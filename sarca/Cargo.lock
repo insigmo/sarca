@@ -1718,7 +1718,7 @@ checksum = "1ad4cc8da4ef723ed60bced201181d83791ad433213d8c24efffda1eec85d741"
 
 [[package]]
 name = "sarca"
-version = "0.0.10"
+version = "0.0.14"
 dependencies = [
  "async-stream",
  "axum",

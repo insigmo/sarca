@@ -28,12 +28,12 @@ const UploadFileTo = () => {
 
 		const data = new FormData(event.currentTarget)
 
-		const path = data.get('path')
+		const path = String(data.get('path') || '').replace(/\/+$/, '')
 		const file = data.get('file')
 
 		await API.files.uploadFileTo(params.id, path, file)
 
-		addAlert(`Uploaded file to "${path}"`, 'success')
+		addAlert(`Uploaded file to "${path || '/'}"`, 'success')
 
 		navigateToFiles()
 	}
@@ -69,10 +69,10 @@ const UploadFileTo = () => {
 				<TextField
 					id="path"
 					name="path"
-					label="Path"
+					label="Destination folder"
+					helperText="Empty = storage root. File name comes from the selected file."
 					variant="standard"
 					fullWidth
-					required
 				/>
 				<TextField
 					id="file"
@@ -82,6 +82,7 @@ const UploadFileTo = () => {
 					variant="standard"
 					fullWidth
 					required
+					inputProps={{ required: true }}
 				/>
 				<Button type="submit" variant="contained" color="secondary">
 					Upload
