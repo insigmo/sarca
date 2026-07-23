@@ -1,6 +1,6 @@
 # Install Sarca from the latest GitHub Release (Windows amd64).
 # Usage:
-#   irm https://raw.githubusercontent.com/insigmo/sarca/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.ps1 | iex
 #   or: .\install.ps1 [-Version v0.0.8] [-Prefix "$env:LOCALAPPDATA\Sarca"]
 
 param(
@@ -10,32 +10,25 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$api = "https://api.github.com/repos/$Repo"
-
-function Get-LatestTag {
-    try {
-        $r = Invoke-RestMethod -Uri "$api/releases/latest" -Headers @{ "User-Agent" = "sarca-install" }
-        if ($r.tag_name) { return $r.tag_name }
-    } catch {}
-    $list = Invoke-RestMethod -Uri "$api/releases?per_page=1" -Headers @{ "User-Agent" = "sarca-install" }
-    if (-not $list -or -not $list[0].tag_name) {
-        throw "Could not resolve latest release for $Repo"
-    }
-    return $list[0].tag_name
-}
-
-if (-not $Version) {
-    $Version = Get-LatestTag
-}
 
 $asset = "sarca_windows_amd64.zip"
-$url = "https://github.com/$Repo/releases/download/$Version/$asset"
+if ([string]::IsNullOrWhiteSpace($Version)) {
+    $url = "https://github.com/$Repo/releases/latest/download/$asset"
+    $label = "latest"
+} else {
+    $url = "https://github.com/$Repo/releases/download/$Version/$asset"
+    $label = $Version
+}
 $tmp = Join-Path $env:TEMP ("sarca-install-" + [guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 
-Write-Host "Installing Sarca $Version ($asset) -> $Prefix"
+Write-Host "Installing Sarca $label ($asset) -> $Prefix"
 $zip = Join-Path $tmp $asset
-Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+try {
+    Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+} catch {
+    throw "Failed to download $url — publish a GitHub Release (tag v*) so /releases/latest has assets. $_"
+}
 Expand-Archive -Path $zip -DestinationPath $tmp -Force
 
 $extracted = Get-ChildItem -Path $tmp -Directory | Select-Object -First 1
