@@ -115,13 +115,15 @@ Open the UI and sign in with the superuser from `.env` (or register a new user i
 - Regular groups: negative id without the `-100` prefix
 - Private chats (positive ids) are not supported
 
+**Optional auto-setup:** set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID` (channel id **without** the `-100` prefix), and `STORAGE_NAME` in `.env`. On startup Sarca creates the storage and attaches the bot for the superuser. If those are left empty, configure them in the UI instead.
+
 ### 3. Create a storage
 
-In the UI go to **Storages → New storage** and provide a name + `chat_id`.
+In the UI go to **Storages → New storage** and provide a name + `chat_id` (skip if you used auto-setup above).
 
 ### 4. Attach storage workers
 
-Go to **Storage workers**, create a worker with the bot token, and bind it to your storage.
+Go to **Storage workers**, create a worker with the bot token, and bind it to your storage (skip if you used auto-setup above).
 
 You can add several bots to raise throughput (Telegram rate-limits each bot).
 
@@ -161,7 +163,8 @@ See [`.env.example`](.env.example) for the full list. Important keys:
 | `SUPERUSER_EMAIL` / `SUPERUSER_PASS` | Bootstrap admin |
 | `SECRET_KEY` | JWT + encryption material |
 | `DATABASE_*` | Postgres connection |
-| `TELEGRAM_*` | Bot API endpoint, rate limit, chunk size |
+| `TELEGRAM_*` | Bot API endpoint, rate limit, chunk size; optional `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHANNEL_ID` (+ `STORAGE_NAME`) for startup bootstrap |
+| `STORAGE_NAME` | Optional storage name used with bootstrap vars above |
 | `WORK_DIR` | Spool directory for uploads |
 
 ## Logo
