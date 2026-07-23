@@ -14,7 +14,7 @@ usage() {
 Usage: install.sh [--docker] [--version vX.Y.Z] [--prefix DIR]
 
   (default)  Download the matching release archive and install binary + UI
-  --docker   Download compose.yml + .env into ./sarca (or \$PREFIX)
+  --docker   Download compose.yml + sarca.conf into ./sarca (or \$PREFIX)
 
 Env:
   SARCA_REPO     GitHub repo (default: ${REPO})
@@ -145,9 +145,23 @@ merge_env_defaults() {
   fi
 }
 
-write_or_merge_env_binary() {
+
+# Prefer sarca.conf; migrate legacy .env once.
+migrate_legacy_env_file() {
   local dest="$1"
-  local env_file="${dest}/.env"
+  if [ -f "${dest}/sarca.conf" ]; then
+    return 0
+  fi
+  if [ -f "${dest}/.env" ]; then
+    mv "${dest}/.env" "${dest}/sarca.conf"
+    echo "Migrated ${dest}/.env → ${dest}/sarca.conf"
+  fi
+}
+
+write_or_merge_conf() {
+  local dest="$1"
+  migrate_legacy_env_file "${dest}"
+  local env_file="${dest}/sarca.conf"
   local secret
   secret="$(openssl rand -hex 32 2>/dev/null || echo "change-me-to-a-long-random-string")"
 
@@ -191,7 +205,7 @@ write_or_merge_env_binary() {
   merge_env_defaults "${env_file}" "$@"
 }
 
-# Soft-merge keys from a template file (e.g. .env.example) into dest .env.
+# Soft-merge keys from a template file (e.g. sarca.conf.example) into dest sarca.conf.
 merge_env_from_template() {
   local dest="$1"
   local template="$2"
@@ -280,14 +294,14 @@ install_binary() {
   fi
 
   mkdir -p "${PREFIX}" "${BIN_DIR}" "${PREFIX}/work"
-  # Always replace binary + UI; soft-merge .env separately.
+  # Always replace binary + UI; soft-merge sarca.conf separately.
   rm -rf "${PREFIX}/sarca" "${PREFIX}/ui"
   cp "${dir}/sarca" "${PREFIX}/sarca"
   chmod +x "${PREFIX}/sarca"
   cp -a "${dir}/ui" "${PREFIX}/ui"
   printf '%s\n' "${ver}" >"${PREFIX}/VERSION"
 
-  write_or_merge_env_binary "${PREFIX}"
+  write_or_merge_conf "${PREFIX}"
 
   wrapper="${BIN_DIR}/sarca"
   cat >"${wrapper}" <<EOF
@@ -295,7 +309,8 @@ install_binary() {
 set -euo pipefail
 cd "${PREFIX}"
 set -a
-[ -f .env ] && . ./.env
+[ -f sarca.conf ] && . ./sarca.conf
+[ ! -f sarca.conf ] && [ -f .env ] && . ./.env
 set +a
 exec "${PREFIX}/sarca" "\$@"
 EOF
@@ -308,8 +323,8 @@ EOF
   echo "  command: ${wrapper}"
   echo
   echo "Next:"
-  echo "  1. Edit ${PREFIX}/.env"
-  echo "  2. Ensure Postgres is reachable (DATABASE_* in .env)"
+  echo "  1. Edit ${PREFIX}/sarca.conf"
+  echo "  2. Ensure Postgres is reachable (DATABASE_* in sarca.conf)"
   echo "  3. Run:  sarca"
   echo "     (or:  ${wrapper})"
   if ! echo ":$PATH:" | grep -q ":${BIN_DIR}:"; then
@@ -317,7 +332,8 @@ EOF
     echo "Add to PATH:  export PATH=\"${BIN_DIR}:\$PATH\""
   fi
   echo
-  echo "Open http://127.0.0.1:8000"
+  conf_port="$(grep -E '^[[:space:]]*PORT=' "${PREFIX}/sarca.conf" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+  echo "Open http://127.0.0.1:${conf_port:-8000}  (PORT from sarca.conf)"
 }
 
 install_docker() {
@@ -328,6 +344,7 @@ install_docker() {
     dest="$(pwd)/sarca"
   fi
   mkdir -p "${dest}"
+  migrate_legacy_env_file "${dest}"
   echo "Scaffolding Docker deploy → ${dest}"
   curl -fsSL -H "Cache-Control: no-cache" \
     "${RAW}/compose.yml" -o "${dest}/compose.yml"
@@ -339,30 +356,30 @@ install_docker() {
 
   tmp_env="$(mktemp)"
   curl -fsSL -H "Cache-Control: no-cache" \
-    "${RAW}/.env.example" -o "${tmp_env}"
+    "${RAW}/sarca.conf.example" -o "${tmp_env}"
 
-  if [ -f "${dest}/.env" ]; then
-    merge_env_from_template "${dest}/.env" "${tmp_env}"
+  if [ -f "${dest}/sarca.conf" ]; then
+    merge_env_from_template "${dest}/sarca.conf" "${tmp_env}"
   else
-    cp "${tmp_env}" "${dest}/.env"
+    cp "${tmp_env}" "${dest}/sarca.conf"
     if command -v openssl >/dev/null 2>&1; then
       secret="$(openssl rand -hex 32)"
       if sed --version >/dev/null 2>&1; then
-        sed -i "s/^SECRET_KEY=.*/SECRET_KEY=${secret}/" "${dest}/.env"
+        sed -i "s/^SECRET_KEY=.*/SECRET_KEY=${secret}/" "${dest}/sarca.conf"
       else
-        sed -i '' "s/^SECRET_KEY=.*/SECRET_KEY=${secret}/" "${dest}/.env"
+        sed -i '' "s/^SECRET_KEY=.*/SECRET_KEY=${secret}/" "${dest}/sarca.conf"
       fi
     fi
-    echo "Wrote ${dest}/.env — set SUPERUSER_*, TELEGRAM_API_ID/HASH, SECRET_KEY"
+    echo "Wrote ${dest}/sarca.conf — set SUPERUSER_*, TELEGRAM_API_ID/HASH, SECRET_KEY"
   fi
   rm -f "${tmp_env}"
 
   echo
   echo "Next:"
   echo "  cd ${dest}"
-  echo "  # edit .env if needed"
-  echo "  docker compose pull"
-  echo "  docker compose up -d"
+  echo "  # edit sarca.conf if needed"
+  echo "  docker compose --env-file sarca.conf pull"
+  echo "  docker compose --env-file sarca.conf up -d"
   echo "  open http://127.0.0.1:\${PORT:-8000}"
 }
 

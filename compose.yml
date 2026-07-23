@@ -15,9 +15,9 @@ services:
     container_name: sarca
     image: ghcr.io/insigmo/sarca:latest
     env_file:
-      - .env
+      - sarca.conf
     ports:
-      - ${PORT}:8000
+      - ${PORT:-8000}:8000
     restart: unless-stopped
     depends_on:
       - db

@@ -11,6 +11,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Migrate-LegacyEnv([string]$Prefix) {
+    $conf = Join-Path $Prefix "sarca.conf"
+    $legacy = Join-Path $Prefix ".env"
+    if (-not (Test-Path $conf) -and (Test-Path $legacy)) {
+        Move-Item $legacy $conf
+        Write-Host "Migrated $legacy -> $conf"
+    }
+}
+
 function Resolve-SarcaVersion {
     param([string]$Repo, [string]$Version)
     if (-not [string]::IsNullOrWhiteSpace($Version)) {
@@ -60,7 +69,7 @@ function Merge-EnvDefaults {
 
 function Write-OrMergeEnv {
     param([string]$Prefix, [string]$WorkDir)
-    $envFile = Join-Path $Prefix ".env"
+    $envFile = Join-Path $Prefix "sarca.conf"
     $secret = -join ((1..64) | ForEach-Object { "{0:x}" -f (Get-Random -Max 16) })
     $workUnix = ($WorkDir -replace '\\', '/')
     # Ordered list for fresh installs; hashtable merge order is not critical.
@@ -146,14 +155,15 @@ if (Test-Path (Join-Path $Prefix "ui")) {
 Copy-Item (Join-Path $extracted.FullName "ui") (Join-Path $Prefix "ui") -Recurse -Force
 Set-Content -Path (Join-Path $Prefix "VERSION") -Value $Version -Encoding ASCII
 
+Migrate-LegacyEnv -Prefix $Prefix
 Write-OrMergeEnv -Prefix $Prefix -WorkDir $work
 
 $launcherPs1 = Join-Path $Prefix "sarca.ps1"
 @"
 `$ErrorActionPreference = 'Stop'
 Set-Location '$Prefix'
-if (Test-Path .env) {
-  Get-Content .env | ForEach-Object {
+if (Test-Path sarca.conf) {
+  Get-Content sarca.conf | ForEach-Object {
     if (`$_ -match '^\s*#' -or `$_ -match '^\s*$') { return }
     `$name, `$value = `$_.Split('=', 2)
     if (`$name -and `$value -ne `$null) { Set-Item -Path ("Env:" + `$name) -Value `$value }
@@ -170,7 +180,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$launcherPs1" %*
 
 Remove-Item $tmp -Recurse -Force
 
-$envFile = Join-Path $Prefix ".env"
+$envFile = Join-Path $Prefix "sarca.conf"
 Write-Host ""
 Write-Host "Installed $Version."
 Write-Host "  app:      $Prefix"
