@@ -168,17 +168,17 @@ jobs:
 
             **Install (Linux / macOS)**
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/main/install.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash
             ```
 
             **Install (Windows PowerShell)**
             ```powershell
-            irm https://raw.githubusercontent.com/insigmo/sarca/main/install.ps1 | iex
+            irm https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.ps1 | iex
             ```
 
             **Docker**
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/main/install.sh | bash -s -- --docker
+            curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
             cd sarca && docker compose up -d
             ```
 
