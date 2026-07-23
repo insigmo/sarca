@@ -142,3 +142,103 @@ impl Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn clear_required() {
+        for k in [
+            "DATABASE_USER",
+            "DATABASE_PASSWORD",
+            "DATABASE_NAME",
+            "DATABASE_HOST",
+            "DATABASE_PORT",
+            "PORT",
+            "WORKERS",
+            "CHANNEL_CAPACITY",
+            "SUPERUSER_EMAIL",
+            "SUPERUSER_PASS",
+            "ACCESS_TOKEN_EXPIRE_IN_SECS",
+            "REFRESH_TOKEN_EXPIRE_IN_DAYS",
+            "SECRET_KEY",
+            "TELEGRAM_LOCAL_API",
+            "TELEGRAM_API_BASE_URL",
+            "TELEGRAM_RATE_LIMIT",
+            "TELEGRAM_CHUNK_SIZE_MB",
+            "WORK_DIR",
+            "TELEGRAM_BOT_TOKEN",
+            "TELEGRAM_CHANNEL_ID",
+            "STORAGE_NAME",
+        ] {
+            env::remove_var(k);
+        }
+    }
+
+    fn set_required() {
+        env::set_var("DATABASE_USER", "sarca");
+        env::set_var("DATABASE_PASSWORD", "sarca");
+        env::set_var("DATABASE_NAME", "sarca");
+        env::set_var("DATABASE_HOST", "127.0.0.1");
+        env::set_var("DATABASE_PORT", "5432");
+        env::set_var("PORT", "8001");
+        env::set_var("WORKERS", "2");
+        env::set_var("CHANNEL_CAPACITY", "8");
+        env::set_var("SUPERUSER_EMAIL", "a@b.c");
+        env::set_var("SUPERUSER_PASS", "pass");
+        env::set_var("ACCESS_TOKEN_EXPIRE_IN_SECS", "1800");
+        env::set_var("REFRESH_TOKEN_EXPIRE_IN_DAYS", "14");
+        env::set_var("SECRET_KEY", "secret");
+    }
+
+    #[test]
+    fn loads_port_from_env() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        let cfg = Config::new().unwrap();
+        assert_eq!(cfg.port, 8001);
+        assert!(cfg.db_uri.contains("127.0.0.1:5432/sarca"));
+        assert!(cfg.telegram_bot_token.is_none());
+        clear_required();
+    }
+
+    #[test]
+    fn optional_bootstrap_vars() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        env::set_var("TELEGRAM_BOT_TOKEN", "tok");
+        env::set_var("TELEGRAM_CHANNEL_ID", "123");
+        env::set_var("STORAGE_NAME", "main");
+        let cfg = Config::new().unwrap();
+        assert_eq!(cfg.telegram_bot_token.as_deref(), Some("tok"));
+        assert_eq!(cfg.telegram_channel_id, Some(123));
+        assert_eq!(cfg.storage_name.as_deref(), Some("main"));
+        clear_required();
+    }
+
+    #[test]
+    fn blank_optional_is_none() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        env::set_var("TELEGRAM_BOT_TOKEN", "  ");
+        env::set_var("STORAGE_NAME", "");
+        let cfg = Config::new().unwrap();
+        assert!(cfg.telegram_bot_token.is_none());
+        assert!(cfg.storage_name.is_none());
+        clear_required();
+    }
+
+    #[test]
+    fn missing_required_errors() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        let err = Config::new().unwrap_err();
+        assert!(matches!(err, SarcaError::EnvConfigLoadingError(_)));
+    }
+}
