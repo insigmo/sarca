@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sarca logo placeholder.
+  Replace this file with the final artwork when ready.
+  Keep the same filename (logo.svg) or update references in README / UI.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Sarca logo placeholder">
+  <defs>
+    <linearGradient id="sarca-bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B3D3A"/>
+      <stop offset="100%" stop-color="#14635C"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="url(#sarca-bg)"/>
+  <text
+    x="64"
+    y="78"
+    text-anchor="middle"
+    font-family="system-ui, sans-serif"
+    font-size="42"
+    font-weight="700"
+    fill="#E8F5F2"
+    letter-spacing="2"
+  >S</text>
+  <text
+    x="64"
+    y="108"
+    text-anchor="middle"
+    font-family="system-ui, sans-serif"
+    font-size="10"
+    font-weight="600"
+    fill="#9AD9CF"
+    letter-spacing="3"
+  >LOGO</text>
+</svg>

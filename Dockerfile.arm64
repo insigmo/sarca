@@ -1,0 +1,30 @@
+# Runtime image for linux/arm64 — downloads a prebuilt release (no Rust/Node compile).
+# Binary targets are glibc (linux-gnu), so use Debian rather than Alpine/musl.
+FROM debian:bookworm-slim
+
+ARG VERSION=v0.0.6
+ARG GITHUB_REPO=insigmo/sarca
+ARG ASSET=sarca_linux_arm64
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        ffmpeg \
+        poppler-utils \
+        tar \
+    && curl -fsSL -o /tmp/sarca.tar.gz \
+        "https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${ASSET}.tar.gz" \
+    && mkdir -p /tmp/extract \
+    && tar -xzf /tmp/sarca.tar.gz -C /tmp/extract \
+    && mv "/tmp/extract/${ASSET}/sarca" /sarca \
+    && mv "/tmp/extract/${ASSET}/ui" /ui \
+    && chmod +x /sarca \
+    && rm -rf /tmp/sarca.tar.gz /tmp/extract \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /
+USER nobody
+ENTRYPOINT ["/sarca"]
