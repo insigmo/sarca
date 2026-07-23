@@ -1,7 +1,7 @@
 [package]
 name = "sarca"
-version = "0.0.7"
-edition = "2021"
+version = "0.0.8"
+edition = "2026"
 
 [profile.release]
 strip = true
