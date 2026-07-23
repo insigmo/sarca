@@ -1,8 +1,7 @@
 name: E2E API tests
 
 on:
-  push:
-    branches: ["master", "main"]
+  # Release workflow runs e2e on master; keep this for PRs and reusable calls.
   pull_request:
   workflow_call:
 
