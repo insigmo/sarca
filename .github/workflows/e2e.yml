@@ -140,7 +140,8 @@ jobs:
       - name: Run e2e tests
         env:
           SARCA_SERVER_LOG: ${{ github.workspace }}/server.log
-        run: pytest -q e2e/
+        # Exclude @pytest.mark.smoke (needs a live Telegram storage worker).
+        run: pytest -q e2e/ -m "not smoke"
 
       - name: Dump server log on failure
         if: failure()

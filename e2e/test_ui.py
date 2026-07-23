@@ -37,6 +37,22 @@ def test_assets_js_or_css_available(client: httpx.Client) -> None:
     assert len(r.content) > 0
 
 
+def test_ui_bundle_includes_file_icons_and_theme(client: httpx.Client) -> None:
+    home = client.get("/")
+    assert home.status_code == 200
+    m = re.search(r'/assets/(index-[^"\']+\.js)', home.text)
+    assert m, home.text[:500]
+    js = client.get(f"/assets/{m.group(1)}")
+    assert js.status_code == 200
+    body = js.text
+    assert (
+        "file-type-icon" in body
+        or "FileTypeIcon" in body
+        or "toggleThemeMode" in body
+        or "data-theme" in body
+    ), "expected new file-icon / theme UI in JS bundle"
+
+
 def test_api_unknown_route_is_not_html_spa(client: httpx.Client) -> None:
     # /api/* must not fall through to the SPA index as a soft 200 HTML page.
     r = client.get("/api/this-route-does-not-exist")

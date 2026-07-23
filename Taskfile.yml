@@ -94,4 +94,4 @@ tasks:
         # Prefer credentials from sarca.conf (ignore ambient e2e env).
         env -u SUPERUSER_EMAIL -u SUPERUSER_PASS \
           SARCA_BASE_URL="${SARCA_BASE_URL:-http://127.0.0.1:8001}" \
-          .venv/bin/python -m pytest -q e2e/test_upload_smoke.py -s
+          .venv/bin/python -m pytest -q -m smoke e2e/test_upload_smoke.py -s

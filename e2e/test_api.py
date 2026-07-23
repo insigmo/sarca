@@ -185,6 +185,8 @@ def test_upload_without_worker_fails_cleanly(
         data=data,
     )
     assert r.status_code >= 400, r.text
+    # Must not look like a folder/directory permission error.
+    assert "upload directory" not in r.text.lower()
 
     tree = client.get(f"/api/storages/{storage_id}/files/tree/", headers=auth_headers)
     assert tree.status_code == 200
@@ -194,3 +196,21 @@ def test_upload_without_worker_fails_cleanly(
     mine = next(s for s in storages if s["id"] == storage_id)
     # unfinished uploads must not inflate size (#61/#46)
     assert mine["size"] == 0
+
+
+def test_upload_parent_trailing_slash_without_worker(
+    client: httpx.Client, auth_headers: dict[str, str], storage_id: str
+) -> None:
+    """Trailing slash on parent path must not be treated as uploading a folder."""
+    files = {"file": ("pic.png", io.BytesIO(b"\x89PNG\r\n"), "image/png")}
+    data = {"path": "album/"}
+    r = client.post(
+        f"/api/storages/{storage_id}/files/upload",
+        headers=auth_headers,
+        files=files,
+        data=data,
+    )
+    assert r.status_code >= 400, r.text
+    tree = client.get(f"/api/storages/{storage_id}/files/tree/", headers=auth_headers)
+    assert tree.status_code == 200
+    assert all(e["name"] not in ("pic.png", "album") for e in tree.json())
