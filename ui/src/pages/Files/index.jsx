@@ -197,7 +197,8 @@ const Files = () => {
 
 		try {
 			setIsUploading(true)
-			await API.files.uploadFile(params.id, params.path, file, (progress) => {
+			const parentPath = (params.path || '').replace(/\/+$/, '')
+			await API.files.uploadFile(params.id, parentPath, file, (progress) => {
 				setUploadProgress(progress)
 			})
 			addAlert(`Uploaded file "${file.name}"`, 'success')

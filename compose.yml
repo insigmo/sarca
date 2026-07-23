@@ -14,46 +14,66 @@ services:
   sarca:
     container_name: sarca
     image: ghcr.io/insigmo/sarca:latest
-    env_file:
-      - sarca.conf
+    build:
+      context: .
+      dockerfile: Dockerfile.amd64
+      args:
+        VERSION: latest
+    entrypoint: ["/bin/sh", "/sarca-entrypoint.sh"]
+    volumes:
+      # App reads KEY=VALUE from this file (same format as native install).
+      - ./sarca.conf:/sarca.conf:ro
+      - ./docker/sarca-entrypoint.sh:/sarca-entrypoint.sh:ro
+      # Local builds override release assets in the image (task binary / task ui).
+      - ./runtime/sarca:/sarca:ro
+      - ./ui/dist:/ui:ro
+      - sarca-work-volume:/work
+    environment:
+      # Docker network layout — overrides host-oriented values in mounted conf.
+      PORT: "8001"
+      DATABASE_HOST: db
+      WORK_DIR: /work
+      # Use public Bot API by default (local telegram-bot-api needs valid
+      # TELEGRAM_API_ID/HASH from my.telegram.org; set TELEGRAM_LOCAL_API=true
+      # in sarca.conf + compose override when that is configured).
+      TELEGRAM_LOCAL_API: "false"
+      TELEGRAM_API_BASE_URL: https://api.telegram.org
     ports:
-      - ${PORT:-8000}:8000
+      - "8001:8001"
     restart: unless-stopped
     depends_on:
       - db
-      - telegram-bot-api
-    volumes:
-      - sarca-work-volume:/work
-      - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
     networks:
       - sarca-network
 
   telegram-bot-api:
+    profiles: ["local-bot-api"]
     container_name: telegram-bot-api
     image: aiogram/telegram-bot-api:latest
+    volumes:
+      - ./sarca.conf:/sarca.conf:ro
+      - ./docker/telegram-bot-api-entrypoint.sh:/sarca-telegram-entrypoint.sh:ro
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
     environment:
-      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
-      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
-      TELEGRAM_LOCAL: 1
+      TELEGRAM_LOCAL: "1"
+    entrypoint: ["/bin/sh", "/sarca-telegram-entrypoint.sh"]
     restart: unless-stopped
     ports:
-      - ${TELEGRAM_BOT_API_PORT:-8081}:8081
-    volumes:
-      - telegram-bot-api-data:/var/lib/telegram-bot-api
+      - "8081:8081"
     networks:
       - sarca-network
 
   db:
     container_name: sarca_db
     image: postgres:15.0-alpine
+    # Keep in sync with DATABASE_* in sarca.conf (example defaults).
     environment:
-      POSTGRES_USER: ${DATABASE_USER}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
-    ports:
-      - "5432:5432"
+      POSTGRES_USER: sarca
+      POSTGRES_PASSWORD: sarca
+      POSTGRES_DB: sarca
     restart: unless-stopped
     healthcheck:
-      test: pg_isready --username=${DATABASE_USER} --dbname=${DATABASE_NAME}
+      test: ["CMD-SHELL", "pg_isready --username=sarca --dbname=sarca"]
       interval: 10s
       timeout: 5s
       retries: 10
