@@ -331,6 +331,11 @@ install_docker() {
   echo "Scaffolding Docker deploy → ${dest}"
   curl -fsSL -H "Cache-Control: no-cache" \
     "${RAW}/compose.yml" -o "${dest}/compose.yml"
+  # Drop legacy filename if an older installer left it behind.
+  if [ -f "${dest}/docker-compose.yml" ]; then
+    rm -f "${dest}/docker-compose.yml"
+    echo "Removed legacy ${dest}/docker-compose.yml (now compose.yml)"
+  fi
 
   tmp_env="$(mktemp)"
   curl -fsSL -H "Cache-Control: no-cache" \
