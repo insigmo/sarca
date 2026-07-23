@@ -107,6 +107,12 @@ TELEGRAM_RATE_LIMIT=18
 TELEGRAM_CHUNK_SIZE_MB=20
 WORK_DIR=${dest}/work
 
+# Optional: set all three to auto-create storage + bot on startup,
+# or leave empty and configure via the UI.
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHANNEL_ID=
+STORAGE_NAME=
+
 DATABASE_USER=sarca
 DATABASE_PASSWORD=sarca
 DATABASE_NAME=sarca

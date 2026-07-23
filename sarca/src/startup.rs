@@ -3,11 +3,16 @@ use std::time::Duration;
 use sqlx::PgPool;
 
 use crate::{
-    common::{db::pool::get_pool, password_manager::PasswordManager},
+    common::{db::pool::get_pool, jwt_manager::AuthUser, password_manager::PasswordManager},
     config::Config,
     errors::SarcaError,
     models::users::InDBUser,
-    repositories::users::UsersRepository,
+    repositories::{storages::StoragesRepository, users::UsersRepository},
+    schemas::{
+        storage_workers::InStorageWorkerSchema,
+        storages::InStorageSchema,
+    },
+    services::{storage_workers::StorageWorkersService, storages::StoragesService},
 };
 
 #[inline]
@@ -197,4 +202,136 @@ pub async fn create_superuser(db: &PgPool, config: &Config) {
             panic!("can't create superuser; terminating process")
         }
     };
+}
+
+/// Convert a channel id (without `-100`) into a Telegram chat_id for channels/supergroups.
+/// Negative values are treated as already-complete chat ids.
+fn channel_id_to_chat_id(channel_id: i64) -> i64 {
+    if channel_id < 0 {
+        return channel_id;
+    }
+    format!("-100{channel_id}")
+        .parse()
+        .expect("channel id should form a valid Telegram chat_id")
+}
+
+/// If `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID`, and `STORAGE_NAME` are all set,
+/// create the storage and attach the bot for the superuser. Otherwise log that
+/// the user should configure them via the UI.
+#[inline]
+pub async fn bootstrap_storage_from_env(db: &PgPool, config: &Config) {
+    let token = config.telegram_bot_token.as_deref();
+    let channel_id = config.telegram_channel_id;
+    let storage_name = config.storage_name.as_deref();
+
+    let any_set = token.is_some() || channel_id.is_some() || storage_name.is_some();
+    let all_set = token.is_some() && channel_id.is_some() && storage_name.is_some();
+
+    if !any_set {
+        tracing::info!(
+            "TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID / STORAGE_NAME not set — \
+             create a storage and register a bot via the UI \
+             (Storages → New storage, Storage workers → New worker)"
+        );
+        return;
+    }
+
+    if !all_set {
+        tracing::warn!(
+            "Incomplete env bootstrap: set all of TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, \
+             and STORAGE_NAME, or leave all empty and configure via the UI"
+        );
+        return;
+    }
+
+    let token = token.expect("checked above");
+    let channel_id = channel_id.expect("checked above");
+    let storage_name = storage_name.expect("checked above");
+    let chat_id = channel_id_to_chat_id(channel_id);
+
+    let user = match UsersRepository::new(db)
+        .get_by_email(&config.superuser_email)
+        .await
+    {
+        Ok(user) => AuthUser::new(user.id, user.email),
+        Err(e) => {
+            tracing::error!("env bootstrap: cannot load superuser: {e}");
+            return;
+        }
+    };
+
+    let storages = StoragesService::new(db);
+    let storage = match storages
+        .create(
+            InStorageSchema {
+                name: storage_name.to_owned(),
+                chat_id,
+            },
+            &user,
+        )
+        .await
+    {
+        Ok(storage) => {
+            tracing::info!(
+                "env bootstrap: created storage \"{}\" (chat_id={})",
+                storage.name,
+                storage.chat_id
+            );
+            storage
+        }
+        Err(SarcaError::StorageNameConflict) => {
+            match StoragesRepository::new(db)
+                .get_by_name_and_user_id(storage_name, user.id)
+                .await
+            {
+                Ok(storage) => {
+                    tracing::debug!(
+                        "env bootstrap: storage \"{}\" already exists; reusing",
+                        storage_name
+                    );
+                    storage
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "env bootstrap: storage name conflict but lookup failed: {e}"
+                    );
+                    return;
+                }
+            }
+        }
+        Err(SarcaError::StorageChatIdConflict) => {
+            tracing::warn!(
+                "env bootstrap: chat_id {chat_id} already used by another storage; \
+                 configure via the UI or pick a different TELEGRAM_CHANNEL_ID"
+            );
+            return;
+        }
+        Err(e) => {
+            tracing::error!("env bootstrap: failed to create storage: {e}");
+            return;
+        }
+    };
+
+    let workers = StorageWorkersService::new(db);
+    match workers
+        .create(
+            InStorageWorkerSchema {
+                name: storage_name.to_owned(),
+                token: token.to_owned(),
+                storage_id: Some(storage.id),
+            },
+            &user,
+        )
+        .await
+    {
+        Ok(_) => tracing::info!(
+            "env bootstrap: attached bot as storage worker \"{}\"",
+            storage_name
+        ),
+        Err(SarcaError::StorageWorkerNameConflict)
+        | Err(SarcaError::StorageWorkerTokenConflict) => {
+            tracing::debug!("env bootstrap: storage worker already exists; skipping")
+        }
+        Err(e) => tracing::error!("env bootstrap: failed to create storage worker: {e}"),
+    }
 }

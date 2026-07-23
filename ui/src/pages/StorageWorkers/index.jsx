@@ -76,8 +76,10 @@ const StorageWorkers = () => {
 											}}
 										>
 											<Typography color="text.secondary">
-												No storage workers yet — register a bot token to start
-												uploads.
+												No storage workers yet — register a bot token in the UI
+												(New worker), or set TELEGRAM_BOT_TOKEN,
+												TELEGRAM_CHANNEL_ID, and STORAGE_NAME in .env for
+												auto-setup.
 											</Typography>
 										</td>
 									</tr>
