@@ -1,23 +1,134 @@
 name: Release binaries
 
+# Auto-release on every push to master (patch bump), or manually with a bump type.
+# Manual tags (v*) still work. Version in Cargo.toml / package.json is updated by CI.
 on:
   push:
+    branches: ["master"]
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Semver bump when releasing from a branch"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
   contents: write
   packages: write
 
 jobs:
+  # Skip auto-release for the bot commit that only bumps version files.
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: check
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "proceed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git log -1 --pretty=%s | grep -qE '^chore: release v'; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping version-bump commit"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
   e2e:
+    needs: [guard]
+    if: needs.guard.outputs.proceed == 'true'
     uses: ./.github/workflows/e2e.yml
 
+  version:
+    needs: [guard, e2e]
+    if: needs.guard.outputs.proceed == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve next version
+        id: meta
+        env:
+          BUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.bump || 'patch' }}
+        run: |
+          set -euo pipefail
+
+          # Tag push: use the tag as-is, do not bump or commit.
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+            echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "Using existing tag ${TAG}"
+            exit 0
+          fi
+
+          LATEST="$(git tag -l 'v*' --sort=-v:refname | head -1 || true)"
+          if [[ -z "${LATEST}" ]]; then
+            MAJOR=0; MINOR=0; PATCH=0
+          else
+            RAW="${LATEST#v}"
+            IFS=. read -r MAJOR MINOR PATCH <<<"${RAW}"
+            MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
+          fi
+
+          case "${BUMP}" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+            *) echo "Unknown bump: ${BUMP}" >&2; exit 1 ;;
+          esac
+
+          VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          TAG="v${VERSION}"
+
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists" >&2
+            exit 1
+          fi
+
+          # Keep package manifests in sync with the release tag.
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" sarca/Cargo.toml
+          python3 - <<PY
+          import json, pathlib
+          path = pathlib.Path("ui/package.json")
+          data = json.loads(path.read_text())
+          data["version"] = "${VERSION}"
+          path.write_text(json.dumps(data, indent=2) + "\n")
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sarca/Cargo.toml ui/package.json
+          git commit -m "chore: release ${TAG}"
+          git tag "${TAG}"
+          git push origin HEAD:"${GITHUB_REF_NAME}"
+          git push origin "${TAG}"
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Prepared ${TAG} (bump=${BUMP}, previous=${LATEST:-none})"
+
   build-ui:
-    needs: [e2e]
+    needs: [version]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.version.outputs.tag }}
 
       - uses: pnpm/action-setup@v6
         with:
@@ -44,7 +155,7 @@ jobs:
           retention-days: 1
 
   build:
-    needs: [e2e, build-ui]
+    needs: [version, build-ui]
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +186,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.version.outputs.tag }}
 
       - uses: actions/download-artifact@v7
         with:
@@ -138,7 +251,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: build
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v7
@@ -158,13 +271,13 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.tag }}
           prerelease: false
           generate_release_notes: true
           fail_on_unmatched_files: true
           body: |
-            Multi-platform binaries for `${{ github.ref_name }}` (each archive = `sarca` + `ui/`).
+            Multi-platform binaries for `${{ needs.version.outputs.tag }}` (each archive = `sarca` + `ui/`).
 
             **Install (Linux / macOS)**
             ```bash
@@ -182,7 +295,7 @@ jobs:
             cd sarca && docker compose up -d
             ```
 
-            Image: `ghcr.io/insigmo/sarca:${{ github.ref_name }}` (also `:latest`).
+            Image: `ghcr.io/insigmo/sarca:${{ needs.version.outputs.tag }}` (also `:latest`).
             Postgres is required — see README.
           files: artifacts/*
         env:
@@ -190,8 +303,8 @@ jobs:
 
   # GITHUB_TOKEN cannot trigger other workflows on release:published — call Docker directly.
   docker:
-    needs: release
+    needs: [version, release]
     uses: ./.github/workflows/docker-image.yml
     with:
-      version: ${{ github.ref_name }}
+      version: ${{ needs.version.outputs.tag }}
     secrets: inherit

@@ -153,6 +153,12 @@ WORK_DIR=/work
 
 Get `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` from https://my.telegram.org
 
+## Releases
+
+Pushes to `master` automatically run e2e, bump the patch version (`v0.0.x`), update `sarca/Cargo.toml` + `ui/package.json`, and publish GitHub Release + GHCR image. You do not need to create tags or edit version fields by hand.
+
+For a minor/major bump: **Actions → Release binaries → Run workflow** and pick the bump type.
+
 ## Configuration
 
 See [`.env.example`](.env.example) for the full list. Important keys:
