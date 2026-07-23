@@ -4,6 +4,9 @@ import { Router } from '@solidjs/router'
 
 import './index.css'
 import App from './App'
+import { initTheme } from './common/theme'
+
+initTheme()
 
 const root = document.getElementById('root')
 
