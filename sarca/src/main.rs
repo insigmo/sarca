@@ -28,22 +28,32 @@ mod storage_manager;
 
 #[tokio::main]
 async fn main() {
-    let config = Config::new().unwrap();
+    let config = Config::new().unwrap_or_else(|e| {
+        eprintln!("error: failed to load config: {e}");
+        std::process::exit(1);
+    });
 
     // Make sure filesystem work dir exists early.
     tokio::fs::create_dir_all(&config.work_dir)
         .await
-        .expect("failed to create WORK_DIR");
+        .unwrap_or_else(|e| {
+            eprintln!(
+                "error: failed to create WORK_DIR {}: {e}",
+                config.work_dir
+            );
+            std::process::exit(1);
+        });
 
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                "sarca=debug,tower_http=debug,axum::rejection=trace".into()
+                "sarca=info,tower_http=info,axum::rejection=trace".into()
             }),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    tracing::info!("starting Sarca on port {}", config.port);
     let (tx, rx) = mpsc::channel::<ClientMessage>(config.channel_capacity.into());
 
     // creating db
