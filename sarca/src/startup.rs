@@ -16,8 +16,13 @@ use crate::{
 };
 
 #[inline]
-pub async fn create_db(dsn: &str, dbname: &str, max_connection: u32, timeout: Duration) {
-    let db = get_pool(dsn, max_connection, timeout).await;
+pub async fn create_db(
+    dsn: &str,
+    dbname: &str,
+    max_connection: u32,
+    timeout: Duration,
+) -> Result<(), String> {
+    let db = get_pool(dsn, max_connection, timeout).await?;
 
     tracing::debug!("creating database");
 
@@ -28,20 +33,19 @@ pub async fn create_db(dsn: &str, dbname: &str, max_connection: u32, timeout: Du
     match &result {
         Ok(_) => {
             tracing::debug!("created database");
-            return;
+            return Ok(());
         }
         Err(sqlx::Error::Database(dbe)) => {
             if let Some(code) = dbe.code() {
                 if code == "42P04" {
                     tracing::debug!("database already exists; skipping");
-                    return;
+                    return Ok(());
                 }
             }
+            return Err(format!("create database failed: {dbe}"));
         }
-        _ => (),
-    };
-
-    result.unwrap();
+        Err(e) => return Err(format!("create database failed: {e}")),
+    }
 }
 
 #[inline]
@@ -206,7 +210,7 @@ pub async fn create_superuser(db: &PgPool, config: &Config) {
 
 /// Convert a channel id (without `-100`) into a Telegram chat_id for channels/supergroups.
 /// Negative values are treated as already-complete chat ids.
-fn channel_id_to_chat_id(channel_id: i64) -> i64 {
+pub(crate) fn channel_id_to_chat_id(channel_id: i64) -> i64 {
     if channel_id < 0 {
         return channel_id;
     }
@@ -333,5 +337,21 @@ pub async fn bootstrap_storage_from_env(db: &PgPool, config: &Config) {
             tracing::debug!("env bootstrap: storage worker already exists; skipping")
         }
         Err(e) => tracing::error!("env bootstrap: failed to create storage worker: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::channel_id_to_chat_id;
+
+    #[test]
+    fn prepends_minus_100_for_positive_channel_id() {
+        assert_eq!(channel_id_to_chat_id(1234567890), -1001234567890);
+    }
+
+    #[test]
+    fn keeps_negative_chat_id() {
+        assert_eq!(channel_id_to_chat_id(-1001234567890), -1001234567890);
+        assert_eq!(channel_id_to_chat_id(-456), -456);
     }
 }

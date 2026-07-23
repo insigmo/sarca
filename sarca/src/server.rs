@@ -13,6 +13,7 @@ use tower_http::{
 
 use crate::{
     common::routing::app_state::AppState,
+    conf,
     routers::{
         auth::AuthRouter, storage_workers::StorageWorkersRouter, storages::StoragesRouter,
         users::UsersRouter,
@@ -43,6 +44,25 @@ impl Server {
         Self { router, ui_dir }
     }
 
+    /// Build a router with an explicit UI directory (for tests).
+    pub fn build_server_with_ui(
+        workers: usize,
+        app_state: Arc<AppState>,
+        ui_dir: PathBuf,
+    ) -> Self {
+        let index = ui_dir.join("index.html");
+        let assets = ui_dir.join("assets");
+        let serve_ui = ServeFile::new(index);
+        let serve_assets = ServeDir::new(assets);
+
+        let router = Router::new()
+            .nest("/api", Self::build_api_router(workers, app_state))
+            .nest_service("/assets", serve_assets)
+            .fallback_service(serve_ui);
+
+        Self { router, ui_dir }
+    }
+
     #[inline]
     fn build_api_router(workers: usize, app_state: Arc<AppState>) -> Router {
         let app_cors = cors::CorsLayer::new()
@@ -62,14 +82,19 @@ impl Server {
             .layer(app_cors)
     }
 
+    pub fn router(self) -> Router {
+        self.router
+    }
+
     pub async fn run(self, addr: &SocketAddr) {
         let listener = std::net::TcpListener::bind(addr).unwrap_or_else(|e| {
             eprintln!();
             eprintln!("error: cannot bind to {addr}: {e}");
             eprintln!(
                 "hint: port {} is probably already in use — stop the other process \
-                 or set a free PORT in .env",
-                addr.port()
+                 or set a free PORT in {}",
+                addr.port(),
+                conf::CONF_NAME
             );
             std::process::exit(1);
         });
@@ -100,20 +125,8 @@ impl Server {
 /// Locate the built UI (`index.html` + `assets/`).
 ///
 /// Search order matches installer layout, then cwd, then cargo/dev layouts.
-fn resolve_ui_dir() -> PathBuf {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            candidates.push(exe_dir.join("ui"));
-            // cargo run: target/{debug,release}/sarca → ../../ui/dist
-            candidates.push(exe_dir.join("../../ui/dist"));
-            candidates.push(exe_dir.join("../ui"));
-        }
-    }
-
-    candidates.push(PathBuf::from("ui"));
-    candidates.push(PathBuf::from("ui/dist"));
+pub(crate) fn resolve_ui_dir() -> PathBuf {
+    let candidates = ui_dir_candidates();
 
     for candidate in &candidates {
         let index = candidate.join("index.html");
@@ -132,4 +145,62 @@ fn resolve_ui_dir() -> PathBuf {
     }
     eprintln!("hint: reinstall Sarca, or run from a directory that contains ui/");
     std::process::exit(1);
+}
+
+pub(crate) fn ui_dir_candidates() -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            candidates.push(exe_dir.join("ui"));
+            // cargo run: target/{debug,release}/sarca → ../../ui/dist
+            candidates.push(exe_dir.join("../../ui/dist"));
+            candidates.push(exe_dir.join("../ui"));
+        }
+    }
+
+    candidates.push(PathBuf::from("ui"));
+    candidates.push(PathBuf::from("ui/dist"));
+    candidates
+}
+
+pub(crate) fn find_ui_dir_among(candidates: &[PathBuf]) -> Option<PathBuf> {
+    for candidate in candidates {
+        if candidate.join("index.html").is_file() {
+            return Some(
+                candidate
+                    .canonicalize()
+                    .unwrap_or_else(|_| candidate.clone()),
+            );
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn find_ui_dir_picks_first_with_index() {
+        let root = std::env::temp_dir().join(format!("sarca-ui-{}", uuid::Uuid::new_v4()));
+        let ui = root.join("ui");
+        fs::create_dir_all(ui.join("assets")).unwrap();
+        fs::write(ui.join("index.html"), "<html>ok</html>").unwrap();
+
+        let missing = root.join("missing");
+        let found = find_ui_dir_among(&[missing, ui.clone()]).unwrap();
+        assert_eq!(found, ui.canonicalize().unwrap());
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn find_ui_dir_none_when_missing() {
+        let root = std::env::temp_dir().join(format!("sarca-ui-miss-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        assert!(find_ui_dir_among(&[root.join("ui")]).is_none());
+        let _ = fs::remove_dir_all(&root);
+    }
 }

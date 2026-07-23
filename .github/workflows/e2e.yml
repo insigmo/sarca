@@ -73,6 +73,10 @@ jobs:
           cache: pip
           cache-dependency-path: e2e/requirements.txt
 
+      - name: Unit + integration tests
+        working-directory: sarca
+        run: cargo test
+
       - name: Build UI
         working-directory: ui
         env:
@@ -91,17 +95,51 @@ jobs:
           cp -a ui/dist/. runtime/ui/
           cp sarca/target/release/sarca runtime/sarca
           chmod +x runtime/sarca
+          # Binary self-loads sarca.conf (production-like).
+          {
+            echo "PORT=${PORT}"
+            echo "WORKERS=${WORKERS}"
+            echo "CHANNEL_CAPACITY=${CHANNEL_CAPACITY}"
+            echo "SUPERUSER_EMAIL=${SUPERUSER_EMAIL}"
+            echo "SUPERUSER_PASS=${SUPERUSER_PASS}"
+            echo "ACCESS_TOKEN_EXPIRE_IN_SECS=${ACCESS_TOKEN_EXPIRE_IN_SECS}"
+            echo "REFRESH_TOKEN_EXPIRE_IN_DAYS=${REFRESH_TOKEN_EXPIRE_IN_DAYS}"
+            echo "SECRET_KEY=${SECRET_KEY}"
+            echo "TELEGRAM_LOCAL_API=${TELEGRAM_LOCAL_API}"
+            echo "TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL}"
+            echo "TELEGRAM_RATE_LIMIT=${TELEGRAM_RATE_LIMIT}"
+            echo "TELEGRAM_CHUNK_SIZE_MB=${TELEGRAM_CHUNK_SIZE_MB}"
+            echo "WORK_DIR=${WORK_DIR}"
+            echo "DATABASE_USER=${DATABASE_USER}"
+            echo "DATABASE_PASSWORD=${DATABASE_PASSWORD}"
+            echo "DATABASE_NAME=${DATABASE_NAME}"
+            echo "DATABASE_HOST=${DATABASE_HOST}"
+            echo "DATABASE_PORT=${DATABASE_PORT}"
+          } > runtime/sarca.conf
 
       - name: Start server
         working-directory: runtime
         run: |
-          ./sarca >"$GITHUB_WORKSPACE/server.log" 2>&1 &
+          env -i HOME="$HOME" PATH="$PATH" \
+            ./sarca >"$GITHUB_WORKSPACE/server.log" 2>&1 &
           echo $! >"$GITHUB_WORKSPACE/server.pid"
+          for i in $(seq 1 45); do
+            if grep -q "Sarca is running" "$GITHUB_WORKSPACE/server.log" 2>/dev/null; then
+              exit 0
+            fi
+            if ! kill -0 "$(cat "$GITHUB_WORKSPACE/server.pid")" 2>/dev/null; then
+              echo "server exited early:"; cat "$GITHUB_WORKSPACE/server.log"; exit 1
+            fi
+            sleep 1
+          done
+          echo "server did not become ready:"; cat "$GITHUB_WORKSPACE/server.log"; exit 1
 
       - name: Install e2e deps
         run: pip install -r e2e/requirements.txt
 
       - name: Run e2e tests
+        env:
+          SARCA_SERVER_LOG: ${{ github.workspace }}/server.log
         run: pytest -q e2e/
 
       - name: Dump server log on failure
