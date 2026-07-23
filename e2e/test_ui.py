@@ -38,10 +38,10 @@ def test_assets_js_or_css_available(client: httpx.Client) -> None:
 
 
 def test_api_unknown_route_is_not_html_spa(client: httpx.Client) -> None:
-    # /api/* should not fall through to the SPA index as a soft 200 HTML page
-    # for unknown API paths (auth middleware / router 404/401 is fine).
+    # /api/* must not fall through to the SPA index as a soft 200 HTML page.
     r = client.get("/api/this-route-does-not-exist")
-    assert r.status_code != 200 or "text/html" not in r.headers.get("content-type", "")
+    assert r.status_code == 404, r.text
+    assert "text/html" not in r.headers.get("content-type", "")
 
 
 def test_startup_banner_mentions_port(server_log_path: str | None) -> None:
