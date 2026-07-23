@@ -4,8 +4,7 @@
 set -euo pipefail
 
 REPO="${SARCA_REPO:-insigmo/sarca}"
-API="https://api.github.com/repos/${REPO}"
-RAW="https://raw.githubusercontent.com/${REPO}/main"
+RAW="https://raw.githubusercontent.com/${REPO}/refs/heads/master"
 PREFIX="${SARCA_HOME:-${HOME}/.local/share/sarca}"
 BIN_DIR="${SARCA_BIN:-${HOME}/.local/bin}"
 VERSION="${SARCA_VERSION:-}" # e.g. v0.0.8; empty = latest
@@ -76,22 +75,14 @@ detect_asset() {
   esac
 }
 
-latest_tag() {
-  # Prefer /releases/latest; fall back to newest release (incl. prerelease).
-  local tag
-  tag="$(curl -fsSL "${API}/releases/latest" 2>/dev/null \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-    | head -1 || true)"
-  if [ -z "${tag}" ] || [ "${tag}" = "null" ]; then
-    tag="$(curl -fsSL "${API}/releases?per_page=1" \
-      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-      | head -1)"
+release_url() {
+  # Empty VERSION → always follow GitHub's latest release redirect.
+  local asset="$1"
+  if [ -n "${VERSION}" ]; then
+    echo "https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+  else
+    echo "https://github.com/${REPO}/releases/latest/download/${asset}"
   fi
-  if [ -z "${tag}" ] || [ "${tag}" = "null" ]; then
-    echo "Could not resolve latest release for ${REPO}" >&2
-    exit 1
-  fi
-  echo "${tag}"
 }
 
 write_env_binary() {
@@ -130,16 +121,20 @@ install_binary() {
   need_cmd tar
   need_cmd uname
 
-  local tag asset url tmp dir wrapper
-  tag="${VERSION:-$(latest_tag)}"
+  local asset url tmp dir wrapper label
   asset="$(detect_asset)"
-  url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
+  url="$(release_url "${asset}")"
+  label="${VERSION:-latest}"
   tmp="$(mktemp -d)"
   # Expand path when registering the trap (tmp may be unset later under `set -u`).
   trap 'rm -rf "'"${tmp}"'"' EXIT
 
-  echo "Installing Sarca ${tag} (${asset}) → ${PREFIX}"
-  curl -fL --progress-bar -o "${tmp}/${asset}" "${url}"
+  echo "Installing Sarca ${label} (${asset}) → ${PREFIX}"
+  if ! curl -fL --progress-bar -o "${tmp}/${asset}" "${url}"; then
+    echo "Failed to download ${url}" >&2
+    echo "Publish a GitHub Release (tag v*) so /releases/latest has assets." >&2
+    exit 1
+  fi
   tar -xzf "${tmp}/${asset}" -C "${tmp}"
 
   dir="$(find "${tmp}" -mindepth 1 -maxdepth 1 -type d | head -1)"
