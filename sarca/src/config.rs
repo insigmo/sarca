@@ -28,6 +28,13 @@ pub struct Config {
     /// - Official Bot API has a practical 20MB download limitation via `getFile`.
     /// - Local Bot API can handle up to ~2GB per upload, so chunk size can be much larger.
     pub telegram_chunk_size_mb: u32,
+
+    /// Optional bootstrap: bot token from @BotFather.
+    pub telegram_bot_token: Option<String>,
+    /// Optional bootstrap: channel id without `-100` prefix.
+    pub telegram_channel_id: Option<i64>,
+    /// Optional bootstrap: storage name to create for the superuser.
+    pub storage_name: Option<String>,
 }
 
 impl Config {
@@ -69,6 +76,10 @@ impl Config {
         let telegram_chunk_size_mb =
             Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", default_chunk_mb)?;
 
+        let telegram_bot_token = Self::get_optional_env_var("TELEGRAM_BOT_TOKEN");
+        let telegram_channel_id = Self::get_optional_parsed_env_var("TELEGRAM_CHANNEL_ID")?;
+        let storage_name = Self::get_optional_env_var("STORAGE_NAME");
+
         Ok(Self {
             db_uri,
             db_uri_without_dbname,
@@ -85,6 +96,9 @@ impl Config {
             telegram_rate_limit,
             work_dir,
             telegram_chunk_size_mb,
+            telegram_bot_token,
+            telegram_channel_id,
+            storage_name,
         })
     }
 
@@ -105,5 +119,26 @@ impl Config {
         }
 
         result
+    }
+
+    /// Missing or blank env → `None`.
+    #[inline]
+    fn get_optional_env_var(env_var: &str) -> Option<String> {
+        match env::var(env_var) {
+            Ok(value) if !value.trim().is_empty() => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Missing or blank env → `None`; non-empty but unparsable → error.
+    #[inline]
+    fn get_optional_parsed_env_var<T: FromStr>(env_var: &str) -> SarcaResult<Option<T>> {
+        match Self::get_optional_env_var(env_var) {
+            Some(value) => value
+                .parse::<T>()
+                .map(Some)
+                .map_err(|_| SarcaError::EnvVarParsingError(env_var.to_owned())),
+            None => Ok(None),
+        }
     }
 }
