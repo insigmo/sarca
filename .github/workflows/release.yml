@@ -160,12 +160,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Pin Linux to 22.04 so release binaries need GLIBC ≤ 2.35 and run on
+          # Bookworm/older hosts; ubuntu-latest (24.04) would require GLIBC 2.39.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
             archive: tar.gz
             asset: sarca_linux_amd64
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
             archive: tar.gz
             asset: sarca_linux_arm64
             cross: true

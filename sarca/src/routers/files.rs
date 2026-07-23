@@ -98,9 +98,14 @@ impl FilesRouter {
     ) -> Result<StatusCode, (StatusCode, String)> {
         // stream multipart to disk
         let upload_dir = Path::new(&state.config.work_dir).join("uploads");
-        tokio::fs::create_dir_all(&upload_dir)
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't create upload dir".to_owned()))?;
+        tokio::fs::create_dir_all(&upload_dir).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "Can't create upload directory under WORK_DIR (check permissions): {e}"
+                ),
+            )
+        })?;
 
         let tmp_path = upload_dir.join(format!("{}.upload", Uuid::new_v4()));
         let mut tmp_file = tokio::fs::File::create(&tmp_path)
@@ -118,7 +123,12 @@ impl FilesRouter {
 
             match name.as_str() {
                 "file" => {
-                    filename = Some(field.file_name().unwrap_or("unnamed").to_owned());
+                    let raw_name = field.file_name().unwrap_or("").to_owned();
+                    filename = Some(if raw_name.trim().is_empty() {
+                        "unnamed".to_owned()
+                    } else {
+                        raw_name
+                    });
                     while let Some(chunk) = field
                         .chunk()
                         .await
@@ -174,16 +184,23 @@ impl FilesRouter {
         mut multipart: Multipart,
     ) -> Result<StatusCode, (StatusCode, String)> {
         let upload_dir = Path::new(&state.config.work_dir).join("uploads");
-        tokio::fs::create_dir_all(&upload_dir)
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't create upload dir".to_owned()))?;
+        tokio::fs::create_dir_all(&upload_dir).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "Can't create upload directory under WORK_DIR (check permissions): {e}"
+                ),
+            )
+        })?;
 
         let tmp_path = upload_dir.join(format!("{}.upload", Uuid::new_v4()));
         let mut tmp_file = tokio::fs::File::create(&tmp_path)
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't create temp file".to_owned()))?;
 
-        let (mut path, mut file_size) = (None::<String>, 0i64);
+        // `path` is the destination folder (may be empty for root); filename comes from the file field.
+        let (mut parent_path, mut filename, mut file_size) =
+            (None::<String>, None::<String>, 0i64);
 
         while let Some(mut field) = multipart
             .next_field()
@@ -200,9 +217,15 @@ impl FilesRouter {
                     let decoded = percent_decode_str(&raw_path)
                         .decode_utf8()
                         .unwrap_or(std::borrow::Cow::Borrowed(&raw_path));
-                    path = Some(decoded.to_string());
+                    parent_path = Some(decoded.to_string());
                 }
                 "file" => {
+                    let raw_name = field.file_name().unwrap_or("").to_owned();
+                    filename = Some(if raw_name.trim().is_empty() {
+                        "unnamed".to_owned()
+                    } else {
+                        raw_name
+                    });
                     while let Some(chunk) = field
                         .chunk()
                         .await
@@ -224,7 +247,11 @@ impl FilesRouter {
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't flush temp file".to_owned()))?;
 
-        let path = path.ok_or((StatusCode::BAD_REQUEST, "Path is required".to_owned()))?;
+        let parent_path =
+            parent_path.ok_or((StatusCode::BAD_REQUEST, "path field is required".to_owned()))?;
+        let filename =
+            filename.ok_or((StatusCode::BAD_REQUEST, "file field is required".to_owned()))?;
+        let path = Self::construct_path(&parent_path, &filename)?;
         let in_schema = InFileSchema::new(storage_id, path, tmp_path.clone(), file_size);
 
         let result = FilesService::new(&state.db, state.tx.clone())
@@ -253,13 +280,23 @@ impl FilesRouter {
         Ok(StatusCode::CREATED)
     }
 
-    #[inline]
-    fn construct_path(path: &str, filename: &str) -> SarcaResult<String> {
-        Path::new(path)
-            .join(filename)
-            .to_str()
-            .ok_or(SarcaError::InvalidPath)
-            .map(|p| p.to_string())
+    /// Join a parent folder path with a file name into a logical FS file path.
+    /// Avoids `Path::join("")` → trailing `/` (folder marker).
+    fn construct_path(parent: &str, filename: &str) -> SarcaResult<String> {
+        let parent = parent.trim().trim_end_matches('/').trim_start_matches('/');
+        let filename = filename.trim().trim_matches('/');
+        if filename.is_empty() || filename == "." || filename == ".." || filename.contains('/') {
+            return Err(SarcaError::InvalidPath);
+        }
+        let path = if parent.is_empty() {
+            filename.to_string()
+        } else {
+            format!("{parent}/{filename}")
+        };
+        if path.ends_with('/') {
+            return Err(SarcaError::InvalidPath);
+        }
+        Ok(path)
     }
 
     async fn download(
@@ -459,3 +496,50 @@ impl FilesRouter {
         Ok(StatusCode::OK)
     }
 }
+
+#[cfg(test)]
+mod construct_path_tests {
+    use super::FilesRouter;
+    use crate::errors::SarcaError;
+
+    #[test]
+    fn root_file() {
+        assert_eq!(
+            FilesRouter::construct_path("", "photo.jpg").unwrap(),
+            "photo.jpg"
+        );
+        assert_eq!(
+            FilesRouter::construct_path("/", "photo.jpg").unwrap(),
+            "photo.jpg"
+        );
+    }
+
+    #[test]
+    fn nested_parent_trims_slash() {
+        assert_eq!(
+            FilesRouter::construct_path("docs/", "a.png").unwrap(),
+            "docs/a.png"
+        );
+        assert_eq!(
+            FilesRouter::construct_path("docs", "a.png").unwrap(),
+            "docs/a.png"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_or_traversal_filename() {
+        assert!(matches!(
+            FilesRouter::construct_path("docs", ""),
+            Err(SarcaError::InvalidPath)
+        ));
+        assert!(matches!(
+            FilesRouter::construct_path("docs", ".."),
+            Err(SarcaError::InvalidPath)
+        ));
+        assert!(matches!(
+            FilesRouter::construct_path("docs", "a/b"),
+            Err(SarcaError::InvalidPath)
+        ));
+    }
+}
+

@@ -1,0 +1,97 @@
+version: "3"
+
+vars:
+  NATIVE_PREFIX:
+    sh: 'echo "${HOME}/.local/share/sarca"'
+
+tasks:
+  default:
+    desc: Show available tasks
+    cmds:
+      - task --list-all
+    silent: true
+
+  ui:
+    desc: Build web UI into ui/dist
+    cmds:
+      - |
+        set -e
+        UI_DIR="{{.ROOT_DIR}}/ui"
+        if command -v pnpm >/dev/null 2>&1; then
+          (cd "$UI_DIR" && pnpm install && pnpm run build)
+        elif bash -lc 'command -v pnpm' >/dev/null 2>&1; then
+          bash -lc "cd \"$UI_DIR\" && pnpm install && pnpm run build"
+        else
+          echo "error: pnpm not found" >&2
+          exit 1
+        fi
+
+  binary:
+    desc: Build release binary into runtime/sarca
+    cmds:
+      - mkdir -p "{{.ROOT_DIR}}/runtime"
+      - |
+        set -e
+        cd "{{.ROOT_DIR}}/sarca"
+        cargo build --release
+        BIN="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+        if [ -z "$BIN" ]; then BIN=target; fi
+        cp -f "$BIN/release/sarca" "{{.ROOT_DIR}}/runtime/sarca"
+        chmod +x "{{.ROOT_DIR}}/runtime/sarca"
+        echo "binary → {{.ROOT_DIR}}/runtime/sarca"
+
+  deploy-ui-native:
+    desc: Copy ui/dist into native install prefix
+    deps: [ui]
+    cmds:
+      - |
+        set -e
+        PREFIX="{{.NATIVE_PREFIX}}"
+        mkdir -p "$PREFIX/ui"
+        rm -rf "$PREFIX/ui"/*
+        cp -a "{{.ROOT_DIR}}/ui/dist/." "$PREFIX/ui/"
+        echo "native UI → $PREFIX/ui"
+
+  deploy-native:
+    desc: Install local binary + UI into ~/.local/share/sarca
+    deps: [binary, deploy-ui-native]
+    cmds:
+      - |
+        set -e
+        PREFIX="{{.NATIVE_PREFIX}}"
+        mkdir -p "$PREFIX"
+        cp -f "{{.ROOT_DIR}}/runtime/sarca" "$PREFIX/sarca"
+        chmod +x "$PREFIX/sarca"
+        echo "native binary → $PREFIX/sarca"
+
+  up:
+    desc: Build binary+UI and start Docker stack
+    deps: [ui, binary]
+    cmds:
+      - chmod +x "{{.ROOT_DIR}}/docker/sarca-entrypoint.sh" "{{.ROOT_DIR}}/docker/telegram-bot-api-entrypoint.sh"
+      - test -x "{{.ROOT_DIR}}/runtime/sarca"
+      - test -f "{{.ROOT_DIR}}/ui/dist/index.html"
+      - docker compose up -d --build --force-recreate --remove-orphans
+
+  down:
+    desc: Stop and remove stack
+    cmds:
+      - docker compose down
+
+  restart:
+    desc: Restart stack with fresh binary+UI
+    cmds:
+      - task: down
+      - task: up
+
+  smoke:
+    desc: Upload sample image+video against running API (SARCA_BASE_URL)
+    cmds:
+      - |
+        set -e
+        cd "{{.ROOT_DIR}}"
+        if [ ! -d .venv ]; then python3 -m venv .venv; .venv/bin/pip install -r e2e/requirements.txt; fi
+        # Prefer credentials from sarca.conf (ignore ambient e2e env).
+        env -u SUPERUSER_EMAIL -u SUPERUSER_PASS \
+          SARCA_BASE_URL="${SARCA_BASE_URL:-http://127.0.0.1:8001}" \
+          .venv/bin/python -m pytest -q e2e/test_upload_smoke.py -s

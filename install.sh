@@ -374,13 +374,23 @@ install_docker() {
   fi
   rm -f "${tmp_env}"
 
+  mkdir -p "${dest}/docker"
+  curl -fsSL -H "Cache-Control: no-cache" \
+    "${RAW}/docker/telegram-bot-api-entrypoint.sh" \
+    -o "${dest}/docker/telegram-bot-api-entrypoint.sh"
+  chmod +x "${dest}/docker/telegram-bot-api-entrypoint.sh"
+  curl -fsSL -H "Cache-Control: no-cache" \
+    "${RAW}/docker/sarca-entrypoint.sh" \
+    -o "${dest}/docker/sarca-entrypoint.sh"
+  chmod +x "${dest}/docker/sarca-entrypoint.sh"
+
   echo
   echo "Next:"
   echo "  cd ${dest}"
-  echo "  # edit sarca.conf if needed"
-  echo "  docker compose --env-file sarca.conf pull"
-  echo "  docker compose --env-file sarca.conf up -d"
-  echo "  open http://127.0.0.1:\${PORT:-8000}"
+  echo "  # edit sarca.conf (SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID/HASH)"
+  echo "  docker compose pull"
+  echo "  docker compose up -d"
+  echo "  open http://127.0.0.1:8000"
 }
 
 case "${MODE}" in

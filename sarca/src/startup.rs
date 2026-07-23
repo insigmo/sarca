@@ -190,15 +190,21 @@ pub async fn init_db(db: &PgPool) {
 #[inline]
 pub async fn create_superuser(db: &PgPool, config: &Config) {
     let password_hash = PasswordManager::generate(&config.superuser_pass).unwrap();
-    let user = InDBUser::new(config.superuser_email.clone(), password_hash);
+    let user = InDBUser::new(config.superuser_email.clone(), password_hash.clone());
     let result = UsersRepository::new(&db).create(user).await;
 
     match result {
         Ok(_) => tracing::debug!("created superuser"),
 
-        // ignoring conflict error -> just skipping it
+        // Keep password in sync with sarca.conf on every boot.
         Err(e) if matches!(e, SarcaError::AlreadyExists(_)) => {
-            tracing::debug!("superuser already exists; skipping")
+            if let Err(err) = UsersRepository::new(&db)
+                .update_password_hash(&config.superuser_email, &password_hash)
+                .await
+            {
+                panic!("can't sync superuser password: {err}");
+            }
+            tracing::debug!("superuser already exists; password synced from config");
         }
 
         // in case of another error kind -> terminating process

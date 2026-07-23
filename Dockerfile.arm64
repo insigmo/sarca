@@ -1,6 +1,9 @@
 # Runtime image for linux/arm64 — downloads a prebuilt release (no Rust/Node compile).
-# Binary targets are glibc (linux-gnu), so use Debian rather than Alpine/musl.
-FROM debian:bookworm-slim
+# Binary is glibc (linux-gnu). Use Ubuntu 24.04 so GLIBC matches GitHub builds.
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV WORK_DIR=/work
 
 # Empty / "latest" → GitHub /releases/latest/download; otherwise pin a tag (e.g. v0.0.6).
 ARG VERSION=latest
@@ -25,11 +28,15 @@ RUN apt-get update \
     && mv "/tmp/extract/${ASSET}/sarca" /sarca \
     && mv "/tmp/extract/${ASSET}/ui" /ui \
     && chmod +x /sarca \
+    && mkdir -p /work \
+    && chown -R nobody:nogroup /work \
     && rm -rf /tmp/sarca.tar.gz /tmp/extract \
     && apt-get purge -y curl \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
 
+COPY docker/sarca-entrypoint.sh /sarca-entrypoint.sh
+RUN chmod +x /sarca-entrypoint.sh
+
 WORKDIR /
-USER nobody
-ENTRYPOINT ["/sarca"]
+ENTRYPOINT ["/sarca-entrypoint.sh"]

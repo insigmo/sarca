@@ -59,7 +59,10 @@ impl From<SarcaError> for (StatusCode, String) {
             SarcaError::DoesNotExist(_) => (StatusCode::NOT_FOUND, e.to_string()),
             SarcaError::HeaderMissed(_)
             | SarcaError::HeaderIsInvalid(..)
-            | SarcaError::InvalidFolderName => (StatusCode::BAD_REQUEST, e.to_string()),
+            | SarcaError::InvalidFolderName
+            | SarcaError::InvalidPath
+            | SarcaError::NoStorageWorkers
+            | SarcaError::TelegramAPIError(_) => (StatusCode::BAD_REQUEST, e.to_string()),
             _ => {
                 tracing::error!("{e}");
                 (
