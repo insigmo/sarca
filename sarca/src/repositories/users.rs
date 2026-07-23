@@ -49,4 +49,20 @@ impl<'d> UsersRepository<'d> {
             .await
             .map_err(|e| map_not_found(e, "user"))
     }
+
+    pub async fn update_password_hash(&self, email: &str, password_hash: &str) -> SarcaResult<()> {
+        let res = sqlx::query("UPDATE users SET password_hash = $2 WHERE email = $1")
+            .bind(email)
+            .bind(password_hash)
+            .execute(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
+        if res.rows_affected() == 0 {
+            return Err(SarcaError::DoesNotExist("user".into()));
+        }
+        Ok(())
+    }
 }
