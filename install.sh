@@ -75,51 +75,167 @@ detect_asset() {
   esac
 }
 
-release_url() {
-  # Empty VERSION → always follow GitHub's latest release redirect.
-  local asset="$1"
+# Resolve empty VERSION to the current GitHub "latest" release tag.
+resolve_version() {
   if [ -n "${VERSION}" ]; then
-    echo "https://github.com/${REPO}/releases/download/${VERSION}/${asset}"
+    echo "${VERSION}"
+    return
+  fi
+  local tag
+  tag="$(
+    curl -fsSL -H "Accept: application/vnd.github+json" \
+      -H "Cache-Control: no-cache" \
+      "https://api.github.com/repos/${REPO}/releases/latest" \
+      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+      | head -1
+  )"
+  if [ -z "${tag}" ]; then
+    echo "Could not resolve latest release tag for ${REPO}" >&2
+    exit 1
+  fi
+  echo "${tag}"
+}
+
+release_url() {
+  local asset="$1"
+  local ver="$2"
+  echo "https://github.com/${REPO}/releases/download/${ver}/${asset}"
+}
+
+# True if KEY=... already exists in the env file (even if value is empty).
+env_has_key() {
+  local file="$1" key="$2"
+  grep -E "^[[:space:]]*${key}=" "${file}" >/dev/null 2>&1
+}
+
+# Append KEY=VALUE only when KEY is missing from dest.
+env_append_missing() {
+  local dest="$1" key="$2" value="$3"
+  if env_has_key "${dest}" "${key}"; then
+    return 0
+  fi
+  printf '%s=%s\n' "${key}" "${value}" >>"${dest}"
+  echo "  + ${key}"
+}
+
+# Soft-merge: keep every existing key/value, append only keys that are new.
+merge_env_defaults() {
+  local dest="$1"
+  shift
+  # remaining args: key=value pairs (value may be empty)
+  local pair key value added=0
+  for pair in "$@"; do
+    key="${pair%%=*}"
+    value="${pair#*=}"
+    if ! env_has_key "${dest}" "${key}"; then
+      if [ "${added}" -eq 0 ]; then
+        {
+          echo ""
+          echo "# Added by Sarca installer ($(date -u +%Y-%m-%dT%H:%MZ))"
+        } >>"${dest}"
+      fi
+      env_append_missing "${dest}" "${key}" "${value}"
+      added=1
+    fi
+  done
+  if [ "${added}" -eq 0 ]; then
+    echo "Env already has all known keys — left ${dest} unchanged"
   else
-    echo "https://github.com/${REPO}/releases/latest/download/${asset}"
+    echo "Merged new keys into ${dest} (existing values kept)"
   fi
 }
 
-write_env_binary() {
+write_or_merge_env_binary() {
   local dest="$1"
-  if [ -f "${dest}/.env" ]; then
-    echo "Keeping existing ${dest}/.env"
+  local env_file="${dest}/.env"
+  local secret
+  secret="$(openssl rand -hex 32 2>/dev/null || echo "change-me-to-a-long-random-string")"
+
+  # Defaults for a fresh install / soft-merge on upgrade.
+  set -- \
+    "PORT=8000" \
+    "WORKERS=4" \
+    "CHANNEL_CAPACITY=32" \
+    "SUPERUSER_EMAIL=admin@example.com" \
+    "SUPERUSER_PASS=change-me" \
+    "ACCESS_TOKEN_EXPIRE_IN_SECS=1800" \
+    "REFRESH_TOKEN_EXPIRE_IN_DAYS=14" \
+    "SECRET_KEY=${secret}" \
+    "TELEGRAM_LOCAL_API=false" \
+    "TELEGRAM_API_BASE_URL=https://api.telegram.org" \
+    "TELEGRAM_RATE_LIMIT=18" \
+    "TELEGRAM_CHUNK_SIZE_MB=20" \
+    "WORK_DIR=${dest}/work" \
+    "TELEGRAM_BOT_TOKEN=" \
+    "TELEGRAM_CHANNEL_ID=" \
+    "STORAGE_NAME=" \
+    "TELEGRAM_API_ID=" \
+    "TELEGRAM_API_HASH=" \
+    "DATABASE_USER=sarca" \
+    "DATABASE_PASSWORD=sarca" \
+    "DATABASE_NAME=sarca" \
+    "DATABASE_HOST=127.0.0.1" \
+    "DATABASE_PORT=5432"
+
+  if [ ! -f "${env_file}" ]; then
+    local line
+    : >"${env_file}"
+    for line in "$@"; do
+      printf '%s\n' "${line}" >>"${env_file}"
+    done
+    echo "Wrote ${env_file} — edit SUPERUSER_* / SECRET_KEY / DATABASE_* before first run"
     return
   fi
-  cat >"${dest}/.env" <<EOF
-PORT=8000
-WORKERS=4
-CHANNEL_CAPACITY=32
-SUPERUSER_EMAIL=admin@example.com
-SUPERUSER_PASS=change-me
-ACCESS_TOKEN_EXPIRE_IN_SECS=1800
-REFRESH_TOKEN_EXPIRE_IN_DAYS=14
-SECRET_KEY=$(openssl rand -hex 32 2>/dev/null || echo "change-me-to-a-long-random-string")
 
-TELEGRAM_LOCAL_API=false
-TELEGRAM_API_BASE_URL=https://api.telegram.org
-TELEGRAM_RATE_LIMIT=18
-TELEGRAM_CHUNK_SIZE_MB=20
-WORK_DIR=${dest}/work
+  echo "Updating ${env_file} (keeping existing values)…"
+  merge_env_defaults "${env_file}" "$@"
+}
 
-# Optional: set all three to auto-create storage + bot on startup,
-# or leave empty and configure via the UI.
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHANNEL_ID=
-STORAGE_NAME=
+# Soft-merge keys from a template file (e.g. .env.example) into dest .env.
+merge_env_from_template() {
+  local dest="$1"
+  local template="$2"
+  local key value line added=0
 
-DATABASE_USER=sarca
-DATABASE_PASSWORD=sarca
-DATABASE_NAME=sarca
-DATABASE_HOST=127.0.0.1
-DATABASE_PORT=5432
-EOF
-  echo "Wrote ${dest}/.env — edit SUPERUSER_* / SECRET_KEY / DATABASE_* before first run"
+  if [ ! -f "${dest}" ]; then
+    cp "${template}" "${dest}"
+    echo "Wrote ${dest} from template"
+    return
+  fi
+
+  echo "Updating ${dest} (keeping existing values)…"
+  while IFS= read -r line || [ -n "${line}" ]; do
+    case "${line}" in
+      ''|\#*) continue ;;
+    esac
+    case "${line}" in
+      *=*) ;;
+      *) continue ;;
+    esac
+    key="${line%%=*}"
+    # trim surrounding whitespace from key
+    key="$(printf '%s' "${key}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    value="${line#*=}"
+    if [ -z "${key}" ]; then
+      continue
+    fi
+    if ! env_has_key "${dest}" "${key}"; then
+      if [ "${added}" -eq 0 ]; then
+        {
+          echo ""
+          echo "# Added by Sarca installer ($(date -u +%Y-%m-%dT%H:%MZ))"
+        } >>"${dest}"
+      fi
+      env_append_missing "${dest}" "${key}" "${value}"
+      added=1
+    fi
+  done <"${template}"
+
+  if [ "${added}" -eq 0 ]; then
+    echo "Env already has all known keys — left ${dest} unchanged"
+  else
+    echo "Merged new keys into ${dest} (existing values kept)"
+  fi
 }
 
 install_binary() {
@@ -127,16 +243,30 @@ install_binary() {
   need_cmd tar
   need_cmd uname
 
-  local asset url tmp dir wrapper label
+  local asset url tmp dir wrapper ver prev
   asset="$(detect_asset)"
-  url="$(release_url "${asset}")"
-  label="${VERSION:-latest}"
+  ver="$(resolve_version)"
+  VERSION="${ver}"
+  url="$(release_url "${asset}" "${ver}")"
   tmp="$(mktemp -d)"
   # Expand path when registering the trap (tmp may be unset later under `set -u`).
   trap 'rm -rf "'"${tmp}"'"' EXIT
 
-  echo "Installing Sarca ${label} (${asset}) → ${PREFIX}"
-  if ! curl -fL --progress-bar -o "${tmp}/${asset}" "${url}"; then
+  prev=""
+  if [ -f "${PREFIX}/VERSION" ]; then
+    prev="$(tr -d '[:space:]' <"${PREFIX}/VERSION" || true)"
+  fi
+  if [ -n "${prev}" ] && [ "${prev}" = "${ver}" ]; then
+    echo "Reinstalling Sarca ${ver} (${asset}) → ${PREFIX}"
+  elif [ -n "${prev}" ]; then
+    echo "Upgrading Sarca ${prev} → ${ver} (${asset}) → ${PREFIX}"
+  else
+    echo "Installing Sarca ${ver} (${asset}) → ${PREFIX}"
+  fi
+
+  if ! curl -fL --progress-bar \
+    -H "Cache-Control: no-cache" \
+    -o "${tmp}/${asset}" "${url}"; then
     echo "Failed to download ${url}" >&2
     echo "Publish a GitHub Release (tag v*) so /releases/latest has assets." >&2
     exit 1
@@ -150,19 +280,14 @@ install_binary() {
   fi
 
   mkdir -p "${PREFIX}" "${BIN_DIR}" "${PREFIX}/work"
-  # Replace install tree but keep .env if present
-  if [ -f "${PREFIX}/.env" ]; then
-    cp "${PREFIX}/.env" "${tmp}/.env.keep"
-  fi
+  # Always replace binary + UI; soft-merge .env separately.
   rm -rf "${PREFIX}/sarca" "${PREFIX}/ui"
   cp "${dir}/sarca" "${PREFIX}/sarca"
   chmod +x "${PREFIX}/sarca"
   cp -a "${dir}/ui" "${PREFIX}/ui"
-  if [ -f "${tmp}/.env.keep" ]; then
-    mv "${tmp}/.env.keep" "${PREFIX}/.env"
-  else
-    write_env_binary "${PREFIX}"
-  fi
+  printf '%s\n' "${ver}" >"${PREFIX}/VERSION"
+
+  write_or_merge_env_binary "${PREFIX}"
 
   wrapper="${BIN_DIR}/sarca"
   cat >"${wrapper}" <<EOF
@@ -177,8 +302,9 @@ EOF
   chmod +x "${wrapper}"
 
   echo
-  echo "Installed."
+  echo "Installed ${ver}."
   echo "  app:     ${PREFIX}"
+  echo "  version: ${PREFIX}/VERSION"
   echo "  command: ${wrapper}"
   echo
   echo "Next:"
@@ -197,19 +323,25 @@ EOF
 install_docker() {
   need_cmd curl
   local dest="${PREFIX}"
+  local tmp_env
   if [ "${PREFIX}" = "${HOME}/.local/share/sarca" ]; then
     dest="$(pwd)/sarca"
   fi
   mkdir -p "${dest}"
   echo "Scaffolding Docker deploy → ${dest}"
-  curl -fsSL "${RAW}/docker-compose.yml" -o "${dest}/docker-compose.yml"
+  curl -fsSL -H "Cache-Control: no-cache" \
+    "${RAW}/docker-compose.yml" -o "${dest}/docker-compose.yml"
+
+  tmp_env="$(mktemp)"
+  curl -fsSL -H "Cache-Control: no-cache" \
+    "${RAW}/.env.example" -o "${tmp_env}"
+
   if [ -f "${dest}/.env" ]; then
-    echo "Keeping existing ${dest}/.env"
+    merge_env_from_template "${dest}/.env" "${tmp_env}"
   else
-    curl -fsSL "${RAW}/.env.example" -o "${dest}/.env"
+    cp "${tmp_env}" "${dest}/.env"
     if command -v openssl >/dev/null 2>&1; then
       secret="$(openssl rand -hex 32)"
-      # portable-ish in-place replace for SECRET_KEY=XXX
       if sed --version >/dev/null 2>&1; then
         sed -i "s/^SECRET_KEY=.*/SECRET_KEY=${secret}/" "${dest}/.env"
       else
@@ -218,10 +350,13 @@ install_docker() {
     fi
     echo "Wrote ${dest}/.env — set SUPERUSER_*, TELEGRAM_API_ID/HASH, SECRET_KEY"
   fi
+  rm -f "${tmp_env}"
+
   echo
   echo "Next:"
   echo "  cd ${dest}"
-  echo "  # edit .env"
+  echo "  # edit .env if needed"
+  echo "  docker compose pull"
   echo "  docker compose up -d"
   echo "  open http://127.0.0.1:\${PORT:-8000}"
 }
