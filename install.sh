@@ -14,7 +14,7 @@ usage() {
 Usage: install.sh [--docker] [--version vX.Y.Z] [--prefix DIR]
 
   (default)  Download the matching release archive and install binary + UI
-  --docker   Download docker-compose.yml + .env into ./sarca (or \$PREFIX)
+  --docker   Download compose.yml + .env into ./sarca (or \$PREFIX)
 
 Env:
   SARCA_REPO     GitHub repo (default: ${REPO})
@@ -330,7 +330,7 @@ install_docker() {
   mkdir -p "${dest}"
   echo "Scaffolding Docker deploy → ${dest}"
   curl -fsSL -H "Cache-Control: no-cache" \
-    "${RAW}/docker-compose.yml" -o "${dest}/docker-compose.yml"
+    "${RAW}/compose.yml" -o "${dest}/compose.yml"
 
   tmp_env="$(mktemp)"
   curl -fsSL -H "Cache-Control: no-cache" \
