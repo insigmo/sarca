@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use axum::Router;
+use axum::{http::StatusCode, Router};
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
     cors,
@@ -78,6 +78,8 @@ impl Server {
                 "/storage_workers",
                 StorageWorkersRouter::get_router(app_state.clone()),
             )
+            // Keep unknown /api/* from falling through to the SPA HTML fallback.
+            .fallback(|| async { (StatusCode::NOT_FOUND, "Not Found") })
             .layer(ConcurrencyLimitLayer::new(workers.into()))
             .layer(app_cors)
     }
