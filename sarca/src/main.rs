@@ -10,7 +10,7 @@ use crate::{
     common::{channels::ClientMessage, db::pool::get_pool, routing::app_state::AppState},
     config::Config,
     server::Server,
-    startup::{create_db, create_superuser, init_db},
+    startup::{bootstrap_storage_from_env, create_db, create_superuser, init_db},
     storage_manager::StorageManager,
 };
 
@@ -78,6 +78,9 @@ async fn main() {
 
     // creating a superuser
     create_superuser(&db, &config).await;
+
+    // optional: storage + bot from TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID / STORAGE_NAME
+    bootstrap_storage_from_env(&db, &config).await;
 
     // running manager
     let config_copy = config.clone();

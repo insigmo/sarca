@@ -53,7 +53,7 @@ const Storages = () => {
 						<Show
 							when={storages().length}
 							fallback={
-								<BoxEmpty message="No storages yet — create one to get started." />
+								<BoxEmpty message="No storages yet — create one in the UI (New storage), or set TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, and STORAGE_NAME in .env for auto-setup." />
 							}
 						>
 							<TableHead>
