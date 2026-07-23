@@ -37,7 +37,7 @@ You can use it as a personal drive, a shared team vault, or as an API similar to
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash
 ```
 
-1. Edit `~/.local/share/sarca/.env` (`SUPERUSER_*`, `SECRET_KEY`, `DATABASE_*`)
+1. Edit `~/.local/share/sarca/sarca.conf` (`SUPERUSER_*`, `SECRET_KEY`, `DATABASE_*`)
 2. Make sure Postgres is reachable
 3. Run:
 
@@ -53,14 +53,14 @@ Open http://127.0.0.1:8000
 irm https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.ps1 | iex
 ```
 
-Edit `%LOCALAPPDATA%\Sarca\.env`, then run `sarca.cmd` from the install folder (path is printed by the installer).
+Edit `%LOCALAPPDATA%\Sarca\sarca.conf`, then run `sarca.cmd` from the install folder (path is printed by the installer).
 
 ### Docker Compose
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
 cd sarca
-# edit .env: SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID, TELEGRAM_API_HASH
+# edit sarca.conf: SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID, TELEGRAM_API_HASH
 docker compose up -d
 ```
 
@@ -80,7 +80,7 @@ Needs Cargo, Node.js, pnpm, and Postgres.
 ```sh
 git clone https://github.com/insigmo/sarca.git
 cd sarca
-cp .env.example .env   # edit credentials
+cp sarca.conf.example sarca.conf   # edit credentials
 
 cd ui && pnpm install && pnpm run build && cd ..
 cd sarca && cargo build --release && cd ..
@@ -90,7 +90,7 @@ cp -a ui/dist/. run/ui/
 cp sarca/target/release/sarca run/
 
 cd run
-set -a && . ../.env && set +a
+set -a && . ../sarca.conf && set +a
 ./sarca
 ```
 
@@ -100,7 +100,7 @@ set -a && . ../.env && set +a
 
 ### 1. Sign in
 
-Open the UI and sign in with the superuser from `.env` (or register a new user if registration is enabled for your setup).
+Open the UI and sign in with the superuser from `sarca.conf` (or register a new user if registration is enabled for your setup).
 
 ### 2. Create a Telegram channel / group
 
@@ -115,7 +115,7 @@ Open the UI and sign in with the superuser from `.env` (or register a new user i
 - Regular groups: negative id without the `-100` prefix
 - Private chats (positive ids) are not supported
 
-**Optional auto-setup:** set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID` (channel id **without** the `-100` prefix), and `STORAGE_NAME` in `.env`. On startup Sarca creates the storage and attaches the bot for the superuser. If those are left empty, configure them in the UI instead.
+**Optional auto-setup:** set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID` (channel id **without** the `-100` prefix), and `STORAGE_NAME` in `sarca.conf`. On startup Sarca creates the storage and attaches the bot for the superuser. If those are left empty, configure them in the UI instead.
 
 ### 3. Create a storage
 
@@ -140,7 +140,7 @@ Open the storage filesystem to:
 
 Official Bot API caps downloads around 20 MB. With Local Bot API (compose service `telegram-bot-api`) you can use much larger chunks (up to ~2 GB per document).
 
-In `.env`:
+In `sarca.conf`:
 
 ```env
 TELEGRAM_LOCAL_API=true
@@ -161,7 +161,7 @@ For a minor/major bump: **Actions → Release binaries → Run workflow** and pi
 
 ## Configuration
 
-See [`.env.example`](.env.example) for the full list. Important keys:
+See [`sarca.conf.example`](sarca.conf.example) for the full list. Important keys:
 
 | Variable | Purpose |
 |---|---|

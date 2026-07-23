@@ -10,6 +10,7 @@ target/
 *.pdb
 
 .env
+sarca.conf
 
 .vscode
 

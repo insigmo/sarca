@@ -20,3 +20,15 @@ impl PasswordManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_and_verify_roundtrip() {
+        let hash = PasswordManager::generate("s3cret").unwrap();
+        assert!(PasswordManager::verify("s3cret", &hash).is_ok());
+        assert!(PasswordManager::verify("wrong", &hash).is_err());
+    }
+}

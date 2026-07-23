@@ -12,6 +12,12 @@ import pytest
 BASE_URL = os.environ.get("SARCA_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 SUPERUSER_EMAIL = os.environ.get("SUPERUSER_EMAIL", "e2e@sarca.test")
 SUPERUSER_PASS = os.environ.get("SUPERUSER_PASS", "e2e-password")
+SERVER_LOG = os.environ.get("SARCA_SERVER_LOG")
+
+
+@pytest.fixture(scope="session")
+def server_log_path() -> str | None:
+    return SERVER_LOG
 
 
 @pytest.fixture(scope="session")

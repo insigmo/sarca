@@ -1,9 +1,10 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
+    time::Duration,
 };
 
-use tokio::{sync::mpsc, time};
+use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
@@ -15,6 +16,7 @@ use crate::{
 };
 
 mod common;
+mod conf;
 mod config;
 mod errors;
 mod models;
@@ -26,23 +28,21 @@ mod services;
 mod startup;
 mod storage_manager;
 
+fn die(msg: impl std::fmt::Display) -> ! {
+    eprintln!("error: {msg}");
+    std::process::exit(1);
+}
+
 #[tokio::main]
 async fn main() {
-    let config = Config::new().unwrap_or_else(|e| {
-        eprintln!("error: failed to load config: {e}");
-        std::process::exit(1);
-    });
+    // Load sarca.conf (or migrate legacy .env) before reading Config.
+    conf::load_sarca_conf();
 
-    // Make sure filesystem work dir exists early.
+    let config = Config::new().unwrap_or_else(|e| die(format!("failed to load config: {e}")));
+
     tokio::fs::create_dir_all(&config.work_dir)
         .await
-        .unwrap_or_else(|e| {
-            eprintln!(
-                "error: failed to create WORK_DIR {}: {e}",
-                config.work_dir
-            );
-            std::process::exit(1);
-        });
+        .unwrap_or_else(|e| die(format!("failed to create WORK_DIR {}: {e}", config.work_dir)));
 
     tracing_subscriber::registry()
         .with(
@@ -53,30 +53,39 @@ async fn main() {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    tracing::info!("starting Sarca on port {}", config.port);
+    let port = config.port;
+    eprintln!("starting Sarca (PORT={port} from config)…");
+    tracing::info!("starting Sarca on port {port}");
+
+    let db_timeout = Duration::from_secs(10);
     let (tx, rx) = mpsc::channel::<ClientMessage>(config.channel_capacity.into());
 
-    // creating db
+    eprintln!("connecting to Postgres…");
     create_db(
         &config.db_uri_without_dbname,
         &config.db_name,
         config.workers.into(),
-        time::Duration::from_secs(30),
+        db_timeout,
     )
-    .await;
+    .await
+    .unwrap_or_else(|e| {
+        die(format!(
+            "{e}\nhint: check DATABASE_* in sarca.conf and that Postgres is running"
+        ))
+    });
 
-    // set up connection pool
-    let db = get_pool(
-        &config.db_uri,
-        config.workers.into(),
-        time::Duration::from_secs(30),
-    )
-    .await;
+    let db = get_pool(&config.db_uri, config.workers.into(), db_timeout)
+        .await
+        .unwrap_or_else(|e| {
+            die(format!(
+                "{e}\nhint: check DATABASE_* in sarca.conf and that Postgres is running"
+            ))
+        });
+    eprintln!("database ok");
 
-    // initing db
+    eprintln!("initializing schema…");
     init_db(&db).await;
 
-    // drop unfinished uploads left from crashed sessions
     match crate::repositories::files::FilesRepository::new(&db)
         .cleanup_stale_uploads(60)
         .await
@@ -86,35 +95,25 @@ async fn main() {
         Err(e) => tracing::warn!("stale upload cleanup failed: {e}"),
     }
 
-    // creating a superuser
+    eprintln!("ensuring superuser…");
     create_superuser(&db, &config).await;
-
-    // optional: storage + bot from TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID / STORAGE_NAME
     bootstrap_storage_from_env(&db, &config).await;
 
-    // running manager
     let config_copy = config.clone();
+    let workers = config.workers;
     tokio::spawn(async move {
-        let db = get_pool(
-            &config_copy.db_uri,
-            config.workers.into(),
-            time::Duration::from_secs(30),
-        )
-        .await;
-        let mut manager = StorageManager::new(rx, db, config_copy);
-
-        tracing::debug!("running manager");
-        manager.run().await;
+        match get_pool(&config_copy.db_uri, workers.into(), db_timeout).await {
+            Ok(db) => {
+                let mut manager = StorageManager::new(rx, db, config_copy);
+                tracing::debug!("running manager");
+                manager.run().await;
+            }
+            Err(e) => tracing::error!("storage manager db pool failed: {e}"),
+        }
     });
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), config.port);
-
-    let server = {
-        let workers = config.workers;
-        let app_state = AppState::new(db, config, tx);
-        let shared_state = Arc::new(app_state);
-        Server::build_server(workers.into(), shared_state)
-    };
-
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port);
+    let app_state = AppState::new(db, config, tx);
+    let server = Server::build_server(workers.into(), Arc::new(app_state));
     server.run(&addr).await
 }

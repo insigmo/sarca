@@ -1337,32 +1337,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sarca"
-version = "0.0.6"
-dependencies = [
- "async-stream",
- "axum",
- "futures",
- "image",
- "jsonwebtoken",
- "mime_guess",
- "percent-encoding",
- "pwhash",
- "reqwest",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 1.0.50",
- "tokio",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "percent-encoding"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1741,6 +1715,33 @@ name = "ryu"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ad4cc8da4ef723ed60bced201181d83791ad433213d8c24efffda1eec85d741"
+
+[[package]]
+name = "sarca"
+version = "0.0.10"
+dependencies = [
+ "async-stream",
+ "axum",
+ "futures",
+ "hyper",
+ "image",
+ "jsonwebtoken",
+ "mime_guess",
+ "percent-encoding",
+ "pwhash",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 1.0.50",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
 
 [[package]]
 name = "scopeguard"
