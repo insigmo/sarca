@@ -34,7 +34,7 @@ You can use it as a personal drive, a shared team vault, or as an API similar to
 ### Linux / macOS (Apple Silicon)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash
 ```
 
 1. Edit `~/.local/share/sarca/.env` (`SUPERUSER_*`, `SECRET_KEY`, `DATABASE_*`)
@@ -50,7 +50,7 @@ Open http://127.0.0.1:8000
 ### Windows (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/insigmo/sarca/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.ps1 | iex
 ```
 
 Edit `%LOCALAPPDATA%\Sarca\.env`, then run `sarca.cmd` from the install folder (path is printed by the installer).
@@ -58,7 +58,7 @@ Edit `%LOCALAPPDATA%\Sarca\.env`, then run `sarca.cmd` from the install folder (
 ### Docker Compose
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/main/install.sh | bash -s -- --docker
+curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
 cd sarca
 # edit .env: SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID, TELEGRAM_API_HASH
 docker compose up -d

@@ -22,3 +22,6 @@ e2e/.venv/
 # UI
 ui/node_modules/
 ui/dist/
+
+
+.idea/

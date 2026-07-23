@@ -2,7 +2,8 @@
 # Binary targets are glibc (linux-gnu), so use Debian rather than Alpine/musl.
 FROM debian:bookworm-slim
 
-ARG VERSION=v0.0.6
+# Empty / "latest" → GitHub /releases/latest/download; otherwise pin a tag (e.g. v0.0.6).
+ARG VERSION=latest
 ARG GITHUB_REPO=insigmo/sarca
 ARG ASSET=sarca_linux_arm64
 
@@ -13,8 +14,12 @@ RUN apt-get update \
         ffmpeg \
         poppler-utils \
         tar \
-    && curl -fsSL -o /tmp/sarca.tar.gz \
-        "https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${ASSET}.tar.gz" \
+    && if [ -z "${VERSION}" ] || [ "${VERSION}" = "latest" ]; then \
+         URL="https://github.com/${GITHUB_REPO}/releases/latest/download/${ASSET}.tar.gz"; \
+       else \
+         URL="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/${ASSET}.tar.gz"; \
+       fi \
+    && curl -fsSL -o /tmp/sarca.tar.gz "${URL}" \
     && mkdir -p /tmp/extract \
     && tar -xzf /tmp/sarca.tar.gz -C /tmp/extract \
     && mv "/tmp/extract/${ASSET}/sarca" /sarca \
