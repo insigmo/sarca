@@ -6,7 +6,10 @@ use uuid::Uuid;
 use crate::{
     common::{
         access::check_access,
-        channels::{ClientData, ClientMessage, ClientSender, StorageManagerData, UploadFileData},
+        channels::{
+            ClientData, ClientMessage, ClientSender, StorageManagerData, UploadFileData,
+            UploadProgressEvent,
+        },
         jwt_manager::AuthUser,
     },
     errors::{SarcaError, SarcaResult},
@@ -19,6 +22,7 @@ use crate::{
     },
     schemas::files::{InFileSchema, InFolderSchema},
 };
+use tokio::sync::mpsc;
 
 pub struct FilesService<'d> {
     repo: FilesRepository<'d>,
@@ -74,7 +78,21 @@ impl<'d> FilesService<'d> {
         self.repo.create_folder(in_file).await.map(|_| ())
     }
 
-    pub async fn upload_to(&self, in_schema: InFileSchema, user: &AuthUser) -> SarcaResult<()> {
+    pub async fn ensure_upload_allowed(
+        &self,
+        storage_id: Uuid,
+        user: &AuthUser,
+    ) -> SarcaResult<()> {
+        check_access(&self.access_repo, user.id, storage_id, &AccessType::W).await?;
+        Self::check_storage_workers(self, storage_id).await
+    }
+
+    pub async fn upload_to_with_progress(
+        &self,
+        in_schema: InFileSchema,
+        user: &AuthUser,
+        progress: Option<mpsc::Sender<UploadProgressEvent>>,
+    ) -> SarcaResult<()> {
         // 0. checking access
         check_access(
             &self.access_repo,
@@ -97,16 +115,17 @@ impl<'d> FilesService<'d> {
         // 3. saving file to db
         let file = self.repo.create_file(in_file).await?;
 
-        self._upload_from_path(file, in_schema.file_path, in_schema.size)
+        self._upload_from_path(file, in_schema.file_path, in_schema.size, progress)
             .await
     }
 
-    pub async fn upload_anyway_from_path(
+    pub async fn upload_anyway_from_path_with_progress(
         &self,
         in_file: InFile,
         file_path: PathBuf,
         file_size: i64,
         user: &AuthUser,
+        progress: Option<mpsc::Sender<UploadProgressEvent>>,
     ) -> SarcaResult<()> {
         // 0. checking access
         check_access(
@@ -123,7 +142,7 @@ impl<'d> FilesService<'d> {
         // 2. saving file in db
         let file = self.repo.create_file_anyway(in_file).await?;
 
-        self._upload_from_path(file, file_path, file_size).await
+        self._upload_from_path(file, file_path, file_size, progress).await
     }
 
     async fn _upload_from_path(
@@ -131,6 +150,7 @@ impl<'d> FilesService<'d> {
         file: File,
         file_path: PathBuf,
         file_size: i64,
+        progress: Option<mpsc::Sender<UploadProgressEvent>>,
     ) -> SarcaResult<()> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
@@ -139,6 +159,7 @@ impl<'d> FilesService<'d> {
                 file_id: file.id,
                 file_path,
                 file_size,
+                progress,
             }),
             tx: resp_tx,
         };

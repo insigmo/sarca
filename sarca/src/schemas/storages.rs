@@ -8,6 +8,11 @@ pub struct InStorageSchema {
     pub chat_id: ChatId,
 }
 
+#[derive(Deserialize)]
+pub struct UpdateStorageSchema {
+    pub name: String,
+}
+
 #[derive(Serialize)]
 pub struct StoragesListSchema {
     pub storages: Vec<StorageWithInfo>,
