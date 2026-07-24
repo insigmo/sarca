@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::common::db::errors::map_not_found;
 use crate::errors::{SarcaError, SarcaResult};
-use crate::models::file_chunks::FileChunk;
+use crate::models::file_chunks::{FileChunk, FileChunkWithReplica};
 use crate::models::files::{DBFSElement, FSElement, File, InFile, SearchFSElement};
 
 pub const FILES_TABLE: &str = "files";
@@ -35,8 +35,8 @@ impl<'d> FilesRepository<'d> {
         sqlx::query(
             format!(
                 "
-                INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded)
-                VALUES ($1, $2, $3, $4, $5);
+                INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded, chunk_size_bytes)
+                VALUES ($1, $2, $3, $4, $5, $6);
             "
             )
             .as_str(),
@@ -46,6 +46,7 @@ impl<'d> FilesRepository<'d> {
         .bind(in_obj.size)
         .bind(in_obj.storage_id)
         .bind(is_uploaded)
+        .bind(in_obj.chunk_size_bytes)
         .execute(self.db)
         .await
         .map_err(|e| match e {
@@ -61,7 +62,14 @@ impl<'d> FilesRepository<'d> {
             }
         })?;
 
-        let storage = File::new(id, in_obj.path, in_obj.size, in_obj.storage_id, false);
+        let storage = File::new(
+            id,
+            in_obj.path,
+            in_obj.size,
+            in_obj.storage_id,
+            false,
+            in_obj.chunk_size_bytes,
+        );
         Ok(storage)
     }
 
@@ -88,7 +96,7 @@ impl<'d> FilesRepository<'d> {
         sqlx::query_as(
             format!(
                 r#"
-                INSERT INTO files (path, storage_id, id, size, is_uploaded)
+                INSERT INTO files (path, storage_id, id, size, is_uploaded, chunk_size_bytes)
                 WITH f AS (
                     SELECT path
                     FROM {FILES_TABLE}
@@ -140,7 +148,8 @@ impl<'d> FilesRepository<'d> {
                     $3,
                     $4,
                     $5,
-                    false
+                    false,
+                    $6
                 FROM f
                 RETURNING *;
             "#
@@ -152,6 +161,7 @@ impl<'d> FilesRepository<'d> {
         .bind(in_obj.storage_id)
         .bind(id)
         .bind(in_obj.size)
+        .bind(in_obj.chunk_size_bytes)
         .fetch_one(self.db)
         .await
         .map_err(|e| match e {
@@ -167,13 +177,11 @@ impl<'d> FilesRepository<'d> {
 
     pub async fn create_chunks_batch(&self, chunks: Vec<FileChunk>) -> SarcaResult<()> {
         QueryBuilder::new(
-            format!("INSERT INTO {CHUNKS_TABLE} (id, file_id, telegram_file_id, position)")
-                .as_str(),
+            format!("INSERT INTO {CHUNKS_TABLE} (id, file_id, position)").as_str(),
         )
         .push_values(chunks, |mut q, chunk| {
             q.push_bind(chunk.id)
                 .push_bind(chunk.file_id)
-                .push_bind(chunk.telegram_file_id)
                 .push_bind(chunk.position);
         })
         .build()
@@ -182,6 +190,50 @@ impl<'d> FilesRepository<'d> {
         .map_err(|_| SarcaError::Unknown)?;
 
         Ok(())
+    }
+
+    /// Chunks of `file_id` that have an `uploaded` replica on `channel_id`, ordered by position.
+    /// Length may be less than the file's total chunk count if that channel doesn't (yet)
+    /// have every chunk replicated.
+    pub async fn list_chunks_with_replica_for_channel(
+        &self,
+        file_id: Uuid,
+        channel_id: Uuid,
+    ) -> SarcaResult<Vec<FileChunkWithReplica>> {
+        sqlx::query_as(
+            format!(
+                "
+                SELECT fc.id, fc.file_id, fc.position, cr.telegram_file_id, cr.channel_id
+                FROM {CHUNKS_TABLE} fc
+                JOIN chunk_replicas cr ON cr.chunk_id = fc.id
+                    AND cr.channel_id = $2
+                    AND cr.status = 'uploaded'
+                    AND cr.telegram_file_id IS NOT NULL
+                WHERE fc.file_id = $1
+                ORDER BY fc.position
+                "
+            )
+            .as_str(),
+        )
+        .bind(file_id)
+        .bind(channel_id)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })
+    }
+
+    pub async fn count_chunks_of_file(&self, file_id: Uuid) -> SarcaResult<i64> {
+        let row: (i64,) = sqlx::query_as(
+            format!("SELECT COUNT(*) FROM {CHUNKS_TABLE} WHERE file_id = $1").as_str(),
+        )
+        .bind(file_id)
+        .fetch_one(self.db)
+        .await
+        .map_err(|_| SarcaError::Unknown)?;
+        Ok(row.0)
     }
 
     /// NOTE:

@@ -10,7 +10,7 @@ use crate::{
     repositories::{storages::StoragesRepository, users::UsersRepository},
     schemas::{
         storage_workers::InStorageWorkerSchema,
-        storages::InStorageSchema,
+        storages::{ChannelInput, InStorageSchema},
     },
     services::{storage_workers::StorageWorkersService, storages::StoragesService},
 };
@@ -64,9 +64,9 @@ pub async fn init_db(db: &PgPool) {
     ",
         "
         CREATE TABLE IF NOT EXISTS storages (
-            id      UUID         PRIMARY KEY,
-            name    VARCHAR(255) NOT NULL,
-            chat_id BigInt       NOT NULL UNIQUE
+            id               UUID         PRIMARY KEY,
+            name             VARCHAR(255) NOT NULL,
+            primary_position SMALLINT     NOT NULL DEFAULT 1
         );
 
     ",
@@ -130,13 +130,16 @@ pub async fn init_db(db: &PgPool) {
         ADD COLUMN IF NOT EXISTS thumb_telegram_file_id VARCHAR(255);
     ",
         "
+        ALTER TABLE files
+        ADD COLUMN IF NOT EXISTS chunk_size_bytes BIGINT;
+    ",
+        "
         CREATE TABLE IF NOT EXISTS file_chunks (
-            id               UUID         PRIMARY KEY,
-            file_id          UUID         NOT NULL REFERENCES files 
-                                                ON DELETE CASCADE 
-                                                ON UPDATE CASCADE,
-            telegram_file_id VARCHAR(255) NOT NULL,
-            position         SmallInt     NOT NULL
+            id       UUID     PRIMARY KEY,
+            file_id  UUID     NOT NULL REFERENCES files 
+                                    ON DELETE CASCADE 
+                                    ON UPDATE CASCADE,
+            position SmallInt NOT NULL
         );
     ",
         "
@@ -173,6 +176,94 @@ pub async fn init_db(db: &PgPool) {
         END;
         $$;
     "#,
+        // --- multi-chat storage replication ---
+        "
+        CREATE TABLE IF NOT EXISTS storage_channels (
+            id         UUID         PRIMARY KEY,
+            storage_id UUID         NOT NULL REFERENCES storages
+                                            ON DELETE CASCADE
+                                            ON UPDATE CASCADE,
+            position   SMALLINT     NOT NULL CHECK (position BETWEEN 1 AND 3),
+            chat_id    BigInt       NOT NULL UNIQUE,
+            name       VARCHAR(255) NOT NULL,
+            status     VARCHAR(16)  NOT NULL DEFAULT 'active',
+
+            UNIQUE(storage_id, position)
+        );
+    ",
+        "
+        ALTER TABLE storages
+        ADD COLUMN IF NOT EXISTS primary_position SMALLINT NOT NULL DEFAULT 1;
+    ",
+        // Migrate legacy `storages.chat_id` (1 chat per storage) into a position=1 channel,
+        // then drop the column. Idempotent: only runs while the column still exists.
+        "
+        DO
+        $$
+        BEGIN
+        IF EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'storages'
+              AND column_name = 'chat_id'
+        ) THEN
+            INSERT INTO storage_channels (id, storage_id, position, chat_id, name, status)
+            SELECT gen_random_uuid(), s.id, 1, s.chat_id, s.name, 'active'
+            FROM storages s
+            WHERE NOT EXISTS (
+                SELECT 1 FROM storage_channels sc WHERE sc.storage_id = s.id
+            );
+
+            ALTER TABLE storages DROP COLUMN chat_id;
+        END IF;
+        END;
+        $$;
+    ",
+        "
+        CREATE TABLE IF NOT EXISTS chunk_replicas (
+            id                  UUID        PRIMARY KEY,
+            chunk_id            UUID        NOT NULL REFERENCES file_chunks
+                                                    ON DELETE CASCADE
+                                                    ON UPDATE CASCADE,
+            channel_id          UUID        NOT NULL REFERENCES storage_channels
+                                                    ON DELETE CASCADE
+                                                    ON UPDATE CASCADE,
+            telegram_file_id    VARCHAR(255),
+            telegram_message_id BigInt,
+            status              VARCHAR(16) NOT NULL DEFAULT 'pending',
+
+            UNIQUE(chunk_id, channel_id)
+        );
+    ",
+        // Migrate legacy `file_chunks.telegram_file_id` into a replica on the storage's
+        // primary channel, then drop the column. Idempotent: only runs while it exists.
+        "
+        DO
+        $$
+        BEGIN
+        IF EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'file_chunks'
+              AND column_name = 'telegram_file_id'
+        ) THEN
+            INSERT INTO chunk_replicas (id, chunk_id, channel_id, telegram_file_id, telegram_message_id, status)
+            SELECT gen_random_uuid(), fc.id, sc.id, fc.telegram_file_id, NULL, 'uploaded'
+            FROM file_chunks fc
+            JOIN files f ON f.id = fc.file_id
+            JOIN storages s ON s.id = f.storage_id
+            JOIN storage_channels sc ON sc.storage_id = s.id AND sc.position = s.primary_position
+            WHERE NOT EXISTS (
+                SELECT 1 FROM chunk_replicas cr WHERE cr.chunk_id = fc.id AND cr.channel_id = sc.id
+            );
+
+            ALTER TABLE file_chunks DROP COLUMN telegram_file_id;
+        END IF;
+        END;
+        $$;
+    ",
     ] {
         sqlx::query(statement)
             .execute(&mut *transaction)
@@ -270,12 +361,15 @@ pub async fn bootstrap_storage_from_env(db: &PgPool, config: &Config) {
         }
     };
 
-    let storages = StoragesService::new(db);
+    let storages = StoragesService::new(db, &config.telegram_api_base_url, config.telegram_rate_limit);
     let storage = match storages
         .create(
             InStorageSchema {
                 name: storage_name.to_owned(),
-                chat_id,
+                channels: vec![ChannelInput {
+                    chat_id,
+                    name: None,
+                }],
             },
             &user,
         )
@@ -285,7 +379,7 @@ pub async fn bootstrap_storage_from_env(db: &PgPool, config: &Config) {
             tracing::info!(
                 "env bootstrap: created storage \"{}\" (chat_id={})",
                 storage.name,
-                storage.chat_id
+                chat_id
             );
             storage
         }

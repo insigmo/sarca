@@ -1,15 +1,16 @@
 use serde::Serialize;
 
-use crate::common::types::ChatId;
-
 pub struct InStorage {
     pub name: String,
-    pub chat_id: ChatId,
+    pub primary_position: i16,
 }
 
 impl InStorage {
-    pub fn new(name: String, chat_id: ChatId) -> Self {
-        Self { name, chat_id }
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            primary_position: 1,
+        }
     }
 }
 
@@ -17,12 +18,16 @@ impl InStorage {
 pub struct Storage {
     pub id: uuid::Uuid,
     pub name: String,
-    pub chat_id: ChatId,
+    pub primary_position: i16,
 }
 
 impl Storage {
-    pub fn new(id: uuid::Uuid, name: String, chat_id: ChatId) -> Self {
-        Self { id, name, chat_id }
+    pub fn new(id: uuid::Uuid, name: String, primary_position: i16) -> Self {
+        Self {
+            id,
+            name,
+            primary_position,
+        }
     }
 }
 
@@ -30,7 +35,8 @@ impl Storage {
 pub struct StorageWithInfo {
     pub id: uuid::Uuid,
     pub name: String,
-    pub chat_id: ChatId,
+    pub primary_position: i16,
     pub files_amount: i64,
     pub size: i64,
+    pub has_dead_channel: bool,
 }
