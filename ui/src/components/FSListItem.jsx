@@ -9,6 +9,8 @@ import VisibilityIcon from '@suid/icons-material/Visibility'
 import DownloadIcon from '@suid/icons-material/Download'
 import InfoIcon from '@suid/icons-material/Info'
 import DeleteIcon from '@suid/icons-material/Delete'
+import RestoreFromTrashIcon from '@suid/icons-material/RestoreFromTrash'
+import DeleteForeverIcon from '@suid/icons-material/DeleteForever'
 import DriveFileRenameOutlineIcon from '@suid/icons-material/DriveFileRenameOutline'
 import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
 import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
@@ -28,6 +30,10 @@ import { fileBaseName, fileExtensionLabel } from '../common/fileLabel'
  * @property {string} storageId
  * @property {() => {}} onDelete
  * @property {(file: import("../api").FSElement) => void} [onOpen]
+ * @property {boolean} [trashMode]
+ * @property {(el: import("../api").FSElement) => void} [onRestore]
+ * @property {(el: import("../api").FSElement) => void} [onDeleteForever]
+ * @property {(el: import("../api").FSElement) => void} [onTrashNavigate]
  */
 
 /**
@@ -52,6 +58,12 @@ const FSListItem = (props) => {
 	}
 
 	const handleNavigate = () => {
+		if (props.trashMode) {
+			if (!props.fsElement.is_file) {
+				props.onTrashNavigate?.(props.fsElement)
+			}
+			return
+		}
 		if (!props.fsElement.is_file) {
 			navigate(`/storages/${props.storageId}/files/${props.fsElement.path}`)
 		} else {
@@ -159,6 +171,11 @@ const FSListItem = (props) => {
 		props.onDelete()
 	}
 
+	const confirmDeleteForever = async () => {
+		closeActionConfirmDialog()
+		props.onDeleteForever?.(props.fsElement)
+	}
+
 	const rename = async () => {
 		handleCloseMore()
 		const currentName = props.fsElement.name
@@ -247,61 +264,90 @@ const FSListItem = (props) => {
 				onClose={handleCloseMore}
 				MenuListProps={{ 'aria-labelledby': 'basic-button' }}
 			>
-				<MenuItem
-					onClick={openViewer}
-					disabled={!props.fsElement.is_file}
+				<Show
+					when={props.trashMode}
+					fallback={
+						<>
+							<MenuItem
+								onClick={openViewer}
+								disabled={!props.fsElement.is_file}
+							>
+								<ListItemIcon>
+									<VisibilityIcon fontSize="small" />
+								</ListItemIcon>
+								<ListItemText>Open</ListItemText>
+							</MenuItem>
+
+							<MenuItem onClick={() => setIsInfoDialogOpened(true)}>
+								<ListItemIcon>
+									<InfoIcon fontSize="small" />
+								</ListItemIcon>
+								<ListItemText>Info</ListItemText>
+							</MenuItem>
+
+							<MenuItem
+								onClick={download}
+								disabled={isParentNav() || isDownloading()}
+							>
+								<ListItemIcon>
+									<DownloadIcon fontSize="small" />
+								</ListItemIcon>
+								<ListItemText>Download</ListItemText>
+							</MenuItem>
+
+							<MenuItem onClick={rename}>
+								<ListItemIcon>
+									<DriveFileRenameOutlineIcon fontSize="small" />
+								</ListItemIcon>
+								<ListItemText>Rename</ListItemText>
+							</MenuItem>
+
+							<MenuItem onClick={moveTo}>
+								<ListItemIcon>
+									<DriveFileMoveIcon fontSize="small" />
+								</ListItemIcon>
+								<ListItemText>Move</ListItemText>
+							</MenuItem>
+
+							<MenuItem onClick={openActionConfirmDialog}>
+								<ListItemIcon>
+									<DeleteIcon fontSize="small" />
+								</ListItemIcon>
+								<ListItemText>Delete</ListItemText>
+							</MenuItem>
+						</>
+					}
 				>
-					<ListItemIcon>
-						<VisibilityIcon fontSize="small" />
-					</ListItemIcon>
-					<ListItemText>Open</ListItemText>
-				</MenuItem>
-
-				<MenuItem onClick={() => setIsInfoDialogOpened(true)}>
-					<ListItemIcon>
-						<InfoIcon fontSize="small" />
-					</ListItemIcon>
-					<ListItemText>Info</ListItemText>
-				</MenuItem>
-
-				<MenuItem
-					onClick={download}
-					disabled={isParentNav() || isDownloading()}
-				>
-					<ListItemIcon>
-						<DownloadIcon fontSize="small" />
-					</ListItemIcon>
-					<ListItemText>Download</ListItemText>
-				</MenuItem>
-
-				<MenuItem onClick={rename}>
-					<ListItemIcon>
-						<DriveFileRenameOutlineIcon fontSize="small" />
-					</ListItemIcon>
-					<ListItemText>Rename</ListItemText>
-				</MenuItem>
-
-				<MenuItem onClick={moveTo}>
-					<ListItemIcon>
-						<DriveFileMoveIcon fontSize="small" />
-					</ListItemIcon>
-					<ListItemText>Move</ListItemText>
-				</MenuItem>
-
-				<MenuItem onClick={openActionConfirmDialog}>
-					<ListItemIcon>
-						<DeleteIcon fontSize="small" />
-					</ListItemIcon>
-					<ListItemText>Delete</ListItemText>
-				</MenuItem>
+					<MenuItem
+						onClick={() => {
+							handleCloseMore()
+							props.onRestore?.(props.fsElement)
+						}}
+					>
+						<ListItemIcon>
+							<RestoreFromTrashIcon fontSize="small" />
+						</ListItemIcon>
+						<ListItemText>Restore</ListItemText>
+					</MenuItem>
+					<MenuItem onClick={openActionConfirmDialog}>
+						<ListItemIcon>
+							<DeleteForeverIcon fontSize="small" />
+						</ListItemIcon>
+						<ListItemText>Delete forever</ListItemText>
+					</MenuItem>
+				</Show>
 			</MenuMUI>
 
 			<ActionConfirmDialog
-				action="Delete"
-				entity="file"
-				actionDescription={`delete file ${props.fsElement.name}`}
+				action={props.trashMode ? 'Delete forever' : 'Move to trash'}
+				entity={props.fsElement.is_file ? 'file' : 'folder'}
+				actionDescription={
+					props.trashMode
+						? `permanently delete ${props.fsElement.name} (including Telegram copies)`
+						: `move ${props.fsElement.name} to trash`
+				}
 				isOpened={isActionConfirmDialogOpened()}
-				onConfirm={deleteFile}
+				onConfirm={props.trashMode ? confirmDeleteForever : deleteFile}
 				onCancel={closeActionConfirmDialog}
 			/>
 

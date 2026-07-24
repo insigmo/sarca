@@ -706,6 +706,63 @@ impl<'t> TelegramBotApi<'t> {
         })
     }
 
+    /// Best-effort Telegram `deleteMessage`. Missing/already-deleted messages are treated as success.
+    pub async fn delete_message(
+        &self,
+        chat_id: ChatId,
+        message_id: i64,
+        storage_id: Uuid,
+    ) -> SarcaResult<()> {
+        let token = self.scheduler.get_token(storage_id).await?;
+        let url = self.build_url("", "deleteMessage", token);
+        let masked_url = self.mask_url(&url);
+
+        let response = Self::send_with_retries("deleteMessage", || {
+            reqwest::Client::new()
+                .post(&url)
+                .form(&[
+                    ("chat_id", chat_id.to_string()),
+                    ("message_id", message_id.to_string()),
+                ])
+                .send()
+        })
+        .await?;
+
+        let status = response.status();
+        if status.is_success() {
+            return Ok(());
+        }
+
+        let error_body = response.text().await.unwrap_or_default();
+        let lower = error_body.to_lowercase();
+        if lower.contains("message to delete not found")
+            || lower.contains("message can't be deleted")
+            || lower.contains("message_id_invalid")
+        {
+            return Ok(());
+        }
+
+        tracing::warn!(
+            target: "http_outbound",
+            "{}",
+            json!({
+                "status": status.as_u16(),
+                "method": "POST",
+                "url": masked_url,
+                "body": {
+                    "chat_id": chat_id,
+                    "message_id": message_id
+                },
+                "response": error_body,
+            })
+        );
+
+        Err(SarcaError::TelegramAPIError(format!(
+            "{}: {}",
+            status, error_body
+        )))
+    }
+
     /// Taking token by a value to force dropping it so it can be used only once
     #[inline]
     fn build_url(&self, pre: &str, relative: &str, token: String) -> String {

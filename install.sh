@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install Sarca from the latest GitHub Release (binary + UI),
 # or scaffold a Docker Compose deploy with --docker.
-set -euo pipefail
+set -uo pipefail
 
 REPO="${SARCA_REPO:-insigmo/sarca}"
 RAW="https://raw.githubusercontent.com/${REPO}/refs/heads/master"
@@ -306,7 +306,7 @@ install_binary() {
   wrapper="${BIN_DIR}/sarca"
   cat >"${wrapper}" <<EOF
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
 cd "${PREFIX}"
 set -a
 [ -f sarca.conf ] && . ./sarca.conf

@@ -33,7 +33,7 @@ use crate::{
         storage_channels::StorageChannelsRepository, storages::StoragesRepository,
     },
     schemas::files::{
-        InFileSchema, InFolderSchema, MoveSchema, RenameSchema, SearchQuery, UploadParams,
+        InFolderSchema, MoveSchema, RenameSchema, SearchQuery, UploadParams,
     },
     services::files::FilesService,
     services::storage_workers_scheduler::StorageWorkersScheduler,
@@ -48,7 +48,6 @@ impl FilesRouter {
         Router::new()
             .route("/create_folder", post(Self::create_folder))
             .route("/upload", post(Self::upload))
-            .route("/upload_to", post(Self::upload_to))
             .route("/rename", post(Self::rename))
             .route("/move", post(Self::move_to))
             .route("/*path", get(Self::dynamic_get).delete(Self::delete))
@@ -215,127 +214,6 @@ impl FilesRouter {
                     &user,
                     Some(progress_tx),
                 )
-                .await;
-            if result.is_err() {
-                let _ = tokio::fs::remove_file(&tmp_for_task).await;
-            }
-            result
-        });
-
-        Ok(Self::ndjson_upload_progress_response(progress_rx, upload_task))
-    }
-
-    async fn upload_to(
-        State(state): State<Arc<AppState>>,
-        Extension(user): Extension<AuthUser>,
-        RoutePath(storage_id): RoutePath<Uuid>,
-        mut multipart: Multipart,
-    ) -> Result<Response, (StatusCode, String)> {
-        let upload_dir = Path::new(&state.config.work_dir).join("uploads");
-        tokio::fs::create_dir_all(&upload_dir).await.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "Can't create upload directory under WORK_DIR (check permissions): {e}"
-                ),
-            )
-        })?;
-
-        let tmp_path = upload_dir.join(format!("{}.upload", Uuid::new_v4()));
-        let mut tmp_file = tokio::fs::File::create(&tmp_path)
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't create temp file".to_owned()))?;
-
-        // `path` is the destination folder (may be empty for root).
-        let (mut filename_field, mut filename_from_file, mut parent_path, mut file_size) =
-            (None::<String>, None::<String>, None::<String>, 0i64);
-        let mut file_content_type = None::<String>;
-
-        while let Some(mut field) = multipart
-            .next_field()
-            .await
-            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid multipart".to_owned()))?
-        {
-            let name = field.name().unwrap_or("").to_owned();
-            match name.as_str() {
-                "path" => {
-                    let raw_path = field
-                        .text()
-                        .await
-                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid path".to_owned()))?;
-                    let decoded = percent_decode_str(&raw_path).decode_utf8_lossy();
-                    parent_path = Some(decoded.into_owned());
-                }
-                "filename" => {
-                    let raw_name = field
-                        .text()
-                        .await
-                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid filename".to_owned()))?;
-                    let decoded = percent_decode_str(&raw_name).decode_utf8_lossy();
-                    if !decoded.trim().is_empty() {
-                        filename_field = Some(decoded.into_owned());
-                    }
-                }
-                "file" => {
-                    let raw_name = field.file_name().unwrap_or("").to_owned();
-                    if !raw_name.trim().is_empty() {
-                        filename_from_file = Some(raw_name);
-                    }
-                    if let Some(ct) = field.content_type() {
-                        file_content_type = Some(ct.to_string());
-                    }
-                    while let Some(chunk) = field
-                        .chunk()
-                        .await
-                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid file stream".to_owned()))?
-                    {
-                        file_size += chunk.len() as i64;
-                        tmp_file
-                            .write_all(&chunk)
-                            .await
-                            .map_err(|_| {
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "Can't write temp file".to_owned(),
-                                )
-                            })?;
-                    }
-                }
-                _ => (),
-            }
-        }
-
-        tmp_file
-            .flush()
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't flush temp file".to_owned()))?;
-
-        let parent_path =
-            parent_path.ok_or((StatusCode::BAD_REQUEST, "path field is required".to_owned()))?;
-        let filename = filename_field
-            .or(filename_from_file)
-            .unwrap_or_else(|| "unnamed".to_owned());
-        let path = Self::construct_path(&parent_path, &filename)?;
-
-        FilesService::new(&state.db, state.tx.clone())
-            .ensure_upload_allowed(storage_id, &user)
-            .await
-            .map_err(<(StatusCode, String)>::from)?;
-
-        let chunk_size_bytes = state
-            .config
-            .chunk_size_bytes_for_file(&path, file_content_type.as_deref());
-        let in_schema =
-            InFileSchema::new(storage_id, path, tmp_path.clone(), file_size, chunk_size_bytes);
-        let (progress_tx, progress_rx) = mpsc::channel(64);
-        let db = state.db.clone();
-        let client_tx = state.tx.clone();
-        let user = user.clone();
-        let tmp_for_task = tmp_path.clone();
-
-        let upload_task = tokio::spawn(async move {
-            let result = FilesService::new(&db, client_tx)
-                .upload_to_with_progress(in_schema, &user, Some(progress_tx))
                 .await;
             if result.is_err() {
                 let _ = tokio::fs::remove_file(&tmp_for_task).await;

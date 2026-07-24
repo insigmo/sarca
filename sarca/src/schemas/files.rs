@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -6,32 +5,6 @@ use uuid::Uuid;
 pub struct UploadParams {
     pub path: String,
     pub folder_name: String,
-}
-
-pub struct InFileSchema {
-    pub storage_id: Uuid,
-    pub path: String,
-    pub size: i64,
-    pub file_path: PathBuf,
-    pub chunk_size_bytes: i64,
-}
-
-impl InFileSchema {
-    pub fn new(
-        storage_id: Uuid,
-        path: String,
-        file_path: PathBuf,
-        size: i64,
-        chunk_size_bytes: i64,
-    ) -> Self {
-        Self {
-            storage_id,
-            path,
-            size,
-            file_path,
-            chunk_size_bytes,
-        }
-    }
 }
 
 pub struct InFolderSchema {
@@ -74,4 +47,17 @@ pub struct RenameSchema {
 pub struct MoveSchema {
     pub path: String,
     pub destination_folder: String,
+}
+
+#[derive(Deserialize)]
+pub struct RestoreTrashSchema {
+    pub path: String,
+    /// `replace` | `rename` when a live file already exists at the path.
+    pub on_conflict: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct TrashListQuery {
+    /// Optional folder prefix inside trash (no leading slash).
+    pub path: Option<String>,
 }

@@ -134,6 +134,41 @@ pub async fn init_db(db: &PgPool) {
         ADD COLUMN IF NOT EXISTS chunk_size_bytes BIGINT;
     ",
         "
+        ALTER TABLE files
+        ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    ",
+        "
+        ALTER TABLE files
+        ADD COLUMN IF NOT EXISTS thumb_telegram_message_id BIGINT;
+    ",
+        r#"
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM pg_constraint
+            WHERE conname = 'files_path_storage_id_key'
+          ) THEN
+            ALTER TABLE files DROP CONSTRAINT files_path_storage_id_key;
+          END IF;
+        END $$;
+    "#,
+        "
+        CREATE UNIQUE INDEX IF NOT EXISTS files_path_storage_id_alive_uidx
+          ON files (path, storage_id)
+          WHERE deleted_at IS NULL;
+    ",
+        "
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+    ",
+        "
+        INSERT INTO app_settings (key, value)
+        VALUES ('trash_retention_days', '30')
+        ON CONFLICT (key) DO NOTHING;
+    ",
+        "
         CREATE TABLE IF NOT EXISTS file_chunks (
             id       UUID     PRIMARY KEY,
             file_id  UUID     NOT NULL REFERENCES files 

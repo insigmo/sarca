@@ -45,6 +45,10 @@ pub enum SarcaError {
     LastActiveChannel,
     #[error("Storage has no active channel available")]
     NoActiveChannel,
+    #[error("A file already exists at this path")]
+    TrashPathConflict,
+    #[error("Invalid trash retention days (must be 1–30)")]
+    InvalidTrashRetention,
     #[error("unknown error")]
     Unknown,
     #[error("{0} header is required")]
@@ -64,7 +68,8 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::StorageDoesNotHaveWorkers
             | SarcaError::TooManyChannels
             | SarcaError::LastActiveChannel
-            | SarcaError::CannotManageAccessOfYourself => (StatusCode::CONFLICT, e.to_string()),
+            | SarcaError::CannotManageAccessOfYourself
+            | SarcaError::TrashPathConflict => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
             SarcaError::DoesNotExist(_) => (StatusCode::NOT_FOUND, e.to_string()),
             SarcaError::FolderTooLargeForZip => {
@@ -76,6 +81,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::InvalidPath
             | SarcaError::NoStorageWorkers
             | SarcaError::NoActiveChannel
+            | SarcaError::InvalidTrashRetention
             | SarcaError::TelegramAPIError(_) => (StatusCode::BAD_REQUEST, e.to_string()),
             _ => {
                 tracing::error!("{e}");

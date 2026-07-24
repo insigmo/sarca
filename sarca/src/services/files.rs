@@ -20,7 +20,7 @@ use crate::{
     repositories::{
         access::AccessRepository, files::FilesRepository, storage_workers::StorageWorkersRepository,
     },
-    schemas::files::{InFileSchema, InFolderSchema},
+    schemas::files::{InFolderSchema},
 };
 use tokio::sync::mpsc;
 
@@ -85,39 +85,6 @@ impl<'d> FilesService<'d> {
     ) -> SarcaResult<()> {
         check_access(&self.access_repo, user.id, storage_id, &AccessType::W).await?;
         Self::check_storage_workers(self, storage_id).await
-    }
-
-    pub async fn upload_to_with_progress(
-        &self,
-        in_schema: InFileSchema,
-        user: &AuthUser,
-        progress: Option<mpsc::Sender<UploadProgressEvent>>,
-    ) -> SarcaResult<()> {
-        // 0. checking access
-        check_access(
-            &self.access_repo,
-            user.id,
-            in_schema.storage_id,
-            &AccessType::W,
-        )
-        .await?;
-
-        // 1. check whether storage got workers
-        Self::check_storage_workers(&self, in_schema.storage_id).await?;
-
-        // 2. path validation
-        if !Self::validate_filepath(&in_schema.path) {
-            return Err(SarcaError::InvalidPath);
-        }
-
-        let in_file = InFile::new(in_schema.path, in_schema.size, in_schema.storage_id)
-            .with_chunk_size(in_schema.chunk_size_bytes);
-
-        // 3. saving file to db
-        let file = self.repo.create_file(in_file).await?;
-
-        self._upload_from_path(file, in_schema.file_path, in_schema.size, progress)
-            .await
     }
 
     pub async fn upload_anyway_from_path_with_progress(

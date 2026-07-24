@@ -251,4 +251,41 @@ impl<'d> ChunkReplicasRepository<'d> {
             SarcaError::Unknown
         })
     }
+
+    /// `(chat_id, message_id, storage_id)` for Telegram `deleteMessage` for the given files.
+    pub async fn list_telegram_messages_for_files(
+        &self,
+        file_ids: &[Uuid],
+    ) -> SarcaResult<Vec<(ChatId, i64, Uuid)>> {
+        if file_ids.is_empty() {
+            return Ok(vec![]);
+        }
+        let rows: Vec<(ChatId, Option<i64>, Uuid)> = sqlx::query_as(
+            format!(
+                "
+                SELECT sc.chat_id, cr.telegram_message_id, sc.storage_id
+                FROM {TABLE} cr
+                JOIN file_chunks fc ON fc.id = cr.chunk_id
+                JOIN storage_channels sc ON sc.id = cr.channel_id
+                WHERE fc.file_id = ANY($1)
+                  AND cr.telegram_message_id IS NOT NULL
+                "
+            )
+            .as_str(),
+        )
+        .bind(file_ids)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|(chat_id, message_id, storage_id)| {
+                message_id.map(|mid| (chat_id, mid, storage_id))
+            })
+            .collect())
+    }
 }

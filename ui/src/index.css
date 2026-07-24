@@ -469,6 +469,8 @@ a.default-link:hover {
 .files-page__toolbar {
 	display: flex;
 	justify-content: flex-end;
+	align-items: center;
+	gap: 8px;
 	margin-bottom: 4px;
 }
 
@@ -1530,6 +1532,16 @@ a.default-link:hover {
 	border: none;
 	box-shadow: none;
 	cursor: pointer;
+}
+
+.file-viewer__buffering {
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	display: grid;
+	place-items: center;
+	pointer-events: none;
+	background: rgba(5, 8, 22, 0.35);
 }
 
 .file-viewer__loading,

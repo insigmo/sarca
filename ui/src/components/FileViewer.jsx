@@ -44,6 +44,7 @@ const formatTime = (sec) => {
 const FileViewer = (props) => {
 	const { addAlert } = alertStore
 	const [loading, setLoading] = createSignal(false)
+	const [firstChunkLoading, setFirstChunkLoading] = createSignal(false)
 	const [isDownloading, setIsDownloading] = createSignal(false)
 	const [error, setError] = createSignal(null)
 	const [textContent, setTextContent] = createSignal('')
@@ -172,6 +173,7 @@ const FileViewer = (props) => {
 		setDuration(0)
 		setProgress(0)
 		setChromeVisible(true)
+		setFirstChunkLoading(false)
 		chromePinned = false
 		clearHideChromeTimer()
 	}
@@ -313,6 +315,7 @@ const FileViewer = (props) => {
 
 		if (['image', 'video', 'audio', 'pdf'].includes(k)) {
 			setLoading(false)
+			setFirstChunkLoading(k === 'video')
 			setMediaUrl(API.files.getInlineMediaUrl(props.storageId, file.path))
 			if (k === 'video') scheduleHideChrome()
 			return
@@ -389,6 +392,10 @@ const FileViewer = (props) => {
 			cancelled = true
 		})
 	})
+
+	const onFirstChunkReady = () => {
+		setFirstChunkLoading(false)
+	}
 
 	const downloadFile = async () => {
 		if (!props.file || isDownloading()) return
@@ -703,12 +710,18 @@ const FileViewer = (props) => {
 										ref={(el) => {
 											mediaEl = el
 											applyVolumeToMedia()
+											if (el && el.readyState >= 2) {
+												setFirstChunkLoading(false)
+											}
 										}}
 										src={mediaUrl()}
 										playsinline
 										preload="auto"
 										onTimeUpdate={onMediaTimeUpdate}
 										onLoadedMetadata={onMediaMeta}
+										onLoadedData={onFirstChunkReady}
+										onCanPlay={onFirstChunkReady}
+										onError={onFirstChunkReady}
 										onPlay={() => {
 											if (!silentBufferKick) setPlaying(true)
 										}}
@@ -716,6 +729,15 @@ const FileViewer = (props) => {
 										onClick={togglePlay}
 										class="file-viewer__video"
 									/>
+									<Show when={firstChunkLoading()}>
+										<div
+											class="file-viewer__buffering"
+											aria-live="polite"
+											aria-busy="true"
+										>
+											<CircularProgress color="secondary" size={48} />
+										</div>
+									</Show>
 									<div
 										class="file-viewer__controls"
 										onMouseEnter={() => pinChrome(true)}

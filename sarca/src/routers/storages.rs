@@ -27,12 +27,14 @@ use crate::{
 };
 
 use super::files::FilesRouter;
+use super::trash::TrashRouter;
 
 pub struct StoragesRouter;
 
 impl StoragesRouter {
     pub fn get_router(state: Arc<AppState>) -> Router {
         let files_router = FilesRouter::get_router(state.clone());
+        let trash_router = TrashRouter::get_router(state.clone());
         Router::new()
             .route("/", get(Self::list).post(Self::create))
             .route(
@@ -58,6 +60,7 @@ impl StoragesRouter {
                 axum::routing::post(Self::retry_replication),
             )
             .nest("/:storage_id/files", files_router)
+            .nest("/:storage_id/trash", trash_router)
             .route_layer(middleware::from_fn_with_state(
                 state.clone(),
                 logged_in_required,
