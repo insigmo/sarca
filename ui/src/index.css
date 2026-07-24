@@ -1921,25 +1921,29 @@ a.default-link:hover {
 	.settings-nav {
 		width: 100%;
 		flex-direction: row;
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 		align-items: stretch;
 		gap: 8px;
 		border-right: none;
 		border-bottom: 1px solid color-mix(in srgb, var(--sarca-ink) 8%, transparent);
-		padding: 4px 14px 12px;
+		padding: 24px 14px 12px;
 		overflow-x: auto;
+		position: relative;
 		background: color-mix(in srgb, var(--sarca-ink) 3%, transparent);
 	}
 
 	.settings-nav__label {
-		width: 100%;
-		margin: 0 0 2px 2px;
+		position: absolute;
+		top: 4px;
+		left: 16px;
+		right: 16px;
+		margin: 0;
 	}
 
 	.settings-nav__item {
 		width: auto;
-		flex: 1;
-		min-width: 140px;
+		flex: 0 0 116px;
+		min-width: 116px;
 		justify-content: flex-start;
 	}
 
@@ -2073,8 +2077,8 @@ a.default-link:hover {
 
 .file-viewer__close {
 	position: absolute;
-	top: 18px;
-	right: 18px;
+	top: calc(18px + env(safe-area-inset-top, 0px));
+	right: calc(18px + env(safe-area-inset-right, 0px));
 	z-index: 40;
 	width: 56px;
 	height: 56px;
@@ -2661,8 +2665,8 @@ a.default-link:hover {
 
 @media (max-width: 840px) {
 	.file-viewer__close {
-		top: 12px;
-		right: 12px;
+		top: calc(12px + env(safe-area-inset-top, 0px));
+		right: calc(12px + env(safe-area-inset-right, 0px));
 		width: 52px;
 		height: 52px;
 		font-size: 1.7rem;
@@ -2703,8 +2707,8 @@ a.default-link:hover {
 	}
 
 	.file-viewer__controls {
-		bottom: 16px;
-		width: calc(100% - 24px);
+		bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+		width: calc(100% - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
 	}
 
 	.file-viewer__title {
