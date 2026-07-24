@@ -1840,6 +1840,10 @@ a.default-link:hover {
 		display: none !important;
 	}
 
+	.header-brand-text {
+		display: none !important;
+	}
+
 	.sarca-appbar .MuiToolbar-root {
 		min-height: 56px;
 	}
