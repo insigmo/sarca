@@ -16,11 +16,9 @@ import Verify from './pages/Verify'
 import OAuthCallback from './pages/OAuthCallback'
 import NotFound from './pages/404'
 import { initTheme, useThemeMode } from './common/theme'
-import { settingsStore } from './common/settings'
 
-/** Opens settings modal then redirects to storages (workers live in Settings now). */
+/** Legacy workers routes → storages (bot is in storage settings). */
 const WorkersRedirect = () => {
-	onMount(() => settingsStore.openSettings())
 	return <Navigate href="/storages" />
 }
 

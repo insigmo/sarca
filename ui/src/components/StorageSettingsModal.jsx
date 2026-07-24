@@ -10,11 +10,12 @@ import EditIcon from '@suid/icons-material/Edit'
 import AddIcon from '@suid/icons-material/Add'
 import RefreshIcon from '@suid/icons-material/Refresh'
 import WarningAmberIcon from '@suid/icons-material/WarningAmber'
+import BadgeOutlinedIcon from '@suid/icons-material/BadgeOutlined'
+import HubOutlinedIcon from '@suid/icons-material/HubOutlined'
 
 import API from '../api'
 import { alertStore } from './AlertStack'
 import ActionConfirmDialog from './ActionConfirmDialog'
-import WaveDivider from './WaveDivider'
 
 const MAX_CHANNELS = 3
 
@@ -46,18 +47,17 @@ const validateChatId = (value) => {
  */
 const StorageSettingsModal = (props) => {
 	const { addAlert } = alertStore
+	const [tab, setTab] = createSignal(/** @type {'general' | 'telegram'} */ ('general'))
 	const [name, setName] = createSignal('')
 	const [saving, setSaving] = createSignal(false)
 	const [confirmDelete, setConfirmDelete] = createSignal(false)
 
-	// Channels + replication (multi-chat storage)
 	const [channels, setChannels] = createSignal([])
 	const [replication, setReplication] = createSignal(null)
+	const [bot, setBot] = createSignal(null)
 	const [loadingDetail, setLoadingDetail] = createSignal(false)
 	const [detailError, setDetailError] = createSignal(null)
 
-	// Add/edit one channel at a time. `editingId` is either a channel id or
-	// the string 'new' for the add-channel form.
 	const [editingId, setEditingId] = createSignal(null)
 	const [draftChatId, setDraftChatId] = createSignal('')
 	const [draftName, setDraftName] = createSignal('')
@@ -65,6 +65,11 @@ const StorageSettingsModal = (props) => {
 	const [savingChannel, setSavingChannel] = createSignal(false)
 	const [pendingRemoveChannel, setPendingRemoveChannel] = createSignal(null)
 	const [retrying, setRetrying] = createSignal(false)
+	const [refreshingChannels, setRefreshingChannels] = createSignal(false)
+	const [editingBot, setEditingBot] = createSignal(false)
+	const [botToken, setBotToken] = createSignal('')
+	const [savingBot, setSavingBot] = createSignal(false)
+	const [botFormError, setBotFormError] = createSignal(null)
 
 	const refreshDetail = async () => {
 		const storage = props.storage
@@ -76,11 +81,13 @@ const StorageSettingsModal = (props) => {
 			const detail = await API.storages.getStorageDetail(storage.id)
 			setChannels(detail.channels || [])
 			setReplication(detail.replication || null)
+			setBot(detail.bot || null)
 		} catch (err) {
 			console.error(err)
 			setDetailError('Could not load channels. Try reopening settings.')
 			setChannels([])
 			setReplication(null)
+			setBot(null)
 		} finally {
 			setLoadingDetail(false)
 		}
@@ -94,9 +101,13 @@ const StorageSettingsModal = (props) => {
 		}
 
 		setName(storage.name)
+		setTab('general')
 		setConfirmDelete(false)
 		setEditingId(null)
 		setPendingRemoveChannel(null)
+		setEditingBot(false)
+		setBotToken('')
+		setBotFormError(null)
 		document.body.style.overflow = 'hidden'
 
 		refreshDetail()
@@ -126,7 +137,7 @@ const StorageSettingsModal = (props) => {
 			return
 		}
 		if (next === storage.name) {
-			props.onClose()
+			addAlert('Name unchanged', 'info')
 			return
 		}
 
@@ -135,7 +146,6 @@ const StorageSettingsModal = (props) => {
 			const updated = await API.storages.renameStorage(storage.id, next)
 			addAlert(`Renamed storage to "${updated.name}"`, 'success')
 			props.onRenamed({ ...storage, name: updated.name })
-			props.onClose()
 		} catch (err) {
 			console.error(err)
 		} finally {
@@ -259,6 +269,131 @@ const StorageSettingsModal = (props) => {
 		}
 	}
 
+	const refreshChannelsFromBot = async () => {
+		const storage = props.storage
+		if (!storage) return
+
+		setRefreshingChannels(true)
+		try {
+			const result = await API.storages.refreshChannels(storage.id)
+			setChannels(result.channels || [])
+			const n = result.added?.length || 0
+			if (n > 0) {
+				addAlert(n === 1 ? 'Added 1 channel' : `Added ${n} channels`, 'success')
+			} else if (result.hint) {
+				addAlert(result.hint, 'warning')
+			} else if (result.skipped_full) {
+				addAlert('Already at 3 channels — remove one to add more', 'info')
+			} else if (result.skipped_in_use?.length) {
+				addAlert('Found channel(s) already used by another storage', 'warning')
+			} else {
+				addAlert(
+					'No new channels found. Add the bot as admin to a channel, then refresh.',
+					'info',
+				)
+			}
+		} catch (err) {
+			console.error(err)
+			addAlert(
+				err?.message ||
+					'Could not refresh channels. Is a bot attached to this storage?',
+				'error',
+			)
+		} finally {
+			setRefreshingChannels(false)
+		}
+	}
+
+	const startEditBot = () => {
+		setEditingBot(true)
+		setBotToken('')
+		setBotFormError(null)
+	}
+
+	const cancelEditBot = () => {
+		setEditingBot(false)
+		setBotToken('')
+		setBotFormError(null)
+	}
+
+	const saveBot = async () => {
+		const storage = props.storage
+		if (!storage) return
+
+		const token = botToken().trim()
+		if (!token || !token.includes(':')) {
+			setBotFormError('Paste a valid bot token from @BotFather')
+			return
+		}
+
+		setSavingBot(true)
+		setBotFormError(null)
+		try {
+			const hadBot = Boolean(bot())
+			const next = await API.storages.setStorageBot(storage.id, token)
+			setBot(next)
+			setEditingBot(false)
+			setBotToken('')
+			addAlert(
+				hadBot ? `Bot updated to "${next.name}"` : `Bot "${next.name}" attached`,
+				'success',
+			)
+			await refreshDetail()
+			setBot(next)
+		} catch (err) {
+			console.error(err)
+			setBotFormError(err?.message || 'Could not save bot token')
+		} finally {
+			setSavingBot(false)
+		}
+	}
+
+	const channelEditor = () => (
+		<div class="channel-row__edit-form">
+			<TextField
+				label="Chat id"
+				type="number"
+				size="small"
+				value={draftChatId()}
+				onChange={(_, v) => {
+					setDraftChatId(v)
+					setDraftError(null)
+				}}
+				error={typeof draftError() === 'string'}
+				helperText={
+					draftError() ||
+					(editingId() === 'new'
+						? 'Get chat ID via @userinfobot or @getidsbot.'
+						: '')
+				}
+				fullWidth
+				required
+				autoFocus
+			/>
+			<TextField
+				label="Name (optional)"
+				size="small"
+				value={draftName()}
+				onChange={(_, v) => setDraftName(v)}
+				fullWidth
+			/>
+			<div class="channel-row__edit-actions">
+				<Button
+					size="small"
+					variant="contained"
+					color="secondary"
+					disabled={savingChannel()}
+					onClick={saveChannel}
+				>
+					Save
+				</Button>
+				<Button size="small" disabled={savingChannel()} onClick={cancelEditChannel}>
+					Cancel
+				</Button>
+			</div>
+		</div>
+	)
+
 	return (
 		<>
 			<Show when={props.storage}>
@@ -281,7 +416,7 @@ const StorageSettingsModal = (props) => {
 								<div>
 									<h2 id="storage-settings-title">Storage settings</h2>
 									<p class="settings-modal__sub">
-										Rename, manage channels, or permanently delete this storage
+										{props.storage?.name || 'Storage'}
 									</p>
 								</div>
 								<IconButton
@@ -294,252 +429,321 @@ const StorageSettingsModal = (props) => {
 								</IconButton>
 							</div>
 
-						<WaveDivider class="settings-modal__wave" />
-
-						<div class="settings-modal__body">
-							<form class="storage-settings-form" onSubmit={saveName}>
-								<TextField
-									label="Name"
-									name="name"
-									value={name()}
-									onChange={(_, v) => setName(v)}
-									fullWidth
-									required
-									autoFocus
-									disabled={saving()}
-								/>
-								<div class="storage-settings-form__actions">
-									<Button
-										type="submit"
-										variant="contained"
-										color="secondary"
-										disabled={saving() || !name().trim()}
+							<div class="settings-modal__layout">
+								<nav class="settings-nav" aria-label="Storage settings sections">
+									<p class="settings-nav__label">Menu</p>
+									<button
+										type="button"
+										class="settings-nav__item"
+										classList={{ 'settings-nav__item--active': tab() === 'general' }}
+										onClick={() => setTab('general')}
 									>
-										Save
-									</Button>
-								</div>
-							</form>
+										<span class="settings-nav__icon" aria-hidden="true">
+											<BadgeOutlinedIcon fontSize="small" />
+										</span>
+										<span class="settings-nav__text">
+											<span class="settings-nav__title">General</span>
+											<span class="settings-nav__desc">Name & delete</span>
+										</span>
+									</button>
+									<button
+										type="button"
+										class="settings-nav__item"
+										classList={{
+											'settings-nav__item--active': tab() === 'telegram',
+										}}
+										onClick={() => setTab('telegram')}
+									>
+										<span class="settings-nav__icon" aria-hidden="true">
+											<HubOutlinedIcon fontSize="small" />
+										</span>
+										<span class="settings-nav__text">
+											<span class="settings-nav__title">Channels</span>
+											<span class="settings-nav__desc">
+												Bot · {channels().length}/{MAX_CHANNELS}
+											</span>
+										</span>
+									</button>
+								</nav>
 
-							<div class="channels-section">
-								<h3>Channels</h3>
-
-								<Show when={detailError()}>
-									<p class="channel-row__dead-message">{detailError()}</p>
-								</Show>
-
-								<Show when={loadingDetail() && !channels().length}>
-									<Typography color="text.secondary" sx={{ fontSize: '0.85rem' }}>
-										Loading channels…
-									</Typography>
-								</Show>
-
-								<div class="channels-list">
-									<For each={channels()}>
-										{(channel) => (
-											<div
-												class="channel-row"
-												classList={{ 'channel-row--dead': channel.status === 'dead' }}
-											>
-												<Show
-													when={editingId() === channel.id}
-													fallback={
-														<>
-															<div class="channel-row__top">
-																<div class="channel-row__info">
-																	<span class="channel-row__name">
-																		{channel.name || `Channel ${channel.position}`}
-																	</span>
-																	<span class="channel-row__chatid">
-																		id {channel.chat_id}
-																	</span>
-																	<span
-																		class={`channel-status channel-status--${channel.status}`}
-																	>
-																		{channel.status === 'active' ? 'Active' : 'Deleted'}
-																	</span>
-																</div>
-																<div class="channel-row__actions">
-																	<IconButton
-																		size="small"
-																		aria-label={`Edit channel ${channel.name || channel.position}`}
-																		onClick={() => startEditChannel(channel)}
-																	>
-																		<EditIcon fontSize="small" />
-																	</IconButton>
-																	<IconButton
-																		size="small"
-																		aria-label={`Remove channel ${channel.name || channel.position}`}
-																		onClick={() => requestRemoveChannel(channel)}
-																		sx={{ color: 'error.main' }}
-																	>
-																		<DeleteIcon fontSize="small" />
-																	</IconButton>
-																</div>
-															</div>
-															<Show when={channel.status === 'dead'}>
-																<p class="channel-row__dead-message">
-																	<WarningAmberIcon
-																		fontSize="inherit"
-																		sx={{ mr: 0.5, verticalAlign: 'text-bottom' }}
-																	/>
-																	Channel "{channel.name || `#${channel.position}`}"
-																	(id {channel.chat_id}) was deleted. Set a new chat id
-																	or add another channel.
-																</p>
-															</Show>
-														</>
-													}
+								<div class="settings-modal__body">
+									<Show when={tab() === 'general'}>
+										<form class="storage-settings-form" onSubmit={saveName}>
+											<p class="settings-panel__lead">
+												Rename this storage. The name is only shown in Sarca.
+											</p>
+											<TextField
+												label="Name"
+												name="name"
+												value={name()}
+												onChange={(_, v) => setName(v)}
+												fullWidth
+												required
+												autoFocus
+												disabled={saving()}
+											/>
+											<div class="storage-settings-form__actions">
+												<Button
+													type="submit"
+													variant="contained"
+													color="secondary"
+													disabled={saving() || !name().trim()}
 												>
-													<div class="channel-row__edit-form">
-														<TextField
-															label="Chat id"
-															type="number"
-															size="small"
-															value={draftChatId()}
-															onChange={(_, v) => {
-																setDraftChatId(v)
-																setDraftError(null)
-															}}
-															error={typeof draftError() === 'string'}
-															helperText={draftError() || ''}
-															fullWidth
-															required
-															autoFocus
-														/>
-														<TextField
-															label="Name (optional)"
-															size="small"
-															value={draftName()}
-															onChange={(_, v) => setDraftName(v)}
-															fullWidth
-														/>
-														<div class="channel-row__edit-actions">
-															<Button
-																size="small"
-																variant="contained"
-																color="secondary"
-																disabled={savingChannel()}
-																onClick={saveChannel}
-															>
-																Save
-															</Button>
-															<Button
-																size="small"
-																disabled={savingChannel()}
-																onClick={cancelEditChannel}
-															>
-																Cancel
-															</Button>
-														</div>
-													</div>
+													Save
+												</Button>
+											</div>
+										</form>
+
+										<div class="storage-settings-danger">
+											<p class="settings-panel__lead">
+												Permanently delete this storage and all its files. This
+												cannot be undone.
+											</p>
+											<Button
+												variant="outlined"
+												color="error"
+												startIcon={<DeleteIcon />}
+												disabled={saving()}
+												onClick={() => setConfirmDelete(true)}
+											>
+												Delete storage and files
+											</Button>
+										</div>
+									</Show>
+
+									<Show when={tab() === 'telegram'}>
+										<div class="bot-section">
+											<div class="bot-section__head">
+												<p class="settings-panel__lead">
+													One bot per storage. Paste a new token to replace
+													it.
+												</p>
+												<Show when={!editingBot()}>
+													<Button
+														variant="outlined"
+														size="small"
+														onClick={startEditBot}
+													>
+														{bot() ? 'Change bot' : 'Add bot'}
+													</Button>
 												</Show>
 											</div>
-										)}
-									</For>
 
-									<Show when={editingId() === 'new'}>
-										<div class="channel-row">
-											<div class="channel-row__edit-form">
-												<TextField
-													label="Chat id"
-													type="number"
-													size="small"
-													value={draftChatId()}
-													onChange={(_, v) => {
-														setDraftChatId(v)
-														setDraftError(null)
-													}}
-													error={typeof draftError() === 'string'}
-													helperText={
-														draftError() ||
-														'Get chat ID via @userinfobot or @getidsbot.'
+											<Show when={editingBot()}>
+												<div class="bot-section__form">
+													<TextField
+														label="Bot token"
+														value={botToken()}
+														onChange={(_, v) => {
+															setBotToken(v)
+															setBotFormError(null)
+														}}
+														fullWidth
+														required
+														autoFocus
+														autoComplete="off"
+														error={Boolean(botFormError())}
+														helperText={
+															botFormError() ||
+															'From @BotFather → your bot → API Token'
+														}
+														disabled={savingBot()}
+													/>
+													<div class="bot-section__form-actions">
+														<Button
+															variant="contained"
+															color="secondary"
+															size="small"
+															disabled={savingBot() || !botToken().trim()}
+															onClick={saveBot}
+														>
+															{savingBot() ? 'Saving…' : 'Save bot'}
+														</Button>
+														<Button
+															size="small"
+															disabled={savingBot()}
+															onClick={cancelEditBot}
+														>
+															Cancel
+														</Button>
+													</div>
+												</div>
+											</Show>
+
+											<Show when={!editingBot()}>
+												<Show
+													when={bot()}
+													fallback={
+														<div class="bot-section__empty">
+															No bot attached yet — click Add bot and paste a
+															token from @BotFather.
+														</div>
 													}
-													fullWidth
-													required
-													autoFocus
-												/>
-												<TextField
-													label="Name (optional)"
+												>
+													<div class="bot-section__card">
+														<span class="bot-section__label">Name</span>
+														<span class="bot-section__name">{bot().name}</span>
+														<span class="bot-section__label">Token</span>
+														<span class="bot-section__token">
+															{bot().token_masked}
+														</span>
+													</div>
+												</Show>
+											</Show>
+										</div>
+
+										<div class="channels-section">
+											<div class="channels-section__head">
+												<p class="settings-panel__lead">
+													Up to {MAX_CHANNELS} Telegram channels for this
+													storage.
+												</p>
+												<Button
+													variant="outlined"
 													size="small"
-													value={draftName()}
-													onChange={(_, v) => setDraftName(v)}
-													fullWidth
-												/>
-												<div class="channel-row__edit-actions">
+													startIcon={<RefreshIcon />}
+													disabled={
+														!bot() ||
+														refreshingChannels() ||
+														loadingDetail() ||
+														channels().length >= MAX_CHANNELS
+													}
+													onClick={refreshChannelsFromBot}
+												>
+													{refreshingChannels() ? 'Refreshing…' : 'Refresh'}
+												</Button>
+											</div>
+
+											<Show when={detailError()}>
+												<p class="channel-row__dead-message">{detailError()}</p>
+											</Show>
+
+											<Show when={loadingDetail() && !channels().length}>
+												<Typography
+													color="text.secondary"
+													sx={{ fontSize: '0.85rem' }}
+												>
+													Loading channels…
+												</Typography>
+											</Show>
+
+											<div class="channels-list">
+												<For each={channels()}>
+													{(channel) => (
+														<div
+															class="channel-row"
+															classList={{
+																'channel-row--dead': channel.status === 'dead',
+															}}
+														>
+															<Show
+																when={editingId() === channel.id}
+																fallback={
+																	<>
+																		<div class="channel-row__top">
+																			<div class="channel-row__info">
+																				<span class="channel-row__name">
+																					{channel.name ||
+																						`Channel ${channel.position}`}
+																				</span>
+																				<span
+																					class="channel-row__chatid"
+																					title={String(channel.chat_id)}
+																				>
+																					{channel.chat_id}
+																				</span>
+																				<span
+																					class={`channel-status channel-status--${channel.status}`}
+																				>
+																					{channel.status === 'active'
+																						? 'Active'
+																						: 'Deleted'}
+																				</span>
+																			</div>
+																			<div class="channel-row__actions">
+																				<IconButton
+																					size="small"
+																					aria-label={`Edit channel ${channel.name || channel.position}`}
+																					onClick={() => startEditChannel(channel)}
+																				>
+																					<EditIcon fontSize="small" />
+																				</IconButton>
+																				<IconButton
+																					size="small"
+																					aria-label={`Remove channel ${channel.name || channel.position}`}
+																					onClick={() =>
+																						requestRemoveChannel(channel)
+																					}
+																					sx={{ color: 'error.main' }}
+																				>
+																					<DeleteIcon fontSize="small" />
+																				</IconButton>
+																			</div>
+																		</div>
+																		<Show when={channel.status === 'dead'}>
+																			<p class="channel-row__dead-message">
+																				<WarningAmberIcon
+																					fontSize="inherit"
+																					sx={{
+																						mr: 0.5,
+																						verticalAlign: 'text-bottom',
+																					}}
+																				/>
+																				Channel deleted in Telegram. Set a new
+																				chat id or add another channel.
+																			</p>
+																		</Show>
+																	</>
+																}
+															>
+																{channelEditor()}
+															</Show>
+														</div>
+													)}
+												</For>
+
+												<Show when={editingId() === 'new'}>
+													<div class="channel-row">{channelEditor()}</div>
+												</Show>
+											</div>
+
+											<Show when={editingId() === null}>
+												<Button
+													variant="outlined"
+													size="small"
+													startIcon={<AddIcon />}
+													disabled={channels().length >= MAX_CHANNELS}
+													onClick={startAddChannel}
+												>
+													Add channel
+												</Button>
+											</Show>
+
+											<Show when={replication()}>
+												<div class="replication-summary">
+													<h3>Replication</h3>
+													<div class="replication-summary__stats">
+														<span>Uploaded: {replication().uploaded}</span>
+														<span>Pending: {replication().pending}</span>
+														<span>Failed: {replication().failed}</span>
+													</div>
 													<Button
+														variant="outlined"
+														color="warning"
 														size="small"
-														variant="contained"
-														color="secondary"
-														disabled={savingChannel()}
-														onClick={saveChannel}
+														startIcon={<RefreshIcon />}
+														disabled={retrying() || !replication().failed}
+														onClick={retryReplication}
 													>
-														Save
-													</Button>
-													<Button
-														size="small"
-														disabled={savingChannel()}
-														onClick={cancelEditChannel}
-													>
-														Cancel
+														Retry failed
 													</Button>
 												</div>
-											</div>
+											</Show>
 										</div>
 									</Show>
 								</div>
-
-								<Show when={editingId() === null}>
-									<Button
-										variant="outlined"
-										size="small"
-										startIcon={<AddIcon />}
-										disabled={channels().length >= MAX_CHANNELS}
-										onClick={startAddChannel}
-									>
-										Add another channel
-									</Button>
-								</Show>
-							</div>
-
-							<Show when={replication()}>
-								<div class="replication-summary">
-									<h3>Replication</h3>
-									<div class="replication-summary__stats">
-										<span>Uploaded: {replication().uploaded}</span>
-										<span>Pending: {replication().pending}</span>
-										<span>Failed: {replication().failed}</span>
-									</div>
-									<Button
-										variant="outlined"
-										color="warning"
-										size="small"
-										startIcon={<RefreshIcon />}
-										disabled={retrying() || !replication().failed}
-										onClick={retryReplication}
-									>
-										Retry upload
-									</Button>
-								</div>
-							</Show>
-
-							<div class="storage-settings-danger">
-								<h3>Danger zone</h3>
-								<p>
-									Delete this storage together with all files. This cannot be
-									undone.
-								</p>
-								<Button
-									variant="outlined"
-									color="error"
-									startIcon={<DeleteIcon />}
-									disabled={saving()}
-									onClick={() => setConfirmDelete(true)}
-								>
-									Delete storage and files
-								</Button>
 							</div>
 						</div>
-					</div>
 					</div>
 				</Portal>
 			</Show>

@@ -19,6 +19,8 @@ import createLocalStore from '../../libs'
 import { toggleThemeMode, useThemeMode } from '../common/theme'
 import { settingsStore } from '../common/settings'
 import { filesChromeStore } from '../common/filesChrome'
+import { storageSettingsStore } from '../common/storageSettings'
+import TuneOutlinedIcon from '@suid/icons-material/TuneOutlined'
 
 const Header = () => {
 	const [_store, setStore] = createLocalStore()
@@ -26,6 +28,7 @@ const Header = () => {
 	const mode = useThemeMode()
 	const { openSettings } = settingsStore
 	const chrome = filesChromeStore
+	const { open: openStorageSettings } = storageSettingsStore
 
 	const logout = (_) => {
 		setStore('access_token')
@@ -122,10 +125,25 @@ const Header = () => {
 				</Show>
 
 				<Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
+					<Show when={chrome.active() && chrome.storageId()}>
+						<IconButton
+							aria-label="Storage settings"
+							title="Storage settings (bot & channels)"
+							onClick={() =>
+								openStorageSettings({
+									id: chrome.storageId(),
+									name: chrome.storageName() || 'Storage',
+								})
+							}
+							class="sarca-header-icon"
+						>
+							<TuneOutlinedIcon />
+						</IconButton>
+					</Show>
 					<IconButton
 						aria-label="Settings"
 						title="Settings"
-						onClick={() => openSettings('workers')}
+						onClick={() => openSettings('access')}
 						class="sarca-header-icon"
 					>
 						<SettingsOutlinedIcon />

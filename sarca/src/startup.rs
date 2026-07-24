@@ -7,7 +7,11 @@ use crate::{
     config::Config,
     errors::SarcaError,
     models::users::InDBUser,
-    repositories::{storages::StoragesRepository, users::UsersRepository},
+    repositories::{
+        storage_workers::StorageWorkersRepository,
+        storages::StoragesRepository,
+        users::UsersRepository,
+    },
     schemas::{
         storage_workers::InStorageWorkerSchema,
         storages::{ChannelInput, InStorageSchema},
@@ -407,6 +411,16 @@ pub async fn init_db(db: &PgPool) {
     }
 
     transaction.commit().await.unwrap();
+}
+
+/// Remove storage workers that were never bound to a storage (legacy orphans).
+#[inline]
+pub async fn delete_orphan_storage_workers(db: &PgPool) {
+    match StorageWorkersRepository::new(db).delete_orphans().await {
+        Ok(0) => {},
+        Ok(n) => tracing::info!("deleted {n} orphan storage worker(s) without storage_id"),
+        Err(e) => tracing::warn!("orphan storage worker cleanup failed: {e}"),
+    }
 }
 
 #[inline]
