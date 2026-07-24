@@ -43,6 +43,9 @@ const AlertStack = () => {
 				zIndex: 99999,
 				right: '1rem',
 				top: '5rem',
+				'@media (max-width: 840px)': {
+					top: 'calc(56px + 12px + env(safe-area-inset-top, 0px))',
+				},
 				maxWidth: 360,
 				width: '30vw',
 				minWidth: 240,
