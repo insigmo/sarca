@@ -1,4 +1,5 @@
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import { useNavigate } from '@solidjs/router'
 import IconButton from '@suid/material/IconButton'
 import Button from '@suid/material/Button'
 import TextField from '@suid/material/TextField'
@@ -7,10 +8,20 @@ import CloseIcon from '@suid/icons-material/Close'
 import AddIcon from '@suid/icons-material/Add'
 import LockOutlinedIcon from '@suid/icons-material/LockOutlined'
 import DeleteOutlineIcon from '@suid/icons-material/DeleteOutline'
+import DarkModeOutlinedIcon from '@suid/icons-material/DarkModeOutlined'
+import LightModeOutlinedIcon from '@suid/icons-material/LightModeOutlined'
+import LogoutIcon from '@suid/icons-material/Logout'
+import PersonOutlineIcon from '@suid/icons-material/PersonOutline'
+import StorageOutlinedIcon from '@suid/icons-material/StorageOutlined'
+import TuneOutlinedIcon from '@suid/icons-material/TuneOutlined'
 
 import API from '../api'
+import createLocalStore from '../../libs'
+import { clearSession } from '../common/auth'
 import { settingsStore } from '../common/settings'
 import { filesChromeStore } from '../common/filesChrome'
+import { storageSettingsStore } from '../common/storageSettings'
+import { toggleThemeMode, useThemeMode } from '../common/theme'
 import { alertStore } from './AlertStack'
 import Access from './Access'
 import GrantAccess from './GrantAccess'
@@ -19,6 +30,10 @@ const SettingsModal = () => {
 	const { isOpen, closeSettings, tab, setTab } = settingsStore
 	const chrome = filesChromeStore
 	const { addAlert } = alertStore
+	const [, setStore] = createLocalStore()
+	const navigate = useNavigate()
+	const mode = useThemeMode()
+	const { open: openStorageSettings } = storageSettingsStore
 
 	/** @type {[import("solid-js").Accessor<import("../api").StorageWithInfo[]>, any]} */
 	const [storages, setStorages] = createSignal([])
@@ -29,6 +44,22 @@ const SettingsModal = () => {
 	const [isGrantVisible, setIsGrantVisible] = createSignal(false)
 	const [trashRetentionDays, setTrashRetentionDays] = createSignal(30)
 	const [trashSettingsSaving, setTrashSettingsSaving] = createSignal(false)
+
+	const logout = () => {
+		closeSettings()
+		navigate(clearSession(setStore))
+	}
+
+	const openCurrentStorageSettings = () => {
+		const id = chrome.storageId()
+		if (!id) return
+
+		closeSettings()
+		openStorageSettings({
+			id,
+			name: chrome.storageName() || 'Storage',
+		})
+	}
 
 	const refreshStorages = async () => {
 		try {
@@ -130,7 +161,7 @@ const SettingsModal = () => {
 							<div>
 								<h2 id="settings-modal-title">Settings</h2>
 								<p class="settings-modal__sub">
-									Storage access and trash
+									Access, trash, account, and storage
 								</p>
 							</div>
 							<IconButton
@@ -174,15 +205,43 @@ const SettingsModal = () => {
 										<span class="settings-nav__desc">Auto-delete</span>
 									</span>
 								</button>
+								<button
+									type="button"
+									class="settings-nav__item"
+									classList={{ 'settings-nav__item--active': tab() === 'account' }}
+									onClick={() => setTab('account')}
+								>
+									<span class="settings-nav__icon" aria-hidden="true">
+										<PersonOutlineIcon fontSize="small" />
+									</span>
+									<span class="settings-nav__text">
+										<span class="settings-nav__title">Account</span>
+										<span class="settings-nav__desc">Theme &amp; session</span>
+									</span>
+								</button>
+								<button
+									type="button"
+									class="settings-nav__item"
+									classList={{ 'settings-nav__item--active': tab() === 'storage' }}
+									onClick={() => setTab('storage')}
+								>
+									<span class="settings-nav__icon" aria-hidden="true">
+										<StorageOutlinedIcon fontSize="small" />
+									</span>
+									<span class="settings-nav__text">
+										<span class="settings-nav__title">Storage</span>
+										<span class="settings-nav__desc">Bot &amp; channels</span>
+									</span>
+								</button>
 							</nav>
 
 							<div class="settings-modal__body">
 								<Show when={tab() === 'access'}>
 									<p class="settings-bot-hint">
 										Telegram bot and channels are in{' '}
-										<strong>Storage settings</strong> — open a storage and use
-										the tune icon in the header, or the gear on the storage
-										card.
+										<strong>Storage settings</strong> — use the gear on a storage
+										card, open the <strong>Storage</strong> tab here while browsing
+										files, or (on desktop) the tune icon in the header.
 									</p>
 
 									<div class="settings-access">
@@ -291,6 +350,85 @@ const SettingsModal = () => {
 												Save
 											</Button>
 										</div>
+									</div>
+								</Show>
+
+								<Show when={tab() === 'account'}>
+									<div class="settings-account">
+										<div class="settings-account__row">
+											<div>
+												<p class="settings-account__label">Theme</p>
+												<p class="settings-account__hint">
+													{mode() === 'dark' ? 'Dark' : 'Light'} mode
+												</p>
+											</div>
+											<Button
+												variant="outlined"
+												startIcon={
+													mode() === 'dark' ? (
+														<LightModeOutlinedIcon />
+													) : (
+														<DarkModeOutlinedIcon />
+													)
+												}
+												onClick={toggleThemeMode}
+											>
+												{mode() === 'dark' ? 'Use light' : 'Use dark'}
+											</Button>
+										</div>
+										<div class="settings-account__row">
+											<div>
+												<p class="settings-account__label">Session</p>
+												<p class="settings-account__hint">
+													Sign out of Sarca on this device
+												</p>
+											</div>
+											<Button
+												variant="outlined"
+												color="error"
+												startIcon={<LogoutIcon />}
+												onClick={logout}
+											>
+												Log out
+											</Button>
+										</div>
+									</div>
+								</Show>
+
+								<Show when={tab() === 'storage'}>
+									<div class="settings-storage-tab">
+										<Show
+											when={chrome.storageId()}
+											fallback={
+												<>
+													<Typography color="text.secondary" sx={{ mb: 2 }}>
+														Open a storage first, then manage its bot and channels
+														here.
+													</Typography>
+													<Button
+														onClick={() => {
+															closeSettings()
+															navigate('/storages')
+														}}
+													>
+														Go to storages
+													</Button>
+												</>
+											}
+										>
+											<Typography color="text.secondary" sx={{ mb: 2 }}>
+												Manage bot and channels for{' '}
+												<strong>{chrome.storageName() || 'this storage'}</strong>.
+											</Typography>
+											<Button
+												variant="contained"
+												color="secondary"
+												startIcon={<TuneOutlinedIcon />}
+												onClick={openCurrentStorageSettings}
+											>
+												Open storage settings
+											</Button>
+										</Show>
 									</div>
 								</Show>
 							</div>
