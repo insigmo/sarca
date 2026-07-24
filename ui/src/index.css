@@ -405,12 +405,21 @@ a.default-link:hover {
 	margin-bottom: 0;
 }
 
-.storage-card .file-type-icon {
-	background: none;
-	border: none;
-	box-shadow: none;
-	backdrop-filter: none;
-	-webkit-backdrop-filter: none;
+.storage-card__settings {
+	align-self: flex-start;
+	margin: -4px -6px 0 0;
+	color: var(--sarca-ink-soft) !important;
+	padding: 6px !important;
+	opacity: 0.72;
+	flex-shrink: 0;
+	transition: opacity 0.18s ease, color 0.18s ease, background 0.18s ease;
+}
+
+.storage-card__settings:hover,
+.storage-card:hover .storage-card__settings {
+	opacity: 1;
+	color: var(--sarca-ink) !important;
+	background: var(--sarca-header-icon-bg) !important;
 }
 
 .storage-card__title {
@@ -689,6 +698,75 @@ a.default-link:hover {
 .settings-modal__wave {
 	color: color-mix(in srgb, var(--sarca-teal) 8%, var(--sarca-modal-bg));
 	height: 28px;
+}
+
+.settings-modal--storage {
+	width: min(480px, 100%);
+	max-height: min(86vh, 640px);
+}
+
+.storage-settings-meta {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	margin-bottom: 18px;
+	padding: 12px 14px;
+	border-radius: var(--sarca-radius-sm);
+	background: var(--sarca-glass);
+	border: 1px solid var(--sarca-border);
+}
+
+.storage-settings-meta__label {
+	font-size: 0.7rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	font-weight: 600;
+	color: var(--sarca-ink-soft);
+}
+
+.storage-settings-meta__value {
+	font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+	font-size: 0.95rem;
+	font-weight: 600;
+	color: var(--sarca-ink);
+	word-break: break-all;
+}
+
+.storage-settings-form {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+}
+
+.storage-settings-form__actions {
+	display: flex;
+	justify-content: flex-end;
+}
+
+.storage-settings-danger {
+	margin-top: 28px;
+	padding: 18px 16px;
+	border-radius: var(--sarca-radius-sm);
+	border: 1px solid color-mix(in srgb, #c62828 35%, var(--sarca-border));
+	background: color-mix(in srgb, #c62828 6%, transparent);
+}
+
+.storage-settings-danger h3 {
+	margin: 0 0 6px;
+	font-size: 0.95rem;
+	font-weight: 700;
+	color: #b71c1c;
+}
+
+[data-theme='dark'] .storage-settings-danger h3 {
+	color: #ef9a9a;
+}
+
+.storage-settings-danger p {
+	margin: 0 0 14px;
+	font-size: 0.85rem;
+	color: var(--sarca-ink-soft);
+	line-height: 1.45;
 }
 
 .worker-row {

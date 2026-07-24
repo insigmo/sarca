@@ -183,6 +183,7 @@ impl<'t> TelegramBotApi<'t> {
     /// Upload a part of a file from disk without buffering it fully in RAM.
     ///
     /// `offset` and `len` define the slice of the file to upload.
+    /// Optional `progress` reports bytes within the whole file (`file_base + sent`).
     pub async fn upload_file_part(
         &self,
         file_path: &Path,
@@ -190,7 +191,16 @@ impl<'t> TelegramBotApi<'t> {
         len: u64,
         chat_id: ChatId,
         storage_id: Uuid,
+        file_total: u64,
+        chunk_no: u32,
+        total_chunks: u32,
+        progress: Option<tokio::sync::mpsc::Sender<crate::common::channels::UploadProgressEvent>>,
     ) -> SarcaResult<UploadSchema> {
+        use crate::common::channels::UploadProgressEvent;
+        use futures::StreamExt;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::Arc;
+
         let token = self.scheduler.get_token(storage_id).await?;
         let url = self.build_url("", "sendDocument", token);
         let masked_url = self.mask_url(&url);
@@ -209,7 +219,33 @@ impl<'t> TelegramBotApi<'t> {
                 return Err(SarcaError::Unknown);
             }
             let reader = file.take(len);
-            let stream = ReaderStream::new(reader);
+            let base_stream = ReaderStream::new(reader);
+            let sent = Arc::new(AtomicU64::new(0));
+            let last_emit = Arc::new(AtomicU64::new(0));
+            let progress_tx = progress.clone();
+            let stream = base_stream.map({
+                let sent = sent.clone();
+                let last_emit = last_emit.clone();
+                move |item| {
+                    if let Ok(ref bytes) = item {
+                        let n = sent.fetch_add(bytes.len() as u64, Ordering::Relaxed) + bytes.len() as u64;
+                        let prev = last_emit.load(Ordering::Relaxed);
+                        // Emit about every 1 MiB (or on chunk completion).
+                        if n == len || n.saturating_sub(prev) >= 1024 * 1024 {
+                            last_emit.store(n, Ordering::Relaxed);
+                            if let Some(tx) = progress_tx.as_ref() {
+                                let _ = tx.try_send(UploadProgressEvent::telegram(
+                                    offset.saturating_add(n).min(file_total),
+                                    file_total,
+                                    chunk_no,
+                                    total_chunks,
+                                ));
+                            }
+                        }
+                    }
+                    item
+                }
+            });
             let body = reqwest::Body::wrap_stream(stream);
             let part =
                 multipart::Part::stream_with_length(body, len).file_name("sarca_chunk.bin");
@@ -369,9 +405,9 @@ impl<'t> TelegramBotApi<'t> {
             })
         );
 
-        // Local Bot API returns an absolute filesystem path.
+        // Local Bot API (`--local`) returns an absolute filesystem path. That path
+        // lives on the telegram-bot-api data volume (must be mounted into Sarca).
         if body.result.file_path.starts_with('/') {
-            // Security: only allow reading from the expected local-bot-api directory.
             if !body
                 .result
                 .file_path
@@ -382,13 +418,20 @@ impl<'t> TelegramBotApi<'t> {
                 ));
             }
 
-            let bytes = tokio::fs::read(&body.result.file_path).await.map_err(|e| {
-                SarcaError::TelegramAPIError(format!(
-                    "Failed to read local bot api file: {}",
-                    e
-                ))
-            })?;
-            return Ok(bytes);
+            match tokio::fs::read(&body.result.file_path).await {
+                Ok(bytes) => return Ok(bytes),
+                Err(e) => {
+                    tracing::error!(
+                        "[TELEGRAM API] local file read failed path={} err={e}. \
+                         Ensure telegram-bot-api-data is mounted at /var/lib/telegram-bot-api \
+                         and is world-readable (see telegram-bot-api entrypoint).",
+                        body.result.file_path
+                    );
+                    return Err(SarcaError::TelegramAPIError(format!(
+                        "Failed to read local bot api file: {e}"
+                    )));
+                }
+            }
         }
 
         // downloading the file itself
@@ -464,7 +507,7 @@ impl<'t> TelegramBotApi<'t> {
             .json()
             .await?;
 
-        // Local Bot API returns an absolute filesystem path.
+        // Local Bot API (`--local`) returns an absolute filesystem path.
         if body.result.file_path.starts_with('/') {
             if !body
                 .result
@@ -479,16 +522,18 @@ impl<'t> TelegramBotApi<'t> {
             let file = tokio::fs::File::open(&body.result.file_path)
                 .await
                 .map_err(|e| {
+                    tracing::error!(
+                        "[TELEGRAM API] local file open failed path={} err={e}",
+                        body.result.file_path
+                    );
                     SarcaError::TelegramAPIError(format!(
-                        "Failed to open local bot api file: {}",
-                        e
+                        "Failed to open local bot api file: {e}"
                     ))
                 })?;
             let stream = ReaderStream::new(file).map(|res| {
                 res.map_err(|e| {
                     SarcaError::TelegramAPIError(format!(
-                        "Failed to read local bot api file: {}",
-                        e
+                        "Failed to read local bot api file: {e}"
                     ))
                 })
             });

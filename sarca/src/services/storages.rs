@@ -11,7 +11,7 @@ use crate::{
     repositories::{access::AccessRepository, storages::StoragesRepository},
     schemas::{
         access::{GrantAccess, RestrictAccess},
-        storages::InStorageSchema,
+        storages::{InStorageSchema, UpdateStorageSchema},
     },
 };
 
@@ -95,6 +95,25 @@ impl<'d> StoragesService<'d> {
         check_access(&self.access_repo, user.id, id, &AccessType::R).await?;
 
         self.repo.get_by_id(id).await
+    }
+
+    pub async fn update(
+        &self,
+        id: Uuid,
+        in_schema: UpdateStorageSchema,
+        user: &AuthUser,
+    ) -> SarcaResult<Storage> {
+        check_access(&self.access_repo, user.id, id, &AccessType::A).await?;
+
+        let name = in_schema.name.trim();
+        if let Ok(existing) = self.repo.get_by_name_and_user_id(name, user.id).await {
+            if existing.id != id {
+                return Err(SarcaError::StorageNameConflict);
+            }
+            return Ok(existing);
+        }
+
+        self.repo.update_name(id, name).await
     }
 
     pub async fn delete(&self, id: Uuid, user: &AuthUser) -> SarcaResult<()> {

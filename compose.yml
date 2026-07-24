@@ -28,28 +28,28 @@ services:
       - ./runtime/sarca:/sarca:ro
       - ./ui/dist:/ui:ro
       - sarca-work-volume:/work
+      # Local Bot API (`--local`) returns absolute paths under this dir; Sarca must
+      # see the same files to open/download without a second HTTP hop.
+      - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
     environment:
       # Docker network layout — overrides host-oriented values in mounted conf.
       # PORT is taken from sarca.conf via `docker compose --env-file sarca.conf`
       # so the published host port matches the process listen port.
+      # TELEGRAM_* (local Bot API URL, chunk size, …) come from mounted sarca.conf —
+      # do not hardcode them here or they permanently override the conf file.
       PORT: ${PORT:-8000}
       DATABASE_HOST: db
       WORK_DIR: /work
-      # Use public Bot API by default (local telegram-bot-api needs valid
-      # TELEGRAM_API_ID/HASH from my.telegram.org; set TELEGRAM_LOCAL_API=true
-      # in sarca.conf + compose override when that is configured).
-      TELEGRAM_LOCAL_API: "false"
-      TELEGRAM_API_BASE_URL: https://api.telegram.org
     ports:
       - "${PORT:-8000}:${PORT:-8000}"
     restart: unless-stopped
     depends_on:
       - db
+      - telegram-bot-api
     networks:
       - sarca-network
 
   telegram-bot-api:
-    profiles: ["local-bot-api"]
     container_name: telegram-bot-api
     image: aiogram/telegram-bot-api:latest
     volumes:
@@ -58,6 +58,10 @@ services:
       - telegram-bot-api-data:/var/lib/telegram-bot-api
     environment:
       TELEGRAM_LOCAL: "1"
+      # Must be present in the process env (server reads them directly).
+      # Interpolated from `docker compose --env-file sarca.conf`.
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?set TELEGRAM_API_ID in sarca.conf}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?set TELEGRAM_API_HASH in sarca.conf}
     entrypoint: ["/bin/sh", "/sarca-telegram-entrypoint.sh"]
     restart: unless-stopped
     ports:
