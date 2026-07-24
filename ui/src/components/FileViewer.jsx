@@ -47,6 +47,8 @@ const FileViewer = (props) => {
 	const [error, setError] = createSignal(null)
 	const [textContent, setTextContent] = createSignal('')
 	const [docxHtml, setDocxHtml] = createSignal('')
+	const [markdownHtml, setMarkdownHtml] = createSignal('')
+	const [htmlDoc, setHtmlDoc] = createSignal('')
 	const [mediaUrl, setMediaUrl] = createSignal('')
 	const [officeMode, setOfficeMode] = createSignal(false)
 
@@ -69,6 +71,9 @@ const FileViewer = (props) => {
 
 	const kind = () =>
 		props.file ? fileKind(props.file.name, props.file.is_file) : 'generic'
+
+	/** Document-like previews where side nav would cover the text. */
+	const isDocNavKind = () => kind() === 'markdown' || kind() === 'html'
 
 	const streamKinds = () =>
 		['image', 'video', 'audio', 'pdf'].includes(kind())
@@ -156,6 +161,8 @@ const FileViewer = (props) => {
 			setMediaUrl('')
 			setTextContent('')
 			setDocxHtml('')
+			setMarkdownHtml('')
+			setHtmlDoc('')
 			setError(null)
 			setLoading(false)
 			setOfficeMode(false)
@@ -172,6 +179,8 @@ const FileViewer = (props) => {
 		setError(null)
 		setTextContent('')
 		setDocxHtml('')
+		setMarkdownHtml('')
+		setHtmlDoc('')
 		setOfficeMode(false)
 		resetMediaState()
 
@@ -223,7 +232,10 @@ const FileViewer = (props) => {
 		}
 
 		const needsFetch =
-			k === 'text' || (k === 'document' && /\.docx$/i.test(file.name))
+			k === 'text' ||
+			k === 'markdown' ||
+			k === 'html' ||
+			(k === 'document' && /\.docx$/i.test(file.name))
 
 		if (!needsFetch) {
 			setLoading(false)
@@ -239,7 +251,20 @@ const FileViewer = (props) => {
 				const blob = await API.files.download(props.storageId, file.path)
 				if (cancelled) return
 
-				if (k === 'text') {
+				if (k === 'markdown') {
+					const { marked } = await import('marked')
+					const raw = await blob.text()
+					const html = await marked.parse(raw, {
+						gfm: true,
+						breaks: true,
+					})
+					if (cancelled) return
+					setMarkdownHtml(html || '<p><em>Empty document</em></p>')
+				} else if (k === 'html') {
+					const raw = await blob.text()
+					if (cancelled) return
+					setHtmlDoc(raw || '<!doctype html><p><em>Empty document</em></p>')
+				} else if (k === 'text') {
 					setTextContent(await blob.text())
 				} else {
 					const mammoth = (await import('mammoth')).default
@@ -419,6 +444,7 @@ const FileViewer = (props) => {
 					class="file-viewer"
 					classList={{
 						'file-viewer--chrome-hidden': kind() === 'video' && !chromeVisible(),
+						'file-viewer--doc-nav': isDocNavKind(),
 					}}
 					role="dialog"
 					aria-modal="true"
@@ -463,31 +489,35 @@ const FileViewer = (props) => {
 					</div>
 
 					<Show when={hasPrev()}>
-						<button
-							type="button"
-							class="file-viewer__nav file-viewer__nav--prev"
-							aria-label="Previous file"
-							title="Previous file"
-							onClick={goPrev}
-							onMouseEnter={() => pinChrome(true)}
-							onMouseLeave={() => pinChrome(false)}
-						>
-							<ChevronLeftIcon fontSize="inherit" />
-						</button>
+						<div class="file-viewer__nav-zone file-viewer__nav-zone--prev">
+							<button
+								type="button"
+								class="file-viewer__nav file-viewer__nav--prev"
+								aria-label="Previous file"
+								title="Previous file"
+								onClick={goPrev}
+								onMouseEnter={() => pinChrome(true)}
+								onMouseLeave={() => pinChrome(false)}
+							>
+								<ChevronLeftIcon fontSize="inherit" />
+							</button>
+						</div>
 					</Show>
 
 					<Show when={hasNext()}>
-						<button
-							type="button"
-							class="file-viewer__nav file-viewer__nav--next"
-							aria-label="Next file"
-							title="Next file"
-							onClick={goNext}
-							onMouseEnter={() => pinChrome(true)}
-							onMouseLeave={() => pinChrome(false)}
-						>
-							<ChevronRightIcon fontSize="inherit" />
-						</button>
+						<div class="file-viewer__nav-zone file-viewer__nav-zone--next">
+							<button
+								type="button"
+								class="file-viewer__nav file-viewer__nav--next"
+								aria-label="Next file"
+								title="Next file"
+								onClick={goNext}
+								onMouseEnter={() => pinChrome(true)}
+								onMouseLeave={() => pinChrome(false)}
+							>
+								<ChevronRightIcon fontSize="inherit" />
+							</button>
+						</div>
 					</Show>
 
 					<div class="file-viewer__stage">
@@ -638,6 +668,22 @@ const FileViewer = (props) => {
 
 							<Show when={kind() === 'text' && textContent()}>
 								<pre class="file-viewer__text">{textContent()}</pre>
+							</Show>
+
+							<Show when={kind() === 'markdown' && markdownHtml()}>
+								<div
+									class="file-viewer__markdown"
+									innerHTML={markdownHtml()}
+								/>
+							</Show>
+
+							<Show when={kind() === 'html' && htmlDoc()}>
+								<iframe
+									class="file-viewer__html"
+									title={props.file.name}
+									sandbox=""
+									srcdoc={htmlDoc()}
+								/>
 							</Show>
 
 							<Show when={docxHtml()}>
