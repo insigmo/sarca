@@ -74,6 +74,7 @@ const apiRequest = async (
 	body,
 	return_response = false,
 	retried = false,
+	silent = false,
 ) => {
 	const { addAlert } = alertStore
 
@@ -102,12 +103,16 @@ const apiRequest = async (
 					body,
 					return_response,
 					true,
+					silent,
 				)
 			}
 		}
 
 		if (!response.ok) {
-			throw new Error(await response.text())
+			const text = await response.text()
+			const err = new Error(text)
+			err.status = response.status
+			throw err
 		}
 
 		if (return_response) {
@@ -118,7 +123,9 @@ const apiRequest = async (
 			return await response.json()
 		} catch {}
 	} catch (err) {
-		addAlert(err.message, 'error')
+		if (!silent) {
+			addAlert(err.message, 'error')
+		}
 
 		throw err
 	}
