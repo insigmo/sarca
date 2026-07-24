@@ -39,6 +39,8 @@ pub enum SarcaError {
     CannotManageAccessOfYourself,
     #[error("Storage does not have workers")]
     StorageDoesNotHaveWorkers,
+    #[error("storage_id is required")]
+    WorkerRequiresStorage,
     #[error("A storage can have at most 3 channels")]
     TooManyChannels,
     #[error("Cannot remove the last active channel")]
@@ -89,6 +91,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::InvalidPath
             | SarcaError::NoStorageWorkers
             | SarcaError::NoActiveChannel
+            | SarcaError::WorkerRequiresStorage
             | SarcaError::InvalidTrashRetention
             | SarcaError::InvalidShareExpiry
             | SarcaError::InvalidToken

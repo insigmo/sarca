@@ -51,6 +51,29 @@ pub struct StorageDetailSchema {
     pub has_dead_channel: bool,
     pub channels: Vec<StorageChannel>,
     pub replication: ReplicationStats,
+    /// Bot bound to this storage (1:1), if any.
+    pub bot: Option<StorageBotSchema>,
+}
+
+#[derive(Serialize)]
+pub struct StorageBotSchema {
+    pub id: Uuid,
+    pub name: String,
+    pub token_masked: String,
+}
+
+#[derive(Serialize)]
+pub struct RefreshChannelsResultSchema {
+    pub added: Vec<StorageChannel>,
+    pub skipped_full: bool,
+    pub skipped_in_use: Vec<ChatId>,
+    pub channels: Vec<StorageChannel>,
+    pub hint: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SetStorageBotSchema {
+    pub token: String,
 }
 
 #[derive(Deserialize)]
