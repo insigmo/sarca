@@ -42,7 +42,6 @@ pub struct GetChatBodySchema {
 
 #[derive(Deserialize)]
 pub struct GetChatResultSchema {
-    pub id: i64,
     #[serde(default)]
     pub title: Option<String>,
     #[serde(default)]
@@ -54,7 +53,6 @@ pub struct GetChatResultSchema {
 /// Minimal chat info resolved via `getChat`, used to auto-fill a channel's display name.
 #[derive(Debug, Clone)]
 pub struct ChatInfo {
-    pub id: i64,
     pub title: String,
 }
 

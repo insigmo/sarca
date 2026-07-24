@@ -1,5 +1,6 @@
 pub mod access;
 pub mod channels;
+pub mod chunk_cache;
 pub mod db;
 pub mod jwt_manager;
 pub mod password_manager;

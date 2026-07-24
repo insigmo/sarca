@@ -71,6 +71,8 @@ const FileViewer = (props) => {
 	/** @type {ReturnType<typeof setTimeout> | null} */
 	let hideChromeTimer = null
 	let chromePinned = false
+	/** True while a silent play→pause is used only to start buffering. */
+	let silentBufferKick = false
 
 	const kind = () =>
 		props.file ? fileKind(props.file.name, props.file.is_file) : 'generic'
@@ -164,6 +166,7 @@ const FileViewer = (props) => {
 	}
 
 	const resetMediaState = () => {
+		silentBufferKick = false
 		setPlaying(false)
 		setCurrentTime(0)
 		setDuration(0)
@@ -177,6 +180,67 @@ const FileViewer = (props) => {
 		if (!mediaEl) return
 		mediaEl.volume = volume()
 		mediaEl.muted = muted()
+	}
+
+	/**
+	 * Browsers often treat preload="auto" as metadata-only until playback is
+	 * requested, so Range buffering never starts on open. Kick the media
+	 * pipeline with muted play→pause (no audible autoplay). If that is blocked,
+	 * issue a tiny Range fetch so the backend can start the first chunk.
+	 * @param {HTMLVideoElement} el
+	 */
+	const kickVideoBuffer = (el) => {
+		if (!el) return
+		el.preload = 'auto'
+		try {
+			el.load()
+		} catch {
+			/* ignore */
+		}
+
+		const preferMuted = muted()
+		const src = el.currentSrc || el.src
+		const warmFirstBytes = () => {
+			if (!src) return
+			fetch(src, {
+				headers: { Range: 'bytes=0-1023' },
+				credentials: 'same-origin',
+			}).catch(() => {})
+		}
+
+		silentBufferKick = true
+		el.muted = true
+		const attempt = el.play()
+		if (!attempt || typeof attempt.then !== 'function') {
+			silentBufferKick = false
+			el.muted = preferMuted
+			applyVolumeToMedia()
+			warmFirstBytes()
+			return
+		}
+
+		attempt
+			.then(() => {
+				if (mediaEl !== el) return
+				if (!silentBufferKick) return
+				silentBufferKick = false
+				el.pause()
+				try {
+					el.currentTime = 0
+				} catch {
+					/* ignore */
+				}
+				el.muted = preferMuted
+				applyVolumeToMedia()
+				setPlaying(false)
+			})
+			.catch(() => {
+				if (mediaEl !== el) return
+				silentBufferKick = false
+				el.muted = preferMuted
+				applyVolumeToMedia()
+				warmFirstBytes()
+			})
 	}
 
 	createEffect(() => {
@@ -308,6 +372,24 @@ const FileViewer = (props) => {
 		})()
 	})
 
+	// Start first-chunk buffering as soon as the video element has a URL —
+	// do not wait for the user to press Play.
+	createEffect(() => {
+		const url = mediaUrl()
+		const file = props.file
+		if (!props.open || !file || !url) return
+		if (fileKind(file.name, file.is_file) !== 'video') return
+
+		let cancelled = false
+		queueMicrotask(() => {
+			if (cancelled || !mediaEl) return
+			kickVideoBuffer(mediaEl)
+		})
+		onCleanup(() => {
+			cancelled = true
+		})
+	})
+
 	const downloadFile = async () => {
 		if (!props.file || isDownloading()) return
 		try {
@@ -334,7 +416,10 @@ const FileViewer = (props) => {
 
 	const togglePlay = () => {
 		if (!mediaEl) return
+		// User took over — do not let a pending silent buffer-kick pause/reset.
+		silentBufferKick = false
 		if (mediaEl.paused) {
+			mediaEl.muted = muted()
 			mediaEl.play()
 			setPlaying(true)
 		} else {
@@ -621,10 +706,12 @@ const FileViewer = (props) => {
 										}}
 										src={mediaUrl()}
 										playsinline
-										preload="metadata"
+										preload="auto"
 										onTimeUpdate={onMediaTimeUpdate}
 										onLoadedMetadata={onMediaMeta}
-										onPlay={() => setPlaying(true)}
+										onPlay={() => {
+											if (!silentBufferKick) setPlaying(true)
+										}}
 										onPause={() => setPlaying(false)}
 										onClick={togglePlay}
 										class="file-viewer__video"

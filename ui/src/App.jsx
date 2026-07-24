@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate } from '@solidjs/router'
 import { ThemeProvider, createTheme } from '@suid/material'
-import { createMemo, onMount } from 'solid-js'
+import { Show, onMount } from 'solid-js'
 
 import Login from './pages/Login'
 import BasicLayout from './layouts/Basic'
@@ -20,6 +20,12 @@ const WorkersRedirect = () => {
 	return <Navigate href="/storages" />
 }
 
+/**
+ * Palette colors must stay parseable by SUID's colorManipulator (hex/rgb/rgba).
+ * CSS vars / color-mix() throw at runtime (Button/IconButton call alpha() on them).
+ * Theme toggle remounts ThemeProvider (keyed Show) because @suid/system styled()
+ * caches the first theme object in a local closure.
+ */
 const lightTheme = createTheme({
 	palette: {
 		mode: 'light',
@@ -153,28 +159,31 @@ function sharedComponents(mode) {
 const App = () => {
 	const mode = useThemeMode()
 	onMount(initTheme)
-	const theme = createMemo(() => (mode() === 'dark' ? darkTheme : lightTheme))
 
 	return (
-		<ThemeProvider theme={theme()}>
-			<Routes>
-				<Route path="/login" component={Login} />
-				<Route path="/register" component={Register} />
+		<Show when={mode()} keyed>
+			{(m) => (
+				<ThemeProvider theme={m === 'dark' ? darkTheme : lightTheme}>
+					<Routes>
+						<Route path="/login" component={Login} />
+						<Route path="/register" component={Register} />
 
-				<Route path="/" component={BasicLayout}>
-					<Route path="/" element={<Navigate href="/storages" />} />
-					<Route path="/storages" component={Storages} />
-					<Route path="/storages/register" component={StorageCreateForm} />
-					<Route path="/storages/:id/files/*path" component={Files} />
-					<Route path="/storages/:id/upload_to" component={UploadFileTo} />
-					<Route path="/storage_workers" component={WorkersRedirect} />
-					<Route path="/storage_workers/register" component={WorkersRedirect} />
-					<Route path="*404" component={NotFound} />
-				</Route>
-			</Routes>
+						<Route path="/" component={BasicLayout}>
+							<Route path="/" element={<Navigate href="/storages" />} />
+							<Route path="/storages" component={Storages} />
+							<Route path="/storages/register" component={StorageCreateForm} />
+							<Route path="/storages/:id/files/*path" component={Files} />
+							<Route path="/storages/:id/upload_to" component={UploadFileTo} />
+							<Route path="/storage_workers" component={WorkersRedirect} />
+							<Route path="/storage_workers/register" component={WorkersRedirect} />
+							<Route path="*404" component={NotFound} />
+						</Route>
+					</Routes>
 
-			<AlertStack />
-		</ThemeProvider>
+					<AlertStack />
+				</ThemeProvider>
+			)}
+		</Show>
 	)
 }
 

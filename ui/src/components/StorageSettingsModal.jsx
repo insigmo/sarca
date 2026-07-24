@@ -1,4 +1,5 @@
 import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import IconButton from '@suid/material/IconButton'
 import Button from '@suid/material/Button'
 import TextField from '@suid/material/TextField'
@@ -261,36 +262,37 @@ const StorageSettingsModal = (props) => {
 	return (
 		<>
 			<Show when={props.storage}>
-				<div
-					class="settings-overlay"
-					onClick={(e) => {
-						if (e.target === e.currentTarget) props.onClose()
-					}}
-					role="presentation"
-				>
+				<Portal mount={document.body}>
 					<div
-						class="settings-modal settings-modal--storage"
-						role="dialog"
-						aria-modal="true"
-						aria-labelledby="storage-settings-title"
-						onClick={(e) => e.stopPropagation()}
+						class="settings-overlay"
+						onClick={(e) => {
+							if (e.target === e.currentTarget) props.onClose()
+						}}
+						role="presentation"
 					>
-						<div class="settings-modal__header">
-							<div>
-								<h2 id="storage-settings-title">Storage settings</h2>
-								<p class="settings-modal__sub">
-									Rename, manage channels, or permanently delete this storage
-								</p>
+						<div
+							class="settings-modal settings-modal--storage"
+							role="dialog"
+							aria-modal="true"
+							aria-labelledby="storage-settings-title"
+							onClick={(e) => e.stopPropagation()}
+						>
+							<div class="settings-modal__header">
+								<div>
+									<h2 id="storage-settings-title">Storage settings</h2>
+									<p class="settings-modal__sub">
+										Rename, manage channels, or permanently delete this storage
+									</p>
+								</div>
+								<IconButton
+									aria-label="Close storage settings"
+									onClick={props.onClose}
+									class="sarca-header-icon"
+									size="small"
+								>
+									<CloseIcon />
+								</IconButton>
 							</div>
-							<IconButton
-								aria-label="Close storage settings"
-								onClick={props.onClose}
-								class="sarca-header-icon"
-								size="small"
-							>
-								<CloseIcon />
-							</IconButton>
-						</div>
 
 						<WaveDivider class="settings-modal__wave" />
 
@@ -538,7 +540,8 @@ const StorageSettingsModal = (props) => {
 							</div>
 						</div>
 					</div>
-				</div>
+					</div>
+				</Portal>
 			</Show>
 
 			<ActionConfirmDialog

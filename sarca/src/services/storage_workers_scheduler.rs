@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use tokio::time::sleep;
 use uuid::Uuid;
 
-use crate::{errors::SarcaResult, repositories::storage_workers::StorageWorkersRepository};
+use crate::{errors::{SarcaError, SarcaResult}, repositories::storage_workers::StorageWorkersRepository};
 
 /// Manages storage workers by limiting their usage
 pub struct StorageWorkersScheduler<'d> {
@@ -19,6 +19,13 @@ impl<'d> StorageWorkersScheduler<'d> {
     }
 
     pub async fn get_token(&self, storage_id: Uuid) -> SarcaResult<String> {
+        // Distinguish "no workers bound yet" from "all workers rate-limited".
+        // Without this check, callers that hit Telegram before attaching a worker
+        // (e.g. storage create → getChat for channel title) loop forever and block boot.
+        if !self.repo.storage_has_any(storage_id).await? {
+            return Err(SarcaError::NoStorageWorkers);
+        }
+
         loop {
             // attempting
             if let Some(schema) = self.repo.get_token(storage_id, self.rate).await? {
