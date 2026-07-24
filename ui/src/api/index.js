@@ -110,6 +110,22 @@ const getStorage = async (id) => {
 	return await apiRequest(`/storages/${id}`, 'get', getAuthToken())
 }
 
+/**
+ * @param {string} id
+ * @param {string} name
+ * @returns {Promise<Storage>}
+ */
+const renameStorage = async (id, name) => {
+	return await apiRequest(`/storages/${id}`, 'put', getAuthToken(), { name })
+}
+
+/**
+ * @param {string} id
+ */
+const deleteStorage = async (id) => {
+	await apiRequest(`/storages/${id}`, 'delete', getAuthToken())
+}
+
 /////////////////////////////////////////////////////////////
 ////  ACCESS
 /////////////////////////////////////////////////////////////
@@ -236,20 +252,27 @@ const createFolder = async (storage_id, path, folderName) => {
  *
  * @param {string} storage_id
  * @param {string} path
- * @param {any} file
+ * @param {File|Blob} file
  * @param {(progress: number) => void} [onProgress]
+ * @param {{ silent?: boolean }} [options]
  * @returns
  */
-const uploadFile = async (storage_id, path, file, onProgress) => {
+const uploadFile = async (storage_id, path, file, onProgress, options = {}) => {
 	const form = new FormData()
-	form.append('file', file)
-	form.append('path', path)
+	const basename = String(file?.name || 'unnamed')
+		.split(/[/\\]/)
+		.pop()
+		.trim() || 'unnamed'
+	form.append('path', path ?? '')
+	form.append('filename', basename)
+	form.append('file', file, basename)
 
 	return await apiMultipartRequest(
 		`/storages/${storage_id}/files/upload`,
 		getAuthToken(),
 		form,
 		onProgress,
+		options,
 	)
 }
 
@@ -257,20 +280,27 @@ const uploadFile = async (storage_id, path, file, onProgress) => {
  *
  * @param {string} storage_id
  * @param {string} path
- * @param {any} file
+ * @param {File|Blob} file
  * @param {(progress: number) => void} [onProgress]
+ * @param {{ silent?: boolean }} [options]
  * @returns
  */
-const uploadFileTo = async (storage_id, path, file, onProgress) => {
+const uploadFileTo = async (storage_id, path, file, onProgress, options = {}) => {
 	const form = new FormData()
-	form.append('file', file)
-	form.append('path', path)
+	const basename = String(file?.name || 'unnamed')
+		.split(/[/\\]/)
+		.pop()
+		.trim() || 'unnamed'
+	form.append('path', path ?? '')
+	form.append('filename', basename)
+	form.append('file', file, basename)
 
 	return await apiMultipartRequest(
 		`/storages/${storage_id}/files/upload_to`,
 		getAuthToken(),
 		form,
 		onProgress,
+		options,
 	)
 }
 
@@ -437,6 +467,8 @@ const API = {
 		createStorage,
 		listStorages,
 		getStorage,
+		renameStorage,
+		deleteStorage,
 	},
 	access: {
 		grantAccess,
