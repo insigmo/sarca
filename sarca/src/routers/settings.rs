@@ -1,12 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    middleware,
-    routing::get,
-    Extension, Json, Router,
-};
+use axum::{Extension, Json, Router, extract::State, http::StatusCode, middleware, routing::get};
 
 use crate::{
     common::{
@@ -23,14 +17,11 @@ impl SettingsRouter {
     pub fn get_router(state: Arc<AppState>) -> Router {
         Router::new()
             .route("/trash", get(Self::get_trash).put(Self::set_trash))
-            .route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                logged_in_required,
-            ))
+            .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required))
             .with_state(state)
     }
 
-    fn service<'d>(state: &'d AppState) -> SettingsService<'d> {
+    fn service(state: &AppState) -> SettingsService<'_> {
         SettingsService::new(&state.db)
     }
 
@@ -38,11 +29,7 @@ impl SettingsRouter {
         State(state): State<Arc<AppState>>,
         Extension(_user): Extension<AuthUser>,
     ) -> Result<Json<TrashSettingsSchema>, (StatusCode, String)> {
-        Self::service(&state)
-            .get_trash()
-            .await
-            .map(Json)
-            .map_err(Into::into)
+        Self::service(&state).get_trash().await.map(Json).map_err(Into::into)
     }
 
     async fn set_trash(
@@ -50,10 +37,6 @@ impl SettingsRouter {
         Extension(_user): Extension<AuthUser>,
         Json(body): Json<TrashSettingsSchema>,
     ) -> Result<Json<TrashSettingsSchema>, (StatusCode, String)> {
-        Self::service(&state)
-            .set_trash(body.retention_days)
-            .await
-            .map(Json)
-            .map_err(Into::into)
+        Self::service(&state).set_trash(body.retention_days).await.map(Json).map_err(Into::into)
     }
 }

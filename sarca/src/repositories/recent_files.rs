@@ -16,7 +16,9 @@ pub struct RecentFilesRepository<'d> {
 
 impl<'d> RecentFilesRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     /// Up to 20 live uploaded files, most recently viewed first.
@@ -65,7 +67,7 @@ impl<'d> RecentFilesRepository<'d> {
             .collect())
     }
 
-    /// Upsert viewed_at and trim to the 20 most recent for (user, storage).
+    /// Upsert `viewed_at` and trim to the 20 most recent for (user, storage).
     pub async fn upsert_and_trim(
         &self,
         user_id: Uuid,

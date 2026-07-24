@@ -1,11 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::{
+    Json,
+    Router,
     extract::{Path, Query, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
 use percent_encoding::percent_decode_str;
 
@@ -40,7 +41,7 @@ impl PublicSharesRouter {
             .with_state(state)
     }
 
-    fn service<'d>(state: &'d AppState) -> PublicSharesService<'d> {
+    fn service(state: &AppState) -> PublicSharesService<'_> {
         PublicSharesService::new(&state.db)
     }
 
@@ -57,19 +58,15 @@ impl PublicSharesRouter {
             let unlocked = headers
                 .get(header::COOKIE)
                 .and_then(|v| v.to_str().ok())
-                .map(|jar| find_cookie(jar, &cookie_name))
-                .flatten()
-                .map(|val| {
+                .and_then(|jar| find_cookie(jar, &cookie_name))
+                .is_some_and(|val| {
                     JWTManager::validate_share_unlock(&val, token, &state.config.secret_key).is_ok()
-                })
-                .unwrap_or(false);
+                });
 
             if !unlocked {
-                return Err((
-                    StatusCode::UNAUTHORIZED,
-                    Json(NeedPasswordSchema::yes()),
-                )
-                    .into_response());
+                return Err(
+                    (StatusCode::UNAUTHORIZED, Json(NeedPasswordSchema::yes())).into_response()
+                );
             }
         }
 
@@ -82,10 +79,7 @@ impl PublicSharesRouter {
         headers: HeaderMap,
     ) -> Result<Response, Response> {
         let link = Self::gate(&state, &token, &headers).await?;
-        let meta = Self::service(&state)
-            .metadata(&link)
-            .await
-            .map_err(err_response)?;
+        let meta = Self::service(&state).metadata(&link).await.map_err(err_response)?;
         Ok(Json(meta).into_response())
     }
 
@@ -102,22 +96,18 @@ impl PublicSharesRouter {
             return Ok(StatusCode::NO_CONTENT.into_response());
         }
 
-        svc.verify_password(&link, &body.password)
-            .await
-            .map_err(|e| match e {
-                SarcaError::NotAuthenticated => (
-                    StatusCode::UNAUTHORIZED,
-                    Json(NeedPasswordSchema::yes()),
-                )
-                    .into_response(),
+        PublicSharesService::verify_password(&link, &body.password).map_err(|e| {
+            match e {
+                SarcaError::NotAuthenticated => {
+                    (StatusCode::UNAUTHORIZED, Json(NeedPasswordSchema::yes())).into_response()
+                },
                 other => err_response(other),
-            })?;
+            }
+        })?;
 
         let max_age = PublicSharesService::unlock_max_age_secs(&link);
         if max_age == 0 {
-            return Err(err_response(SarcaError::DoesNotExist(
-                "share link".to_owned(),
-            )));
+            return Err(err_response(SarcaError::DoesNotExist("share link".to_owned())));
         }
 
         let jwt = JWTManager::generate_share_unlock(
@@ -149,10 +139,7 @@ impl PublicSharesRouter {
     ) -> Result<Response, Response> {
         let link = Self::gate(&state, &token, &headers).await?;
         let relative = query.path.as_deref().unwrap_or("");
-        let elements = Self::service(&state)
-            .tree(&link, relative)
-            .await
-            .map_err(err_response)?;
+        let elements = Self::service(&state).tree(&link, relative).await.map_err(err_response)?;
         Ok(Json(elements).into_response())
     }
 
@@ -162,14 +149,9 @@ impl PublicSharesRouter {
         headers: HeaderMap,
     ) -> Result<Response, Response> {
         let link = Self::gate(&state, &token, &headers).await?;
-        let folder = Self::service(&state)
-            .resolve_folder_zip_path(&link)
-            .map_err(err_response)?;
+        let folder = PublicSharesService::resolve_folder_zip_path(&link).map_err(err_response)?;
         // Confirm still live.
-        let _ = Self::service(&state)
-            .metadata(&link)
-            .await
-            .map_err(err_response)?;
+        let _ = Self::service(&state).metadata(&link).await.map_err(err_response)?;
         FilesRouter::download_folder(state, link.storage_id, &folder)
             .await
             .map_err(|(s, m)| (s, m).into_response())
@@ -188,9 +170,7 @@ impl PublicSharesRouter {
         Path((token, relpath)): Path<(String, String)>,
         headers: HeaderMap,
     ) -> Result<Response, Response> {
-        let relpath = percent_decode_str(&relpath)
-            .decode_utf8_lossy()
-            .to_string();
+        let relpath = percent_decode_str(&relpath).decode_utf8_lossy().to_string();
         Self::download_inner(state, token, relpath, &headers, false).await
     }
 
@@ -207,9 +187,7 @@ impl PublicSharesRouter {
         Path((token, relpath)): Path<(String, String)>,
         headers: HeaderMap,
     ) -> Result<Response, Response> {
-        let relpath = percent_decode_str(&relpath)
-            .decode_utf8_lossy()
-            .to_string();
+        let relpath = percent_decode_str(&relpath).decode_utf8_lossy().to_string();
         Self::download_inner(state, token, relpath, &headers, true).await
     }
 
@@ -221,23 +199,15 @@ impl PublicSharesRouter {
         force_inline: bool,
     ) -> Result<Response, Response> {
         let link = Self::gate(&state, &token, headers).await?;
-        let abs = Self::service(&state)
-            .resolve_file_path(&link, &relpath)
-            .map_err(err_response)?;
+        let abs = PublicSharesService::resolve_file_path(&link, &relpath).map_err(err_response)?;
 
         let files_repo = FilesRepository::new(&state.db);
-        let file = files_repo
-            .get_file_by_path(&abs, link.storage_id)
-            .await
-            .map_err(err_response)?;
+        let file =
+            files_repo.get_file_by_path(&abs, link.storage_id).await.map_err(err_response)?;
 
         let query = SearchQuery {
             search_path: None,
-            inline: if force_inline {
-                Some("1".to_owned())
-            } else {
-                None
-            },
+            inline: if force_inline { Some("1".to_owned()) } else { None },
         };
 
         FilesRouter::download_file(state, link.storage_id, &abs, file, &query, headers)
@@ -258,9 +228,7 @@ impl PublicSharesRouter {
         Path((token, relpath)): Path<(String, String)>,
         headers: HeaderMap,
     ) -> Result<Response, Response> {
-        let relpath = percent_decode_str(&relpath)
-            .decode_utf8_lossy()
-            .to_string();
+        let relpath = percent_decode_str(&relpath).decode_utf8_lossy().to_string();
         Self::thumb_inner(state, token, relpath, &headers).await
     }
 
@@ -271,9 +239,7 @@ impl PublicSharesRouter {
         headers: &HeaderMap,
     ) -> Result<Response, Response> {
         let link = Self::gate(&state, &token, headers).await?;
-        let abs = Self::service(&state)
-            .resolve_file_path(&link, &relpath)
-            .map_err(err_response)?;
+        let abs = PublicSharesService::resolve_file_path(&link, &relpath).map_err(err_response)?;
         FilesRouter::thumb_for_path(state, link.storage_id, &abs)
             .await
             .map_err(|(s, m)| (s, m).into_response())

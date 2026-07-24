@@ -57,17 +57,10 @@ impl<'d> AuthService<'d> {
         Ok(Self::issue_tokens(auth, email_verified, config))
     }
 
-    pub async fn refresh(
-        &self,
-        refresh_token: &str,
-        config: &Config,
-    ) -> SarcaResult<TokenSchema> {
+    pub async fn refresh(&self, refresh_token: &str, config: &Config) -> SarcaResult<TokenSchema> {
         let auth = JWTManager::validate_refresh(refresh_token, &config.secret_key)?;
-        let user = self
-            .repo
-            .get_by_email(&auth.email)
-            .await
-            .map_err(|_| SarcaError::NotAuthenticated)?;
+        let user =
+            self.repo.get_by_email(&auth.email).await.map_err(|_| SarcaError::NotAuthenticated)?;
         Ok(Self::issue_tokens(auth, user.email_verified(), config))
     }
 
@@ -108,24 +101,15 @@ impl<'d> AuthService<'d> {
         let hash = Self::hash_token(&raw);
         let expires_at = Utc::now() + ChronoDuration::hours(VERIFY_TTL_HOURS);
 
-        self.tokens
-            .invalidate_unused(user_id, PURPOSE_VERIFY)
-            .await?;
-        self.tokens
-            .create(user_id, PURPOSE_VERIFY, &hash, expires_at)
-            .await?;
+        self.tokens.invalidate_unused(user_id, PURPOSE_VERIFY).await?;
+        self.tokens.create(user_id, PURPOSE_VERIFY, &hash, expires_at).await?;
 
         let (subject, text, html) = mailer::verify_email_body(&config.public_base_url, &raw);
         Mailer::new(config).send(email, &subject, &text, &html).await
     }
 
     /// Soft-send verify mail on register (no error if SMTP unset / send fails).
-    pub async fn send_verify_email_soft(
-        &self,
-        user_id: Uuid,
-        email: &str,
-        config: &Config,
-    ) {
+    pub async fn send_verify_email_soft(&self, user_id: Uuid, email: &str, config: &Config) {
         if !config.smtp_configured() {
             return;
         }
@@ -137,19 +121,13 @@ impl<'d> AuthService<'d> {
             tracing::warn!("verify token invalidate failed: {e}");
             return;
         }
-        if let Err(e) = self
-            .tokens
-            .create(user_id, PURPOSE_VERIFY, &hash, expires_at)
-            .await
-        {
+        if let Err(e) = self.tokens.create(user_id, PURPOSE_VERIFY, &hash, expires_at).await {
             tracing::warn!("verify token create failed: {e}");
             return;
         }
 
         let (subject, text, html) = mailer::verify_email_body(&config.public_base_url, &raw);
-        Mailer::new(config)
-            .send_soft(email, &subject, &text, &html)
-            .await;
+        Mailer::new(config).send_soft(email, &subject, &text, &html).await;
     }
 
     pub async fn verify_token(&self, raw_token: &str) -> SarcaResult<()> {
@@ -181,19 +159,13 @@ impl<'d> AuthService<'d> {
             tracing::warn!("reset token invalidate failed: {e}");
             return;
         }
-        if let Err(e) = self
-            .tokens
-            .create(user.id, PURPOSE_RESET, &hash, expires_at)
-            .await
-        {
+        if let Err(e) = self.tokens.create(user.id, PURPOSE_RESET, &hash, expires_at).await {
             tracing::warn!("reset token create failed: {e}");
             return;
         }
 
         let (subject, text, html) = mailer::reset_email_body(&config.public_base_url, &raw);
-        Mailer::new(config)
-            .send_soft(&user.email, &subject, &text, &html)
-            .await;
+        Mailer::new(config).send_soft(&user.email, &subject, &text, &html).await;
     }
 
     pub async fn reset_password(&self, raw_token: &str, new_password: &str) -> SarcaResult<()> {
@@ -205,9 +177,7 @@ impl<'d> AuthService<'d> {
             .map_err(|_| SarcaError::InvalidToken)?;
 
         let password_hash = PasswordManager::generate(new_password)?;
-        self.repo
-            .update_password_hash_by_id(token.user_id, &password_hash)
-            .await?;
+        self.repo.update_password_hash_by_id(token.user_id, &password_hash).await?;
         // Completing reset also verifies email (they proved inbox access).
         self.repo.mark_email_verified(token.user_id).await?;
         self.tokens.mark_used(token.id).await?;
@@ -219,8 +189,12 @@ impl<'d> AuthService<'d> {
         let refresh_expire =
             Duration::from_secs(u64::from(config.refresh_token_expire_in_days) * 24 * 3600);
 
-        let access_token =
-            JWTManager::generate(user.clone(), access_expire, &config.secret_key, TOKEN_TYPE_ACCESS);
+        let access_token = JWTManager::generate(
+            user.clone(),
+            access_expire,
+            &config.secret_key,
+            TOKEN_TYPE_ACCESS,
+        );
         let refresh_token =
             JWTManager::generate(user, refresh_expire, &config.secret_key, TOKEN_TYPE_REFRESH);
 
@@ -228,8 +202,13 @@ impl<'d> AuthService<'d> {
     }
 
     pub fn hash_token(raw: &str) -> String {
+        use std::fmt::Write;
         let digest = Sha256::digest(raw.as_bytes());
-        digest.iter().map(|b| format!("{b:02x}")).collect()
+        let mut out = String::with_capacity(digest.len() * 2);
+        for b in digest {
+            let _ = write!(out, "{b:02x}");
+        }
+        out
     }
 
     fn new_raw_token() -> String {

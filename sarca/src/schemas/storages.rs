@@ -3,7 +3,11 @@ use uuid::Uuid;
 
 use crate::{
     common::types::ChatId,
-    models::{chunk_replicas::ReplicationStats, storage_channels::StorageChannel, storages::StorageWithInfo},
+    models::{
+        chunk_replicas::ReplicationStats,
+        storage_channels::StorageChannel,
+        storages::StorageWithInfo,
+    },
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -31,7 +35,9 @@ pub struct StoragesListSchema {
 
 impl StoragesListSchema {
     pub fn new(storages: Vec<StorageWithInfo>) -> Self {
-        Self { storages }
+        Self {
+            storages,
+        }
     }
 }
 

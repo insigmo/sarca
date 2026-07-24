@@ -447,6 +447,7 @@ const FSListItem = (props) => {
 
 			<FileInfoDialog
 				file={props.fsElement}
+				storageId={props.storageId}
 				isOpened={isInfoDialogOpened()}
 				onClose={() => setIsInfoDialogOpened(false)}
 			/>

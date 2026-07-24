@@ -2,15 +2,13 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    common::{
-        access::check_access,
-        jwt_manager::AuthUser,
-        telegram_api::bot_api::TelegramBotApi,
-    },
+    common::{access::check_access, jwt_manager::AuthUser, telegram_api::bot_api::TelegramBotApi},
     errors::{SarcaError, SarcaResult},
     models::{access::AccessType, files::FSElement},
     repositories::{
-        access::AccessRepository, chunk_replicas::ChunkReplicasRepository, files::FilesRepository,
+        access::AccessRepository,
+        chunk_replicas::ChunkReplicasRepository,
+        files::FilesRepository,
     },
     services::storage_workers_scheduler::StorageWorkersScheduler,
 };
@@ -57,10 +55,7 @@ impl<'d> TrashService<'d> {
         }
 
         let restore_path = normalize_trash_path(path);
-        let ids = self
-            .files_repo
-            .list_trashed_ids(storage_id, &restore_path)
-            .await?;
+        let ids = self.files_repo.list_trashed_ids(storage_id, &restore_path).await?;
         if ids.is_empty() {
             return Err(SarcaError::DoesNotExist("file".to_string()));
         }
@@ -73,32 +68,22 @@ impl<'d> TrashService<'d> {
             match on_conflict {
                 None => return Err(SarcaError::TrashPathConflict),
                 Some("replace") => {
-                    let live_ids = self
-                        .files_repo
-                        .list_live_ids_at_path(storage_id, &canonical)
-                        .await?;
+                    let live_ids =
+                        self.files_repo.list_live_ids_at_path(storage_id, &canonical).await?;
                     self.purge_ids(&live_ids).await?;
-                }
+                },
                 Some("rename") => {
-                    let new_path = self
-                        .files_repo
-                        .next_available_live_path(&canonical, storage_id)
-                        .await?;
-                    self.files_repo
-                        .update_trashed_path(&canonical, &new_path, storage_id)
-                        .await?;
-                    self.files_repo
-                        .ensure_live_parent_folders(&new_path, storage_id)
-                        .await?;
+                    let new_path =
+                        self.files_repo.next_available_live_path(&canonical, storage_id).await?;
+                    self.files_repo.update_trashed_path(&canonical, &new_path, storage_id).await?;
+                    self.files_repo.ensure_live_parent_folders(&new_path, storage_id).await?;
                     return self.files_repo.restore(&new_path, storage_id).await;
-                }
+                },
                 Some(_) => return Err(SarcaError::InvalidPath),
             }
         }
 
-        self.files_repo
-            .ensure_live_parent_folders(&canonical, storage_id)
-            .await?;
+        self.files_repo.ensure_live_parent_folders(&canonical, storage_id).await?;
         self.files_repo.restore(&canonical, storage_id).await
     }
 
@@ -142,11 +127,7 @@ async fn canonical_trashed_path(
     }
     let probe = format!("{path}/");
     let folder_ids = repo.list_trashed_ids(storage_id, &probe).await?;
-    if !folder_ids.is_empty() {
-        Ok(probe)
-    } else {
-        Ok(path.to_string())
-    }
+    if folder_ids.is_empty() { Ok(path.to_string()) } else { Ok(probe) }
 }
 
 async fn live_conflict_at(
@@ -200,12 +181,8 @@ pub async fn purge_file_ids(
     let scheduler = StorageWorkersScheduler::new(db, rate_limit);
     let api = TelegramBotApi::new(base_url, scheduler);
     for (chat_id, message_id, storage_id) in unique {
-        let replica_ref = replicas_repo
-            .message_still_referenced(chat_id, message_id)
-            .await?;
-        let thumb_ref = files_repo
-            .thumb_message_still_referenced(chat_id, message_id)
-            .await?;
+        let replica_ref = replicas_repo.message_still_referenced(chat_id, message_id).await?;
+        let thumb_ref = files_repo.thumb_message_still_referenced(chat_id, message_id).await?;
         if replica_ref || thumb_ref {
             continue;
         }

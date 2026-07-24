@@ -33,7 +33,7 @@ pub struct Config {
     /// Default 48 MB. Non-video files use `telegram_chunk_size_mb`.
     pub telegram_video_chunk_size_mb: u32,
 
-    /// Optional bootstrap: bot token from @BotFather.
+    /// Optional bootstrap: bot token from @`BotFather`.
     pub telegram_bot_token: Option<String>,
     /// Optional bootstrap: channel id without `-100` prefix.
     pub telegram_channel_id: Option<i64>,
@@ -88,12 +88,17 @@ impl Config {
         let access_token_expire_in_secs = Self::get_env_var("ACCESS_TOKEN_EXPIRE_IN_SECS")?;
         let refresh_token_expire_in_days = Self::get_env_var("REFRESH_TOKEN_EXPIRE_IN_DAYS")?;
         let secret_key = Self::get_env_var("SECRET_KEY")?;
-        let telegram_local_api: bool =
-            Self::get_env_var_with_default("TELEGRAM_LOCAL_API", false)?;
+        let telegram_local_api: bool = Self::get_env_var_with_default("TELEGRAM_LOCAL_API", false)?;
         let telegram_api_base_url: String = if telegram_local_api {
-            Self::get_env_var_with_default("TELEGRAM_API_BASE_URL", "http://127.0.0.1:8081".to_owned())?
+            Self::get_env_var_with_default(
+                "TELEGRAM_API_BASE_URL",
+                "http://127.0.0.1:8081".to_owned(),
+            )?
         } else {
-            Self::get_env_var_with_default("TELEGRAM_API_BASE_URL", "https://api.telegram.org".to_owned())?
+            Self::get_env_var_with_default(
+                "TELEGRAM_API_BASE_URL",
+                "https://api.telegram.org".to_owned(),
+            )?
         };
         let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 18)?;
 
@@ -114,18 +119,14 @@ impl Config {
         let telegram_channel_id = Self::get_optional_parsed_env_var("TELEGRAM_CHANNEL_ID")?;
         let storage_name = Self::get_optional_env_var("STORAGE_NAME");
 
-        let public_base_url = Self::get_env_var_with_default(
-            "PUBLIC_BASE_URL",
-            format!("http://127.0.0.1:{port}"),
-        )?;
+        let public_base_url =
+            Self::get_env_var_with_default("PUBLIC_BASE_URL", format!("http://127.0.0.1:{port}"))?;
         let smtp_host = Self::get_optional_env_var("SMTP_HOST");
         let smtp_port = Self::get_env_var_with_default("SMTP_PORT", 587u16)?;
         let smtp_username = Self::get_optional_env_var("SMTP_USERNAME");
         let smtp_password = Self::get_optional_env_var("SMTP_PASSWORD");
-        let smtp_from = Self::get_env_var_with_default(
-            "SMTP_FROM",
-            "Sarca <noreply@example.com>".to_owned(),
-        )?;
+        let smtp_from =
+            Self::get_env_var_with_default("SMTP_FROM", "Sarca <noreply@example.com>".to_owned())?;
         let smtp_tls = Self::get_env_var_with_default("SMTP_TLS", "starttls".to_owned())?;
 
         let oauth_google_client_id = Self::get_optional_env_var("OAUTH_GOOGLE_CLIENT_ID");
@@ -174,14 +175,12 @@ impl Config {
         } else {
             self.telegram_chunk_size_mb
         };
-        (mb as i64).saturating_mul(1024 * 1024).max(1)
+        i64::from(mb).saturating_mul(1024 * 1024).max(1)
     }
 
     /// Default (non-video) chunk size in bytes — used when a file row has no `chunk_size_bytes`.
     pub fn default_chunk_size_bytes(&self) -> u64 {
-        (self.telegram_chunk_size_mb as u64)
-            .saturating_mul(1024 * 1024)
-            .max(1)
+        u64::from(self.telegram_chunk_size_mb).saturating_mul(1024 * 1024).max(1)
     }
 
     #[inline]
@@ -215,20 +214,20 @@ impl Config {
     /// Missing or blank env → `None`; non-empty but unparsable → error.
     #[inline]
     fn get_optional_parsed_env_var<T: FromStr>(env_var: &str) -> SarcaResult<Option<T>> {
-        match Self::get_optional_env_var(env_var) {
-            Some(value) => value
+        Self::get_optional_env_var(env_var).map_or(Ok(None), |value| {
+            value
                 .parse::<T>()
                 .map(Some)
-                .map_err(|_| SarcaError::EnvVarParsingError(env_var.to_owned())),
-            None => Ok(None),
-        }
+                .map_err(|_| SarcaError::EnvVarParsingError(env_var.to_owned()))
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Mutex;
+
+    use super::*;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 

@@ -1,10 +1,11 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::common::db::errors::map_not_found;
-use crate::common::types::ChatId;
-use crate::errors::{SarcaError, SarcaResult};
-use crate::models::storage_channels::{InStorageChannel, StorageChannel, CHANNEL_STATUS_DEAD};
+use crate::{
+    common::{db::errors::map_not_found, types::ChatId},
+    errors::{SarcaError, SarcaResult},
+    models::storage_channels::{CHANNEL_STATUS_DEAD, InStorageChannel, StorageChannel},
+};
 
 pub const TABLE: &str = "storage_channels";
 
@@ -14,7 +15,9 @@ pub struct StorageChannelsRepository<'d> {
 
 impl<'d> StorageChannelsRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn list_by_storage(&self, storage_id: Uuid) -> SarcaResult<Vec<StorageChannel>> {
@@ -24,7 +27,7 @@ impl<'d> StorageChannelsRepository<'d> {
         .bind(storage_id)
         .fetch_all(self.db)
         .await
-        .map_err(|e| map_not_found(e, "storage channels"))
+        .map_err(|e| map_not_found(&e, "storage channels"))
     }
 
     pub async fn get_by_id(&self, id: Uuid) -> SarcaResult<StorageChannel> {
@@ -32,7 +35,7 @@ impl<'d> StorageChannelsRepository<'d> {
             .bind(id)
             .fetch_one(self.db)
             .await
-            .map_err(|e| map_not_found(e, "storage channel"))
+            .map_err(|e| map_not_found(&e, "storage channel"))
     }
 
     /// First free slot (1..=3) not currently used by `storage_id`, or `None` if all 3 taken.
@@ -59,16 +62,18 @@ impl<'d> StorageChannelsRepository<'d> {
         .bind(&in_obj.status)
         .execute(self.db)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
-                SarcaError::DoesNotExist("such storage".to_string())
-            }
-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
-                SarcaError::StorageChatIdConflict
-            }
-            _ => {
-                tracing::error!("{e}");
-                SarcaError::Unknown
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+                    SarcaError::DoesNotExist("such storage".to_string())
+                },
+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+                    SarcaError::StorageChatIdConflict
+                },
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
             }
         })?;
 
@@ -90,7 +95,8 @@ impl<'d> StorageChannelsRepository<'d> {
     ) -> SarcaResult<StorageChannel> {
         sqlx::query_as(
             format!(
-                "UPDATE {TABLE} SET chat_id = $2, name = $3, status = 'active' WHERE id = $1 RETURNING *"
+                "UPDATE {TABLE} SET chat_id = $2, name = $3, status = 'active' WHERE id = $1 \
+                 RETURNING *"
             )
             .as_str(),
         )
@@ -99,11 +105,13 @@ impl<'d> StorageChannelsRepository<'d> {
         .bind(name)
         .fetch_one(self.db)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
-                SarcaError::StorageChatIdConflict
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+                    SarcaError::StorageChatIdConflict
+                },
+                _ => map_not_found(&e, "storage channel"),
             }
-            _ => map_not_found(e, "storage channel"),
         })
     }
 
@@ -113,7 +121,7 @@ impl<'d> StorageChannelsRepository<'d> {
             .bind(name)
             .fetch_one(self.db)
             .await
-            .map_err(|e| map_not_found(e, "storage channel"))
+            .map_err(|e| map_not_found(&e, "storage channel"))
     }
 
     pub async fn mark_dead(&self, id: Uuid) -> SarcaResult<()> {
@@ -143,7 +151,7 @@ impl<'d> StorageChannelsRepository<'d> {
             .bind(id)
             .execute(self.db)
             .await
-            .map_err(|e| map_not_found(e, "storage channel"))?;
+            .map_err(|e| map_not_found(&e, "storage channel"))?;
         Ok(())
     }
 
