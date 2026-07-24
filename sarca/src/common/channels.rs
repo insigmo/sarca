@@ -22,6 +22,8 @@ pub struct UploadFileData {
     pub file_id: Uuid,
     pub file_path: PathBuf,
     pub file_size: i64,
+    /// Telegram document chunk size for this upload (bytes).
+    pub chunk_size: usize,
     /// Optional live progress toward Telegram (bytes within the whole file).
     pub progress: Option<mpsc::Sender<UploadProgressEvent>>,
 }

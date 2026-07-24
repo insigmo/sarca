@@ -110,7 +110,8 @@ impl<'d> FilesService<'d> {
             return Err(SarcaError::InvalidPath);
         }
 
-        let in_file = InFile::new(in_schema.path, in_schema.size, in_schema.storage_id);
+        let in_file = InFile::new(in_schema.path, in_schema.size, in_schema.storage_id)
+            .with_chunk_size(in_schema.chunk_size_bytes);
 
         // 3. saving file to db
         let file = self.repo.create_file(in_file).await?;
@@ -154,11 +155,21 @@ impl<'d> FilesService<'d> {
     ) -> SarcaResult<()> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
+        let chunk_size = file
+            .chunk_size_bytes
+            .filter(|&n| n > 0)
+            .map(|n| n as usize)
+            .ok_or_else(|| {
+                tracing::error!("upload missing chunk_size_bytes for file {}", file.id);
+                SarcaError::Unknown
+            })?;
+
         let message = ClientMessage {
             data: ClientData::UploadFile(UploadFileData {
                 file_id: file.id,
                 file_path,
                 file_size,
+                chunk_size,
                 progress,
             }),
             tx: resp_tx,

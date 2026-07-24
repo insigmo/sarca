@@ -29,6 +29,10 @@ pub struct Config {
     /// - Local Bot API can handle up to ~2GB per upload, so chunk size can be much larger.
     pub telegram_chunk_size_mb: u32,
 
+    /// Chunk size for video uploads (smaller → progressive Range playback sooner).
+    /// Default 48 MB. Non-video files use `telegram_chunk_size_mb`.
+    pub telegram_video_chunk_size_mb: u32,
+
     /// Optional bootstrap: bot token from @BotFather.
     pub telegram_bot_token: Option<String>,
     /// Optional bootstrap: channel id without `-100` prefix.
@@ -75,6 +79,8 @@ impl Config {
         };
         let telegram_chunk_size_mb =
             Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", default_chunk_mb)?;
+        let telegram_video_chunk_size_mb =
+            Self::get_env_var_with_default("TELEGRAM_VIDEO_CHUNK_SIZE_MB", 48u32)?;
 
         let telegram_bot_token = Self::get_optional_env_var("TELEGRAM_BOT_TOKEN");
         let telegram_channel_id = Self::get_optional_parsed_env_var("TELEGRAM_CHANNEL_ID")?;
@@ -96,10 +102,28 @@ impl Config {
             telegram_rate_limit,
             work_dir,
             telegram_chunk_size_mb,
+            telegram_video_chunk_size_mb,
             telegram_bot_token,
             telegram_channel_id,
             storage_name,
         })
+    }
+
+    /// Bytes per Telegram chunk for this file (video → smaller chunks).
+    pub fn chunk_size_bytes_for_file(&self, path: &str, content_type: Option<&str>) -> i64 {
+        let mb = if crate::models::files::is_video(path, content_type) {
+            self.telegram_video_chunk_size_mb
+        } else {
+            self.telegram_chunk_size_mb
+        };
+        (mb as i64).saturating_mul(1024 * 1024).max(1)
+    }
+
+    /// Default (non-video) chunk size in bytes — used when a file row has no `chunk_size_bytes`.
+    pub fn default_chunk_size_bytes(&self) -> u64 {
+        (self.telegram_chunk_size_mb as u64)
+            .saturating_mul(1024 * 1024)
+            .max(1)
     }
 
     #[inline]
@@ -169,6 +193,7 @@ mod tests {
             "TELEGRAM_API_BASE_URL",
             "TELEGRAM_RATE_LIMIT",
             "TELEGRAM_CHUNK_SIZE_MB",
+            "TELEGRAM_VIDEO_CHUNK_SIZE_MB",
             "WORK_DIR",
             "TELEGRAM_BOT_TOKEN",
             "TELEGRAM_CHANNEL_ID",
