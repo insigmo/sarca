@@ -28,9 +28,7 @@ impl<'d> UsersService<'d> {
         let email = in_user.email.clone();
         let user = InDBUser::new_password(in_user.email, password_hash);
         let created = self.repo.create(user).await?;
-        AuthService::new(self.db)
-            .send_verify_email_soft(created.id, &email, config)
-            .await;
+        AuthService::new(self.db).send_verify_email_soft(created.id, &email, config).await;
         Ok(())
     }
 }

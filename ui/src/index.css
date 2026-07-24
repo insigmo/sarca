@@ -1180,6 +1180,114 @@ a.default-link:hover {
 	box-shadow: var(--sarca-shadow) !important;
 }
 
+/* —— File info dialog —— */
+.file-info-dialog {
+	overflow: hidden;
+}
+
+.file-info-dialog__header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 20px 20px 0;
+}
+
+.file-info-dialog__identity {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	min-width: 0;
+}
+
+.file-info-dialog__titles {
+	min-width: 0;
+}
+
+.file-info-dialog__title {
+	margin: 0;
+	font-family: var(--sarca-font);
+	font-size: 1.1rem;
+	font-weight: 700;
+	line-height: 1.3;
+	color: var(--sarca-ink);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.file-info-dialog__subtitle {
+	margin: 4px 0 0;
+	font-size: 0.82rem;
+	font-weight: 500;
+	color: var(--sarca-ink-soft);
+}
+
+.file-info-dialog__close {
+	flex-shrink: 0;
+	margin-top: -4px;
+	margin-right: -4px;
+}
+
+.file-info-dialog__content {
+	padding: 16px 20px 8px !important;
+}
+
+.file-info-dialog__loading {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	margin-bottom: 12px;
+	font-size: 0.85rem;
+	color: var(--sarca-ink-soft);
+}
+
+.file-info-dialog__list {
+	margin: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 0;
+	border: 1px solid var(--sarca-border);
+	border-radius: 14px;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--sarca-surface, transparent) 55%, transparent);
+}
+
+.file-info-dialog__row {
+	display: grid;
+	grid-template-columns: 108px 1fr;
+	gap: 12px;
+	padding: 11px 14px;
+	border-bottom: 1px solid var(--sarca-border);
+}
+
+.file-info-dialog__row:last-child {
+	border-bottom: none;
+}
+
+.file-info-dialog__row dt {
+	margin: 0;
+	font-size: 0.72rem;
+	font-weight: 700;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--sarca-ink-soft);
+	align-self: center;
+}
+
+.file-info-dialog__row dd {
+	margin: 0;
+	font-size: 0.92rem;
+	font-weight: 500;
+	color: var(--sarca-ink);
+	word-break: break-word;
+	line-height: 1.35;
+}
+
+.file-info-dialog__actions {
+	padding: 8px 20px 18px !important;
+}
+
 @keyframes sarca-fade-up {
 	from {
 		opacity: 0;

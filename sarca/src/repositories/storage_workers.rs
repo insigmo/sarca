@@ -1,9 +1,11 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::common::db::errors::map_not_found;
-use crate::errors::{SarcaError, SarcaResult};
-use crate::models::storage_workers::{InStorageWorker, StorageWorker, StorageWorkerTokenOnly};
+use crate::{
+    common::db::errors::map_not_found,
+    errors::{SarcaError, SarcaResult},
+    models::storage_workers::{InStorageWorker, StorageWorker, StorageWorkerTokenOnly},
+};
 
 const STORAGE_WORKERS_TABLE: &str = "storage_workers";
 const STORAGE_WORKERS_USAGES_TABLE: &str = "storage_workers_usages";
@@ -14,7 +16,9 @@ pub struct StorageWorkersRepository<'d> {
 
 impl<'d> StorageWorkersRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn create(&self, in_obj: InStorageWorker) -> SarcaResult<StorageWorker> {
@@ -33,26 +37,23 @@ impl<'d> StorageWorkersRepository<'d> {
         .bind(in_obj.storage_id)
         .execute(self.db)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
-                SarcaError::StorageWorkerTokenConflict
-            }
-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
-                SarcaError::DoesNotExist("Such storage does not exist".to_string())
-            }
-            _ => {
-                tracing::error!("{e}");
-                SarcaError::Unknown
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+                    SarcaError::StorageWorkerTokenConflict
+                },
+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+                    SarcaError::DoesNotExist("Such storage does not exist".to_string())
+                },
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
             }
         })?;
 
-        let sw = StorageWorker::new(
-            id,
-            in_obj.name,
-            in_obj.user_id,
-            in_obj.token,
-            in_obj.storage_id,
-        );
+        let sw =
+            StorageWorker::new(id, in_obj.name, in_obj.user_id, in_obj.token, in_obj.storage_id);
         Ok(sw)
     }
 
@@ -63,19 +64,17 @@ impl<'d> StorageWorkersRepository<'d> {
         .bind(storage_id)
         .fetch_one(self.db)
         .await
-        .map_err(|e| map_not_found(e, "storage_workers"))?;
+        .map_err(|e| map_not_found(&e, "storage_workers"))?;
 
         Ok(has_sws.0)
     }
 
     pub async fn list_by_user_id(&self, user_id: Uuid) -> SarcaResult<Vec<StorageWorker>> {
-        sqlx::query_as(&format!(
-            "SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE user_id = $1"
-        ))
-        .bind(user_id)
-        .fetch_all(self.db)
-        .await
-        .map_err(|_| SarcaError::Unknown)
+        sqlx::query_as(&format!("SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE user_id = $1"))
+            .bind(user_id)
+            .fetch_all(self.db)
+            .await
+            .map_err(|_| SarcaError::Unknown)
     }
 
     pub async fn get_by_name_and_user_id(
@@ -90,7 +89,7 @@ impl<'d> StorageWorkersRepository<'d> {
         .bind(user_id)
         .fetch_one(self.db)
         .await
-        .map_err(|e| map_not_found(e, "storage_worker"))
+        .map_err(|e| map_not_found(&e, "storage_worker"))
     }
 
     pub async fn get_by_id_and_user_id(
@@ -105,7 +104,7 @@ impl<'d> StorageWorkersRepository<'d> {
         .bind(user_id)
         .fetch_one(self.db)
         .await
-        .map_err(|e| map_not_found(e, "storage_worker"))
+        .map_err(|e| map_not_found(&e, "storage_worker"))
     }
 
     pub async fn delete(&self, id: Uuid, user_id: Uuid) -> SarcaResult<()> {
@@ -130,7 +129,7 @@ impl<'d> StorageWorkersRepository<'d> {
         storage_id: Uuid,
         limit: u8,
     ) -> SarcaResult<Option<StorageWorkerTokenOnly>> {
-        let mut transaction = self.db.begin().await.map_err(|e| map_not_found(e, ""))?;
+        let mut transaction = self.db.begin().await.map_err(|e| map_not_found(&e, ""))?;
 
         // deleting old rows
         sqlx::query(&format!(
@@ -141,7 +140,7 @@ impl<'d> StorageWorkersRepository<'d> {
         ))
         .execute(&mut *transaction)
         .await
-        .map_err(|e| map_not_found(e, "some entity"))?;
+        .map_err(|e| map_not_found(&e, "some entity"))?;
 
         let new_id = Uuid::new_v4();
 
@@ -169,16 +168,13 @@ impl<'d> StorageWorkersRepository<'d> {
         "
         ))
         .bind(storage_id)
-        .bind(limit as i16)
+        .bind(i16::from(limit))
         .bind(new_id)
         .fetch_optional(&mut *transaction)
         .await
-        .map_err(|e| map_not_found(e, "some entity"))?;
+        .map_err(|e| map_not_found(&e, "some entity"))?;
 
-        transaction
-            .commit()
-            .await
-            .map_err(|e| map_not_found(e, ""))?;
+        transaction.commit().await.map_err(|e| map_not_found(&e, ""))?;
 
         Ok(token)
     }

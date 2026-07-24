@@ -203,7 +203,7 @@ mod tests {
         let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
         let chats = chats_from_updates(&body);
         assert_eq!(chats.len(), 1);
-        assert_eq!(chats[0].chat_id, -1001234567890);
+        assert_eq!(chats[0].chat_id, -1_001_234_567_890);
         assert_eq!(chats[0].title, "Sarca Data");
     }
 

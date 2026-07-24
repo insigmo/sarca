@@ -13,11 +13,7 @@ impl PasswordManager {
     }
 
     pub fn verify(password: &str, hash: &str) -> SarcaResult<()> {
-        if bcrypt::verify(password, hash) {
-            Ok(())
-        } else {
-            Err(SarcaError::NotAuthenticated)
-        }
+        if bcrypt::verify(password, hash) { Ok(()) } else { Err(SarcaError::NotAuthenticated) }
     }
 }
 

@@ -1,8 +1,14 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use super::storage_workers_scheduler::StorageWorkersScheduler;
 use crate::{
-    common::{access::check_access, jwt_manager::AuthUser, telegram_api::bot_api::TelegramBotApi, types::ChatId},
+    common::{
+        access::check_access,
+        jwt_manager::AuthUser,
+        telegram_api::bot_api::TelegramBotApi,
+        types::ChatId,
+    },
     errors::{SarcaError, SarcaResult},
     models::{
         access::{AccessType, UserWithAccess},
@@ -11,20 +17,23 @@ use crate::{
         storages::{InStorage, Storage, StorageWithInfo},
     },
     repositories::{
-        access::AccessRepository, chunk_replicas::ChunkReplicasRepository,
-        storage_channels::StorageChannelsRepository, storages::StoragesRepository,
+        access::AccessRepository,
+        chunk_replicas::ChunkReplicasRepository,
+        storage_channels::StorageChannelsRepository,
+        storages::StoragesRepository,
     },
     schemas::{
         access::{GrantAccess, RestrictAccess},
         storages::{
-            AddChannelSchema, InStorageSchema, StorageDetailSchema, UpdateChannelSchema,
+            AddChannelSchema,
+            InStorageSchema,
+            StorageDetailSchema,
+            UpdateChannelSchema,
             UpdateStorageSchema,
         },
     },
     services::channel_health::ChannelHealthService,
 };
-
-use super::storage_workers_scheduler::StorageWorkersScheduler;
 
 const MAX_CHANNELS: usize = 3;
 
@@ -72,11 +81,15 @@ impl<'d> StoragesService<'d> {
             Err(e) => {
                 tracing::debug!("[STORAGES SERVICE] getChat failed for {chat_id}: {e}");
                 fallback()
-            }
+            },
         }
     }
 
-    pub async fn create(&self, in_schema: InStorageSchema, user: &AuthUser) -> SarcaResult<Storage> {
+    pub async fn create(
+        &self,
+        in_schema: InStorageSchema,
+        user: &AuthUser,
+    ) -> SarcaResult<Storage> {
         if in_schema.channels.is_empty() {
             return Err(SarcaError::NoActiveChannel);
         }
@@ -84,12 +97,7 @@ impl<'d> StoragesService<'d> {
             return Err(SarcaError::TooManyChannels);
         }
 
-        if self
-            .repo
-            .get_by_name_and_user_id(&in_schema.name, user.id)
-            .await
-            .is_ok()
-        {
+        if self.repo.get_by_name_and_user_id(&in_schema.name, user.id).await.is_ok() {
             return Err(SarcaError::StorageNameConflict);
         }
 
@@ -108,7 +116,8 @@ impl<'d> StoragesService<'d> {
         let access_schema = GrantAccess::new(user.email.clone(), AccessType::A);
         if let Err(e) = self.access_repo.create_or_update(storage.id, access_schema).await {
             tracing::error!(
-                "[STORAGES SERVICE] Failed to grant access to user {} for storage {}: {:?}. Rolling back.",
+                "[STORAGES SERVICE] Failed to grant access to user {} for storage {}: {:?}. \
+                 Rolling back.",
                 user.email,
                 storage.id,
                 e
@@ -118,7 +127,7 @@ impl<'d> StoragesService<'d> {
         }
 
         for (idx, input) in in_schema.channels.into_iter().enumerate() {
-            let position = (idx + 1) as i16;
+            let position = i16::try_from(idx + 1).unwrap_or(i16::MAX);
             let chat_id = input.chat_id;
             let name = self
                 .resolve_channel_name(chat_id, input.name, storage.id, || {
@@ -128,7 +137,8 @@ impl<'d> StoragesService<'d> {
             let in_channel = InStorageChannel::active(storage.id, position, chat_id, name);
             if let Err(e) = self.channels_repo.insert(in_channel).await {
                 tracing::error!(
-                    "[STORAGES SERVICE] failed to insert channel for storage {}: {e}. Rolling back.",
+                    "[STORAGES SERVICE] failed to insert channel for storage {}: {e}. Rolling \
+                     back.",
                     storage.id
                 );
                 let _ = self.repo.delete_storage(storage.id).await;
@@ -154,7 +164,8 @@ impl<'d> StoragesService<'d> {
 
         let storage = self.repo.get_by_id(id).await?;
         let channels = self.channels_repo.list_by_storage(id).await?;
-        let has_dead_channel = channels.iter().any(|c| c.is_dead());
+        let has_dead_channel =
+            channels.iter().any(super::super::models::storage_channels::StorageChannel::is_dead);
         let replication = self.replicas_repo.replication_stats(id).await?;
 
         Ok(StorageDetailSchema {
@@ -255,11 +266,7 @@ impl<'d> StoragesService<'d> {
                 .await;
             let updated = self.channels_repo.update_chat(channel_id, chat_id, &name).await?;
 
-            if let Err(e) = self
-                .replicas_repo
-                .enqueue_for_channel(storage_id, channel_id)
-                .await
-            {
+            if let Err(e) = self.replicas_repo.enqueue_for_channel(storage_id, channel_id).await {
                 tracing::warn!(
                     "[STORAGES SERVICE] failed to enqueue catch-up replication for channel {}: {e}",
                     channel_id
@@ -298,7 +305,9 @@ impl<'d> StoragesService<'d> {
         let storage = self.repo.get_by_id(storage_id).await?;
         if storage.primary_position == channel.position {
             let siblings = self.channels_repo.list_by_storage(storage_id).await?;
-            if let Some(next) = ChannelHealthService::next_active_position(&siblings, channel.position) {
+            if let Some(next) =
+                ChannelHealthService::next_active_position(&siblings, channel.position)
+            {
                 let _ = self.repo.set_primary_position(storage_id, next).await;
             }
         }

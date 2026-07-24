@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Deserialize)]
@@ -70,4 +70,18 @@ pub struct RestoreTrashSchema {
 pub struct TrashListQuery {
     /// Optional folder prefix inside trash (no leading slash).
     pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileInfoSchema {
+    pub path: String,
+    pub name: String,
+    pub size: i64,
+    pub is_file: bool,
+    pub has_thumb: bool,
+    pub is_uploaded: bool,
+    pub chunk_size_bytes: Option<i64>,
+    pub chunks_count: i64,
+    pub content_type: Option<String>,
+    pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
 }

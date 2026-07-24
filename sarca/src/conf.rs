@@ -4,7 +4,8 @@
 //! binary and in the current working directory. Migrates legacy `.env` once.
 
 use std::{
-    env, fs,
+    env,
+    fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
@@ -23,10 +24,10 @@ pub fn load_sarca_conf() -> Option<PathBuf> {
             Ok(n) => {
                 eprintln!("loaded config from {} ({n} keys)", path.display());
                 return Some(path);
-            }
+            },
             Err(e) => {
                 eprintln!("warning: could not read {}: {e}", path.display());
-            }
+            },
         }
     }
     None
@@ -43,7 +44,8 @@ pub fn resolve_conf_path() -> Option<PathBuf> {
     None
 }
 
-/// Best-effort upsert of KEY=VALUE lines in `sarca.conf`. Returns Ok(false) if no file / not writable.
+/// Best-effort upsert of KEY=VALUE lines in `sarca.conf`. Returns Ok(false) if no file / not
+/// writable.
 pub fn upsert_conf_keys(keys: &[(&str, &str)]) -> Result<bool, String> {
     let Some(path) = resolve_conf_path() else {
         return Ok(false);
@@ -54,10 +56,10 @@ pub fn upsert_conf_keys(keys: &[(&str, &str)]) -> Result<bool, String> {
 
 fn upsert_conf_keys_at(path: &Path, keys: &[(&str, &str)]) -> Result<(), String> {
     let original = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let mut lines: Vec<String> = original.lines().map(|l| l.to_string()).collect();
+    let mut lines: Vec<String> = original.lines().map(std::string::ToString::to_string).collect();
     let mut found = vec![false; keys.len()];
 
-    for line in lines.iter_mut() {
+    for line in &mut lines {
         let trimmed = line.trim().to_owned();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
@@ -103,19 +105,12 @@ fn migrate_legacy_env(conf_path: &Path) -> PathBuf {
     if conf_path.is_file() {
         return conf_path.to_path_buf();
     }
-    let legacy = conf_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(LEGACY_ENV_NAME);
+    let legacy = conf_path.parent().unwrap_or_else(|| Path::new(".")).join(LEGACY_ENV_NAME);
     if legacy.is_file() {
         match fs::rename(&legacy, conf_path) {
             Ok(()) => {
-                eprintln!(
-                    "migrated {} → {}",
-                    legacy.display(),
-                    conf_path.display()
-                );
-            }
+                eprintln!("migrated {} → {}", legacy.display(), conf_path.display());
+            },
             Err(e) => {
                 eprintln!(
                     "warning: could not migrate {} → {}: {e}",
@@ -123,7 +118,7 @@ fn migrate_legacy_env(conf_path: &Path) -> PathBuf {
                     conf_path.display()
                 );
                 return legacy;
-            }
+            },
         }
     }
     conf_path.to_path_buf()
@@ -168,9 +163,9 @@ pub fn parse_conf_line(line: &str) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use std::{io::Write, sync::Mutex};
+
     use super::*;
-    use std::io::Write;
-    use std::sync::Mutex;
 
     // serialize env-mutating tests
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -185,22 +180,13 @@ mod tests {
 
     #[test]
     fn parse_key_value_and_quotes() {
-        assert_eq!(
-            parse_conf_line("PORT=8001"),
-            Some(("PORT".into(), "8001".into()))
-        );
+        assert_eq!(parse_conf_line("PORT=8001"), Some(("PORT".into(), "8001".into())));
         assert_eq!(
             parse_conf_line("  NAME = \"hello world\" "),
             Some(("NAME".into(), "hello world".into()))
         );
-        assert_eq!(
-            parse_conf_line("TOKEN='abc=def'"),
-            Some(("TOKEN".into(), "abc=def".into()))
-        );
-        assert_eq!(
-            parse_conf_line("EMPTY="),
-            Some(("EMPTY".into(), "".into()))
-        );
+        assert_eq!(parse_conf_line("TOKEN='abc=def'"), Some(("TOKEN".into(), "abc=def".into())));
+        assert_eq!(parse_conf_line("EMPTY="), Some(("EMPTY".into(), String::new())));
     }
 
     #[test]
@@ -218,10 +204,7 @@ mod tests {
         let n = apply_conf_file(&conf).unwrap();
         assert_eq!(n, 1);
         assert_eq!(env::var("SARCA_TEST_PORT").unwrap(), "1111");
-        assert_eq!(
-            env::var("SARCA_TEST_ONLY_FROM_FILE").unwrap(),
-            "from-file"
-        );
+        assert_eq!(env::var("SARCA_TEST_ONLY_FROM_FILE").unwrap(), "from-file");
 
         env::remove_var("SARCA_TEST_PORT");
         env::remove_var("SARCA_TEST_ONLY_FROM_FILE");
@@ -251,10 +234,7 @@ mod tests {
         fs::write(&conf, "PORT=8000\nTELEGRAM_API_ID=old\n").unwrap();
         upsert_conf_keys_at(
             &conf,
-            &[
-                ("TELEGRAM_API_ID", "12345"),
-                ("TELEGRAM_API_HASH", "abcdef"),
-            ],
+            &[("TELEGRAM_API_ID", "12345"), ("TELEGRAM_API_HASH", "abcdef")],
         )
         .unwrap();
         let text = fs::read_to_string(&conf).unwrap();

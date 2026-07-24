@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension,
+    Json,
+    Router,
     extract::{Path, Query, State},
     middleware,
     response::{IntoResponse, Redirect},
     routing::{get, post},
-    Extension, Json, Router,
 };
 use reqwest::StatusCode;
 use serde::Deserialize;
@@ -18,8 +20,15 @@ use crate::{
     },
     models::oauth_accounts::{PROVIDER_GITHUB, PROVIDER_GOOGLE},
     schemas::auth::{
-        ForgotPasswordSchema, LoginSchema, MeSchema, OAuthExchangeSchema, ProvidersSchema,
-        RefreshSchema, ResetPasswordSchema, TokenBodySchema, TokenSchema,
+        ForgotPasswordSchema,
+        LoginSchema,
+        MeSchema,
+        OAuthExchangeSchema,
+        ProvidersSchema,
+        RefreshSchema,
+        ResetPasswordSchema,
+        TokenBodySchema,
+        TokenSchema,
     },
     services::{auth::AuthService, oauth::OAuthService},
 };
@@ -31,10 +40,7 @@ impl AuthRouter {
         let protected = Router::new()
             .route("/me", get(Self::me))
             .route("/verify/request", post(Self::verify_request))
-            .route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                logged_in_required,
-            ));
+            .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required));
 
         Router::new()
             .route("/login", post(Self::login))
@@ -54,9 +60,7 @@ impl AuthRouter {
         State(state): State<Arc<AppState>>,
         Json(login_data): Json<LoginSchema>,
     ) -> impl IntoResponse {
-        let schema = AuthService::new(&state.db)
-            .login(login_data, &state.config)
-            .await?;
+        let schema = AuthService::new(&state.db).login(login_data, &state.config).await?;
 
         Ok::<_, (StatusCode, String)>((StatusCode::OK, Json(schema)))
     }
@@ -65,9 +69,8 @@ impl AuthRouter {
         State(state): State<Arc<AppState>>,
         Json(body): Json<RefreshSchema>,
     ) -> Result<(StatusCode, Json<TokenSchema>), (StatusCode, String)> {
-        let schema = AuthService::new(&state.db)
-            .refresh(&body.refresh_token, &state.config)
-            .await?;
+        let schema =
+            AuthService::new(&state.db).refresh(&body.refresh_token, &state.config).await?;
 
         Ok((StatusCode::OK, Json(schema)))
     }
@@ -76,11 +79,7 @@ impl AuthRouter {
         State(state): State<Arc<AppState>>,
         Extension(user): Extension<AuthUser>,
     ) -> Result<Json<MeSchema>, (StatusCode, String)> {
-        AuthService::new(&state.db)
-            .me(&user)
-            .await
-            .map(Json)
-            .map_err(Into::into)
+        AuthService::new(&state.db).me(&user).await.map(Json).map_err(Into::into)
     }
 
     async fn providers(State(state): State<Arc<AppState>>) -> Json<ProvidersSchema> {
@@ -91,9 +90,7 @@ impl AuthRouter {
         State(state): State<Arc<AppState>>,
         Extension(user): Extension<AuthUser>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        AuthService::new(&state.db)
-            .request_verify(&user, &state.config)
-            .await?;
+        AuthService::new(&state.db).request_verify(&user, &state.config).await?;
         Ok(StatusCode::NO_CONTENT)
     }
 
@@ -101,9 +98,7 @@ impl AuthRouter {
         State(state): State<Arc<AppState>>,
         Json(body): Json<TokenBodySchema>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        AuthService::new(&state.db)
-            .verify_token(&body.token)
-            .await?;
+        AuthService::new(&state.db).verify_token(&body.token).await?;
         Ok(StatusCode::NO_CONTENT)
     }
 
@@ -111,9 +106,7 @@ impl AuthRouter {
         State(state): State<Arc<AppState>>,
         Query(q): Query<TokenQuery>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        AuthService::new(&state.db)
-            .verify_token(&q.token)
-            .await?;
+        AuthService::new(&state.db).verify_token(&q.token).await?;
         Ok(StatusCode::NO_CONTENT)
     }
 
@@ -121,9 +114,7 @@ impl AuthRouter {
         State(state): State<Arc<AppState>>,
         Json(body): Json<ForgotPasswordSchema>,
     ) -> StatusCode {
-        AuthService::new(&state.db)
-            .forgot_password(&body.email, &state.config)
-            .await;
+        AuthService::new(&state.db).forgot_password(&body.email, &state.config).await;
         StatusCode::NO_CONTENT
     }
 
@@ -131,9 +122,7 @@ impl AuthRouter {
         State(state): State<Arc<AppState>>,
         Json(body): Json<ResetPasswordSchema>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        AuthService::new(&state.db)
-            .reset_password(&body.token, &body.new_password)
-            .await?;
+        AuthService::new(&state.db).reset_password(&body.token, &body.new_password).await?;
         Ok(StatusCode::NO_CONTENT)
     }
 
@@ -166,7 +155,7 @@ impl AuthRouter {
                 tracing::warn!("oauth callback failed: {e}");
                 let base = state.config.public_base_url.trim_end_matches('/');
                 Ok(Redirect::temporary(&format!("{base}/login?oauth=error")))
-            }
+            },
         }
     }
 

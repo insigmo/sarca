@@ -31,7 +31,8 @@ tasks:
         fi
 
   binary:
-    desc: Build release binary into runtime/sarca
+    desc: Lint (fmt+clippy) then build release binary into runtime/sarca
+    deps: [lint]
     cmds:
       - mkdir -p "{{.ROOT_DIR}}/runtime"
       - |
@@ -39,9 +40,31 @@ tasks:
         cargo build --release
         BIN="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
         if [ -z "$BIN" ]; then BIN=target; fi
-        cp -f "$BIN/release/sarca" "{{.ROOT_DIR}}/runtime/sarca"
-        chmod +x "{{.ROOT_DIR}}/runtime/sarca"
-        echo "binary → {{.ROOT_DIR}}/runtime/sarca"
+        SRC="$BIN/release/sarca"
+        DEST="{{.ROOT_DIR}}/runtime/sarca"
+        if cp -f "$SRC" "$DEST" 2>/dev/null; then
+          chmod +x "$DEST"
+        else
+          # runtime/sarca may be root-owned from a prior Docker copy
+          docker run --rm \
+            -v "{{.ROOT_DIR}}/runtime:/runtime" \
+            -v "$SRC:/bin-src:ro" \
+            alpine sh -c 'cp /bin-src /runtime/sarca && chmod 755 /runtime/sarca'
+        fi
+        echo "binary → $DEST"
+
+  lint:
+    desc: Strict rustfmt (nightly) + clippy (deny pedantic/nursery/cargo)
+    dir: sarca
+    cmds:
+      - cargo +nightly fmt -- --check
+      - cargo clippy --all-targets --all-features -- -D warnings
+
+  fmt:
+    desc: Apply strict rustfmt (nightly unstable options)
+    dir: sarca
+    cmds:
+      - cargo +nightly fmt
 
   deploy-ui-native:
     desc: Copy ui/dist into native install prefix

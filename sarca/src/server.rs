@@ -1,10 +1,6 @@
-use std::{
-    net::SocketAddr,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use axum::{http::StatusCode, Router};
+use axum::{Router, http::StatusCode};
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
     cors,
@@ -15,8 +11,12 @@ use crate::{
     common::routing::app_state::AppState,
     conf,
     routers::{
-        auth::AuthRouter, public_shares::PublicSharesRouter, settings::SettingsRouter,
-        setup::SetupRouter, storage_workers::StorageWorkersRouter, storages::StoragesRouter,
+        auth::AuthRouter,
+        public_shares::PublicSharesRouter,
+        settings::SettingsRouter,
+        setup::SetupRouter,
+        storage_workers::StorageWorkersRouter,
+        storages::StoragesRouter,
         users::UsersRouter,
     },
 };
@@ -42,7 +42,10 @@ impl Server {
             .nest_service("/assets", serve_assets)
             .fallback_service(serve_ui);
 
-        Self { router, ui_dir }
+        Self {
+            router,
+            ui_dir,
+        }
     }
 
     #[inline]
@@ -64,11 +67,11 @@ impl Server {
             .nest("/setup", SetupRouter::get_router(app_state.clone()))
             .nest(
                 "/public/shares",
-                PublicSharesRouter::get_router(app_state.clone()),
+                PublicSharesRouter::get_router(app_state),
             )
             // Keep unknown /api/* from falling through to the SPA HTML fallback.
             .fallback(|| async { (StatusCode::NOT_FOUND, "Not Found") })
-            .layer(ConcurrencyLimitLayer::new(workers.into()))
+            .layer(ConcurrencyLimitLayer::new(workers))
             .layer(app_cors)
     }
 
@@ -77,16 +80,14 @@ impl Server {
             eprintln!();
             eprintln!("error: cannot bind to {addr}: {e}");
             eprintln!(
-                "hint: port {} is probably already in use — stop the other process \
-                 or set a free PORT in {}",
+                "hint: port {} is probably already in use — stop the other process or set a free \
+                 PORT in {}",
                 addr.port(),
                 conf::CONF_NAME
             );
             std::process::exit(1);
         });
-        listener
-            .set_nonblocking(true)
-            .expect("failed to set nonblocking on listener");
+        listener.set_nonblocking(true).expect("failed to set nonblocking on listener");
 
         let public = format!("http://127.0.0.1:{}", addr.port());
         eprintln!();
@@ -111,7 +112,7 @@ impl Server {
 /// Locate the built UI (`index.html` + `assets/`).
 ///
 /// Search order matches installer layout, then cwd, then cargo/dev layouts.
-pub(crate) fn resolve_ui_dir() -> PathBuf {
+pub fn resolve_ui_dir() -> PathBuf {
     let candidates = ui_dir_candidates();
 
     if let Some(dir) = find_ui_dir_among(&candidates) {
@@ -128,7 +129,7 @@ pub(crate) fn resolve_ui_dir() -> PathBuf {
     std::process::exit(1);
 }
 
-pub(crate) fn ui_dir_candidates() -> Vec<PathBuf> {
+pub fn ui_dir_candidates() -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     if let Ok(exe) = std::env::current_exe() {
@@ -145,14 +146,10 @@ pub(crate) fn ui_dir_candidates() -> Vec<PathBuf> {
     candidates
 }
 
-pub(crate) fn find_ui_dir_among(candidates: &[PathBuf]) -> Option<PathBuf> {
+pub fn find_ui_dir_among(candidates: &[PathBuf]) -> Option<PathBuf> {
     for candidate in candidates {
         if candidate.join("index.html").is_file() {
-            return Some(
-                candidate
-                    .canonicalize()
-                    .unwrap_or_else(|_| candidate.clone()),
-            );
+            return Some(candidate.canonicalize().unwrap_or_else(|_| candidate.clone()));
         }
     }
     None
@@ -160,8 +157,9 @@ pub(crate) fn find_ui_dir_among(candidates: &[PathBuf]) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
+    use super::*;
 
     #[test]
     fn find_ui_dir_picks_first_with_index() {

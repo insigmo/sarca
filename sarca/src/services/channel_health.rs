@@ -1,12 +1,11 @@
 use sqlx::PgPool;
 
+use super::storage_workers_scheduler::StorageWorkersScheduler;
 use crate::{
-    common::telegram_api::bot_api::{is_chat_dead_error, TelegramBotApi},
+    common::telegram_api::bot_api::{TelegramBotApi, is_chat_dead_error},
     models::storage_channels::StorageChannel,
     repositories::{storage_channels::StorageChannelsRepository, storages::StoragesRepository},
 };
-
-use super::storage_workers_scheduler::StorageWorkersScheduler;
 
 pub struct ChannelHealthService;
 
@@ -14,11 +13,8 @@ impl ChannelHealthService {
     /// Next active channel position to promote to primary, cycling forward from `current`
     /// (exclusive). Returns `None` if there is no active channel left at all.
     pub fn next_active_position(channels: &[StorageChannel], current: i16) -> Option<i16> {
-        let mut active: Vec<i16> = channels
-            .iter()
-            .filter(|c| c.is_active())
-            .map(|c| c.position)
-            .collect();
+        let mut active: Vec<i16> =
+            channels.iter().filter(|c| c.is_active()).map(|c| c.position).collect();
         active.sort_unstable();
 
         if active.is_empty() {
@@ -43,7 +39,7 @@ impl ChannelHealthService {
             Err(e) => {
                 tracing::warn!("[CHANNEL HEALTH] failed to list channels: {e}");
                 return;
-            }
+            },
         };
 
         for channel in channels.iter().filter(|c| c.is_active()) {
@@ -76,9 +72,12 @@ impl ChannelHealthService {
             let storage = match storages_repo.get_by_id(channel.storage_id).await {
                 Ok(s) => s,
                 Err(e) => {
-                    tracing::error!("[CHANNEL HEALTH] failed to load storage {}: {e}", channel.storage_id);
+                    tracing::error!(
+                        "[CHANNEL HEALTH] failed to load storage {}: {e}",
+                        channel.storage_id
+                    );
                     continue;
-                }
+                },
             };
 
             if storage.primary_position != channel.position {
@@ -88,9 +87,12 @@ impl ChannelHealthService {
             let siblings = match channels_repo.list_by_storage(storage.id).await {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::error!("[CHANNEL HEALTH] failed to list channels for storage {}: {e}", storage.id);
+                    tracing::error!(
+                        "[CHANNEL HEALTH] failed to list channels for storage {}: {e}",
+                        storage.id
+                    );
                     continue;
-                }
+                },
             };
 
             match Self::next_active_position(&siblings, channel.position) {
@@ -100,13 +102,13 @@ impl ChannelHealthService {
                         "[CHANNEL HEALTH] rotated storage {} primary channel to position {next}",
                         storage.id
                     );
-                }
+                },
                 None => {
                     tracing::error!(
                         "[CHANNEL HEALTH] storage {} has no active channel left",
                         storage.id
                     );
-                }
+                },
             }
         }
     }
@@ -124,16 +126,17 @@ impl ChannelHealthService {
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use super::ChannelHealthService;
     use crate::models::storage_channels::StorageChannel;
-    use uuid::Uuid;
 
     fn channel(position: i16, status: &str) -> StorageChannel {
         StorageChannel {
             id: Uuid::new_v4(),
             storage_id: Uuid::new_v4(),
             position,
-            chat_id: -1001234567890,
+            chat_id: -1_001_234_567_890,
             name: format!("channel-{position}"),
             status: status.to_owned(),
         }

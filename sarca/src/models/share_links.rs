@@ -25,9 +25,7 @@ impl ShareLink {
     }
 
     pub fn is_expired(&self) -> bool {
-        self.expires_at
-            .map(|exp| exp <= Utc::now())
-            .unwrap_or(false)
+        self.expires_at.is_some_and(|exp| exp <= Utc::now())
     }
 
     /// Unavailable to guests (revoked or past expiry).
