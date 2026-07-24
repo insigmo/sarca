@@ -284,6 +284,8 @@ const glyphForKind = (kind) => {
 		case 'presentation':
 			return <DocumentGlyph />
 		case 'text':
+		case 'markdown':
+		case 'html':
 			return <TextGlyph />
 		case 'spreadsheet':
 			return <SpreadsheetGlyph />

@@ -292,6 +292,66 @@ impl<'d> FilesRepository<'d> {
         .map_err(|e| map_not_found(e, "file"))
     }
 
+    /// Sum of uploaded file sizes under a folder prefix (prefix must end with `/`).
+    pub async fn sum_uploaded_size_under(
+        &self,
+        storage_id: Uuid,
+        folder_prefix: &str,
+    ) -> SarcaResult<i64> {
+        let row: (i64,) = sqlx::query_as(
+            format!(
+                "
+                SELECT COALESCE(SUM(size), 0)::BigInt
+                FROM {FILES_TABLE}
+                WHERE storage_id = $1
+                  AND is_uploaded
+                  AND path LIKE $2 || '%'
+                  AND path NOT LIKE '%/';
+            "
+            )
+            .as_str(),
+        )
+        .bind(storage_id)
+        .bind(folder_prefix)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+        Ok(row.0)
+    }
+
+    /// Uploaded files (not folder markers) under a folder prefix (prefix must end with `/`).
+    pub async fn list_uploaded_files_under(
+        &self,
+        storage_id: Uuid,
+        folder_prefix: &str,
+    ) -> SarcaResult<Vec<File>> {
+        sqlx::query_as(
+            format!(
+                "
+                SELECT *
+                FROM {FILES_TABLE}
+                WHERE storage_id = $1
+                  AND is_uploaded
+                  AND path LIKE $2 || '%'
+                  AND path NOT LIKE '%/'
+                ORDER BY path
+            "
+            )
+            .as_str(),
+        )
+        .bind(storage_id)
+        .bind(folder_prefix)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })
+    }
+
     pub async fn get_by_id(&self, id: Uuid) -> SarcaResult<File> {
         sqlx::query_as(format!("SELECT * FROM {FILES_TABLE} WHERE id = $1").as_str())
             .bind(id)
