@@ -34,7 +34,14 @@ const BasicLayout = () => {
 					}}
 				/>
 
-				<Box sx={{ minHeight: 'calc(100vh - 64px)' }}>
+				<Box
+					sx={{
+						minHeight: {
+							xs: 'calc(100dvh - 56px - env(safe-area-inset-top, 0px))',
+							sm: 'calc(100vh - 64px)',
+						},
+					}}
+				>
 					<Container
 						maxWidth="lg"
 						class="app-shell-main"
