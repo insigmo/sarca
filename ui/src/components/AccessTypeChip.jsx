@@ -1,7 +1,4 @@
 import { ThemeProvider, createTheme } from '@suid/material'
-import red from '@suid/material/colors/red'
-import amber from '@suid/material/colors/amber'
-import lightBlue from '@suid/material/colors/lightBlue'
 import Chip from '@suid/material/Chip'
 
 export const makeAccessTypeUserFriendly = (at) => {
@@ -9,31 +6,34 @@ export const makeAccessTypeUserFriendly = (at) => {
 		case 'A':
 			return 'Admin'
 		case 'W':
-			return 'Can edit'
+			return 'Edit'
 		case 'R':
-			return 'Viewer'
+			return 'View'
+		default:
+			return at
 	}
 }
 
+/** Soft tints + dark ink — readable on light and dark themes. */
 const accessTypeTheme = createTheme({
 	palette: {
 		A: {
-			main: red[500],
-			light: red[100],
-			dark: red[400],
-			contrastText: '#fff',
+			main: '#C45C4A',
+			light: 'rgba(196, 92, 74, 0.18)',
+			dark: '#9E3F30',
+			contrastText: '#9E3F30',
 		},
 		W: {
-			main: amber[500],
-			light: amber[100],
-			dark: amber[400],
-			contrastText: '#fff',
+			main: '#B8862E',
+			light: 'rgba(217, 164, 65, 0.22)',
+			dark: '#8A6420',
+			contrastText: '#8A6420',
 		},
 		R: {
-			main: lightBlue[500],
-			light: lightBlue[100],
-			dark: lightBlue[200],
-			contrastText: '#fff',
+			main: '#3D4AD6',
+			light: 'rgba(91, 108, 255, 0.18)',
+			dark: '#2A35A8',
+			contrastText: '#2A35A8',
 		},
 	},
 })
@@ -44,13 +44,34 @@ const accessTypeTheme = createTheme({
  */
 
 /**
- *
  * @param {AccessTypeChipProps} props
  */
 const AccessTypeChip = (props) => {
 	return (
+		<span class={`access-chip access-chip--${String(props.at).toLowerCase()}`}>
+			{makeAccessTypeUserFriendly(props.at)}
+		</span>
+	)
+}
+
+/**
+ * MUI Chip variant kept for places that still need ThemeProvider color.
+ * Prefer the CSS `access-chip` span above.
+ */
+export const AccessTypeMuiChip = (props) => {
+	return (
 		<ThemeProvider theme={accessTypeTheme}>
-			<Chip label={makeAccessTypeUserFriendly(props.at)} color={props.at} />
+			<Chip
+				label={makeAccessTypeUserFriendly(props.at)}
+				color={props.at}
+				size="small"
+				sx={{
+					fontWeight: 700,
+					bgcolor: (t) => t.palette[props.at]?.light,
+					color: (t) => t.palette[props.at]?.contrastText,
+					border: (t) => `1px solid ${t.palette[props.at]?.main}`,
+				}}
+			/>
 		</ThemeProvider>
 	)
 }

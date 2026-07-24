@@ -188,62 +188,36 @@ impl<'d> SetupService<'d> {
         })
     }
 
+    /// Discover chats where the bot is admin/creator (negative chat ids only).
+    /// `exclude` skips chat ids already known (e.g. on this storage).
+    pub async fn discover_admin_chats(
+        &self,
+        token: &str,
+        exclude: &[ChatId],
+    ) -> SarcaResult<(Vec<(ChatId, String)>, Option<String>)> {
+        let client = TelegramTokenClient::new(self.telegram_base_url, token.trim());
+        client.discover_admin_chats(exclude).await
+    }
+
     pub async fn poll_channel(
         &self,
         token: &str,
         exclude: &[ChatId],
     ) -> SarcaResult<ChannelPollResultSchema> {
-        let client = TelegramTokenClient::new(self.telegram_base_url, token.trim());
-        let me = client.get_me().await?;
-        let chats = client.get_updates().await?;
-        let mut saw_non_admin = false;
-
-        for chat in chats {
-            if exclude.contains(&chat.chat_id) {
-                continue;
-            }
-            // Prefer channel / negative ids (Telegram chats for storage).
-            if chat.chat_id >= 0 {
-                continue;
-            }
-
-            let title = match client.get_chat(chat.chat_id).await {
-                Ok(info) => info.title,
-                Err(_) => chat.title,
-            };
-
-            match client.get_chat_member_status(chat.chat_id, me.id).await {
-                Ok(status) if status == "administrator" || status == "creator" => {
-                    return Ok(ChannelPollResultSchema {
-                        found: true,
-                        chat_id: Some(chat.chat_id),
-                        title: Some(title),
-                        hint: None,
-                    });
-                },
-                Ok(_) => {
-                    saw_non_admin = true;
-                },
-                Err(e) => {
-                    tracing::warn!("setup poll: getChatMember for {} failed: {e}", chat.chat_id);
-                    saw_non_admin = true;
-                },
-            }
+        let (found, hint) = self.discover_admin_chats(token, exclude).await?;
+        if let Some((chat_id, title)) = found.into_iter().next() {
+            return Ok(ChannelPollResultSchema {
+                found: true,
+                chat_id: Some(chat_id),
+                title: Some(title),
+                hint: None,
+            });
         }
-
         Ok(ChannelPollResultSchema {
             found: false,
             chat_id: None,
             title: None,
-            hint: if saw_non_admin {
-                Some(
-                    "Bot was added to a channel but does not have admin rights. Make it an admin \
-                     with Post messages and Delete messages."
-                        .to_owned(),
-                )
-            } else {
-                None
-            },
+            hint,
         })
     }
 

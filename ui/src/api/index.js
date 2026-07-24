@@ -250,10 +250,18 @@ const getStorage = async (id) => {
  */
 
 /**
+ * @typedef {Object} StorageBot
+ * @property {string} id
+ * @property {string} name
+ * @property {string} token_masked
+ */
+
+/**
  * @typedef {Object} StorageDetailProperties
  * @property {boolean} has_dead_channel
  * @property {StorageChannel[]} channels
  * @property {ReplicationStats} replication
+ * @property {StorageBot | null} [bot]
  * @typedef {Storage & StorageDetailProperties} StorageDetail
  */
 
@@ -277,6 +285,37 @@ const addChannel = async (storageId, chatId, name) => {
 		getAuthToken(),
 		{ chat_id: chatId, ...(name ? { name } : {}) },
 	)
+}
+
+/**
+ * Discover admin chats for this storage's bot and add missing ones (add-only, max 3).
+ * @param {string} storageId
+ * @returns {Promise<{
+ *   added: StorageChannel[],
+ *   skipped_full: boolean,
+ *   skipped_in_use: number[],
+ *   channels: StorageChannel[],
+ *   hint?: string | null
+ * }>}
+ */
+const refreshChannels = async (storageId) => {
+	return await apiRequest(
+		`/storages/${storageId}/channels/refresh`,
+		'post',
+		getAuthToken(),
+	)
+}
+
+/**
+ * Attach or replace the Telegram bot for this storage.
+ * @param {string} storageId
+ * @param {string} token
+ * @returns {Promise<StorageBot>}
+ */
+const setStorageBot = async (storageId, token) => {
+	return await apiRequest(`/storages/${storageId}/bot`, 'put', getAuthToken(), {
+		token,
+	})
 }
 
 /**
@@ -1287,6 +1326,8 @@ const API = {
 		renameStorage,
 		deleteStorage,
 		addChannel,
+		refreshChannels,
+		setStorageBot,
 		updateChannel,
 		removeChannel,
 		retryReplication,

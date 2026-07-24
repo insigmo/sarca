@@ -16,7 +16,13 @@ use crate::{
         replication::ReplicationService,
         trash_purge::TrashPurgeService,
     },
-    startup::{bootstrap_storage_from_env, create_db, create_superuser, init_db},
+    startup::{
+        bootstrap_storage_from_env,
+        create_db,
+        create_superuser,
+        delete_orphan_storage_workers,
+        init_db,
+    },
     storage_manager::StorageManager,
 };
 
@@ -79,6 +85,7 @@ async fn main() {
 
     eprintln!("initializing schema…");
     init_db(&db).await;
+    delete_orphan_storage_workers(&db).await;
 
     match crate::repositories::files::FilesRepository::new(&db).list_stale_upload_ids().await {
         Ok(ids) if !ids.is_empty() => {
