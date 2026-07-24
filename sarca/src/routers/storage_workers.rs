@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension,
+    Json,
+    Router,
     extract::{Path, Query, State},
     http::StatusCode,
     middleware,
     response::{IntoResponse, Response},
     routing::{delete, get},
-    Extension, Json, Router,
 };
 use uuid::Uuid;
 
@@ -16,7 +18,9 @@ use crate::{
         routing::{app_state::AppState, middlewares::auth::logged_in_required},
     },
     schemas::storage_workers::{
-        HasStorageWorkers, InStorageWorkerSchema, StorageWorkersStorageIDQuery,
+        HasStorageWorkers,
+        InStorageWorkerSchema,
+        StorageWorkersStorageIDQuery,
     },
     services::storage_workers::StorageWorkersService,
 };
@@ -29,10 +33,7 @@ impl StorageWorkersRouter {
             .route("/", get(Self::list).post(Self::create))
             .route("/has_workers", get(Self::has_storages_workers))
             .route("/:id", delete(Self::delete))
-            .route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                logged_in_required,
-            ))
+            .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required))
             .with_state(state)
     }
 
@@ -41,9 +42,7 @@ impl StorageWorkersRouter {
         Extension(user): Extension<AuthUser>,
         Json(in_schema): Json<InStorageWorkerSchema>,
     ) -> impl IntoResponse {
-        let sw = StorageWorkersService::new(&state.db)
-            .create(in_schema, &user)
-            .await?;
+        let sw = StorageWorkersService::new(&state.db).create(in_schema, &user).await?;
         Ok::<_, (StatusCode, String)>((StatusCode::CREATED, Json(sw)))
     }
 
@@ -63,7 +62,7 @@ impl StorageWorkersRouter {
         StorageWorkersService::new(&state.db)
             .delete(id, &user)
             .await
-            .map_err(|e| <(StatusCode, String)>::from(e))?;
+            .map_err(<(StatusCode, String)>::from)?;
         Ok(StatusCode::NO_CONTENT)
     }
 
@@ -75,6 +74,9 @@ impl StorageWorkersRouter {
         let has = StorageWorkersService::new(&state.db)
             .has_storage_workers(query.0.storage_id, &user)
             .await?;
-        Ok(Json(HasStorageWorkers { has }).into_response())
+        Ok(Json(HasStorageWorkers {
+            has,
+        })
+        .into_response())
     }
 }

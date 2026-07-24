@@ -3,7 +3,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -38,7 +38,10 @@ pub struct AuthUser {
 
 impl AuthUser {
     pub fn new(id: Uuid, email: String) -> Self {
-        Self { id, email }
+        Self {
+            id,
+            email,
+        }
     }
 }
 
@@ -83,11 +86,8 @@ impl JWTManager {
         decode::<Claims>(token, &decoding_key, &validation)
             .map_err(|_| SarcaError::NotAuthenticated)
             .and_then(|token_data| {
-                let token_type = token_data
-                    .claims
-                    .token_type
-                    .as_deref()
-                    .unwrap_or(TOKEN_TYPE_ACCESS);
+                let token_type =
+                    token_data.claims.token_type.as_deref().unwrap_or(TOKEN_TYPE_ACCESS);
                 if token_type != expected_type {
                     return Err(SarcaError::NotAuthenticated);
                 }
@@ -97,7 +97,7 @@ impl JWTManager {
             })
     }
 
-    /// Short-lived unlock JWT for a password-protected share (stored in HttpOnly cookie).
+    /// Short-lived unlock JWT for a password-protected share (stored in `HttpOnly` cookie).
     pub fn generate_share_unlock(
         share_token: &str,
         expire_in: Duration,

@@ -1,18 +1,24 @@
 use std::{collections::HashMap, io, path::Path, pin::Pin, sync::Arc};
 
+use async_stream::try_stream;
 use axum::{
+    Extension,
+    Json,
+    Router,
     body::{Bytes, StreamBody},
     extract::{DefaultBodyLimit, Multipart, Path as RoutePath, Query, State},
     http::{HeaderMap, StatusCode},
     middleware,
     response::{AppendHeaders, IntoResponse, Response},
     routing::{get, post},
-    Extension, Json, Router,
 };
-use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use percent_encoding::percent_decode_str;
 use reqwest::header;
+use tokio::{
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    sync::mpsc,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -22,28 +28,33 @@ use crate::{
         chunk_cache::ChunkCache,
         jwt_manager::AuthUser,
         routing::{app_state::AppState, middlewares::auth::logged_in_required},
-        telegram_api::bot_api::{is_chat_dead_error, TelegramBotApi},
+        telegram_api::bot_api::{TelegramBotApi, is_chat_dead_error},
     },
     errors::{SarcaError, SarcaResult},
-    models::access::AccessType,
-    models::files::InFile,
-    models::storage_channels::StorageChannel,
+    models::{access::AccessType, files::InFile, storage_channels::StorageChannel},
     repositories::{
-        access::AccessRepository, files::FilesRepository,
-        storage_channels::StorageChannelsRepository, storages::StoragesRepository,
+        access::AccessRepository,
+        files::FilesRepository,
+        storage_channels::StorageChannelsRepository,
+        storages::StoragesRepository,
     },
     schemas::files::{
-        CopySchema, InFolderSchema, MoveSchema, RenameSchema, SearchQuery, UploadParams,
+        CopySchema,
+        InFolderSchema,
+        MoveSchema,
+        RenameSchema,
+        SearchQuery,
+        UploadParams,
     },
-    services::files::FilesService,
-    services::storage_workers_scheduler::StorageWorkersScheduler,
+    services::{files::FilesService, storage_workers_scheduler::StorageWorkersScheduler},
 };
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-use tokio::sync::mpsc;
 
 pub struct FilesRouter;
 
 impl FilesRouter {
+    /// Max total uncompressed size of files packed into a folder ZIP.
+    const MAX_FOLDER_ZIP_BYTES: i64 = 10 * 1024 * 1024 * 1024;
+
     pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>, axum::body::Body> {
         Router::new()
             .route("/create_folder", post(Self::create_folder))
@@ -53,14 +64,11 @@ impl FilesRouter {
             .route("/copy", post(Self::copy_to))
             .route("/*path", get(Self::dynamic_get).delete(Self::delete))
             .layer(DefaultBodyLimit::disable())
-            .route_layer(middleware::from_fn_with_state(
-                state.clone(),
-                logged_in_required,
-            ))
+            .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required))
             .with_state(state)
     }
 
-    fn service<'d>(state: &'d AppState) -> FilesService<'d> {
+    fn service(state: &AppState) -> FilesService<'_> {
         FilesService::new(
             &state.db,
             state.tx.clone(),
@@ -76,11 +84,12 @@ impl FilesRouter {
         query: Query<SearchQuery>,
         headers: HeaderMap,
     ) -> impl IntoResponse {
-        let (root_path, path) = path.split_once("/").unwrap_or((&path, ""));
+        let (root_path, path) = path.split_once('/').unwrap_or((&path, ""));
         match root_path {
             "tree" => Self::tree(state, user, storage_id, path).await,
             "download" => Self::download(state, user, storage_id, path, &query.0, &headers).await,
             "thumb" => Self::thumb(state, user, storage_id, path).await,
+            "info" => Self::file_info_inner(state, user, storage_id, path).await,
             "search" => {
                 if let Some(search_path) = query.0.search_path {
                     Self::search(state, user, storage_id, path, &search_path).await
@@ -90,7 +99,7 @@ impl FilesRouter {
                         "search_path query parameter is required".to_owned(),
                     ))
                 }
-            }
+            },
             _ => Err((StatusCode::NOT_FOUND, "Not found".to_owned())),
         }
     }
@@ -101,10 +110,22 @@ impl FilesRouter {
         storage_id: Uuid,
         path: &str,
     ) -> Result<Response, (StatusCode, String)> {
-        let fs_layer = Self::service(&state)
-            .list_dir(storage_id, path, &user)
-            .await?;
+        let fs_layer = Self::service(&state).list_dir(storage_id, path, &user).await?;
         Ok(Json(fs_layer).into_response())
+    }
+
+    async fn file_info_inner(
+        state: Arc<AppState>,
+        user: AuthUser,
+        storage_id: Uuid,
+        path: &str,
+    ) -> Result<Response, (StatusCode, String)> {
+        let path = percent_decode_str(path).decode_utf8_lossy().to_string();
+        let info = Self::service(&state)
+            .info(storage_id, &path, &user)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
+        Ok(Json(info).into_response())
     }
 
     async fn upload(
@@ -118,16 +139,14 @@ impl FilesRouter {
         tokio::fs::create_dir_all(&upload_dir).await.map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!(
-                    "Can't create upload directory under WORK_DIR (check permissions): {e}"
-                ),
+                format!("Can't create upload directory under WORK_DIR (check permissions): {e}"),
             )
         })?;
 
         let tmp_path = upload_dir.join(format!("{}.upload", Uuid::new_v4()));
-        let mut tmp_file = tokio::fs::File::create(&tmp_path)
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't create temp file".to_owned()))?;
+        let mut tmp_file = tokio::fs::File::create(&tmp_path).await.map_err(|_| {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Can't create temp file".to_owned())
+        })?;
 
         let (mut filename_field, mut filename_from_file, mut parent_path, mut file_size) =
             (None::<String>, None::<String>, None::<String>, 0i64);
@@ -155,17 +174,11 @@ impl FilesRouter {
                         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid file stream".to_owned()))?
                     {
                         file_size += chunk.len() as i64;
-                        tmp_file
-                            .write_all(&chunk)
-                            .await
-                            .map_err(|_| {
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "Can't write temp file".to_owned(),
-                                )
-                            })?;
+                        tmp_file.write_all(&chunk).await.map_err(|_| {
+                            (StatusCode::INTERNAL_SERVER_ERROR, "Can't write temp file".to_owned())
+                        })?;
                     }
-                }
+                },
                 "filename" => {
                     let raw_name = field
                         .text()
@@ -175,7 +188,7 @@ impl FilesRouter {
                     if !decoded.trim().is_empty() {
                         filename_field = Some(decoded.into_owned());
                     }
-                }
+                },
                 "path" => {
                     let raw_path = field
                         .text()
@@ -183,7 +196,7 @@ impl FilesRouter {
                         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid path".to_owned()))?;
                     let decoded = percent_decode_str(&raw_path).decode_utf8_lossy();
                     parent_path = Some(decoded.into_owned());
-                }
+                },
                 _ => (),
             }
         }
@@ -193,11 +206,10 @@ impl FilesRouter {
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't flush temp file".to_owned()))?;
 
-        let parent_path =
-            parent_path.ok_or((StatusCode::BAD_REQUEST, "path field is required".to_owned()))?;
-        let filename = filename_field
-            .or(filename_from_file)
-            .unwrap_or_else(|| "unnamed".to_owned());
+        let parent_path = parent_path
+            .ok_or_else(|| (StatusCode::BAD_REQUEST, "path field is required".to_owned()))?;
+        let filename =
+            filename_field.or(filename_from_file).unwrap_or_else(|| "unnamed".to_owned());
         let path = Self::construct_path(&parent_path, &filename)?;
 
         Self::service(&state)
@@ -205,9 +217,8 @@ impl FilesRouter {
             .await
             .map_err(<(StatusCode, String)>::from)?;
 
-        let chunk_size_bytes = state
-            .config
-            .chunk_size_bytes_for_file(&path, file_content_type.as_deref());
+        let chunk_size_bytes =
+            state.config.chunk_size_bytes_for_file(&path, file_content_type.as_deref());
         let in_file = InFile::new(path, file_size, storage_id).with_chunk_size(chunk_size_bytes);
         let (progress_tx, progress_rx) = mpsc::channel(64);
         let db = state.db.clone();
@@ -244,9 +255,7 @@ impl FilesRouter {
     ) -> Result<StatusCode, (StatusCode, String)> {
         let in_schema = InFolderSchema::new(storage_id, params.path, params.folder_name);
 
-        Self::service(&state)
-            .create_folder(in_schema, &user)
-            .await?;
+        Self::service(&state).create_folder(in_schema, &user).await?;
         Ok(StatusCode::CREATED)
     }
 
@@ -319,13 +328,7 @@ impl FilesRouter {
     /// Basename only — browsers may put `dir/file.ext` into multipart filename
     /// when uploading a folder (`webkitdirectory`).
     fn file_basename(filename: &str) -> String {
-        filename
-            .trim()
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or("")
-            .trim()
-            .to_string()
+        filename.trim().rsplit(['/', '\\']).next().unwrap_or("").trim().to_string()
     }
 
     /// Normalize a parent folder path: Unicode/spaces OK, reject `..`, drop empty/`.` segments.
@@ -352,11 +355,7 @@ impl FilesRouter {
         if filename.is_empty() || filename == "." || filename == ".." {
             return Err(SarcaError::InvalidPath);
         }
-        let path = if parent.is_empty() {
-            filename
-        } else {
-            format!("{parent}/{filename}")
-        };
+        let path = if parent.is_empty() { filename } else { format!("{parent}/{filename}") };
         if path.ends_with('/') {
             return Err(SarcaError::InvalidPath);
         }
@@ -371,14 +370,9 @@ impl FilesRouter {
         query: &SearchQuery,
         headers: &HeaderMap,
     ) -> Result<Response, (StatusCode, String)> {
-        check_access(
-            &AccessRepository::new(&state.db),
-            user.id,
-            storage_id,
-            &AccessType::R,
-        )
-        .await
-        .map_err(|e| <(StatusCode, String)>::from(e))?;
+        check_access(&AccessRepository::new(&state.db), user.id, storage_id, &AccessType::R)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
 
         if path.starts_with('/') || path.contains("//") {
             return Err((StatusCode::BAD_REQUEST, SarcaError::InvalidPath.to_string()));
@@ -392,19 +386,21 @@ impl FilesRouter {
         match files_repo.get_file_by_path(path, storage_id).await {
             Ok(file) => {
                 return Self::download_file(state, storage_id, path, file, query, headers).await;
-            }
+            },
             Err(SarcaError::DoesNotExist(_)) => {
                 // UI folder paths omit the trailing slash; try as folder.
                 let folder_path = format!("{path}/");
                 match Self::download_folder(state, storage_id, &folder_path).await {
-                    Err((StatusCode::NOT_FOUND, _)) => Err((
-                        StatusCode::NOT_FOUND,
-                        SarcaError::DoesNotExist("file".to_owned()).to_string(),
-                    )),
+                    Err((StatusCode::NOT_FOUND, _)) => {
+                        Err((
+                            StatusCode::NOT_FOUND,
+                            SarcaError::DoesNotExist("file".to_owned()).to_string(),
+                        ))
+                    },
                     other => other,
                 }
-            }
-            Err(e) => return Err(<(StatusCode, String)>::from(e)),
+            },
+            Err(e) => Err(<(StatusCode, String)>::from(e)),
         }
     }
 
@@ -418,42 +414,27 @@ impl FilesRouter {
     ) -> Result<Response, (StatusCode, String)> {
         let files_repo = FilesRepository::new(&state.db);
 
-        let mut chunks = files_repo
-            .list_chunks_of_file(file.id)
-            .await
-            .map_err(|e| <(StatusCode, String)>::from(e))?;
+        let mut chunks =
+            files_repo.list_chunks_of_file(file.id).await.map_err(<(StatusCode, String)>::from)?;
         chunks.sort_by_key(|c| c.position);
 
         let file_size = file.size.max(0) as u64;
         let chunk_size = file
             .chunk_size_bytes
             .filter(|&n| n > 0)
-            .map(|n| n as u64)
-            .unwrap_or_else(|| state.config.default_chunk_size_bytes());
+            .map_or_else(|| state.config.default_chunk_size_bytes(), |n| n as u64);
 
-        let filename = Path::new(&path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("unnamed.bin");
-        let content_type = mime_guess::from_path(filename)
-            .first_or_octet_stream()
-            .to_string();
+        let filename =
+            Path::new(&path).file_name().and_then(|name| name.to_str()).unwrap_or("unnamed.bin");
+        let content_type = mime_guess::from_path(filename).first_or_octet_stream().to_string();
 
-        let want_inline = matches!(
-            query.inline.as_deref(),
-            Some("1") | Some("true") | Some("yes")
-        ) || is_inline_previewable(&content_type);
-        let disposition = content_disposition_value(
-            if want_inline { "inline" } else { "attachment" },
-            filename,
-        );
+        let want_inline = matches!(query.inline.as_deref(), Some("1" | "true" | "yes"))
+            || is_inline_previewable(&content_type);
+        let disposition =
+            content_disposition_value(if want_inline { "inline" } else { "attachment" }, filename);
 
-        let range = parse_bytes_range(
-            headers
-                .get(header::RANGE)
-                .and_then(|v| v.to_str().ok()),
-            file_size,
-        );
+        let range =
+            parse_bytes_range(headers.get(header::RANGE).and_then(|v| v.to_str().ok()), file_size);
 
         let (start, end, status) = match range {
             Ok(None) => (0u64, file_size.saturating_sub(1), StatusCode::OK),
@@ -463,7 +444,7 @@ impl FilesRouter {
                     StatusCode::RANGE_NOT_SATISFIABLE,
                     format!("Requested range not satisfiable; file size is {file_size}"),
                 ));
-            }
+            },
         };
 
         // Empty file
@@ -497,9 +478,8 @@ impl FilesRouter {
         let cache = ChunkCache::new(&state.config.work_dir);
         let is_video = crate::models::files::is_video(path, Some(&content_type));
 
-        let channels = ordered_active_channels(&db, storage_id)
-            .await
-            .map_err(<(StatusCode, String)>::from)?;
+        let channels =
+            ordered_active_channels(&db, storage_id).await.map_err(<(StatusCode, String)>::from)?;
         if channels.is_empty() {
             return Err(<(StatusCode, String)>::from(SarcaError::NoActiveChannel));
         }
@@ -508,10 +488,7 @@ impl FilesRouter {
             .map_err(<(StatusCode, String)>::from)?;
 
         fn primary_candidate(candidates: &ChunkCandidates, position: i16) -> Option<String> {
-            candidates
-                .get(&position)
-                .and_then(|v| v.first())
-                .map(|(f, _)| f.clone())
+            candidates.get(&position).and_then(|v| v.first()).map(|(f, _)| f.clone())
         }
 
         // Warm the next Telegram chunk while the player consumes the current Range.
@@ -562,15 +539,15 @@ impl FilesRouter {
                 let chunk_candidates = candidates.get(&chunk.position).cloned().unwrap_or_default();
                 let cached = ensure_chunk_cached(&cache, &base_url, &db, rate, storage_id, &chunk_candidates)
                     .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                    .map_err(|e| io::Error::other(e.to_string()))?;
 
                 let mut file = tokio::fs::File::open(&cached)
                     .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                    .map_err(|e| io::Error::other(e.to_string()))?;
                 if skip > 0 {
                     file.seek(std::io::SeekFrom::Start(skip))
                         .await
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                        .map_err(|e| io::Error::other(e.to_string()))?;
                 }
 
                 let mut buf = vec![0u8; 64 * 1024];
@@ -578,7 +555,7 @@ impl FilesRouter {
                     let n = file
                         .read(&mut buf)
                         .await
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                        .map_err(|e| io::Error::other(e.to_string()))?;
                     if n == 0 {
                         break;
                     }
@@ -600,10 +577,7 @@ impl FilesRouter {
         headers_mut.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
         headers_mut.insert(header::CONTENT_DISPOSITION, disposition);
         headers_mut.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
-        headers_mut.insert(
-            header::CONTENT_LENGTH,
-            content_length.to_string().parse().unwrap(),
-        );
+        headers_mut.insert(header::CONTENT_LENGTH, content_length.to_string().parse().unwrap());
         if status == StatusCode::PARTIAL_CONTENT {
             headers_mut.insert(
                 header::CONTENT_RANGE,
@@ -614,8 +588,7 @@ impl FilesRouter {
         Ok(response)
     }
 
-    /// Max total uncompressed size of files packed into a folder ZIP.
-    const MAX_FOLDER_ZIP_BYTES: i64 = 10 * 1024 * 1024 * 1024; // 10 GiB
+    // 10 GiB
 
     pub(crate) async fn download_folder(
         state: Arc<AppState>,
@@ -635,17 +608,14 @@ impl FilesRouter {
         let total_size = files_repo
             .sum_uploaded_size_under(storage_id, &prefix)
             .await
-            .map_err(|e| <(StatusCode, String)>::from(e))?;
+            .map_err(<(StatusCode, String)>::from)?;
 
         let files = files_repo
             .list_uploaded_files_under(storage_id, &prefix)
             .await
-            .map_err(|e| <(StatusCode, String)>::from(e))?;
+            .map_err(<(StatusCode, String)>::from)?;
 
-        let folder_marker_exists = files_repo
-            .get_file_by_path(&prefix, storage_id)
-            .await
-            .is_ok();
+        let folder_marker_exists = files_repo.get_file_by_path(&prefix, storage_id).await.is_ok();
 
         if !folder_marker_exists && files.is_empty() {
             return Err(<(StatusCode, String)>::from(SarcaError::DoesNotExist(
@@ -676,10 +646,7 @@ impl FilesRouter {
 
         {
             let zip_file = std::fs::File::create(&zip_path).map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Can't create zip file: {e}"),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Can't create zip file: {e}"))
             })?;
             let mut zip = zip::ZipWriter::new(zip_file);
             let options = zip::write::SimpleFileOptions::default()
@@ -699,35 +666,24 @@ impl FilesRouter {
             }
 
             for file in files {
-                let entry_name = file
-                    .path
-                    .strip_prefix(&prefix)
-                    .unwrap_or(&file.path)
-                    .to_owned();
+                let entry_name = file.path.strip_prefix(&prefix).unwrap_or(&file.path).to_owned();
                 if entry_name.is_empty() {
                     continue;
                 }
 
                 zip.start_file(&entry_name, options).map_err(|e| {
                     let _ = std::fs::remove_file(&zip_path);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Can't write zip entry: {e}"),
-                    )
+                    (StatusCode::INTERNAL_SERVER_ERROR, format!("Can't write zip entry: {e}"))
                 })?;
 
-                let mut chunks = files_repo
-                    .list_chunks_of_file(file.id)
-                    .await
-                    .map_err(|e| {
-                        let _ = std::fs::remove_file(&zip_path);
-                        <(StatusCode, String)>::from(e)
-                    })?;
+                let mut chunks = files_repo.list_chunks_of_file(file.id).await.map_err(|e| {
+                    let _ = std::fs::remove_file(&zip_path);
+                    <(StatusCode, String)>::from(e)
+                })?;
                 chunks.sort_by_key(|c| c.position);
 
-                let candidates = resolve_chunk_candidates(&db, file.id, &channels)
-                    .await
-                    .map_err(|e| {
+                let candidates =
+                    resolve_chunk_candidates(&db, file.id, &channels).await.map_err(|e| {
                         let _ = std::fs::remove_file(&zip_path);
                         <(StatusCode, String)>::from(e)
                     })?;
@@ -767,27 +723,21 @@ impl FilesRouter {
 
             zip.finish().map_err(|e| {
                 let _ = std::fs::remove_file(&zip_path);
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Can't finalize zip: {e}"),
-                )
+                (StatusCode::INTERNAL_SERVER_ERROR, format!("Can't finalize zip: {e}"))
             })?;
         }
 
-        let zip_len = tokio::fs::metadata(&zip_path)
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let zip_len = tokio::fs::metadata(&zip_path).await.map_or(0, |m| m.len());
 
         let stream = try_stream! {
             let mut file = tokio::fs::File::open(&zip_path_str)
                 .await
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             let mut buf = vec![0u8; 64 * 1024];
             loop {
                 let n = tokio::io::AsyncReadExt::read(&mut file, &mut buf)
                     .await
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                    .map_err(|e| io::Error::other(e.to_string()))?;
                 if n == 0 {
                     break;
                 }
@@ -799,17 +749,13 @@ impl FilesRouter {
         let stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(stream);
         let body = StreamBody::new(stream);
 
-        let disposition =
-            content_disposition_value("attachment", &format!("{folder_name}.zip"));
+        let disposition = content_disposition_value("attachment", &format!("{folder_name}.zip"));
         let mut response = body.into_response();
         *response.status_mut() = StatusCode::OK;
         let headers_mut = response.headers_mut();
         headers_mut.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
         headers_mut.insert(header::CONTENT_DISPOSITION, disposition);
-        headers_mut.insert(
-            header::CONTENT_LENGTH,
-            zip_len.to_string().parse().unwrap(),
-        );
+        headers_mut.insert(header::CONTENT_LENGTH, zip_len.to_string().parse().unwrap());
 
         Ok(response)
     }
@@ -820,14 +766,9 @@ impl FilesRouter {
         storage_id: Uuid,
         path: &str,
     ) -> Result<Response, (StatusCode, String)> {
-        check_access(
-            &AccessRepository::new(&state.db),
-            user.id,
-            storage_id,
-            &AccessType::R,
-        )
-        .await
-        .map_err(|e| <(StatusCode, String)>::from(e))?;
+        check_access(&AccessRepository::new(&state.db), user.id, storage_id, &AccessType::R)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
 
         Self::thumb_for_path(state, storage_id, path).await
     }
@@ -839,17 +780,14 @@ impl FilesRouter {
         path: &str,
     ) -> Result<Response, (StatusCode, String)> {
         if path.starts_with('/') || path.contains("//") {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                SarcaError::InvalidPath.to_string(),
-            ));
+            return Err((StatusCode::BAD_REQUEST, SarcaError::InvalidPath.to_string()));
         }
 
         let files_repo = FilesRepository::new(&state.db);
         let file = files_repo
             .get_file_by_path(path, storage_id)
             .await
-            .map_err(|e| <(StatusCode, String)>::from(e))?;
+            .map_err(<(StatusCode, String)>::from)?;
 
         let Some(thumb_id) = file.thumb_telegram_file_id.as_deref() else {
             return Err((StatusCode::NOT_FOUND, "Thumbnail not found".to_owned()));
@@ -859,23 +797,18 @@ impl FilesRouter {
         let bytes = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
             .download(thumb_id, storage_id)
             .await
-            .map_err(|e| <(StatusCode, String)>::from(e))?;
+            .map_err(<(StatusCode, String)>::from)?;
 
         let headers = AppendHeaders([
             (header::CONTENT_TYPE, "image/jpeg".to_owned()),
-            (
-                header::CONTENT_DISPOSITION,
-                "inline; filename=\"thumb.jpg\"".to_owned(),
-            ),
+            (header::CONTENT_DISPOSITION, "inline; filename=\"thumb.jpg\"".to_owned()),
             (header::CACHE_CONTROL, "private, max-age=86400".to_owned()),
         ]);
 
         Ok((headers, bytes).into_response())
     }
 
-    ///
     /// Need path with trailing slash
-    ///
     async fn search(
         state: Arc<AppState>,
         user: AuthUser,
@@ -889,10 +822,10 @@ impl FilesRouter {
             &state.config.telegram_api_base_url,
             state.config.telegram_rate_limit,
         )
-            .search(storage_id, path, search_path, &user)
-            .await
-            .map(|files| Json(files).into_response())
-            .map_err(|e| <(StatusCode, String)>::from(e))
+        .search(storage_id, path, search_path, &user)
+        .await
+        .map(|files| Json(files).into_response())
+        .map_err(<(StatusCode, String)>::from)
     }
 
     async fn delete(
@@ -903,7 +836,7 @@ impl FilesRouter {
         Self::service(&state)
             .delete(&path, storage_id, &user)
             .await
-            .map_err(|e| <(StatusCode, String)>::from(e))?;
+            .map_err(<(StatusCode, String)>::from)?;
 
         Ok(())
     }
@@ -915,22 +848,20 @@ impl FilesRouter {
         Json(body): Json<RenameSchema>,
     ) -> Result<StatusCode, (StatusCode, String)> {
         let (old_path, new_path) = match (body.old_path, body.new_path, body.path, body.new_name) {
-            (Some(old), Some(new), _, _) => (old, new),
+            (Some(old), Some(new), ..) => (old, new),
             (_, _, Some(path), Some(new_name)) => {
                 let new = FilesService::rename_with_new_name(&path, &new_name)?;
                 (path, new)
-            }
+            },
             _ => {
                 return Err((
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "Provide either {old_path, new_path} or {path, new_name}".to_owned(),
                 ));
-            }
+            },
         };
 
-        Self::service(&state)
-            .rename(storage_id, &old_path, &new_path, &user)
-            .await?;
+        Self::service(&state).rename(storage_id, &old_path, &new_path, &user).await?;
         Ok(StatusCode::OK)
     }
 
@@ -971,7 +902,7 @@ impl FilesRouter {
     }
 }
 
-/// telegram_file_id + channel_id candidates for a chunk, ordered by channel priority.
+/// `telegram_file_id` + `channel_id` candidates for a chunk, ordered by channel priority.
 type ChunkCandidates = HashMap<i16, Vec<(String, Uuid)>>;
 
 /// Active channels of a storage, ordered by download priority: current primary first,
@@ -985,19 +916,15 @@ async fn ordered_active_channels(
         .list_by_storage(storage_id)
         .await?
         .into_iter()
-        .filter(|c| c.is_active())
+        .filter(super::super::models::storage_channels::StorageChannel::is_active)
         .collect();
     channels.sort_by_key(|c| {
-        if c.position == storage.primary_position {
-            (0i16, c.position)
-        } else {
-            (1i16, c.position)
-        }
+        if c.position == storage.primary_position { (0i16, c.position) } else { (1i16, c.position) }
     });
     Ok(channels)
 }
 
-/// For every chunk position of `file_id`, collect the telegram_file_id + channel_id of
+/// For every chunk position of `file_id`, collect the `telegram_file_id` + `channel_id` of
 /// each active channel that already has it replicated, ordered by channel priority.
 async fn resolve_chunk_candidates(
     db: &sqlx::PgPool,
@@ -1007,13 +934,9 @@ async fn resolve_chunk_candidates(
     let files_repo = FilesRepository::new(db);
     let mut map: ChunkCandidates = HashMap::new();
     for channel in channels {
-        let replicas = files_repo
-            .list_chunks_with_replica_for_channel(file_id, channel.id)
-            .await?;
+        let replicas = files_repo.list_chunks_with_replica_for_channel(file_id, channel.id).await?;
         for r in replicas {
-            map.entry(r.position)
-                .or_default()
-                .push((r.telegram_file_id, channel.id));
+            map.entry(r.position).or_default().push((r.telegram_file_id, channel.id));
         }
     }
     Ok(map)
@@ -1041,7 +964,7 @@ async fn ensure_chunk_cached(
                     let _ = StorageChannelsRepository::new(db).mark_dead(*channel_id).await;
                 }
                 last_err = e;
-            }
+            },
         }
     }
     Err(last_err)
@@ -1068,7 +991,7 @@ async fn download_chunk_stream_with_failover(
                     let _ = StorageChannelsRepository::new(db).mark_dead(*channel_id).await;
                 }
                 last_err = e;
-            }
+            },
         }
     }
     Err(last_err)
@@ -1098,20 +1021,17 @@ fn prefetch_telegram_chunk(
 fn content_disposition_value(disposition: &str, filename: &str) -> header::HeaderValue {
     let ascii_name: String = filename
         .chars()
-        .map(|c| match c {
-            ' '..='~' if c != '"' && c != '\\' => c,
-            _ => '_',
+        .map(|c| {
+            match c {
+                ' '..='~' if c != '"' && c != '\\' => c,
+                _ => '_',
+            }
         })
         .collect();
-    let ascii_name = if ascii_name.chars().all(|c| c == '_') {
-        "download".to_owned()
-    } else {
-        ascii_name
-    };
-    let encoded = percent_encoding::utf8_percent_encode(
-        filename,
-        percent_encoding::NON_ALPHANUMERIC,
-    );
+    let ascii_name =
+        if ascii_name.chars().all(|c| c == '_') { "download".to_owned() } else { ascii_name };
+    let encoded =
+        percent_encoding::utf8_percent_encode(filename, percent_encoding::NON_ALPHANUMERIC);
     let value = format!("{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}");
     value
         .parse()
@@ -1199,38 +1119,20 @@ mod construct_path_tests {
 
     #[test]
     fn root_file() {
-        assert_eq!(
-            FilesRouter::construct_path("", "photo.jpg").unwrap(),
-            "photo.jpg"
-        );
-        assert_eq!(
-            FilesRouter::construct_path("/", "photo.jpg").unwrap(),
-            "photo.jpg"
-        );
+        assert_eq!(FilesRouter::construct_path("", "photo.jpg").unwrap(), "photo.jpg");
+        assert_eq!(FilesRouter::construct_path("/", "photo.jpg").unwrap(), "photo.jpg");
     }
 
     #[test]
     fn nested_parent_trims_slash() {
-        assert_eq!(
-            FilesRouter::construct_path("docs/", "a.png").unwrap(),
-            "docs/a.png"
-        );
-        assert_eq!(
-            FilesRouter::construct_path("docs", "a.png").unwrap(),
-            "docs/a.png"
-        );
+        assert_eq!(FilesRouter::construct_path("docs/", "a.png").unwrap(), "docs/a.png");
+        assert_eq!(FilesRouter::construct_path("docs", "a.png").unwrap(), "docs/a.png");
     }
 
     #[test]
     fn rejects_empty_or_traversal_filename() {
-        assert!(matches!(
-            FilesRouter::construct_path("docs", ""),
-            Err(SarcaError::InvalidPath)
-        ));
-        assert!(matches!(
-            FilesRouter::construct_path("docs", ".."),
-            Err(SarcaError::InvalidPath)
-        ));
+        assert!(matches!(FilesRouter::construct_path("docs", ""), Err(SarcaError::InvalidPath)));
+        assert!(matches!(FilesRouter::construct_path("docs", ".."), Err(SarcaError::InvalidPath)));
         assert!(matches!(
             FilesRouter::construct_path("docs/..", "a.png"),
             Err(SarcaError::InvalidPath)
@@ -1265,4 +1167,3 @@ mod construct_path_tests {
         );
     }
 }
-

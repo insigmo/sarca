@@ -5,7 +5,6 @@ import { Show, onMount } from 'solid-js'
 import Login from './pages/Login'
 import BasicLayout from './layouts/Basic'
 import Storages from './pages/Storages'
-import StorageCreateForm from './pages/Storages/StorageCreateForm'
 import SetupWizard from './pages/Setup'
 import AlertStack from './components/AlertStack'
 import Files from './pages/Files'
@@ -182,7 +181,6 @@ const App = () => {
 							<Route path="/" element={<Navigate href="/storages" />} />
 							<Route path="/storages" component={Storages} />
 							<Route path="/storages/register" component={SetupWizard} />
-							<Route path="/storages/register/manual" component={StorageCreateForm} />
 							<Route path="/setup" component={SetupWizard} />
 							<Route path="/storages/:id/files/*path" component={Files} />
 							<Route path="/storage_workers" component={WorkersRedirect} />

@@ -121,14 +121,12 @@ On first login (no storages yet), or via **Storages → New storage**, Sarca ope
 
 1. **Local Bot API (optional once):** paste `api_id` / `api_hash` from [my.telegram.org](https://my.telegram.org) for files larger than ~20 MB, or skip.
 2. **Bot:** create a bot with [@BotFather](https://t.me/BotFather) and paste the token.
-3. **Channel:** create a private channel, add the bot as admin (post + delete), then post any message — Sarca detects the `chat_id` automatically.
+3. **Channel:** create a private channel, add the bot as admin, then use **Check channel**.
 4. Optionally detect up to 3 channels for replication, then finish — storage + worker are created together.
-
-Advanced form (manual `chat_id`): **Storages → New storage → Advanced create**, or `/storages/register/manual`.
 
 **Optional auto-setup:** set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID` (channel id **without** the `-100` prefix), and `STORAGE_NAME` in `sarca.conf`. On startup Sarca creates the storage and attaches the bot for the superuser.
 
-`chat_id` rules (manual / bootstrap):
+`chat_id` rules (bootstrap):
 
 - Supergroups / channels: usually `-100…`
 - Regular groups: negative id without the `-100` prefix

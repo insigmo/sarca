@@ -2,9 +2,11 @@ use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::common::db::errors::map_not_found;
-use crate::errors::{SarcaError, SarcaResult};
-use crate::models::oauth_accounts::OAuthAccount;
+use crate::{
+    common::db::errors::map_not_found,
+    errors::{SarcaError, SarcaResult},
+    models::oauth_accounts::OAuthAccount,
+};
 
 pub struct OAuthAccountsRepository<'d> {
     db: &'d PgPool,
@@ -12,7 +14,9 @@ pub struct OAuthAccountsRepository<'d> {
 
 impl<'d> OAuthAccountsRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn get_by_provider(
@@ -20,14 +24,12 @@ impl<'d> OAuthAccountsRepository<'d> {
         provider: &str,
         provider_user_id: &str,
     ) -> SarcaResult<OAuthAccount> {
-        sqlx::query_as(
-            "SELECT * FROM oauth_accounts WHERE provider = $1 AND provider_user_id = $2",
-        )
-        .bind(provider)
-        .bind(provider_user_id)
-        .fetch_one(self.db)
-        .await
-        .map_err(|e| map_not_found(e, "oauth account"))
+        sqlx::query_as("SELECT * FROM oauth_accounts WHERE provider = $1 AND provider_user_id = $2")
+            .bind(provider)
+            .bind(provider_user_id)
+            .fetch_one(self.db)
+            .await
+            .map_err(|e| map_not_found(&e, "oauth account"))
     }
 
     pub async fn create(

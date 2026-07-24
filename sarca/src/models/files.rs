@@ -2,9 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 /// Extensions treated as video for progressive upload chunking.
-const VIDEO_EXTENSIONS: &[&str] = &[
-    "mp4", "webm", "mkv", "mov", "m4v", "avi", "mpeg", "mpg", "ogv", "3gp",
-];
+const VIDEO_EXTENSIONS: &[&str] =
+    &["mp4", "webm", "mkv", "mov", "m4v", "avi", "mpeg", "mpg", "ogv", "3gp"];
 
 /// True when `path` looks like a video (by extension), or `content_type` is `video/*`.
 pub fn is_video(path: &str, content_type: Option<&str>) -> bool {
@@ -17,8 +16,7 @@ pub fn is_video(path: &str, content_type: Option<&str>) -> bool {
     path.rsplit('/')
         .next()
         .and_then(|name| name.rsplit_once('.'))
-        .map(|(_, ext)| VIDEO_EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
-        .unwrap_or(false)
+        .is_some_and(|(_, ext)| VIDEO_EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
 pub struct InFile {
