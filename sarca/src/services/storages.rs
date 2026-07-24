@@ -102,6 +102,21 @@ impl<'d> StoragesService<'d> {
             storage.name
         );
 
+        // Grant access before channel setup so a failed/partial create is still
+        // visible via name lookup (and can be cleaned up / reused) instead of
+        // leaving an orphan row that bootstrap recreates on every restart.
+        let access_schema = GrantAccess::new(user.email.clone(), AccessType::A);
+        if let Err(e) = self.access_repo.create_or_update(storage.id, access_schema).await {
+            tracing::error!(
+                "[STORAGES SERVICE] Failed to grant access to user {} for storage {}: {:?}. Rolling back.",
+                user.email,
+                storage.id,
+                e
+            );
+            let _ = self.repo.delete_storage(storage.id).await;
+            return Err(e);
+        }
+
         for (idx, input) in in_schema.channels.into_iter().enumerate() {
             let position = (idx + 1) as i16;
             let chat_id = input.chat_id;
@@ -121,28 +136,7 @@ impl<'d> StoragesService<'d> {
             }
         }
 
-        let access_schema = GrantAccess::new(user.email.clone(), AccessType::A);
-        let result = self.access_repo.create_or_update(storage.id, access_schema).await;
-
-        match &result {
-            Ok(_) => {
-                tracing::debug!(
-                    "[STORAGES SERVICE] Successfully granted access to user {} for storage {}",
-                    user.email,
-                    storage.id
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    "[STORAGES SERVICE] Failed to grant access to user {} for storage {}: {:?}. Rolling back storage creation.",
-                    user.email,
-                    storage.id,
-                    e
-                );
-                let _ = self.repo.delete_storage(storage.id).await;
-            }
-        }
-        result.map(|_| storage)
+        Ok(storage)
     }
 
     pub async fn list(&self, user: &AuthUser) -> SarcaResult<Vec<StorageWithInfo>> {
@@ -153,12 +147,6 @@ impl<'d> StoragesService<'d> {
             user.id
         );
         Ok(storages)
-    }
-
-    pub async fn get(&self, id: Uuid, user: &AuthUser) -> SarcaResult<Storage> {
-        check_access(&self.access_repo, user.id, id, &AccessType::R).await?;
-
-        self.repo.get_by_id(id).await
     }
 
     pub async fn get_detail(&self, id: Uuid, user: &AuthUser) -> SarcaResult<StorageDetailSchema> {
