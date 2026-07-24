@@ -96,19 +96,43 @@ const FSListItem = (props) => {
 	})
 
 	const download = async () => {
-		const blob = await API.files.download(params.id, props.fsElement.path)
+		handleCloseMore()
 
-		const href = URL.createObjectURL(blob)
-		const a = Object.assign(document.createElement('a'), {
-			href,
-			style: 'display: none',
-			download: props.fsElement.name,
-		})
-		document.body.appendChild(a)
+		if (isParentNav()) {
+			return
+		}
 
-		a.click()
-		URL.revokeObjectURL(href)
-		a.remove()
+		const isFile = props.fsElement.is_file
+		const maxFolderBytes = 10 * 1024 * 1024 * 1024
+
+		if (!isFile && (props.fsElement.size || 0) > maxFolderBytes) {
+			addAlert(
+				'Folder is larger than 10 GB. Download files in smaller pieces.',
+				'error',
+			)
+			return
+		}
+
+		const path = isFile ? props.fsElement.path : normalizedPath()
+
+		try {
+			const blob = await API.files.download(params.id, path)
+			const href = URL.createObjectURL(blob)
+			const filename = isFile
+				? props.fsElement.name
+				: `${props.fsElement.name}.zip`
+			const a = Object.assign(document.createElement('a'), {
+				href,
+				style: 'display: none',
+				download: filename,
+			})
+			document.body.appendChild(a)
+			a.click()
+			URL.revokeObjectURL(href)
+			a.remove()
+		} catch (err) {
+			console.error(err)
+		}
 	}
 
 	const openActionConfirmDialog = () => {
@@ -230,7 +254,7 @@ const FSListItem = (props) => {
 					<ListItemText>Info</ListItemText>
 				</MenuItem>
 
-				<MenuItem onClick={download} disabled={!props.fsElement.is_file}>
+				<MenuItem onClick={download} disabled={isParentNav()}>
 					<ListItemIcon>
 						<DownloadIcon fontSize="small" />
 					</ListItemIcon>

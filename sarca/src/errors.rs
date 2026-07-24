@@ -31,6 +31,8 @@ pub enum SarcaError {
     NoStorageWorkers,
     #[error("Invalid path")]
     InvalidPath,
+    #[error("Folder is larger than 10 GB. Download files in smaller pieces.")]
+    FolderTooLargeForZip,
     #[error("Invalid folder name")]
     InvalidFolderName,
     #[error("You cannot manage access of yourself")]
@@ -57,6 +59,9 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::CannotManageAccessOfYourself => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
             SarcaError::DoesNotExist(_) => (StatusCode::NOT_FOUND, e.to_string()),
+            SarcaError::FolderTooLargeForZip => {
+                (StatusCode::PAYLOAD_TOO_LARGE, e.to_string())
+            }
             SarcaError::HeaderMissed(_)
             | SarcaError::HeaderIsInvalid(..)
             | SarcaError::InvalidFolderName

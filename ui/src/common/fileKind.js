@@ -24,10 +24,11 @@ export const fileKind = (name, isFile = true) => {
 	if (['doc', 'docx', 'odt', 'rtf'].includes(ext)) return 'document'
 	if (['ppt', 'pptx', 'odp', 'key'].includes(ext)) return 'presentation'
 	if (['url', 'webloc', 'desktop'].includes(ext) || name.startsWith('http')) return 'link'
+	if (['md', 'markdown', 'mdown', 'mdx'].includes(ext)) return 'markdown'
+	if (['html', 'htm'].includes(ext)) return 'html'
 	if (
 		[
 			'txt',
-			'md',
 			'json',
 			'xml',
 			'log',
@@ -37,7 +38,6 @@ export const fileKind = (name, isFile = true) => {
 			'tsx',
 			'jsx',
 			'py',
-			'html',
 			'css',
 			'yml',
 			'yaml',

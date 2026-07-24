@@ -1,35 +1,55 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<!--
-  Sarca logo placeholder.
-  Replace this file with the final artwork when ready.
-  Keep the same filename (logo.svg) or update references in README / UI.
--->
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Sarca logo placeholder">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Sarca">
   <defs>
-    <linearGradient id="sarca-bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0B3D3A"/>
-      <stop offset="100%" stop-color="#14635C"/>
+    <linearGradient id="sarca-plate" x1="12%" y1="8%" x2="92%" y2="96%">
+      <stop offset="0%" stop-color="#6B7CFF"/>
+      <stop offset="55%" stop-color="#3D4AD6"/>
+      <stop offset="100%" stop-color="#1A2158"/>
     </linearGradient>
+    <linearGradient id="sarca-glass" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.42"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.06"/>
+    </linearGradient>
+    <linearGradient id="sarca-cloud" x1="20%" y1="20%" x2="80%" y2="90%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#DCE2FF"/>
+    </linearGradient>
+    <linearGradient id="sarca-accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F0D089"/>
+      <stop offset="100%" stop-color="#D9A441"/>
+    </linearGradient>
+    <filter id="sarca-soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#1A2158" flood-opacity="0.35"/>
+    </filter>
+    <filter id="sarca-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#D9A441" flood-opacity="0.55"/>
+    </filter>
   </defs>
-  <rect width="128" height="128" rx="28" fill="url(#sarca-bg)"/>
-  <text
-    x="64"
-    y="78"
-    text-anchor="middle"
-    font-family="system-ui, sans-serif"
-    font-size="42"
-    font-weight="700"
-    fill="#E8F5F2"
-    letter-spacing="2"
-  >S</text>
-  <text
-    x="64"
-    y="108"
-    text-anchor="middle"
-    font-family="system-ui, sans-serif"
-    font-size="10"
-    font-weight="600"
-    fill="#9AD9CF"
-    letter-spacing="3"
-  >LOGO</text>
+
+  <!-- Soft rounded plate -->
+  <rect x="6" y="6" width="116" height="116" rx="32" fill="url(#sarca-plate)" filter="url(#sarca-soft)"/>
+  <rect x="6" y="6" width="116" height="116" rx="32" fill="url(#sarca-glass)"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="30" fill="none" stroke="#FFFFFF" stroke-opacity="0.28" stroke-width="1.5"/>
+
+  <!-- Soft cloud (storage / telegram cloud) -->
+  <g filter="url(#sarca-soft)">
+    <path
+      fill="url(#sarca-cloud)"
+      d="M38 78c-8.3 0-15-6.3-15-14 0-6.4 4.3-11.9 10.3-13.6C35.2 40.8 44.6 34 56 34c10.2 0 19 5.5 22.8 13.5 1.5-.4 3.1-.6 4.7-.6 9.4 0 17 7.2 17 16.1S92.9 79 83.5 79H38z"
+    />
+  </g>
+
+  <!-- Mustard accent spark / sync arc -->
+  <g filter="url(#sarca-glow)">
+    <path
+      d="M72 52c6.2 1.8 10.8 7.2 11.2 13.8"
+      fill="none"
+      stroke="url(#sarca-accent)"
+      stroke-width="4.5"
+      stroke-linecap="round"
+    />
+    <circle cx="84.5" cy="66.5" r="4.2" fill="url(#sarca-accent)"/>
+  </g>
+
+  <!-- Tiny highlight -->
+  <circle cx="40" cy="28" r="7" fill="#FFFFFF" fill-opacity="0.18"/>
 </svg>

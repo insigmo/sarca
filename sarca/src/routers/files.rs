@@ -474,11 +474,33 @@ impl FilesRouter {
             return Err((StatusCode::BAD_REQUEST, SarcaError::InvalidPath.to_string()));
         }
 
+        if path.ends_with('/') {
+            return Self::download_folder(state, storage_id, path).await;
+        }
+
         let files_repo = FilesRepository::new(&state.db);
-        let file = files_repo
-            .get_file_by_path(path, storage_id)
-            .await
-            .map_err(|e| <(StatusCode, String)>::from(e))?;
+        match files_repo.get_file_by_path(path, storage_id).await {
+            Ok(file) => {
+                return Self::download_file(state, storage_id, path, file, query, headers).await;
+            }
+            Err(SarcaError::DoesNotExist(_)) => {
+                // UI folder paths omit the trailing slash; try as folder.
+                let folder_path = format!("{path}/");
+                return Self::download_folder(state, storage_id, &folder_path).await;
+            }
+            Err(e) => return Err(<(StatusCode, String)>::from(e)),
+        }
+    }
+
+    async fn download_file(
+        state: Arc<AppState>,
+        storage_id: Uuid,
+        path: &str,
+        file: crate::models::files::File,
+        query: &SearchQuery,
+        headers: &HeaderMap,
+    ) -> Result<Response, (StatusCode, String)> {
+        let files_repo = FilesRepository::new(&state.db);
 
         let mut chunks = files_repo
             .list_chunks_of_file(file.id)
@@ -626,6 +648,184 @@ impl FilesRouter {
                 format!("bytes {start}-{end}/{file_size}").parse().unwrap(),
             );
         }
+
+        Ok(response)
+    }
+
+    /// Max total uncompressed size of files packed into a folder ZIP.
+    const MAX_FOLDER_ZIP_BYTES: i64 = 10 * 1024 * 1024 * 1024; // 10 GiB
+
+    async fn download_folder(
+        state: Arc<AppState>,
+        storage_id: Uuid,
+        path: &str,
+    ) -> Result<Response, (StatusCode, String)> {
+        let prefix = {
+            let trimmed = path.trim_end_matches('/');
+            if trimmed.is_empty() || trimmed.contains("//") || trimmed.starts_with('/') {
+                return Err((StatusCode::BAD_REQUEST, SarcaError::InvalidPath.to_string()));
+            }
+            format!("{trimmed}/")
+        };
+
+        let files_repo = FilesRepository::new(&state.db);
+
+        let total_size = files_repo
+            .sum_uploaded_size_under(storage_id, &prefix)
+            .await
+            .map_err(|e| <(StatusCode, String)>::from(e))?;
+
+        let files = files_repo
+            .list_uploaded_files_under(storage_id, &prefix)
+            .await
+            .map_err(|e| <(StatusCode, String)>::from(e))?;
+
+        let folder_marker_exists = files_repo
+            .get_file_by_path(&prefix, storage_id)
+            .await
+            .is_ok();
+
+        if !folder_marker_exists && files.is_empty() {
+            return Err(<(StatusCode, String)>::from(SarcaError::DoesNotExist(
+                "folder".to_owned(),
+            )));
+        }
+
+        if total_size > Self::MAX_FOLDER_ZIP_BYTES {
+            return Err(<(StatusCode, String)>::from(SarcaError::FolderTooLargeForZip));
+        }
+
+        let folder_name = Path::new(prefix.trim_end_matches('/'))
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("folder")
+            .to_owned();
+
+        let zip_dir = Path::new(&state.config.work_dir).join("zips");
+        tokio::fs::create_dir_all(&zip_dir).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Can't create zip directory under WORK_DIR: {e}"),
+            )
+        })?;
+
+        let zip_path = zip_dir.join(format!("{}.zip", Uuid::new_v4()));
+        let zip_path_str = zip_path.to_string_lossy().to_string();
+
+        {
+            let zip_file = std::fs::File::create(&zip_path).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Can't create zip file: {e}"),
+                )
+            })?;
+            let mut zip = zip::ZipWriter::new(zip_file);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+
+            let base_url = state.config.telegram_api_base_url.clone();
+            let rate = state.config.telegram_rate_limit;
+            let db = state.db.clone();
+
+            for file in files {
+                let entry_name = file
+                    .path
+                    .strip_prefix(&prefix)
+                    .unwrap_or(&file.path)
+                    .to_owned();
+                if entry_name.is_empty() {
+                    continue;
+                }
+
+                zip.start_file(&entry_name, options).map_err(|e| {
+                    let _ = std::fs::remove_file(&zip_path);
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Can't write zip entry: {e}"),
+                    )
+                })?;
+
+                let mut chunks = files_repo
+                    .list_chunks_of_file(file.id)
+                    .await
+                    .map_err(|e| {
+                        let _ = std::fs::remove_file(&zip_path);
+                        <(StatusCode, String)>::from(e)
+                    })?;
+                chunks.sort_by_key(|c| c.position);
+
+                for chunk in chunks {
+                    let scheduler = StorageWorkersScheduler::new(&db, rate);
+                    let api = TelegramBotApi::new(&base_url, scheduler);
+                    let mut stream = api
+                        .download_stream(&chunk.telegram_file_id, storage_id)
+                        .await
+                        .map_err(|e| {
+                            let _ = std::fs::remove_file(&zip_path);
+                            <(StatusCode, String)>::from(e)
+                        })?;
+
+                    while let Some(item) = stream.next().await {
+                        let bytes = item.map_err(|e| {
+                            let _ = std::fs::remove_file(&zip_path);
+                            <(StatusCode, String)>::from(e)
+                        })?;
+                        use std::io::Write;
+                        zip.write_all(&bytes).map_err(|e| {
+                            let _ = std::fs::remove_file(&zip_path);
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Can't write zip data: {e}"),
+                            )
+                        })?;
+                    }
+                }
+            }
+
+            zip.finish().map_err(|e| {
+                let _ = std::fs::remove_file(&zip_path);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Can't finalize zip: {e}"),
+                )
+            })?;
+        }
+
+        let zip_len = tokio::fs::metadata(&zip_path)
+            .await
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        let stream = try_stream! {
+            let mut file = tokio::fs::File::open(&zip_path_str)
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = tokio::io::AsyncReadExt::read(&mut file, &mut buf)
+                    .await
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                if n == 0 {
+                    break;
+                }
+                yield Bytes::copy_from_slice(&buf[..n]);
+            }
+            let _ = tokio::fs::remove_file(&zip_path_str).await;
+        };
+
+        let stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(stream);
+        let body = StreamBody::new(stream);
+
+        let disposition = format!("attachment; filename=\"{folder_name}.zip\"");
+        let mut response = body.into_response();
+        *response.status_mut() = StatusCode::OK;
+        let headers_mut = response.headers_mut();
+        headers_mut.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
+        headers_mut.insert(header::CONTENT_DISPOSITION, disposition.parse().unwrap());
+        headers_mut.insert(
+            header::CONTENT_LENGTH,
+            zip_len.to_string().parse().unwrap(),
+        );
 
         Ok(response)
     }
