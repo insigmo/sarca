@@ -214,6 +214,7 @@ a.default-link:hover {
 	border-bottom: 1px solid var(--sarca-border);
 	box-shadow: var(--sarca-shadow-soft) !important;
 	color: var(--sarca-header-ink) !important;
+	padding-top: env(safe-area-inset-top, 0px);
 }
 
 .sarca-header-icon {
@@ -1833,6 +1834,14 @@ a.default-link:hover {
 @media (max-width: 840px) {
 	.bottom-nav {
 		display: flex;
+	}
+
+	.header-desktop-actions {
+		display: none !important;
+	}
+
+	.sarca-appbar .MuiToolbar-root {
+		min-height: 56px;
 	}
 
 	.app-shell-main {
