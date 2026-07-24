@@ -20,6 +20,7 @@ import { toggleThemeMode, useThemeMode } from '../common/theme'
 import { settingsStore } from '../common/settings'
 import { filesChromeStore } from '../common/filesChrome'
 import { storageSettingsStore } from '../common/storageSettings'
+import { clearSession } from '../common/auth'
 import TuneOutlinedIcon from '@suid/icons-material/TuneOutlined'
 
 const Header = () => {
@@ -30,14 +31,7 @@ const Header = () => {
 	const chrome = filesChromeStore
 	const { open: openStorageSettings } = storageSettingsStore
 
-	const logout = (_) => {
-		setStore('access_token')
-		setStore('refresh_token')
-		setStore('user')
-		setStore('redirect', '/')
-
-		navigate('/login')
-	}
+	const logout = () => navigate(clearSession(setStore))
 
 	return (
 		<AppBar position="fixed" elevation={0} class="sarca-appbar">
