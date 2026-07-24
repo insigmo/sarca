@@ -44,7 +44,7 @@ const Header = () => {
 			<Toolbar
 				sx={{
 					justifyContent: 'space-between',
-					minHeight: 64,
+					minHeight: { xs: 56, sm: 64 },
 					gap: 1.5,
 					px: { xs: 1.5, sm: 2 },
 				}}
@@ -124,7 +124,10 @@ const Header = () => {
 					</Box>
 				</Show>
 
-				<Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
+				<Box
+					class="header-desktop-actions"
+					sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}
+				>
 					<Show when={chrome.active() && chrome.storageId()}>
 						<IconButton
 							aria-label="Storage settings"
