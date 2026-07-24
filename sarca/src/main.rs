@@ -11,6 +11,7 @@ use crate::{
     common::{channels::ClientMessage, db::pool::get_pool, routing::app_state::AppState},
     config::Config,
     server::Server,
+    services::{channel_health::ChannelHealthService, replication::ReplicationService},
     startup::{bootstrap_storage_from_env, create_db, create_superuser, init_db},
     storage_manager::StorageManager,
 };
@@ -111,6 +112,26 @@ async fn main() {
             Err(e) => tracing::error!("storage manager db pool failed: {e}"),
         }
     });
+
+    match get_pool(&config.db_uri, workers.into(), db_timeout).await {
+        Ok(db) => ReplicationService::spawn_loop(
+            db,
+            config.telegram_api_base_url.clone(),
+            config.telegram_rate_limit,
+            Duration::from_secs(10),
+        ),
+        Err(e) => tracing::error!("replication worker db pool failed: {e}"),
+    }
+
+    match get_pool(&config.db_uri, workers.into(), db_timeout).await {
+        Ok(db) => ChannelHealthService::spawn_loop(
+            db,
+            config.telegram_api_base_url.clone(),
+            config.telegram_rate_limit,
+            Duration::from_secs(30 * 60),
+        ),
+        Err(e) => tracing::error!("channel health scheduler db pool failed: {e}"),
+    }
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port);
     let app_state = AppState::new(db, config, tx);
