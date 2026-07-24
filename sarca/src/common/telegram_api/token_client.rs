@@ -176,4 +176,56 @@ impl TelegramTokenClient {
             .map_err(|e| SarcaError::TelegramAPIError(format!("getChatMember parse error: {e}")))?;
         Ok(body.result.status)
     }
+
+    /// Chats where this bot is admin/creator (negative chat ids only).
+    /// `exclude` skips already-known chat ids. Returns `(found, hint)` where hint
+    /// explains non-admin sightings when nothing was found.
+    pub async fn discover_admin_chats(
+        &self,
+        exclude: &[ChatId],
+    ) -> SarcaResult<(Vec<(ChatId, String)>, Option<String>)> {
+        let me = self.get_me().await?;
+        let chats = self.get_updates().await?;
+        let mut saw_non_admin = false;
+        let mut found = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for chat in chats {
+            if exclude.contains(&chat.chat_id) || !seen.insert(chat.chat_id) {
+                continue;
+            }
+            if chat.chat_id >= 0 {
+                continue;
+            }
+
+            let title = match self.get_chat(chat.chat_id).await {
+                Ok(info) => info.title,
+                Err(_) => chat.title,
+            };
+
+            match self.get_chat_member_status(chat.chat_id, me.id).await {
+                Ok(status) if status == "administrator" || status == "creator" => {
+                    found.push((chat.chat_id, title));
+                },
+                Ok(_) => {
+                    saw_non_admin = true;
+                },
+                Err(e) => {
+                    tracing::warn!("discover: getChatMember for {} failed: {e}", chat.chat_id);
+                    saw_non_admin = true;
+                },
+            }
+        }
+
+        let hint = if saw_non_admin && found.is_empty() {
+            Some(
+                "Bot was added to a channel but does not have admin rights. Make it an admin with \
+                 Post messages and Delete messages."
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        Ok((found, hint))
+    }
 }

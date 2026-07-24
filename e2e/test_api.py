@@ -107,6 +107,66 @@ def test_create_and_delete_storage_worker(
     assert all(w["id"] != wid for w in r.json())
 
 
+def test_worker_requires_storage_id(
+    client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    r = client.post(
+        "/api/storage_workers",
+        headers=auth_headers,
+        json={"name": f"orphan-{uuid.uuid4().hex[:8]}", "token": f"tok{uuid.uuid4().hex}"},
+    )
+    assert r.status_code == 400, r.text
+
+
+def test_storage_detail_includes_bot(
+    client: httpx.Client, auth_headers: dict[str, str], storage_id: str
+) -> None:
+    name = f"bot-detail-{uuid.uuid4().hex[:8]}"
+    token = f"bot{uuid.uuid4().hex}token"
+    r = client.post(
+        "/api/storage_workers",
+        headers=auth_headers,
+        json={"name": name, "token": token, "storage_id": storage_id},
+    )
+    assert r.status_code in (200, 201), r.text
+    wid = r.json()["id"]
+
+    try:
+        r = client.get(f"/api/storages/{storage_id}", headers=auth_headers)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "bot" in body
+        assert body["bot"] is not None
+        assert body["bot"]["id"] == wid
+        assert body["bot"]["name"] == name
+        assert "token_masked" in body["bot"]
+        assert token not in body["bot"]["token_masked"]
+        assert "channels" in body
+    finally:
+        client.delete(f"/api/storage_workers/{wid}", headers=auth_headers)
+
+
+def test_refresh_channels_without_bot_conflicts(
+    client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    # Fresh storage with no worker
+    r = client.post(
+        "/api/storages",
+        headers=auth_headers,
+        json={
+            "name": f"nobot-{uuid.uuid4().hex[:8]}",
+            "channels": [{"chat_id": -100_000_000_000 - int(uuid.uuid4().int % 10**9)}],
+        },
+    )
+    assert r.status_code in (200, 201), r.text
+    sid = r.json()["id"]
+    try:
+        r = client.post(f"/api/storages/{sid}/channels/refresh", headers=auth_headers)
+        assert r.status_code == 409, r.text
+    finally:
+        client.delete(f"/api/storages/{sid}", headers=auth_headers)
+
+
 def test_folder_create_list_search_rename_move_delete(
     client: httpx.Client, auth_headers: dict[str, str], storage_id: str
 ) -> None:

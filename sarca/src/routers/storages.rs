@@ -30,6 +30,8 @@ use crate::{
         storages::{
             AddChannelSchema,
             InStorageSchema,
+            RefreshChannelsResultSchema,
+            SetStorageBotSchema,
             StoragesListSchema,
             UpdateChannelSchema,
             UpdateStorageSchema,
@@ -57,6 +59,8 @@ impl StoragesRouter {
                     .delete(Self::restrict_access),
             )
             .route("/:storage_id/channels", axum::routing::post(Self::add_channel))
+            .route("/:storage_id/channels/refresh", axum::routing::post(Self::refresh_channels))
+            .route("/:storage_id/bot", axum::routing::put(Self::set_bot))
             .route(
                 "/:storage_id/channels/:channel_id",
                 axum::routing::put(Self::update_channel).delete(Self::remove_channel),
@@ -136,6 +140,25 @@ impl StoragesRouter {
     ) -> impl IntoResponse {
         let channel = Self::service(&state).add_channel(storage_id, in_schema, &user).await?;
         Ok::<_, (StatusCode, String)>((StatusCode::CREATED, Json(channel)))
+    }
+
+    async fn refresh_channels(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+        Path(storage_id): Path<Uuid>,
+    ) -> Result<Json<RefreshChannelsResultSchema>, (StatusCode, String)> {
+        let result = Self::service(&state).refresh_channels(storage_id, &user).await?;
+        Ok(Json(result))
+    }
+
+    async fn set_bot(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+        Path(storage_id): Path<Uuid>,
+        Json(body): Json<SetStorageBotSchema>,
+    ) -> impl IntoResponse {
+        let bot = Self::service(&state).set_bot(storage_id, body, &user).await?;
+        Ok::<_, (StatusCode, String)>(Json(bot))
     }
 
     async fn update_channel(

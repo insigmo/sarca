@@ -1,15 +1,7 @@
-import Grid from '@suid/material/Grid'
-import Paper from '@suid/material/Paper'
-import Table from '@suid/material/Table'
-import TableBody from '@suid/material/TableBody'
-import TableCell from '@suid/material/TableCell'
-import TableContainer from '@suid/material/TableContainer'
-import TableHead from '@suid/material/TableHead'
-import TableRow from '@suid/material/TableRow'
 import IconButton from '@suid/material/IconButton'
 import DeleteIcon from '@suid/icons-material/Delete'
 import EditIcon from '@suid/icons-material/Edit'
-import { Show, createSignal, mapArray, onMount } from 'solid-js'
+import { For, Show, createSignal, onMount } from 'solid-js'
 import { useParams } from '@solidjs/router'
 
 import createLocalStore from '../../libs'
@@ -29,11 +21,13 @@ import GrantAccess from './GrantAccess'
  */
 
 /**
- *
  * @param {AccessProps} props
  */
 const Access = (props) => {
 	const [selectedUserEmail, setSelectedUserEmail] = createSignal()
+	const [selectedAccessType, setSelectedAccessType] = createSignal(
+		/** @type {'R' | 'W' | 'A' | undefined} */ (undefined),
+	)
 	const [isRestrictConfirmOpened, setIsRestrictConfirmOpened] =
 		createSignal(false)
 	const [isChangeAccessOpened, setIsChangeAccessOpened] = createSignal(false)
@@ -44,8 +38,9 @@ const Access = (props) => {
 
 	onMount(props.onMount)
 
-	const onEditButtonClicked = (email) => {
-		setSelectedUserEmail(email)
+	const onEditButtonClicked = (user) => {
+		setSelectedUserEmail(user.email)
+		setSelectedAccessType(user.access_type)
 		setIsChangeAccessOpened(true)
 	}
 
@@ -65,7 +60,7 @@ const Access = (props) => {
 		await API.access.restrictAccess(storageId(), userID)
 		addAlert(
 			`Restricted access for the user with email ${selectedUserEmail()}`,
-			'success'
+			'success',
 		)
 
 		await props.refetchUsers()
@@ -73,61 +68,41 @@ const Access = (props) => {
 
 	return (
 		<>
-			<Grid>
-				<TableContainer component={Paper}>
-					<Table sx={{ minWidth: 650 }}>
-						<Show
-							when={props.users.length}
-							fallback={<div>There's no users with access yet</div>}
-						>
-							<TableHead>
-								<TableRow>
-									<TableCell>Email</TableCell>
-									<TableCell>Access Type</TableCell>
-									<TableCell></TableCell>
-								</TableRow>
-							</TableHead>
-							<TableBody>
-								{mapArray(
-									() => props.users,
-									(user) => (
-										<TableRow
-											sx={{
-												cursor: 'pointer',
-												'&:last-child td, &:last-child th': { border: 0 },
-											}}
-										>
-											<TableCell component="th" scope="row">
-												{user.email}
-											</TableCell>
-
-											<TableCell>
-												<AccessTypeChip at={user.access_type} />
-											</TableCell>
-
-											<TableCell>
-												<IconButton
-													disabled={store.user?.email === user.email}
-													onClick={() => onEditButtonClicked(user.email)}
-												>
-													<EditIcon />
-												</IconButton>
-
-												<IconButton
-													disabled={store.user?.email === user.email}
-													onClick={() => onDeleteButtonClicked(user.email)}
-												>
-													<DeleteIcon />
-												</IconButton>
-											</TableCell>
-										</TableRow>
-									)
-								)}
-							</TableBody>
-						</Show>
-					</Table>
-				</TableContainer>
-			</Grid>
+			<div class="access-list">
+				<Show
+					when={props.users.length}
+					fallback={<p class="access-list__empty">No users with access yet</p>}
+				>
+					<For each={props.users}>
+						{(user) => (
+							<div class="access-row">
+								<span class="access-row__email" title={user.email}>
+									{user.email}
+								</span>
+								<AccessTypeChip at={user.access_type} />
+								<div class="access-row__actions">
+									<IconButton
+										size="small"
+										disabled={store.user?.email === user.email}
+										aria-label={`Edit access for ${user.email}`}
+										onClick={() => onEditButtonClicked(user)}
+									>
+										<EditIcon fontSize="small" />
+									</IconButton>
+									<IconButton
+										size="small"
+										disabled={store.user?.email === user.email}
+										aria-label={`Remove access for ${user.email}`}
+										onClick={() => onDeleteButtonClicked(user.email)}
+									>
+										<DeleteIcon fontSize="small" />
+									</IconButton>
+								</div>
+							</div>
+						)}
+					</For>
+				</Show>
+			</div>
 
 			<ActionConfirmDialog
 				action="Restrict"
@@ -141,6 +116,7 @@ const Access = (props) => {
 			<GrantAccess
 				afterGrant={onChangeAccess}
 				email={selectedUserEmail()}
+				initialAccessType={selectedAccessType()}
 				isVisible={isChangeAccessOpened()}
 				onClose={() => setIsChangeAccessOpened(false)}
 				storageId={storageId()}

@@ -9,8 +9,8 @@ import { useNavigate } from '@solidjs/router'
 
 import API from '../../api'
 import { convertSize } from '../../common/size_converter'
+import { storageSettingsStore } from '../../common/storageSettings'
 import FileTypeIcon from '../../components/FileTypeIcon'
-import StorageSettingsModal from '../../components/StorageSettingsModal'
 import WaveDivider from '../../components/WaveDivider'
 
 const Storages = () => {
@@ -18,11 +18,8 @@ const Storages = () => {
 	 * @type {[import("solid-js").Accessor<import("../../api").StorageWithInfo[]>, any]}
 	 */
 	const [storages, setStorages] = createSignal([])
-	/**
-	 * @type {[import("solid-js").Accessor<import("../../api").StorageWithInfo | null>, any]}
-	 */
-	const [settingsStorage, setSettingsStorage] = createSignal(null)
 	const navigate = useNavigate()
+	const { open: openStorageSettings } = storageSettingsStore
 
 	onMount(async () => {
 		const storagesSchema = await API.storages.listStorages()
@@ -35,7 +32,7 @@ const Storages = () => {
 	const openSettings = (e, storage) => {
 		e.stopPropagation()
 		e.preventDefault()
-		setSettingsStorage(storage)
+		openStorageSettings(storage)
 	}
 
 	return (
@@ -107,6 +104,7 @@ const Storages = () => {
 										class="storage-card__settings"
 										size="small"
 										aria-label={`Settings for ${storage.name}`}
+										title="Bot, channels, rename…"
 										onClick={(e) => openSettings(e, storage)}
 										onMouseDown={(e) => e.stopPropagation()}
 										onKeyDown={(e) => e.stopPropagation()}
@@ -119,19 +117,6 @@ const Storages = () => {
 					</For>
 				</div>
 			</Show>
-
-			<StorageSettingsModal
-				storage={settingsStorage()}
-				onClose={() => setSettingsStorage(null)}
-				onRenamed={(updated) => {
-					setStorages((list) =>
-						list.map((s) => (s.id === updated.id ? { ...s, name: updated.name } : s)),
-					)
-				}}
-				onDeleted={(id) => {
-					setStorages((list) => list.filter((s) => s.id !== id))
-				}}
-			/>
 		</Stack>
 	)
 }

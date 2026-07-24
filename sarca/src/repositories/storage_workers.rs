@@ -123,6 +123,61 @@ impl<'d> StorageWorkersRepository<'d> {
         Ok(())
     }
 
+    pub async fn get_by_storage_id(&self, storage_id: Uuid) -> SarcaResult<Option<StorageWorker>> {
+        sqlx::query_as(&format!(
+            "SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE storage_id = $1 ORDER BY name LIMIT 1"
+        ))
+        .bind(storage_id)
+        .fetch_optional(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })
+    }
+
+    pub async fn update_credentials(
+        &self,
+        id: Uuid,
+        name: &str,
+        token: &str,
+    ) -> SarcaResult<StorageWorker> {
+        let result = sqlx::query_as(&format!(
+            "UPDATE {STORAGE_WORKERS_TABLE} SET name = $2, token = $3 WHERE id = $1 \
+             RETURNING *"
+        ))
+        .bind(id)
+        .bind(name)
+        .bind(token)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+                    SarcaError::StorageWorkerTokenConflict
+                },
+                sqlx::Error::RowNotFound => SarcaError::DoesNotExist("storage_worker".to_owned()),
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
+            }
+        })?;
+        Ok(result)
+    }
+
+    pub async fn delete_orphans(&self) -> SarcaResult<u64> {
+        let result =
+            sqlx::query(&format!("DELETE FROM {STORAGE_WORKERS_TABLE} WHERE storage_id IS NULL"))
+                .execute(self.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                })?;
+        Ok(result.rows_affected())
+    }
+
     // https://www.db-fiddle.com/f/fHcCh7bRtVSxyDfPvPyDre/11
     pub async fn get_token(
         &self,

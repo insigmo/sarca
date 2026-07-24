@@ -5,16 +5,16 @@ import { createRoot, createSignal } from 'solid-js'
  */
 export const settingsStore = createRoot(() => {
 	const [isOpen, setIsOpen] = createSignal(false)
-	const [tab, setTab] = createSignal(/** @type {'workers' | 'access' | 'trash'} */ ('workers'))
+	const [tab, setTab] = createSignal(/** @type {'access' | 'trash'} */ ('access'))
 
 	return {
 		isOpen,
 		tab,
 		setTab,
 		/**
-		 * @param {'workers' | 'access' | 'trash'} [nextTab]
+		 * @param {'access' | 'trash'} [nextTab]
 		 */
-		openSettings: (nextTab = 'workers') => {
+		openSettings: (nextTab = 'access') => {
 			setTab(nextTab)
 			setIsOpen(true)
 		},
