@@ -642,10 +642,7 @@ impl<'t> TelegramBotApi<'t> {
             .or(body.result.first_name)
             .unwrap_or_else(|| chat_id.to_string());
 
-        Ok(ChatInfo {
-            id: body.result.id,
-            title,
-        })
+        Ok(ChatInfo { title })
     }
 
     /// Copy a message (with its document) from one chat to another without re-uploading.
