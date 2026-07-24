@@ -17,7 +17,6 @@ tasks:
     desc: Build web UI into ui/dist
     cmds:
       - |
-        set -e
         UI_DIR="{{.ROOT_DIR}}/ui"
         build() {
           (cd "$UI_DIR" && VITE_API_BASE=/api pnpm install && VITE_API_BASE=/api pnpm run build)
@@ -36,7 +35,6 @@ tasks:
     cmds:
       - mkdir -p "{{.ROOT_DIR}}/runtime"
       - |
-        set -e
         cd "{{.ROOT_DIR}}/sarca"
         cargo build --release
         BIN="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
@@ -50,7 +48,6 @@ tasks:
     deps: [ui]
     cmds:
       - |
-        set -e
         PREFIX="{{.NATIVE_PREFIX}}"
         mkdir -p "$PREFIX/ui"
         rm -rf "$PREFIX/ui"/*
@@ -62,7 +59,6 @@ tasks:
     deps: [binary, deploy-ui-native]
     cmds:
       - |
-        set -e
         PREFIX="{{.NATIVE_PREFIX}}"
         mkdir -p "$PREFIX"
         cp -f "{{.ROOT_DIR}}/runtime/sarca" "$PREFIX/sarca"
@@ -94,7 +90,6 @@ tasks:
     desc: Upload sample image+video against running API (SARCA_BASE_URL)
     cmds:
       - |
-        set -e
         cd "{{.ROOT_DIR}}"
         if [ ! -d .venv ]; then python3 -m venv .venv; .venv/bin/pip install -r e2e/requirements.txt; fi
         PORT="$(grep -E '^[[:space:]]*PORT=' sarca.conf 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"

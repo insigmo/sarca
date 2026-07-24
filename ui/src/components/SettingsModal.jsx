@@ -16,6 +16,7 @@ import HelpOutlineIcon from '@suid/icons-material/HelpOutline'
 import ChevronLeftIcon from '@suid/icons-material/ChevronLeft'
 import SmartToyOutlinedIcon from '@suid/icons-material/SmartToyOutlined'
 import LockOutlinedIcon from '@suid/icons-material/LockOutlined'
+import DeleteOutlineIcon from '@suid/icons-material/DeleteOutline'
 
 import API from '../api'
 import { settingsStore } from '../common/settings'
@@ -52,6 +53,8 @@ const SettingsModal = () => {
 	const [accessUsers, setAccessUsers] = createSignal([])
 	const [canManageAccess, setCanManageAccess] = createSignal(false)
 	const [isGrantVisible, setIsGrantVisible] = createSignal(false)
+	const [trashRetentionDays, setTrashRetentionDays] = createSignal(30)
+	const [trashSettingsSaving, setTrashSettingsSaving] = createSignal(false)
 
 	const refreshWorkers = async () => {
 		setLoading(true)
@@ -126,6 +129,30 @@ const SettingsModal = () => {
 		accessStorageId()
 		fetchAccessUsers()
 	})
+
+	createEffect(() => {
+		if (!isOpen() || tab() !== 'trash') return
+		API.settings
+			.getTrashSettings()
+			.then((s) => setTrashRetentionDays(s.retention_days))
+			.catch(() => {})
+	})
+
+	const saveTrashSettings = async () => {
+		const days = Number(trashRetentionDays())
+		if (!Number.isFinite(days) || days < 1 || days > 30) {
+			addAlert('Retention must be between 1 and 30 days', 'error')
+			return
+		}
+		setTrashSettingsSaving(true)
+		try {
+			const s = await API.settings.setTrashSettings(days)
+			setTrashRetentionDays(s.retention_days)
+			addAlert('Trash settings saved', 'success')
+		} finally {
+			setTrashSettingsSaving(false)
+		}
+	}
 
 	const toggleToken = (id) => {
 		setVisibleTokens((prev) => ({ ...prev, [id]: !prev[id] }))
@@ -219,6 +246,15 @@ const SettingsModal = () => {
 							>
 								<LockOutlinedIcon fontSize="small" />
 								Access
+							</button>
+							<button
+								type="button"
+								class="settings-tab"
+								classList={{ 'settings-tab--active': tab() === 'trash' }}
+								onClick={() => setTab('trash')}
+							>
+								<DeleteOutlineIcon fontSize="small" />
+								Trash
 							</button>
 						</div>
 
@@ -486,6 +522,35 @@ const SettingsModal = () => {
 									onClose={() => setIsGrantVisible(false)}
 									storageId={accessStorageId()}
 								/>
+							</Show>
+
+							<Show when={tab() === 'trash'}>
+								<div class="settings-trash">
+									<Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+										Deleted files stay in the trash for this many days (1–30),
+										then are permanently removed from Sarca and Telegram.
+									</Typography>
+									<TextField
+										type="number"
+										label="Days in trash"
+										fullWidth
+										inputProps={{ min: 1, max: 30, step: 1 }}
+										value={trashRetentionDays()}
+										onChange={(e) =>
+											setTrashRetentionDays(Number(e.target.value))
+										}
+									/>
+									<div style={{ 'margin-top': '16px' }}>
+										<Button
+											variant="contained"
+											color="secondary"
+											disabled={trashSettingsSaving()}
+											onClick={saveTrashSettings}
+										>
+											Save
+										</Button>
+									</div>
+								</div>
 							</Show>
 						</div>
 					</div>

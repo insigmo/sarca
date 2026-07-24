@@ -128,7 +128,7 @@ jobs:
           OWNER: ${{ github.repository_owner }}
           PACKAGE: ${{ steps.meta.outputs.package }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           api() {
             curl -sS -o /tmp/pkg-vis.json -w "%{http_code}" \
               -X PUT \

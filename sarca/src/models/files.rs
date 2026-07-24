@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 /// Extensions treated as video for progressive upload chunking.
@@ -53,8 +54,12 @@ pub struct File {
     pub storage_id: uuid::Uuid,
     pub is_uploaded: bool,
     pub thumb_telegram_file_id: Option<String>,
+    /// Telegram message id of the thumbnail document (for `deleteMessage` on purge).
+    pub thumb_telegram_message_id: Option<i64>,
     /// Telegram chunk size used at upload; `None` for pre-feature / folder rows.
     pub chunk_size_bytes: Option<i64>,
+    /// When set, the file is in the trash.
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 impl File {
@@ -73,7 +78,9 @@ impl File {
             storage_id,
             is_uploaded,
             thumb_telegram_file_id: None,
+            thumb_telegram_message_id: None,
             chunk_size_bytes,
+            deleted_at: None,
         }
     }
 }

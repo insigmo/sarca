@@ -6,6 +6,9 @@ import ListItemText from '@suid/material/ListItemText'
 import UploadFileIcon from '@suid/icons-material/UploadFile'
 import DriveFolderUploadIcon from '@suid/icons-material/DriveFolderUpload'
 import CreateNewFolderIcon from '@suid/icons-material/CreateNewFolder'
+import DeleteOutlineIcon from '@suid/icons-material/DeleteOutline'
+import ArrowBackIcon from '@suid/icons-material/ArrowBack'
+import Button from '@suid/material/Button'
 import Stack from '@suid/material/Stack'
 import Typography from '@suid/material/Typography'
 import LinearProgress from '@suid/material/LinearProgress'
@@ -18,6 +21,8 @@ import Menu from '../../components/Menu'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
 import { alertStore } from '../../components/AlertStack'
 import FileViewer from '../../components/FileViewer'
+import RestoreConflictDialog from '../../components/RestoreConflictDialog'
+import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import { filesChromeStore } from '../../common/filesChrome'
 
 const joinStoragePath = (...parts) =>
@@ -67,6 +72,10 @@ const Files = () => {
 	 * @type {[import("solid-js").Accessor<import("../../api").FSElement | null>, any]}
 	 */
 	const [viewerFile, setViewerFile] = createSignal(null)
+	const [trashMode, setTrashMode] = createSignal(false)
+	const [trashPath, setTrashPath] = createSignal('')
+	const [emptyTrashOpen, setEmptyTrashOpen] = createSignal(false)
+	const [restoreConflictPath, setRestoreConflictPath] = createSignal(null)
 
 	const navigate = useNavigate()
 	const params = useParams()
@@ -102,10 +111,100 @@ const Files = () => {
 		chrome.setSearchQuery('')
 	}
 
+	const fetchTrashLayer = async (path = trashPath()) => {
+		const fsLayerRes = await API.files.listTrash(params.id, path)
+
+		if (path.length) {
+			const parentPath = path.split('/').slice(0, -1).join('/')
+			const backToParent = {
+				is_file: false,
+				name: '..',
+				path: parentPath,
+				has_thumb: false,
+				size: 0,
+			}
+			fsLayerRes.splice(0, 0, backToParent)
+		}
+
+		setFsLayer(fsLayerRes)
+		chrome.setIsSearching(false)
+		chrome.setSearchQuery('')
+	}
+
+	const refreshCurrent = async () => {
+		if (trashMode()) {
+			await fetchTrashLayer()
+		} else {
+			await fetchFSLayer()
+		}
+	}
+
+	const enterTrash = async () => {
+		setTrashMode(true)
+		setTrashPath('')
+		setViewerFile(null)
+		await fetchTrashLayer('')
+	}
+
+	const exitTrash = async () => {
+		setTrashMode(false)
+		setTrashPath('')
+		await fetchFSLayer()
+	}
+
+	const onTrashNavigate = async (el) => {
+		if (el.name === '..') {
+			setTrashPath(el.path)
+			await fetchTrashLayer(el.path)
+			return
+		}
+		if (!el.is_file) {
+			setTrashPath(el.path)
+			await fetchTrashLayer(el.path)
+		}
+	}
+
+	const trashItemPath = (el) => {
+		if (el.is_file) return el.path
+		return el.path.endsWith('/') ? el.path : `${el.path}/`
+	}
+
+	const restoreItem = async (el, onConflict) => {
+		const path = trashItemPath(el)
+		try {
+			await API.files.restoreTrash(params.id, path, onConflict)
+			addAlert(`Restored "${el.name}"`, 'success')
+			setRestoreConflictPath(null)
+			await fetchTrashLayer()
+		} catch (err) {
+			if (err.status === 409 && !onConflict) {
+				setRestoreConflictPath(path)
+				return
+			}
+			throw err
+		}
+	}
+
+	const deleteForeverItem = async (el) => {
+		await API.files.deleteForever(params.id, trashItemPath(el))
+		addAlert(`Permanently deleted "${el.name}"`, 'success')
+		await fetchTrashLayer()
+	}
+
+	const confirmEmptyTrash = async () => {
+		setEmptyTrashOpen(false)
+		await API.files.emptyTrash(params.id)
+		addAlert('Trash emptied', 'success')
+		await fetchTrashLayer('')
+	}
+
 	/**
 	 * @param {string} query
 	 */
 	const runSearch = async (query) => {
+		if (trashMode()) {
+			return
+		}
 		const q = query.trim()
 		if (!q) {
 			await fetchFSLayer()
@@ -320,34 +419,59 @@ const Files = () => {
 		<>
 			<Stack class="files-page" spacing={1.5}>
 				<div class="files-page__toolbar">
-					<Menu button_title="Create">
-						<MenuItem onClick={openCreateFolderDialog}>
-							<ListItemIcon>
-								<CreateNewFolderIcon />
-							</ListItemIcon>
-							<ListItemText>Create folder</ListItemText>
-						</MenuItem>
-						<MenuItem onClick={uploadFileClickHandler}>
-							<ListItemIcon>
-								<UploadFileIcon />
-							</ListItemIcon>
-							<ListItemText>Upload file</ListItemText>
-						</MenuItem>
-						<MenuItem onClick={uploadFolderClickHandler}>
-							<ListItemIcon>
-								<DriveFolderUploadIcon />
-							</ListItemIcon>
-							<ListItemText>Upload folder</ListItemText>
-						</MenuItem>
-						<MenuItem
-							onClick={() => navigate(`/storages/${params.id}/upload_to`)}
+					<Show
+						when={trashMode()}
+						fallback={
+							<>
+								<Button
+									variant="outlined"
+									color="inherit"
+									startIcon={<DeleteOutlineIcon />}
+									onClick={enterTrash}
+									sx={{ mr: 1 }}
+								>
+									Trash
+								</Button>
+								<Menu button_title="Create">
+									<MenuItem onClick={openCreateFolderDialog}>
+										<ListItemIcon>
+											<CreateNewFolderIcon />
+										</ListItemIcon>
+										<ListItemText>Create folder</ListItemText>
+									</MenuItem>
+									<MenuItem onClick={uploadFileClickHandler}>
+										<ListItemIcon>
+											<UploadFileIcon />
+										</ListItemIcon>
+										<ListItemText>Upload file</ListItemText>
+									</MenuItem>
+									<MenuItem onClick={uploadFolderClickHandler}>
+										<ListItemIcon>
+											<DriveFolderUploadIcon />
+										</ListItemIcon>
+										<ListItemText>Upload folder</ListItemText>
+									</MenuItem>
+								</Menu>
+							</>
+						}
+					>
+						<Button
+							variant="outlined"
+							color="inherit"
+							startIcon={<ArrowBackIcon />}
+							onClick={exitTrash}
+							sx={{ mr: 1 }}
 						>
-							<ListItemIcon>
-								<UploadFileIcon />
-							</ListItemIcon>
-							<ListItemText>Upload to folder</ListItemText>
-						</MenuItem>
-					</Menu>
+							Back
+						</Button>
+						<Button
+							variant="contained"
+							color="warning"
+							onClick={() => setEmptyTrashOpen(true)}
+						>
+							Empty trash
+						</Button>
+					</Show>
 				</div>
 
 				<Show when={isUploading()}>
@@ -376,7 +500,11 @@ const Files = () => {
 						when={fsLayer().length}
 						fallback={
 							<div class="files-canvas__empty">
-								{chrome.isSearching() ? 'No search results' : 'No files yet'}
+								{trashMode()
+									? 'Trash is empty'
+									: chrome.isSearching()
+										? 'No search results'
+										: 'No files yet'}
 							</div>
 						}
 					>
@@ -385,8 +513,12 @@ const Files = () => {
 								<FSListItem
 									fsElement={fsElement}
 									storageId={params.id}
-									onDelete={fetchFSLayer}
+									onDelete={refreshCurrent}
 									onOpen={(file) => setViewerFile(file)}
+									trashMode={trashMode()}
+									onRestore={(el) => restoreItem(el)}
+									onDeleteForever={deleteForeverItem}
+									onTrashNavigate={onTrashNavigate}
 								/>
 							))}
 						</div>
@@ -394,7 +526,7 @@ const Files = () => {
 				</div>
 
 				<FileViewer
-					open={Boolean(viewerFile())}
+					open={Boolean(viewerFile()) && !trashMode()}
 					file={viewerFile()}
 					files={fsLayer()}
 					storageId={params.id}
@@ -406,6 +538,33 @@ const Files = () => {
 					isOpened={isCreateFolderDialogOpen()}
 					onCreate={createFolder}
 					onClose={closeCreateFolderDialog}
+				/>
+
+				<ActionConfirmDialog
+					action="Empty"
+					entity="trash"
+					actionDescription="permanently delete all files in the trash, including Telegram copies"
+					isOpened={emptyTrashOpen()}
+					onConfirm={confirmEmptyTrash}
+					onCancel={() => setEmptyTrashOpen(false)}
+				/>
+
+				<RestoreConflictDialog
+					isOpened={Boolean(restoreConflictPath())}
+					path={restoreConflictPath() || ''}
+					onCancel={() => setRestoreConflictPath(null)}
+					onChoose={async (choice) => {
+						const path = restoreConflictPath()
+						if (!path) return
+						try {
+							await API.files.restoreTrash(params.id, path, choice)
+							addAlert('Restored', 'success')
+							setRestoreConflictPath(null)
+							await fetchTrashLayer()
+						} catch {
+							/* alerted by API */
+						}
+					}}
 				/>
 				<input
 					ref={uploadFileInputElement}

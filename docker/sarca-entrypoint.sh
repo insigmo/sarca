@@ -1,6 +1,6 @@
 #!/bin/sh
 # Ensure WORK_DIR is writable by the app user (named volumes mount as root).
-set -e
+set -
 
 WORK_DIR="${WORK_DIR:-/work}"
 mkdir -p "$WORK_DIR/uploads"

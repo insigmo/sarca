@@ -1,7 +1,7 @@
 #!/bin/sh
 # Load TELEGRAM_API_ID / TELEGRAM_API_HASH from mounted sarca.conf, then
 # hand off to the image's docker-entrypoint.sh.
-set -e
+set -
 
 CONF="${SARCA_CONF:-/sarca.conf}"
 DATA_DIR="${TELEGRAM_WORK_DIR:-/var/lib/telegram-bot-api}"

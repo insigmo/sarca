@@ -186,12 +186,15 @@ impl<'d> StorageManagerService<'d> {
             .upload(&jpeg, chat_id, storage_id)
             .await?;
 
-        self.files_repo.set_thumb(file_id, &outcome.file_id).await?;
+        self.files_repo
+            .set_thumb(file_id, &outcome.file_id, outcome.message_id)
+            .await?;
 
         tracing::debug!(
-            "uploaded thumbnail for file {} as telegram_file_id {}",
+            "uploaded thumbnail for file {} as telegram_file_id {} (message_id={})",
             file_id,
-            outcome.file_id
+            outcome.file_id,
+            outcome.message_id
         );
 
         Ok(())
