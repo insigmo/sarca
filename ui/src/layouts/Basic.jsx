@@ -25,7 +25,13 @@ const BasicLayout = () => {
 			<CssBaseline />
 			<Header />
 			<Box>
-				<Toolbar />
+				<Toolbar
+					sx={{
+						minHeight: { xs: 56, sm: 64 },
+						paddingTop: 'env(safe-area-inset-top, 0px)',
+						boxSizing: 'content-box',
+					}}
+				/>
 
 				<Box sx={{ minHeight: 'calc(100vh - 64px)' }}>
 					<Container
