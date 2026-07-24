@@ -294,7 +294,7 @@ jobs:
             **Docker**
             ```bash
             curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
-            cd sarca && docker compose up -d
+            cd sarca && docker compose --env-file sarca.conf up -d
             ```
 
             Image: `ghcr.io/insigmo/sarca:${{ needs.version.outputs.tag }}` (also `:latest`).

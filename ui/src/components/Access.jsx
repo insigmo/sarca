@@ -21,10 +21,11 @@ import GrantAccess from './GrantAccess'
 
 /**
  * @typedef {Object} AccessProps
- * @property {() => void} setIsGrantAccessVisible
+ * @property {() => void} [setIsGrantAccessVisible]
  * @property {() => void} onMount
  * @property {import('../api').UserWithAccess[]} users
  * @property {() => Promise<void>} refetchUsers
+ * @property {string} [storageId]
  */
 
 /**
@@ -39,6 +40,7 @@ const Access = (props) => {
 	const [store, _setStore] = createLocalStore()
 	const { addAlert } = alertStore
 	const params = useParams()
+	const storageId = () => props.storageId || params.id
 
 	onMount(props.onMount)
 
@@ -60,7 +62,7 @@ const Access = (props) => {
 	const onRestrict = async () => {
 		const userID = props.users.find((u) => u.email === selectedUserEmail()).id
 
-		await API.access.restrictAccess(params.id, userID)
+		await API.access.restrictAccess(storageId(), userID)
 		addAlert(
 			`Restricted access for the user with email ${selectedUserEmail()}`,
 			'success'
@@ -141,6 +143,7 @@ const Access = (props) => {
 				email={selectedUserEmail()}
 				isVisible={isChangeAccessOpened()}
 				onClose={() => setIsChangeAccessOpened(false)}
+				storageId={storageId()}
 			/>
 		</>
 	)
