@@ -27,6 +27,9 @@ const Storages = () => {
 	onMount(async () => {
 		const storagesSchema = await API.storages.listStorages()
 		setStorages(storagesSchema.storages)
+		if (!storagesSchema.storages.length) {
+			navigate('/setup', { replace: true })
+		}
 	})
 
 	const openSettings = (e, storage) => {
@@ -54,9 +57,9 @@ const Storages = () => {
 				when={storages().length}
 				fallback={
 					<div class="storages-empty">
-						No storages yet — create one in the UI (New storage), or set
-						TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, and STORAGE_NAME in
-						sarca.conf for auto-setup.
+						No storages yet — the setup wizard will guide you, or use Advanced create
+						/ set TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, and STORAGE_NAME in
+						sarca.conf.
 					</div>
 				}
 			>
