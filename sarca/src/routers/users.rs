@@ -20,7 +20,9 @@ impl UsersRouter {
         State(state): State<Arc<AppState>>,
         Json(in_user): Json<InUser>,
     ) -> impl IntoResponse {
-        UsersService::new(&state.db).create(in_user).await?;
+        UsersService::new(&state.db)
+            .create(in_user, &state.config)
+            .await?;
         Ok::<_, (StatusCode, String)>(StatusCode::OK)
     }
 }

@@ -15,31 +15,49 @@ use crate::{
     errors::{SarcaError, SarcaResult},
     models::{
         access::AccessType,
+        chunk_replicas::ChunkReplica,
+        file_chunks::FileChunk,
         files::{FSElement, File, InFile, SearchFSElement},
     },
     repositories::{
-        access::AccessRepository, files::FilesRepository, storage_workers::StorageWorkersRepository,
+        access::AccessRepository, chunk_replicas::ChunkReplicasRepository, files::FilesRepository,
+        storage_workers::StorageWorkersRepository,
     },
-    schemas::files::{InFolderSchema},
+    schemas::files::InFolderSchema,
+    services::trash::purge_file_ids,
 };
 use tokio::sync::mpsc;
 
 pub struct FilesService<'d> {
     repo: FilesRepository<'d>,
+    replicas_repo: ChunkReplicasRepository<'d>,
     storage_workers_repo: StorageWorkersRepository<'d>,
     access_repo: AccessRepository<'d>,
+    db: &'d PgPool,
+    base_url: &'d str,
+    rate_limit: u8,
     tx: ClientSender,
 }
 
 impl<'d> FilesService<'d> {
-    pub fn new(db: &'d PgPool, tx: ClientSender) -> Self {
+    pub fn new(
+        db: &'d PgPool,
+        tx: ClientSender,
+        base_url: &'d str,
+        rate_limit: u8,
+    ) -> Self {
         let repo = FilesRepository::new(db);
+        let replicas_repo = ChunkReplicasRepository::new(db);
         let storage_workers_repo = StorageWorkersRepository::new(db);
         let access_repo = AccessRepository::new(db);
         Self {
             repo,
+            replicas_repo,
             access_repo,
             storage_workers_repo,
+            db,
+            base_url,
+            rate_limit,
             tx,
         }
     }
@@ -157,8 +175,8 @@ impl<'d> FilesService<'d> {
         }) {
             tracing::error!("{e}");
 
-            // fallback logic: deleting file
-            let _ = self.repo.delete_with_folders(file.id).await;
+            // fallback: hard-purge with refcount GC (may have partial Telegram uploads)
+            let _ = purge_file_ids(self.db, self.base_url, self.rate_limit, &[file.id]).await;
 
             return Err(e);
         };
@@ -215,7 +233,7 @@ impl<'d> FilesService<'d> {
             return Err(SarcaError::InvalidPath);
         }
 
-        // 2. deleting file
+        // 2. soft-delete only (Telegram untouched)
         self.repo.delete(path, storage_id).await
     }
 
@@ -243,11 +261,12 @@ impl<'d> FilesService<'d> {
         storage_id: Uuid,
         path: &str,
         destination_folder: &str,
+        on_conflict: Option<&str>,
         user: &AuthUser,
     ) -> SarcaResult<()> {
         check_access(&self.access_repo, user.id, storage_id, &AccessType::W).await?;
 
-        if !Self::validate_path(path) {
+        if !Self::validate_path(path) || path.is_empty() {
             return Err(SarcaError::InvalidPath);
         }
 
@@ -256,12 +275,89 @@ impl<'d> FilesService<'d> {
             return Err(SarcaError::InvalidPath);
         }
 
-        let new_path = Self::path_in_folder(path, dest);
+        let source = self.repo.canonicalize_live_path(storage_id, path).await?;
+        let mut new_path = Self::path_in_folder(&source, dest);
         if !Self::validate_path(&new_path) {
             return Err(SarcaError::InvalidPath);
         }
 
-        self.repo.update_path(path, &new_path, storage_id).await
+        // Same path → no-op
+        if source == new_path {
+            return Ok(());
+        }
+
+        // Moving a folder into itself / a descendant is invalid
+        if source.ends_with('/') && new_path.starts_with(&source) {
+            return Err(SarcaError::InvalidPath);
+        }
+
+        new_path = self
+            .resolve_dest_conflict(storage_id, &source, new_path, on_conflict)
+            .await?;
+
+        self.repo
+            .ensure_live_parent_folders(&new_path, storage_id)
+            .await?;
+        self.repo.update_path(&source, &new_path, storage_id).await
+    }
+
+    pub async fn copy_to(
+        &self,
+        storage_id: Uuid,
+        path: &str,
+        destination_folder: &str,
+        on_conflict: Option<&str>,
+        user: &AuthUser,
+    ) -> SarcaResult<()> {
+        check_access(&self.access_repo, user.id, storage_id, &AccessType::W).await?;
+
+        if !Self::validate_path(path) || path.is_empty() {
+            return Err(SarcaError::InvalidPath);
+        }
+
+        let dest = destination_folder.trim_end_matches('/');
+        if !dest.is_empty() && !Self::validate_path(dest) {
+            return Err(SarcaError::InvalidPath);
+        }
+
+        let source = self.repo.canonicalize_live_path(storage_id, path).await?;
+        let mut dest_root = Self::path_in_folder(&source, dest);
+        if !Self::validate_path(&dest_root) {
+            return Err(SarcaError::InvalidPath);
+        }
+
+        dest_root = self
+            .resolve_dest_conflict(storage_id, &source, dest_root, on_conflict)
+            .await?;
+
+        self.repo
+            .ensure_live_parent_folders(&dest_root, storage_id)
+            .await?;
+
+        if source.ends_with('/') {
+            let rows = self.repo.list_live_under(storage_id, &source).await?;
+            if rows.is_empty() {
+                return Err(SarcaError::DoesNotExist("file".to_string()));
+            }
+            let has_root_marker = rows.iter().any(|r| r.path == source);
+            if !has_root_marker {
+                let in_file = InFile::new(dest_root.clone(), 0, storage_id);
+                self.repo.create_folder(in_file).await?;
+            }
+            for row in rows {
+                let relative = row.path.strip_prefix(&source).unwrap_or(&row.path);
+                let new_path = format!("{dest_root}{relative}");
+                self.repo
+                    .ensure_live_parent_folders(&new_path, storage_id)
+                    .await?;
+                self.clone_one_row(&row, &new_path).await?;
+            }
+        } else {
+            let file = self.repo.get_file_by_path(&source, storage_id).await?;
+            self.clone_one_row(&file, &dest_root).await?;
+        }
+
+        Ok(())
     }
 
     /// Build a new path when renaming by basename only.
@@ -294,6 +390,83 @@ impl<'d> FilesService<'d> {
     ////    Helpers
     /////////////////////////////////////////////////////////////////////
 
+    async fn resolve_dest_conflict(
+        &self,
+        storage_id: Uuid,
+        source: &str,
+        dest: String,
+        on_conflict: Option<&str>,
+    ) -> SarcaResult<String> {
+        let conflict = live_conflict_at(&self.repo, storage_id, &dest).await?;
+        if !conflict {
+            return Ok(dest);
+        }
+
+        // Replace onto the source itself (same-folder copy/move) → rename instead.
+        let self_overlap = dest == source
+            || (source.ends_with('/') && dest.starts_with(source))
+            || (dest.ends_with('/') && source.starts_with(&dest));
+
+        match on_conflict {
+            None => Err(SarcaError::TrashPathConflict),
+            Some("replace") if self_overlap => {
+                self.repo.next_available_live_path(&dest, storage_id).await
+            }
+            Some("replace") => {
+                let live_ids = self.repo.list_live_ids_at_path(storage_id, &dest).await?;
+                purge_file_ids(self.db, self.base_url, self.rate_limit, &live_ids).await?;
+                Ok(dest)
+            }
+            Some("rename") => self.repo.next_available_live_path(&dest, storage_id).await,
+            Some(_) => Err(SarcaError::InvalidPath),
+        }
+    }
+
+    async fn clone_one_row(&self, source: &File, dest_path: &str) -> SarcaResult<()> {
+        let new_file = self.repo.insert_cloned_file(source, dest_path).await?;
+
+        // Folder markers have no chunks.
+        if dest_path.ends_with('/') || source.path.ends_with('/') {
+            return Ok(());
+        }
+
+        let chunks = self.repo.list_chunks_of_file(source.id).await?;
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let mut chunk_id_map = std::collections::HashMap::new();
+        let mut new_chunks = Vec::with_capacity(chunks.len());
+        for chunk in &chunks {
+            let new_id = Uuid::new_v4();
+            chunk_id_map.insert(chunk.id, new_id);
+            new_chunks.push(FileChunk::new(new_id, new_file.id, chunk.position));
+        }
+        self.repo.create_chunks_batch(new_chunks).await?;
+
+        let replicas = self.replicas_repo.list_for_file(source.id).await?;
+        if replicas.is_empty() {
+            return Ok(());
+        }
+
+        let new_replicas: Vec<ChunkReplica> = replicas
+            .into_iter()
+            .filter_map(|r| {
+                let new_chunk_id = *chunk_id_map.get(&r.chunk_id)?;
+                Some(ChunkReplica {
+                    id: Uuid::new_v4(),
+                    chunk_id: new_chunk_id,
+                    channel_id: r.channel_id,
+                    telegram_file_id: r.telegram_file_id,
+                    telegram_message_id: r.telegram_message_id,
+                    status: r.status,
+                })
+            })
+            .collect();
+        self.replicas_repo.insert_batch(new_replicas).await?;
+        Ok(())
+    }
+
     fn path_in_folder(path: &str, dest_folder: &str) -> String {
         let is_folder = path.ends_with('/');
         let trimmed = path.trim_end_matches('/');
@@ -319,4 +492,18 @@ impl<'d> FilesService<'d> {
     fn validate_path(path: &str) -> bool {
         !path.starts_with(r"/") && !path.contains(r"//")
     }
+}
+
+async fn live_conflict_at(
+    repo: &FilesRepository<'_>,
+    storage_id: Uuid,
+    path: &str,
+) -> SarcaResult<bool> {
+    if repo.live_path_exists(path, storage_id).await? {
+        return Ok(true);
+    }
+    if !path.ends_with('/') && repo.live_path_exists(&format!("{path}/"), storage_id).await? {
+        return Ok(true);
+    }
+    Ok(false)
 }

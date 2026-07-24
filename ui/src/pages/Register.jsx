@@ -9,6 +9,7 @@ import { A, useNavigate } from '@solidjs/router'
 
 import API from '../api'
 import { alertStore } from '../components/AlertStack'
+import OAuthButtons from '../components/OAuthButtons'
 import logoUrl from '../assets/logo.svg'
 
 const Register = () => {
@@ -40,6 +41,10 @@ const Register = () => {
 
 		setStore('access_token', tokenData.access_token)
 		setStore('refresh_token', tokenData.refresh_token)
+		setStore('user', {
+			email: tokenData.email || email,
+			email_verified: tokenData.email_verified,
+		})
 
 		const redirect_url = store.redirect || '/'
 		navigate(redirect_url)
@@ -49,8 +54,6 @@ const Register = () => {
 		<div class="auth-page">
 			<Paper class="auth-card" elevation={0}>
 				<Box
-					component="form"
-					onSubmit={handleSubmit}
 					sx={{
 						px: { xs: 3, sm: 4.5 },
 						py: { xs: 3.5, sm: 4 },
@@ -65,29 +68,37 @@ const Register = () => {
 						<p>Create your account</p>
 					</div>
 
-					<TextField
-						name="email"
-						label="Email"
-						type="email"
-						autoComplete="email"
-						required
-					/>
-					<TextField
-						name="password"
-						label="Password"
-						type="password"
-						autoComplete="new-password"
-						required
-					/>
+					<Box
+						component="form"
+						onSubmit={handleSubmit}
+						sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+					>
+						<TextField
+							name="email"
+							label="Email"
+							type="email"
+							autoComplete="email"
+							required
+						/>
+						<TextField
+							name="password"
+							label="Password"
+							type="password"
+							autoComplete="new-password"
+							required
+						/>
 
-					<Stack spacing={1.5} sx={{ mt: 1 }}>
-						<Button type="submit" variant="contained" color="secondary" size="large">
-							Create account
-						</Button>
-						<A class="default-link" href="/login" style={{ 'text-align': 'center' }}>
-							Already have an account? Sign in
-						</A>
-					</Stack>
+						<Stack spacing={1.5} sx={{ mt: 1 }}>
+							<Button type="submit" variant="contained" color="secondary" size="large">
+								Create account
+							</Button>
+							<A class="default-link" href="/login" style={{ 'text-align': 'center' }}>
+								Already have an account? Sign in
+							</A>
+						</Stack>
+					</Box>
+
+					<OAuthButtons />
 				</Box>
 			</Paper>
 		</div>

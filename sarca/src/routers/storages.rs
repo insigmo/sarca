@@ -26,7 +26,10 @@ use crate::{
     services::storages::StoragesService,
 };
 
+use super::favorites::FavoritesRouter;
 use super::files::FilesRouter;
+use super::recent::RecentRouter;
+use super::shares::SharesRouter;
 use super::trash::TrashRouter;
 
 pub struct StoragesRouter;
@@ -35,6 +38,9 @@ impl StoragesRouter {
     pub fn get_router(state: Arc<AppState>) -> Router {
         let files_router = FilesRouter::get_router(state.clone());
         let trash_router = TrashRouter::get_router(state.clone());
+        let favorites_router = FavoritesRouter::get_router(state.clone());
+        let recent_router = RecentRouter::get_router(state.clone());
+        let shares_router = SharesRouter::get_router(state.clone());
         Router::new()
             .route("/", get(Self::list).post(Self::create))
             .route(
@@ -61,6 +67,9 @@ impl StoragesRouter {
             )
             .nest("/:storage_id/files", files_router)
             .nest("/:storage_id/trash", trash_router)
+            .nest("/:storage_id/favorites", favorites_router)
+            .nest("/:storage_id/recent", recent_router)
+            .nest("/:storage_id/shares", shares_router)
             .route_layer(middleware::from_fn_with_state(
                 state.clone(),
                 logged_in_required,

@@ -30,6 +30,7 @@ const Header = () => {
 	const logout = (_) => {
 		setStore('access_token')
 		setStore('refresh_token')
+		setStore('user')
 		setStore('redirect', '/')
 
 		navigate('/login')

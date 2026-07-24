@@ -54,7 +54,7 @@ pub struct File {
     pub storage_id: uuid::Uuid,
     pub is_uploaded: bool,
     pub thumb_telegram_file_id: Option<String>,
-    /// Telegram message id of the thumbnail document (for `deleteMessage` on purge).
+    /// Telegram message id of the thumbnail document (refcount-GC'd on hard purge).
     pub thumb_telegram_message_id: Option<i64>,
     /// Telegram chunk size used at upload; `None` for pre-feature / folder rows.
     pub chunk_size_bytes: Option<i64>,

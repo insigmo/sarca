@@ -39,9 +39,37 @@ pub struct Config {
     pub telegram_channel_id: Option<i64>,
     /// Optional bootstrap: storage name to create for the superuser.
     pub storage_name: Option<String>,
+
+    /// Public base URL for email links and OAuth redirect URIs.
+    pub public_base_url: String,
+
+    pub smtp_host: Option<String>,
+    pub smtp_port: u16,
+    pub smtp_username: Option<String>,
+    pub smtp_password: Option<String>,
+    pub smtp_from: String,
+    /// `starttls` | `none` | `tls`
+    pub smtp_tls: String,
+
+    pub oauth_google_client_id: Option<String>,
+    pub oauth_google_client_secret: Option<String>,
+    pub oauth_github_client_id: Option<String>,
+    pub oauth_github_client_secret: Option<String>,
 }
 
 impl Config {
+    pub fn smtp_configured(&self) -> bool {
+        self.smtp_host.is_some()
+    }
+
+    pub fn google_oauth_configured(&self) -> bool {
+        self.oauth_google_client_id.is_some() && self.oauth_google_client_secret.is_some()
+    }
+
+    pub fn github_oauth_configured(&self) -> bool {
+        self.oauth_github_client_id.is_some() && self.oauth_github_client_secret.is_some()
+    }
+
     pub fn new() -> SarcaResult<Self> {
         let db_user: String = Self::get_env_var("DATABASE_USER")?;
         let db_password: String = Self::get_env_var("DATABASE_PASSWORD")?;
@@ -86,6 +114,25 @@ impl Config {
         let telegram_channel_id = Self::get_optional_parsed_env_var("TELEGRAM_CHANNEL_ID")?;
         let storage_name = Self::get_optional_env_var("STORAGE_NAME");
 
+        let public_base_url = Self::get_env_var_with_default(
+            "PUBLIC_BASE_URL",
+            format!("http://127.0.0.1:{port}"),
+        )?;
+        let smtp_host = Self::get_optional_env_var("SMTP_HOST");
+        let smtp_port = Self::get_env_var_with_default("SMTP_PORT", 587u16)?;
+        let smtp_username = Self::get_optional_env_var("SMTP_USERNAME");
+        let smtp_password = Self::get_optional_env_var("SMTP_PASSWORD");
+        let smtp_from = Self::get_env_var_with_default(
+            "SMTP_FROM",
+            "Sarca <noreply@example.com>".to_owned(),
+        )?;
+        let smtp_tls = Self::get_env_var_with_default("SMTP_TLS", "starttls".to_owned())?;
+
+        let oauth_google_client_id = Self::get_optional_env_var("OAUTH_GOOGLE_CLIENT_ID");
+        let oauth_google_client_secret = Self::get_optional_env_var("OAUTH_GOOGLE_CLIENT_SECRET");
+        let oauth_github_client_id = Self::get_optional_env_var("OAUTH_GITHUB_CLIENT_ID");
+        let oauth_github_client_secret = Self::get_optional_env_var("OAUTH_GITHUB_CLIENT_SECRET");
+
         Ok(Self {
             db_uri,
             db_uri_without_dbname,
@@ -106,6 +153,17 @@ impl Config {
             telegram_bot_token,
             telegram_channel_id,
             storage_name,
+            public_base_url,
+            smtp_host,
+            smtp_port,
+            smtp_username,
+            smtp_password,
+            smtp_from,
+            smtp_tls,
+            oauth_google_client_id,
+            oauth_google_client_secret,
+            oauth_github_client_id,
+            oauth_github_client_secret,
         })
     }
 

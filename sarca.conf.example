@@ -41,3 +41,24 @@ DATABASE_PASSWORD=sarca
 DATABASE_NAME=sarca
 DATABASE_HOST=db
 DATABASE_PORT=5432
+
+# --- Auth: email verify / password reset / OAuth (Wave 4) ---
+# Public base URL used in email links and OAuth redirect URIs
+PUBLIC_BASE_URL=http://127.0.0.1:8000
+
+# Leave SMTP_HOST empty to disable outbound mail (verify/reset return "mail not configured")
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM=Sarca <noreply@example.com>
+SMTP_TLS=starttls   # starttls | none | tls
+
+# Leave client ids empty to hide that provider
+OAUTH_GOOGLE_CLIENT_ID=
+OAUTH_GOOGLE_CLIENT_SECRET=
+OAUTH_GITHUB_CLIENT_ID=
+OAUTH_GITHUB_CLIENT_SECRET=
+# Register redirect URIs with providers:
+#   {PUBLIC_BASE_URL}/api/auth/oauth/google/callback
+#   {PUBLIC_BASE_URL}/api/auth/oauth/github/callback

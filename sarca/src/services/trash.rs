@@ -82,16 +82,8 @@ impl<'d> TrashService<'d> {
                 Some("rename") => {
                     let new_path = self
                         .files_repo
-                        .next_available_live_path(
-                            canonical.trim_end_matches('/'),
-                            storage_id,
-                        )
+                        .next_available_live_path(&canonical, storage_id)
                         .await?;
-                    let new_path = if canonical.ends_with('/') {
-                        format!("{}/", new_path.trim_end_matches('/'))
-                    } else {
-                        new_path
-                    };
                     self.files_repo
                         .update_trashed_path(&canonical, &new_path, storage_id)
                         .await?;
@@ -171,7 +163,9 @@ async fn live_conflict_at(
     Ok(false)
 }
 
-/// Delete Telegram messages for file ids (best-effort), then hard-delete DB rows.
+/// Hard-delete file metadata, then best-effort Telegram `deleteMessage` only for
+/// messages no longer referenced by any remaining chunk replica or file thumb
+/// (including trashed files). Soft-delete must not call this.
 pub async fn purge_file_ids(
     db: &PgPool,
     base_url: &str,
@@ -187,17 +181,40 @@ pub async fn purge_file_ids(
     let mut messages = replicas_repo.list_telegram_messages_for_files(ids).await?;
     messages.extend(files_repo.list_thumb_messages_for_files(ids).await?);
 
-    if !messages.is_empty() {
-        let scheduler = StorageWorkersScheduler::new(db, rate_limit);
-        let api = TelegramBotApi::new(base_url, scheduler);
-        for (chat_id, message_id, storage_id) in messages {
-            if let Err(e) = api.delete_message(chat_id, message_id, storage_id).await {
-                tracing::warn!(
-                    "[TRASH] failed to delete Telegram message {message_id} in chat {chat_id}: {e}"
-                );
-            }
+    // Drop DB rows first so remaining-refcount checks exclude these files.
+    files_repo.hard_delete_ids(ids).await?;
+
+    if messages.is_empty() {
+        return Ok(());
+    }
+
+    // Dedupe (chat_id, message_id) while keeping a storage_id for token lookup.
+    let mut seen = std::collections::HashSet::new();
+    let mut unique = Vec::new();
+    for (chat_id, message_id, storage_id) in messages {
+        if seen.insert((chat_id, message_id)) {
+            unique.push((chat_id, message_id, storage_id));
         }
     }
 
-    files_repo.hard_delete_ids(ids).await
+    let scheduler = StorageWorkersScheduler::new(db, rate_limit);
+    let api = TelegramBotApi::new(base_url, scheduler);
+    for (chat_id, message_id, storage_id) in unique {
+        let replica_ref = replicas_repo
+            .message_still_referenced(chat_id, message_id)
+            .await?;
+        let thumb_ref = files_repo
+            .thumb_message_still_referenced(chat_id, message_id)
+            .await?;
+        if replica_ref || thumb_ref {
+            continue;
+        }
+        if let Err(e) = api.delete_message(chat_id, message_id, storage_id).await {
+            tracing::warn!(
+                "[TRASH] failed to delete Telegram message {message_id} in chat {chat_id}: {e}"
+            );
+        }
+    }
+
+    Ok(())
 }

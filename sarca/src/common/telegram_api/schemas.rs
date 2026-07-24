@@ -52,6 +52,16 @@ pub struct GetChatResultSchema {
     pub first_name: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub struct GetChatMemberBodySchema {
+    pub result: ChatMemberResultSchema,
+}
+
+#[derive(Deserialize)]
+pub struct ChatMemberResultSchema {
+    pub status: String,
+}
+
 /// Minimal chat info resolved via `getChat`, used to auto-fill a channel's display name.
 #[derive(Debug, Clone)]
 pub struct ChatInfo {

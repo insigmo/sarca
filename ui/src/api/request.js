@@ -285,4 +285,71 @@ export const apiMultipartRequest = (path, auth_token, form, onProgress, options 
 	})
 }
 
+/**
+ * Unauthenticated public API calls (share links). Always sends cookies so
+ * HttpOnly unlock cookies work after POST /unlock.
+ *
+ * @param {string} path
+ * @param {Method} method
+ * @param {any} [body]
+ * @param {boolean} [return_response]
+ * @param {boolean} [silent]
+ */
+export const publicApiRequest = async (
+	path,
+	method,
+	body,
+	return_response = false,
+	silent = false,
+) => {
+	const { addAlert } = alertStore
+	const fullpath = `${API_BASE}${path}`
+	const headers = new Headers()
+	headers.append('Content-Type', 'application/json')
+
+	try {
+		const response = await fetch(fullpath, {
+			method,
+			body: body === undefined ? undefined : JSON.stringify(body),
+			headers,
+			credentials: 'include',
+		})
+
+		if (!response.ok) {
+			const text = await response.text()
+			let parsed = null
+			try {
+				parsed = text ? JSON.parse(text) : null
+			} catch {
+				/* plain text error body */
+			}
+			const err = new Error(
+				(parsed && (parsed.message || parsed.error)) || text || response.statusText,
+			)
+			err.status = response.status
+			err.body = parsed
+			throw err
+		}
+
+		if (return_response) {
+			return response
+		}
+
+		if (response.status === 204) {
+			return undefined
+		}
+
+		try {
+			return await response.json()
+		} catch {
+			return undefined
+		}
+	} catch (err) {
+		if (!silent) {
+			addAlert(err.message || 'Request failed', 'error')
+		}
+		throw err
+	}
+}
+
 export default apiRequest

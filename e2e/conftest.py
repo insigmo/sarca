@@ -77,7 +77,7 @@ def storage_id(client: httpx.Client, auth_headers: dict[str, str]) -> str:
     r = client.post(
         "/api/storages",
         headers=auth_headers,
-        json={"name": name, "chat_id": chat_id},
+        json={"name": name, "channels": [{"chat_id": chat_id}]},
     )
     assert r.status_code in (200, 201), r.text
     body = r.json()

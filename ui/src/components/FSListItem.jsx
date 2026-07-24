@@ -1,28 +1,33 @@
-import MenuMUI from '@suid/material/Menu'
-import MenuItem from '@suid/material/MenuItem'
-import ListItemIcon from '@suid/material/ListItemIcon'
-import ListItemText from '@suid/material/ListItemText'
-import IconButton from '@suid/material/IconButton'
-import CircularProgress from '@suid/material/CircularProgress'
-import MoreVertIcon from '@suid/icons-material/MoreVert'
-import VisibilityIcon from '@suid/icons-material/Visibility'
+import ContentCopyIcon from '@suid/icons-material/ContentCopy'
+import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
+import DriveFileRenameOutlineIcon from '@suid/icons-material/DriveFileRenameOutline'
+import DeleteIcon from '@suid/icons-material/Delete'
+import DeleteForeverIcon from '@suid/icons-material/DeleteForever'
 import DownloadIcon from '@suid/icons-material/Download'
 import InfoIcon from '@suid/icons-material/Info'
-import DeleteIcon from '@suid/icons-material/Delete'
+import LinkIcon from '@suid/icons-material/Link'
+import MoreVertIcon from '@suid/icons-material/MoreVert'
 import RestoreFromTrashIcon from '@suid/icons-material/RestoreFromTrash'
-import DeleteForeverIcon from '@suid/icons-material/DeleteForever'
-import DriveFileRenameOutlineIcon from '@suid/icons-material/DriveFileRenameOutline'
-import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
+import StarIcon from '@suid/icons-material/Star'
+import StarBorderIcon from '@suid/icons-material/StarBorder'
+import VisibilityIcon from '@suid/icons-material/Visibility'
+import CircularProgress from '@suid/material/CircularProgress'
+import IconButton from '@suid/material/IconButton'
+import ListItemIcon from '@suid/material/ListItemIcon'
+import ListItemText from '@suid/material/ListItemText'
+import MenuItem from '@suid/material/MenuItem'
+import MenuMUI from '@suid/material/Menu'
 import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import { useNavigate, useParams } from '@solidjs/router'
 
 import API from '../api'
+import { fileBaseName, fileExtensionLabel } from '../common/fileLabel'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
 import FileTypeIcon from './FileTypeIcon'
+import ShareLinkDialog from './ShareLinkDialog'
 import { alertStore } from './AlertStack'
-import { fileBaseName, fileExtensionLabel } from '../common/fileLabel'
 
 /**
  * @typedef {Object} FSListItemProps
@@ -31,9 +36,14 @@ import { fileBaseName, fileExtensionLabel } from '../common/fileLabel'
  * @property {() => {}} onDelete
  * @property {(file: import("../api").FSElement) => void} [onOpen]
  * @property {boolean} [trashMode]
+ * @property {boolean} [flatMode] Favorites / Recent: open files only, no folder browse
+ * @property {boolean | (() => boolean)} [isFavorite]
+ * @property {(el: import("../api").FSElement) => void | Promise<void>} [onToggleFavorite]
  * @property {(el: import("../api").FSElement) => void} [onRestore]
  * @property {(el: import("../api").FSElement) => void} [onDeleteForever]
  * @property {(el: import("../api").FSElement) => void} [onTrashNavigate]
+ * @property {(el: import("../api").FSElement) => void} [onCopyTo]
+ * @property {(el: import("../api").FSElement) => void} [onMoveTo]
  */
 
 /**
@@ -45,6 +55,7 @@ const FSListItem = (props) => {
 	const [isActionConfirmDialogOpened, setIsActionConfirmDialogOpened] =
 		createSignal(false)
 	const [isInfoDialogOpened, setIsInfoDialogOpened] = createSignal(false)
+	const [isShareDialogOpened, setIsShareDialogOpened] = createSignal(false)
 	const [thumbUrl, setThumbUrl] = createSignal(null)
 	const [isDownloading, setIsDownloading] = createSignal(false)
 	const { addAlert } = alertStore
@@ -57,10 +68,18 @@ const FSListItem = (props) => {
 		setMoreAnchorEl(null)
 	}
 
+	const isParentNav = () => props.fsElement.name === '..'
+
 	const handleNavigate = () => {
 		if (props.trashMode) {
 			if (!props.fsElement.is_file) {
 				props.onTrashNavigate?.(props.fsElement)
+			}
+			return
+		}
+		if (props.flatMode) {
+			if (props.fsElement.is_file) {
+				props.onOpen?.(props.fsElement)
 			}
 			return
 		}
@@ -71,12 +90,28 @@ const FSListItem = (props) => {
 		}
 	}
 
+	const canFavorite = () =>
+		!props.trashMode &&
+		!isParentNav() &&
+		props.fsElement.is_file &&
+		typeof props.onToggleFavorite === 'function'
+
+	const favorited = () => {
+		const v = props.isFavorite
+		return typeof v === 'function' ? Boolean(v()) : Boolean(v)
+	}
+
+	const toggleFavorite = async (event) => {
+		event?.stopPropagation?.()
+		handleCloseMore()
+		if (!canFavorite()) return
+		await props.onToggleFavorite?.(props.fsElement)
+	}
+
 	const openViewer = () => {
 		handleCloseMore()
 		props.onOpen?.(props.fsElement)
 	}
-
-	const isParentNav = () => props.fsElement.name === '..'
 
 	const normalizedPath = () => {
 		const p = props.fsElement.path
@@ -192,23 +227,22 @@ const FSListItem = (props) => {
 		}
 	}
 
-	const moveTo = async () => {
+	const copyTo = () => {
 		handleCloseMore()
-		const destination = window.prompt(
-			'Destination folder path (empty for root)',
-			'',
-		)
-		if (destination === null) {
-			return
-		}
-		try {
-			await API.files.moveFile(params.id, normalizedPath(), destination.trim())
-			addAlert('Moved successfully', 'success')
-			props.onDelete()
-		} catch (err) {
-			console.error(err)
-		}
+		props.onCopyTo?.(props.fsElement)
 	}
+
+	const moveTo = () => {
+		handleCloseMore()
+		props.onMoveTo?.(props.fsElement)
+	}
+
+	const openShare = () => {
+		handleCloseMore()
+		setIsShareDialogOpened(true)
+	}
+
+	const canShare = () => !props.trashMode && !isParentNav()
 
 	const displayName = () =>
 		fileBaseName(props.fsElement.name, props.fsElement.is_file)
@@ -229,6 +263,33 @@ const FSListItem = (props) => {
 					}
 				}}
 			>
+				<Show when={canFavorite()}>
+					<div
+						class="fs-grid-item__star"
+						classList={{ 'fs-grid-item__star--active': favorited() }}
+					>
+						<IconButton
+							size="small"
+							onClick={toggleFavorite}
+							aria-label={
+								favorited()
+									? 'Remove from favorites'
+									: 'Add to favorites'
+							}
+							title={
+								favorited()
+									? 'Remove from favorites'
+									: 'Add to favorites'
+							}
+						>
+							{favorited() ? (
+								<StarIcon fontSize="small" color="warning" />
+							) : (
+								<StarBorderIcon fontSize="small" />
+							)}
+						</IconButton>
+					</div>
+				</Show>
 				<Show when={!isParentNav()}>
 					<div class="fs-grid-item__more">
 						<IconButton
@@ -278,6 +339,23 @@ const FSListItem = (props) => {
 								<ListItemText>Open</ListItemText>
 							</MenuItem>
 
+							<Show when={canFavorite()}>
+								<MenuItem onClick={toggleFavorite}>
+									<ListItemIcon>
+										{favorited() ? (
+											<StarIcon fontSize="small" />
+										) : (
+											<StarBorderIcon fontSize="small" />
+										)}
+									</ListItemIcon>
+									<ListItemText>
+										{favorited()
+											? 'Remove from favorites'
+											: 'Add to favorites'}
+									</ListItemText>
+								</MenuItem>
+							</Show>
+
 							<MenuItem onClick={() => setIsInfoDialogOpened(true)}>
 								<ListItemIcon>
 									<InfoIcon fontSize="small" />
@@ -302,12 +380,28 @@ const FSListItem = (props) => {
 								<ListItemText>Rename</ListItemText>
 							</MenuItem>
 
+							<MenuItem onClick={copyTo}>
+								<ListItemIcon>
+									<ContentCopyIcon fontSize="small" />
+								</ListItemIcon>
+								<ListItemText>Copy to…</ListItemText>
+							</MenuItem>
+
 							<MenuItem onClick={moveTo}>
 								<ListItemIcon>
 									<DriveFileMoveIcon fontSize="small" />
 								</ListItemIcon>
-								<ListItemText>Move</ListItemText>
+								<ListItemText>Move to…</ListItemText>
 							</MenuItem>
+
+							<Show when={canShare()}>
+								<MenuItem onClick={openShare}>
+									<ListItemIcon>
+										<LinkIcon fontSize="small" />
+									</ListItemIcon>
+									<ListItemText>Share link…</ListItemText>
+								</MenuItem>
+							</Show>
 
 							<MenuItem onClick={openActionConfirmDialog}>
 								<ListItemIcon>
@@ -355,6 +449,15 @@ const FSListItem = (props) => {
 				file={props.fsElement}
 				isOpened={isInfoDialogOpened()}
 				onClose={() => setIsInfoDialogOpened(false)}
+			/>
+
+			<ShareLinkDialog
+				isOpened={isShareDialogOpened()}
+				storageId={props.storageId}
+				path={normalizedPath()}
+				itemName={props.fsElement.name}
+				isFile={props.fsElement.is_file}
+				onClose={() => setIsShareDialogOpened(false)}
 			/>
 
 			<Show when={isDownloading()}>

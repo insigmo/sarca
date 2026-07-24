@@ -8,8 +8,8 @@ use crate::{
 };
 
 use super::schemas::{
-    chats_from_updates, BotMe, ChatInfo, DetectedChat, GetChatBodySchema, GetMeBodySchema,
-    GetUpdatesBodySchema,
+    chats_from_updates, BotMe, ChatInfo, DetectedChat, GetChatBodySchema, GetChatMemberBodySchema,
+    GetMeBodySchema, GetUpdatesBodySchema,
 };
 
 pub struct TelegramTokenClient {
@@ -150,5 +150,39 @@ impl TelegramTokenClient {
             .or(body.result.first_name)
             .unwrap_or_else(|| chat_id.to_string());
         Ok(ChatInfo { title })
+    }
+
+    /// Returns Telegram member status (`creator`, `administrator`, `member`, …).
+    pub async fn get_chat_member_status(
+        &self,
+        chat_id: ChatId,
+        user_id: i64,
+    ) -> SarcaResult<String> {
+        let url = self.build_url("getChatMember");
+        let masked = self.mask_url(&url);
+        let response = reqwest::Client::new()
+            .get(&url)
+            .query(&[
+                ("chat_id", chat_id.to_string()),
+                ("user_id", user_id.to_string()),
+            ])
+            .send()
+            .await?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            tracing::error!(
+                target: "http_outbound",
+                "{}",
+                json!({ "status": status.as_u16(), "method": "GET", "url": masked, "body": { "chat_id": chat_id, "user_id": user_id }, "response": text })
+            );
+            return Err(SarcaError::TelegramAPIError(format!(
+                "getChatMember failed ({status}): {text}"
+            )));
+        }
+        let body: GetChatMemberBodySchema = serde_json::from_str(&text).map_err(|e| {
+            SarcaError::TelegramAPIError(format!("getChatMember parse error: {e}"))
+        })?;
+        Ok(body.result.status)
     }
 }

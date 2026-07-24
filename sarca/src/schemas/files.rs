@@ -47,6 +47,16 @@ pub struct RenameSchema {
 pub struct MoveSchema {
     pub path: String,
     pub destination_folder: String,
+    /// `replace` | `rename` when destination basename already exists.
+    pub on_conflict: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct CopySchema {
+    pub path: String,
+    pub destination_folder: String,
+    /// `replace` | `rename` when destination basename already exists.
+    pub on_conflict: Option<String>,
 }
 
 #[derive(Deserialize)]
