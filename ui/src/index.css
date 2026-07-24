@@ -308,6 +308,58 @@ a.default-link:hover {
 	text-align: center;
 }
 
+.auth-forgot-link {
+	align-self: flex-end;
+	font-size: 0.875rem;
+	margin-top: -4px;
+}
+
+.auth-divider {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	margin: 4px 0;
+	color: var(--sarca-ink-soft);
+	font-size: 0.8rem;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	text-transform: lowercase;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+	content: '';
+	flex: 1;
+	height: 1px;
+	background: var(--sarca-border);
+}
+
+.auth-divider span {
+	flex-shrink: 0;
+}
+
+.oauth-btn {
+	border-color: var(--sarca-border) !important;
+	font-weight: 700 !important;
+}
+
+.auth-message {
+	margin: 0;
+	color: var(--sarca-ink-soft);
+	font-size: 0.95rem;
+	line-height: 1.45;
+	text-align: center;
+}
+
+.auth-message--error {
+	color: var(--sarca-danger, #c62828);
+}
+
+.email-verify-banner__hint {
+	font-size: 0.8rem;
+	opacity: 0.85;
+}
+
 /* —— Page chrome —— */
 .page-header {
 	display: flex;
@@ -487,6 +539,7 @@ a.default-link:hover {
 	display: flex;
 	justify-content: flex-end;
 	align-items: center;
+	flex-wrap: wrap;
 	gap: 8px;
 	margin-bottom: 4px;
 }
@@ -612,8 +665,23 @@ a.default-link:hover {
 	transition: opacity 0.15s ease;
 }
 
+.fs-grid-item__star {
+	position: absolute;
+	top: 4px;
+	left: 2px;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+	z-index: 1;
+}
+
+.fs-grid-item__star--active {
+	opacity: 1;
+}
+
 .fs-grid-item:hover .fs-grid-item__more,
-.fs-grid-item:focus-within .fs-grid-item__more {
+.fs-grid-item:focus-within .fs-grid-item__more,
+.fs-grid-item:hover .fs-grid-item__star,
+.fs-grid-item:focus-within .fs-grid-item__star {
 	opacity: 1;
 }
 
@@ -1171,6 +1239,14 @@ a.default-link:hover {
 
 	.fs-grid-item__more {
 		opacity: 0.85;
+	}
+
+	.fs-grid-item__star {
+		opacity: 0.85;
+	}
+
+	.fs-grid-item__star--active {
+		opacity: 1;
 	}
 }
 
@@ -1948,4 +2024,40 @@ a.default-link:hover {
 	.file-viewer__title {
 		font-size: 0.95rem;
 	}
+}
+
+/* Public share guest page */
+.public-share {
+	min-height: 100vh;
+	padding: 20px 16px 48px;
+	box-sizing: border-box;
+}
+
+.public-share__header {
+	max-width: 960px;
+	margin: 0 auto 20px;
+	padding: 14px 18px;
+}
+
+.public-share__main {
+	max-width: 960px;
+	margin: 0 auto;
+}
+
+.public-share__center {
+	display: grid;
+	place-items: center;
+	min-height: min(60vh, 480px);
+}
+
+.public-share__card {
+	width: min(100%, 420px);
+	padding: 28px 24px;
+}
+
+.public-share__file,
+.public-share__folder {
+	width: 100%;
+	padding: 24px 20px;
+	box-sizing: border-box;
 }

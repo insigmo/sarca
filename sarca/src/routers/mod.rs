@@ -1,7 +1,11 @@
 pub mod auth;
+pub mod favorites;
 pub mod files;
+pub mod public_shares;
+pub mod recent;
 pub mod settings;
 pub mod setup;
+pub mod shares;
 pub mod storage_workers;
 pub mod storages;
 pub mod trash;

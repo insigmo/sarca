@@ -1,6 +1,10 @@
 import createLocalStore from '../../libs'
 
-import apiRequest, { apiMultipartRequest, API_BASE } from './request'
+import apiRequest, {
+	apiMultipartRequest,
+	publicApiRequest,
+	API_BASE,
+} from './request'
 import { alertStore } from '../components/AlertStack'
 
 /////////////////////////////////////////////////////////////
@@ -33,6 +37,21 @@ const register = async (email, password) => {
  * @typedef {Object} TokenData
  * @property {string} access_token
  * @property {string} refresh_token
+ * @property {string} [email]
+ * @property {boolean} [email_verified]
+ */
+
+/**
+ * @typedef {Object} AuthProviders
+ * @property {boolean} google
+ * @property {boolean} github
+ * @property {boolean} [smtp]
+ */
+
+/**
+ * @typedef {Object} AuthMe
+ * @property {string} email
+ * @property {boolean} email_verified
  */
 
 /**
@@ -58,6 +77,117 @@ const refresh = async (refresh_token) => {
 		refresh_token,
 	})
 }
+
+/**
+ * Which OAuth/SMTP features the server has configured.
+ * Missing endpoint → all disabled (no toast).
+ * @returns {Promise<AuthProviders>}
+ */
+const getProviders = async () => {
+	try {
+		const data = await apiRequest(
+			'/auth/providers',
+			'get',
+			undefined,
+			undefined,
+			false,
+			false,
+			true,
+		)
+		return {
+			google: !!data?.google,
+			github: !!data?.github,
+			smtp: !!data?.smtp,
+		}
+	} catch {
+		return { google: false, github: false, smtp: false }
+	}
+}
+
+/**
+ * @returns {Promise<AuthMe>}
+ */
+const me = async () => {
+	return await apiRequest('/auth/me', 'get', getAuthToken())
+}
+
+/**
+ * Soft-fail variant for app shell (banner). No toast on missing endpoint.
+ * @returns {Promise<AuthMe|null>}
+ */
+const meSilent = async () => {
+	try {
+		return await apiRequest(
+			'/auth/me',
+			'get',
+			getAuthToken(),
+			undefined,
+			false,
+			false,
+			true,
+		)
+	} catch {
+		return null
+	}
+}
+
+/**
+ * Resend verification email (auth required).
+ * @returns {Promise<void>}
+ */
+const requestVerify = async () => {
+	return await apiRequest('/auth/verify/request', 'post', getAuthToken())
+}
+
+/**
+ * Consume email verification token.
+ * @param {string} token
+ * @returns {Promise<void>}
+ */
+const verifyEmail = async (token) => {
+	return await apiRequest('/auth/verify', 'post', undefined, { token })
+}
+
+/**
+ * Always 204 when backend is present (no email enumeration).
+ * @param {string} email
+ * @returns {Promise<void>}
+ */
+const forgotPassword = async (email) => {
+	return await apiRequest('/auth/password/forgot', 'post', undefined, {
+		email,
+	})
+}
+
+/**
+ * @param {string} token
+ * @param {string} new_password
+ * @returns {Promise<void>}
+ */
+const resetPassword = async (token, new_password) => {
+	return await apiRequest('/auth/password/reset', 'post', undefined, {
+		token,
+		new_password,
+	})
+}
+
+/**
+ * Exchange OAuth one-time code for JWTs.
+ * @param {string} code
+ * @returns {Promise<TokenData>}
+ */
+const exchangeOAuth = async (code) => {
+	return await apiRequest('/auth/oauth/exchange', 'post', undefined, {
+		code,
+	})
+}
+
+/**
+ * Browser redirect URL for OAuth start (full navigation).
+ * @param {'google'|'github'} provider
+ * @returns {string}
+ */
+const oauthStartUrl = (provider) => `${API_BASE}/auth/oauth/${provider}/start`
 
 /////////////////////////////////////////////////////////////
 ////  STORAGES
@@ -381,6 +511,11 @@ const uploadFile = async (storage_id, path, file, onProgress, options = {}) => {
  * @property {boolean} is_file
  * @property {number} size
  * @property {boolean} has_thumb
+ * @property {string|number} [mtime]
+ * @property {string|number} [modified_at]
+ * @property {string|number} [updated_at]
+ * @property {string|number} [date_modified]
+ * @property {boolean} [is_favorite]
  */
 
 /**
@@ -561,6 +696,389 @@ const setTrashSettings = async (retention_days) => {
 }
 
 /////////////////////////////////////////////////////////////
+////  FAVORITES
+/////////////////////////////////////////////////////////////
+
+/**
+ * @param {string} storage_id
+ * @param {{ quiet?: boolean }} [options] When quiet, skip toast (e.g. background path sync)
+ * @returns {Promise<import("./index").FSElement[]>}
+ */
+const listFavorites = async (storage_id, options = {}) => {
+	try {
+		return await apiRequest(
+			`/storages/${storage_id}/favorites`,
+			'get',
+			getAuthToken(),
+			undefined,
+			false,
+			false,
+			true,
+		)
+	} catch (err) {
+		if (!options.quiet) {
+			const msg =
+				err.status === 404
+					? 'Favorites are not available on this server yet'
+					: err.message || 'Failed to load favorites'
+			alertStore.addAlert(msg, 'error')
+		}
+		throw err
+	}
+}
+
+/**
+ * Star a file (idempotent). Files only — not folders.
+ * @param {string} storage_id
+ * @param {string} path
+ */
+const addFavorite = async (storage_id, path) => {
+	try {
+		await apiRequest(
+			`/storages/${storage_id}/favorites`,
+			'put',
+			getAuthToken(),
+			{ path },
+			false,
+			false,
+			true,
+		)
+	} catch (err) {
+		const msg =
+			err.status === 404
+				? 'Favorites are not available on this server yet'
+				: err.message || 'Failed to star file'
+		alertStore.addAlert(msg, 'error')
+		throw err
+	}
+}
+
+/**
+ * Unstar a file.
+ * @param {string} storage_id
+ * @param {string} path
+ */
+const removeFavorite = async (storage_id, path) => {
+	try {
+		await apiRequest(
+			`/storages/${storage_id}/favorites/${encodeFilePath(path)}`,
+			'delete',
+			getAuthToken(),
+			undefined,
+			false,
+			false,
+			true,
+		)
+	} catch (err) {
+		const msg =
+			err.status === 404
+				? 'Favorites are not available on this server yet'
+				: err.message || 'Failed to unstar file'
+		alertStore.addAlert(msg, 'error')
+		throw err
+	}
+}
+
+/////////////////////////////////////////////////////////////
+////  RECENT
+/////////////////////////////////////////////////////////////
+
+/**
+ * @param {string} storage_id
+ * @returns {Promise<import("./index").FSElement[]>}
+ */
+const listRecent = async (storage_id) => {
+	try {
+		return await apiRequest(
+			`/storages/${storage_id}/recent`,
+			'get',
+			getAuthToken(),
+			undefined,
+			false,
+			false,
+			true,
+		)
+	} catch (err) {
+		const msg =
+			err.status === 404
+				? 'Recent files are not available on this server yet'
+				: err.message || 'Failed to load recent files'
+		alertStore.addAlert(msg, 'error')
+		throw err
+	}
+}
+
+/**
+ * Record a preview open (fire-and-forget friendly). Ignores errors for UX.
+ * @param {string} storage_id
+ * @param {string} path
+ */
+const recordRecent = async (storage_id, path) => {
+	try {
+		await apiRequest(
+			`/storages/${storage_id}/recent`,
+			'post',
+			getAuthToken(),
+			{ path },
+			false,
+			false,
+			true,
+		)
+	} catch {
+		/* ignore — preview UX must not depend on recent tracking */
+	}
+}
+
+/////////////////////////////////////////////////////////////
+////  SHARE LINKS (authenticated)
+/////////////////////////////////////////////////////////////
+
+/**
+ * @typedef {Object} ShareLink
+ * @property {string} id
+ * @property {string} token
+ * @property {string} url_path
+ * @property {string} path
+ * @property {string|null} expires_at
+ * @property {boolean} has_password
+ * @property {string} created_at
+ */
+
+/**
+ * Absolute guest URL for a share token.
+ * @param {string} token
+ * @param {string} [urlPath] From API (`/s/...`); falls back to `/s/{token}`
+ */
+const shareAbsoluteUrl = (token, urlPath) => {
+	const path =
+		urlPath && String(urlPath).startsWith('/')
+			? urlPath
+			: `/s/${encodeURIComponent(token)}`
+	return `${window.location.origin}${path}`
+}
+
+/**
+ * @param {string} storage_id
+ * @param {{ path: string, expires_at?: string|null, password?: string|null }} body
+ * @returns {Promise<ShareLink>}
+ */
+const createShare = async (storage_id, body) => {
+	try {
+		return await apiRequest(
+			`/storages/${storage_id}/shares`,
+			'post',
+			getAuthToken(),
+			body,
+			false,
+			false,
+			true,
+		)
+	} catch (err) {
+		const msg =
+			err.status === 404
+				? 'Share links are not available on this server yet'
+				: err.message || 'Failed to create share link'
+		alertStore.addAlert(msg, 'error')
+		throw err
+	}
+}
+
+/**
+ * @param {string} storage_id
+ * @returns {Promise<ShareLink[]>}
+ */
+const listShares = async (storage_id) => {
+	try {
+		const data = await apiRequest(
+			`/storages/${storage_id}/shares`,
+			'get',
+			getAuthToken(),
+			undefined,
+			false,
+			false,
+			true,
+		)
+		return Array.isArray(data) ? data : data?.shares || []
+	} catch (err) {
+		const msg =
+			err.status === 404
+				? 'Share links are not available on this server yet'
+				: err.message || 'Failed to list share links'
+		alertStore.addAlert(msg, 'error')
+		throw err
+	}
+}
+
+/**
+ * @param {string} storage_id
+ * @param {string} share_id
+ */
+const revokeShare = async (storage_id, share_id) => {
+	try {
+		await apiRequest(
+			`/storages/${storage_id}/shares/${share_id}`,
+			'delete',
+			getAuthToken(),
+			undefined,
+			false,
+			false,
+			true,
+		)
+	} catch (err) {
+		const msg =
+			err.status === 404
+				? 'Share links are not available on this server yet'
+				: err.message || 'Failed to revoke share link'
+		alertStore.addAlert(msg, 'error')
+		throw err
+	}
+}
+
+/////////////////////////////////////////////////////////////
+////  PUBLIC SHARES (no JWT; cookies for unlock)
+/////////////////////////////////////////////////////////////
+
+/**
+ * @typedef {Object} PublicShareMeta
+ * @property {string} path
+ * @property {string} name
+ * @property {boolean} is_file
+ * @property {number} [size]
+ * @property {boolean} has_password
+ */
+
+/**
+ * Encode a relative path under a public share (preserves trailing /).
+ * @param {string} path
+ */
+const encodeShareRelPath = (path) => {
+	const raw = String(path || '')
+	const trailing = raw.endsWith('/')
+	const encoded = raw
+		.split('/')
+		.filter((p) => p.length)
+		.map(encodeURIComponent)
+		.join('/')
+	return trailing && encoded ? `${encoded}/` : encoded
+}
+
+/**
+ * Public share file URL path. Empty relPath must NOT end with `/` —
+ * Axum maps `/download` and `/download/` differently (`/` → 404).
+ * @param {string} token
+ * @param {'download' | 'inline' | 'thumb'} kind
+ * @param {string} [relPath]
+ */
+const publicShareFilePath = (token, kind, relPath = '') => {
+	const base = `/public/shares/${encodeURIComponent(token)}/${kind}`
+	const suffix = encodeShareRelPath(relPath)
+	return suffix ? `${base}/${suffix}` : base
+}
+
+/**
+ * @param {string} token
+ * @returns {Promise<PublicShareMeta>}
+ */
+const getPublicShare = async (token) => {
+	return await publicApiRequest(
+		`/public/shares/${encodeURIComponent(token)}`,
+		'get',
+		undefined,
+		false,
+		true,
+	)
+}
+
+/**
+ * @param {string} token
+ * @param {string} password
+ */
+const unlockPublicShare = async (token, password) => {
+	return await publicApiRequest(
+		`/public/shares/${encodeURIComponent(token)}/unlock`,
+		'post',
+		{ password },
+		false,
+		true,
+	)
+}
+
+/**
+ * @param {string} token
+ * @param {string} [relPath] Relative to share root
+ * @returns {Promise<import("./index").FSElement[]>}
+ */
+const getPublicShareTree = async (token, relPath = '') => {
+	const params = new URLSearchParams()
+	if (relPath) params.set('path', relPath)
+	const qs = params.toString()
+	return await publicApiRequest(
+		`/public/shares/${encodeURIComponent(token)}/tree${qs ? `?${qs}` : ''}`,
+		'get',
+		undefined,
+		false,
+		true,
+	)
+}
+
+/**
+ * @param {string} token
+ * @param {string} [relPath]
+ * @returns {Promise<Blob>}
+ */
+const downloadPublicShare = async (token, relPath = '') => {
+	const response = await publicApiRequest(
+		publicShareFilePath(token, 'download', relPath),
+		'get',
+		undefined,
+		true,
+		true,
+	)
+	return await response.blob()
+}
+
+/**
+ * @param {string} token
+ * @returns {Promise<Blob>}
+ */
+const downloadPublicShareZip = async (token) => {
+	const response = await publicApiRequest(
+		`/public/shares/${encodeURIComponent(token)}/download_zip`,
+		'get',
+		undefined,
+		true,
+		true,
+	)
+	return await response.blob()
+}
+
+/**
+ * @param {string} token
+ * @param {string} relPath
+ * @returns {Promise<Blob>}
+ */
+const thumbPublicShare = async (token, relPath) => {
+	const response = await publicApiRequest(
+		publicShareFilePath(token, 'thumb', relPath),
+		'get',
+		undefined,
+		true,
+		true,
+	)
+	return await response.blob()
+}
+
+/**
+ * Cookie-auth URL for `<video>` / `<img>` / `<iframe>` on a public share.
+ * @param {string} token
+ * @param {string} [relPath]
+ * @returns {string}
+ */
+const getPublicInlineMediaUrl = (token, relPath = '') => {
+	return `${API_BASE}${publicShareFilePath(token, 'inline', relPath)}`
+}
+
+/////////////////////////////////////////////////////////////
 ////  SETUP WIZARD
 /////////////////////////////////////////////////////////////
 
@@ -612,7 +1130,7 @@ const validateBot = async (token) => {
 /**
  * @param {string} token
  * @param {number[]} [exclude_chat_ids]
- * @returns {Promise<{ found: boolean, chat_id?: number, title?: string }>}
+ * @returns {Promise<{ found: boolean, chat_id?: number, title?: string, hint?: string }>}
  */
 const pollChannel = async (token, exclude_chat_ids = []) => {
 	return await apiRequest('/setup/channel/poll', 'post', getAuthToken(), {
@@ -669,18 +1187,67 @@ const rename = async (storage_id, path, new_name) => {
 }
 
 /**
- *
  * @param {string} storage_id
  * @param {string} path
  * @param {string} destination_folder
+ * @param {'replace' | 'rename'} [on_conflict]
  */
-const moveFile = async (storage_id, path, destination_folder) => {
-	await apiRequest(
-		`/storages/${storage_id}/files/move`,
-		'post',
-		getAuthToken(),
-		{ path, destination_folder },
-	)
+const moveFile = async (storage_id, path, destination_folder, on_conflict) => {
+	const body = { path, destination_folder }
+	if (on_conflict) body.on_conflict = on_conflict
+	try {
+		await apiRequest(
+			`/storages/${storage_id}/files/move`,
+			'post',
+			getAuthToken(),
+			body,
+			false,
+			false,
+			true,
+		)
+	} catch (err) {
+		if (err.status === 409 && !on_conflict) {
+			throw err
+		}
+		const msg =
+			err.status === 404
+				? 'Move is not available on this server yet'
+				: err.message || 'Failed to move'
+		alertStore.addAlert(msg, 'error')
+		throw err
+	}
+}
+
+/**
+ * @param {string} storage_id
+ * @param {string} path
+ * @param {string} destination_folder
+ * @param {'replace' | 'rename'} [on_conflict]
+ */
+const copyFile = async (storage_id, path, destination_folder, on_conflict) => {
+	const body = { path, destination_folder }
+	if (on_conflict) body.on_conflict = on_conflict
+	try {
+		await apiRequest(
+			`/storages/${storage_id}/files/copy`,
+			'post',
+			getAuthToken(),
+			body,
+			false,
+			false,
+			true,
+		)
+	} catch (err) {
+		if (err.status === 409 && !on_conflict) {
+			throw err
+		}
+		const msg =
+			err.status === 404
+				? 'Copy is not available on this server yet'
+				: err.message || 'Failed to copy'
+		alertStore.addAlert(msg, 'error')
+		throw err
+	}
 }
 
 /////////////////////////////////////////////////////////////
@@ -694,6 +1261,15 @@ const API = {
 	auth: {
 		login,
 		refresh,
+		getProviders,
+		me,
+		meSilent,
+		requestVerify,
+		verifyEmail,
+		forgotPassword,
+		resetPassword,
+		exchangeOAuth,
+		oauthStartUrl,
 	},
 	storages: {
 		createStorage,
@@ -729,9 +1305,30 @@ const API = {
 		restoreTrash,
 		deleteForever,
 		emptyTrash,
+		listFavorites,
+		addFavorite,
+		removeFavorite,
+		listRecent,
+		recordRecent,
 		search,
 		rename,
 		moveFile,
+		copyFile,
+	},
+	shares: {
+		createShare,
+		listShares,
+		revokeShare,
+		shareAbsoluteUrl,
+	},
+	publicShares: {
+		getPublicShare,
+		unlockPublicShare,
+		getPublicShareTree,
+		downloadPublicShare,
+		downloadPublicShareZip,
+		thumbPublicShare,
+		getPublicInlineMediaUrl,
 	},
 	settings: {
 		getTrashSettings,
