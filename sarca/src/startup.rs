@@ -299,6 +299,103 @@ pub async fn init_db(db: &PgPool) {
         END;
         $$;
     ",
+        // --- favorites + recent (Wave 2) ---
+        "
+        CREATE TABLE IF NOT EXISTS favorites (
+            user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            storage_id UUID NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
+            file_id    UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_id, file_id)
+        );
+    ",
+        "
+        CREATE INDEX IF NOT EXISTS favorites_user_storage_idx
+          ON favorites (user_id, storage_id);
+    ",
+        "
+        CREATE TABLE IF NOT EXISTS recent_files (
+            user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            storage_id  UUID NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
+            file_id     UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            viewed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (user_id, file_id)
+        );
+    ",
+        "
+        CREATE INDEX IF NOT EXISTS recent_user_storage_viewed_idx
+          ON recent_files (user_id, storage_id, viewed_at DESC);
+    ",
+        // --- public share links (Wave 3) ---
+        "
+        CREATE TABLE IF NOT EXISTS share_links (
+            id            UUID PRIMARY KEY,
+            token         TEXT NOT NULL UNIQUE,
+            storage_id    UUID NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
+            path          TEXT NOT NULL,
+            created_by    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expires_at    TIMESTAMPTZ NULL,
+            password_hash TEXT NULL,
+            revoked_at    TIMESTAMPTZ NULL
+        );
+    ",
+        "
+        CREATE INDEX IF NOT EXISTS share_links_storage_path_idx
+          ON share_links (storage_id, path);
+    ",
+        "
+        CREATE INDEX IF NOT EXISTS share_links_created_by_idx
+          ON share_links (created_by);
+    ",
+        // --- auth: email verify / password reset / OAuth (Wave 4) ---
+        // Add email_verified_at only once; backfill existing users as verified.
+        r#"
+        DO $$
+        BEGIN
+          IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'users'
+              AND column_name = 'email_verified_at'
+          ) THEN
+            ALTER TABLE users ADD COLUMN email_verified_at TIMESTAMPTZ;
+            UPDATE users SET email_verified_at = NOW() WHERE email_verified_at IS NULL;
+          END IF;
+        END $$;
+    "#,
+        "
+        ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+    ",
+        "
+        CREATE TABLE IF NOT EXISTS email_tokens (
+            id         UUID PRIMARY KEY,
+            user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            purpose    TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            expires_at TIMESTAMPTZ NOT NULL,
+            used_at    TIMESTAMPTZ NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    ",
+        "
+        CREATE INDEX IF NOT EXISTS email_tokens_user_purpose_idx
+          ON email_tokens (user_id, purpose);
+    ",
+        "
+        CREATE TABLE IF NOT EXISTS oauth_accounts (
+            id               UUID PRIMARY KEY,
+            user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            provider         TEXT NOT NULL,
+            provider_user_id TEXT NOT NULL,
+            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (provider, provider_user_id)
+        );
+    ",
+        "
+        CREATE INDEX IF NOT EXISTS oauth_accounts_user_idx
+          ON oauth_accounts (user_id);
+    ",
     ] {
         sqlx::query(statement)
             .execute(&mut *transaction)
@@ -316,7 +413,8 @@ pub async fn init_db(db: &PgPool) {
 #[inline]
 pub async fn create_superuser(db: &PgPool, config: &Config) {
     let password_hash = PasswordManager::generate(&config.superuser_pass).unwrap();
-    let user = InDBUser::new(config.superuser_email.clone(), password_hash.clone());
+    let mut user = InDBUser::new_password(config.superuser_email.clone(), password_hash.clone());
+    user.email_verified_at = Some(chrono::Utc::now());
     let result = UsersRepository::new(&db).create(user).await;
 
     match result {

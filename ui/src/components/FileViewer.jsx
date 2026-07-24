@@ -35,6 +35,8 @@ const formatTime = (sec) => {
  * @property {string} storageId
  * @property {() => void} onClose
  * @property {(file: import("../api").FSElement) => void} [onNavigate]
+ * @property {(path: string) => string} [resolveInlineUrl] Override authenticated inline URL (public shares)
+ * @property {(path: string) => Promise<Blob>} [resolveDownload] Override authenticated download (public shares)
  */
 
 /**
@@ -130,6 +132,24 @@ const FileViewer = (props) => {
 		props.onNavigate(viewableFiles()[currentIndex() + 1])
 	}
 
+	const inlineUrlFor = (path) =>
+		props.resolveInlineUrl
+			? props.resolveInlineUrl(path)
+			: API.files.getInlineMediaUrl(props.storageId, path)
+
+	const downloadBlobFor = (path) =>
+		props.resolveDownload
+			? props.resolveDownload(path)
+			: API.files.download(props.storageId, path)
+
+	createEffect(() => {
+		if (!props.open || !props.file?.is_file || !props.storageId) return
+		if (props.resolveDownload || props.resolveInlineUrl) return
+		const path = props.file.path
+		if (!path) return
+		API.files.recordRecent(props.storageId, path)
+	})
+
 	const clearHideChromeTimer = () => {
 		if (hideChromeTimer != null) {
 			clearTimeout(hideChromeTimer)
@@ -206,7 +226,7 @@ const FileViewer = (props) => {
 			if (!src) return
 			fetch(src, {
 				headers: { Range: 'bytes=0-1023' },
-				credentials: 'same-origin',
+				credentials: 'include',
 			}).catch(() => {})
 		}
 
@@ -316,7 +336,7 @@ const FileViewer = (props) => {
 		if (['image', 'video', 'audio', 'pdf'].includes(k)) {
 			setLoading(false)
 			setFirstChunkLoading(k === 'video')
-			setMediaUrl(API.files.getInlineMediaUrl(props.storageId, file.path))
+			setMediaUrl(inlineUrlFor(file.path))
 			if (k === 'video') scheduleHideChrome()
 			return
 		}
@@ -338,7 +358,7 @@ const FileViewer = (props) => {
 
 		;(async () => {
 			try {
-				const blob = await API.files.download(props.storageId, file.path)
+				const blob = await downloadBlobFor(file.path)
 				if (cancelled) return
 
 				if (k === 'markdown') {
@@ -401,7 +421,7 @@ const FileViewer = (props) => {
 		if (!props.file || isDownloading()) return
 		try {
 			setIsDownloading(true)
-			const blob = await API.files.download(props.storageId, props.file.path)
+			const blob = await downloadBlobFor(props.file.path)
 			const href = URL.createObjectURL(blob)
 			const a = Object.assign(document.createElement('a'), {
 				href,

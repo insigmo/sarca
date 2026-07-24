@@ -441,7 +441,7 @@ impl<'d> FilesRepository<'d> {
         let rows: Vec<(i64, Option<i64>, Uuid)> = sqlx::query_as(
             format!(
                 "
-                SELECT sc.chat_id, f.thumb_telegram_message_id, f.storage_id
+                SELECT DISTINCT sc.chat_id, f.thumb_telegram_message_id, f.storage_id
                 FROM {FILES_TABLE} f
                 JOIN storage_channels sc ON sc.storage_id = f.storage_id
                 WHERE f.id = ANY($1)
@@ -466,6 +466,38 @@ impl<'d> FilesRepository<'d> {
             .collect())
     }
 
+    /// True if any remaining file (live or trashed) still uses this thumb message
+    /// on a channel with `chat_id`.
+    pub async fn thumb_message_still_referenced(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+    ) -> SarcaResult<bool> {
+        let row: (bool,) = sqlx::query_as(
+            format!(
+                "
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM {FILES_TABLE} f
+                    JOIN storage_channels sc ON sc.storage_id = f.storage_id
+                    WHERE sc.chat_id = $1
+                      AND f.thumb_telegram_message_id = $2
+                )
+                "
+            )
+            .as_str(),
+        )
+        .bind(chat_id)
+        .bind(message_id)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+        Ok(row.0)
+    }
+
     pub async fn list_chunks_of_file(&self, file_id: Uuid) -> SarcaResult<Vec<FileChunk>> {
         sqlx::query_as(format!("SELECT * FROM {CHUNKS_TABLE} WHERE file_id = $1").as_str())
             .bind(file_id)
@@ -477,15 +509,6 @@ impl<'d> FilesRepository<'d> {
     pub async fn set_as_uploaded(&self, file_id: Uuid) -> SarcaResult<()> {
         sqlx::query(format!("UPDATE {FILES_TABLE} SET is_uploaded = true WHERE id = $1").as_str())
             .bind(file_id)
-            .execute(self.db)
-            .await
-            .map_err(|_| SarcaError::Unknown)
-            .map(|_| ())
-    }
-
-    pub async fn delete_with_folders(&self, id: Uuid) -> SarcaResult<()> {
-        sqlx::query(format!("DELETE FROM {FILES_TABLE} WHERE id = $1").as_str())
-            .bind(id)
             .execute(self.db)
             .await
             .map_err(|_| SarcaError::Unknown)
@@ -676,25 +699,6 @@ impl<'d> FilesRepository<'d> {
             .map_err(|_| SarcaError::Unknown)?;
         }
         Ok(())
-    }
-
-    pub async fn cleanup_stale_uploads(&self, older_than_minutes: i64) -> SarcaResult<u64> {
-        let result = sqlx::query(&format!(
-            "
-            DELETE FROM {FILES_TABLE}
-            WHERE is_uploaded = false
-              AND deleted_at IS NULL
-              AND path NOT LIKE '%/'
-            "
-        ))
-        // Note: files table has no created_at; delete all unfinished uploads.
-        // older_than_minutes reserved for future schema; currently cleans all stale rows.
-        .execute(self.db)
-        .await
-        .map_err(|_| SarcaError::Unknown)?;
-
-        let _ = older_than_minutes;
-        Ok(result.rows_affected())
     }
 
     /// Directory listing for trashed items under `prefix` (without leading/trailing slashes).
@@ -1059,34 +1063,72 @@ impl<'d> FilesRepository<'d> {
         Ok(row.0)
     }
 
-    /// Next free live path for rename-on-conflict (`name (n).ext`).
+    /// True if a live file `path` or folder `path/` occupies this basename.
+    pub async fn live_basename_taken(&self, path: &str, storage_id: Uuid) -> SarcaResult<bool> {
+        let file_path = path.trim_end_matches('/');
+        if self.live_path_exists(file_path, storage_id).await? {
+            return Ok(true);
+        }
+        let folder_path = format!("{file_path}/");
+        self.live_path_exists(&folder_path, storage_id).await
+    }
+
+    /// Next free live path for rename-on-conflict (`name (n).ext` or `name (n)/`).
+    ///
+    /// Folder paths must end with `/`. If a non-slash path is passed but only the
+    /// folder form is taken, treat it as a folder rename so we never return a
+    /// "free" file path that collides with `path/` on restore.
     pub async fn next_available_live_path(
         &self,
         path: &str,
         storage_id: Uuid,
     ) -> SarcaResult<String> {
-        if !self.live_path_exists(path, storage_id).await? {
-            return Ok(path.to_string());
+        let as_folder = path.ends_with('/')
+            || (!path.is_empty()
+                && self
+                    .live_path_exists(&format!("{}/", path.trim_end_matches('/')), storage_id)
+                    .await?
+                && !self
+                    .live_path_exists(path.trim_end_matches('/'), storage_id)
+                    .await?);
+
+        let normalized = if as_folder {
+            let stem = path.trim_end_matches('/');
+            format!("{stem}/")
+        } else {
+            path.trim_end_matches('/').to_string()
+        };
+
+        if !self.live_basename_taken(&normalized, storage_id).await? {
+            return Ok(normalized);
         }
 
-        let (stem, suffix) = match path.rsplit_once('.') {
-            Some((stem, ext)) if !stem.contains('/') || stem.rsplit('/').next().is_some() => {
-                // Prefer last path segment for extension split
-                if let Some((dir, name)) = path.rsplit_once('/') {
-                    match name.rsplit_once('.') {
-                        Some((n, e)) => (format!("{dir}/{n}"), format!(".{e}")),
-                        None => (path.to_string(), String::new()),
-                    }
-                } else {
-                    (stem.to_string(), format!(".{ext}"))
+        if as_folder {
+            let stem = normalized.trim_end_matches('/');
+            for i in 1..10_000 {
+                let candidate = format!("{stem} ({i})/");
+                if !self.live_basename_taken(&candidate, storage_id).await? {
+                    return Ok(candidate);
                 }
             }
-            _ => (path.to_string(), String::new()),
+            return Err(SarcaError::Unknown);
+        }
+
+        let (stem, suffix) = if let Some((dir, name)) = normalized.rsplit_once('/') {
+            match name.rsplit_once('.') {
+                Some((n, e)) => (format!("{dir}/{n}"), format!(".{e}")),
+                None => (normalized.clone(), String::new()),
+            }
+        } else {
+            match normalized.rsplit_once('.') {
+                Some((stem, ext)) => (stem.to_string(), format!(".{ext}")),
+                None => (normalized.clone(), String::new()),
+            }
         };
 
         for i in 1..10_000 {
             let candidate = format!("{stem} ({i}){suffix}");
-            if !self.live_path_exists(&candidate, storage_id).await? {
+            if !self.live_basename_taken(&candidate, storage_id).await? {
                 return Ok(candidate);
             }
         }
@@ -1156,6 +1198,122 @@ impl<'d> FilesRepository<'d> {
             SarcaError::Unknown
         })?;
 
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// Resolve a live path to its canonical form (add trailing `/` when it is a folder).
+    pub async fn canonicalize_live_path(
+        &self,
+        storage_id: Uuid,
+        path: &str,
+    ) -> SarcaResult<String> {
+        if path.ends_with('/') {
+            if self.live_path_exists(path, storage_id).await? {
+                return Ok(path.to_string());
+            }
+            return Err(SarcaError::DoesNotExist("file".to_string()));
+        }
+
+        if self.live_path_exists(path, storage_id).await? {
+            return Ok(path.to_string());
+        }
+
+        let folder = format!("{path}/");
+        if self.live_path_exists(&folder, storage_id).await?
+            || !self.list_live_ids_at_path(storage_id, &folder).await?.is_empty()
+        {
+            return Ok(folder);
+        }
+
+        Err(SarcaError::DoesNotExist("file".to_string()))
+    }
+
+    /// All live rows under a folder prefix (including the folder marker and nested folders).
+    pub async fn list_live_under(
+        &self,
+        storage_id: Uuid,
+        folder_prefix: &str,
+    ) -> SarcaResult<Vec<File>> {
+        sqlx::query_as(
+            format!(
+                "
+                SELECT *
+                FROM {FILES_TABLE}
+                WHERE storage_id = $1
+                  AND deleted_at IS NULL
+                  AND (path = $2 OR path LIKE $2 || '%')
+                ORDER BY path
+                "
+            )
+            .as_str(),
+        )
+        .bind(storage_id)
+        .bind(folder_prefix)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })
+    }
+
+    /// Insert a live file row copying size/flags/thumb/chunk size from `source`.
+    pub async fn insert_cloned_file(
+        &self,
+        source: &File,
+        dest_path: &str,
+    ) -> SarcaResult<File> {
+        let id = Uuid::new_v4();
+        sqlx::query_as(
+            format!(
+                "
+                INSERT INTO {FILES_TABLE} (
+                    id, path, size, storage_id, is_uploaded,
+                    thumb_telegram_file_id, thumb_telegram_message_id, chunk_size_bytes
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING *
+                "
+            )
+            .as_str(),
+        )
+        .bind(id)
+        .bind(dest_path)
+        .bind(source.size)
+        .bind(source.storage_id)
+        .bind(source.is_uploaded)
+        .bind(&source.thumb_telegram_file_id)
+        .bind(source.thumb_telegram_message_id)
+        .bind(source.chunk_size_bytes)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| match e {
+            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+                SarcaError::AlreadyExists("File with such name".to_string())
+            }
+            _ => {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            }
+        })
+    }
+
+    /// Ids of unfinished live uploads (for refcount-aware hard purge).
+    pub async fn list_stale_upload_ids(&self) -> SarcaResult<Vec<Uuid>> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(&format!(
+            "
+            SELECT id FROM {FILES_TABLE}
+            WHERE is_uploaded = false
+              AND deleted_at IS NULL
+              AND path NOT LIKE '%/'
+            "
+        ))
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 }

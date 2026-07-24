@@ -57,6 +57,9 @@ pub struct ChannelPollResultSchema {
     pub found: bool,
     pub chat_id: Option<ChatId>,
     pub title: Option<String>,
+    /// Present when a chat was seen but the bot is not an admin (or similar).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

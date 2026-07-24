@@ -263,7 +263,7 @@ impl<'d> ChunkReplicasRepository<'d> {
         let rows: Vec<(ChatId, Option<i64>, Uuid)> = sqlx::query_as(
             format!(
                 "
-                SELECT sc.chat_id, cr.telegram_message_id, sc.storage_id
+                SELECT DISTINCT sc.chat_id, cr.telegram_message_id, sc.storage_id
                 FROM {TABLE} cr
                 JOIN file_chunks fc ON fc.id = cr.chunk_id
                 JOIN storage_channels sc ON sc.id = cr.channel_id
@@ -287,5 +287,61 @@ impl<'d> ChunkReplicasRepository<'d> {
                 message_id.map(|mid| (chat_id, mid, storage_id))
             })
             .collect())
+    }
+
+    /// All replicas for chunks of `file_id` (any status), for metadata clone.
+    pub async fn list_for_file(&self, file_id: Uuid) -> SarcaResult<Vec<ChunkReplica>> {
+        sqlx::query_as(
+            format!(
+                "
+                SELECT cr.id, cr.chunk_id, cr.channel_id,
+                       cr.telegram_file_id, cr.telegram_message_id, cr.status
+                FROM {TABLE} cr
+                JOIN file_chunks fc ON fc.id = cr.chunk_id
+                WHERE fc.file_id = $1
+                ORDER BY fc.position, cr.channel_id
+                "
+            )
+            .as_str(),
+        )
+        .bind(file_id)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })
+    }
+
+    /// True if any remaining chunk replica still points at this Telegram message
+    /// (including trashed files' metadata).
+    pub async fn message_still_referenced(
+        &self,
+        chat_id: ChatId,
+        message_id: i64,
+    ) -> SarcaResult<bool> {
+        let row: (bool,) = sqlx::query_as(
+            format!(
+                "
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM {TABLE} cr
+                    JOIN storage_channels sc ON sc.id = cr.channel_id
+                    WHERE sc.chat_id = $1
+                      AND cr.telegram_message_id = $2
+                )
+                "
+            )
+            .as_str(),
+        )
+        .bind(chat_id)
+        .bind(message_id)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+        Ok(row.0)
     }
 }

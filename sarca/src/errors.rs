@@ -49,6 +49,16 @@ pub enum SarcaError {
     TrashPathConflict,
     #[error("Invalid trash retention days (must be 1–30)")]
     InvalidTrashRetention,
+    #[error("Share expiry must be in the future")]
+    InvalidShareExpiry,
+    #[error("mail not configured")]
+    MailNotConfigured,
+    #[error("invalid or expired token")]
+    InvalidToken,
+    #[error("OAuth provider is not configured")]
+    OAuthNotConfigured,
+    #[error("OAuth failed")]
+    OAuthFailed,
     #[error("unknown error")]
     Unknown,
     #[error("{0} header is required")]
@@ -82,7 +92,12 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::NoStorageWorkers
             | SarcaError::NoActiveChannel
             | SarcaError::InvalidTrashRetention
+            | SarcaError::InvalidShareExpiry
+            | SarcaError::InvalidToken
+            | SarcaError::OAuthNotConfigured
+            | SarcaError::OAuthFailed
             | SarcaError::TelegramAPIError(_) => (StatusCode::BAD_REQUEST, e.to_string()),
+            SarcaError::MailNotConfigured => (StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
             _ => {
                 tracing::error!("{e}");
                 (

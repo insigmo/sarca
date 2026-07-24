@@ -1,9 +1,13 @@
 pub mod auth;
 pub mod channel_health;
+pub mod favorites;
 pub mod files;
+pub mod oauth;
+pub mod recent;
 pub mod replication;
 pub mod settings;
 pub mod setup;
+pub mod shares;
 pub mod storage_manager;
 pub mod storage_workers;
 pub mod storage_workers_scheduler;
