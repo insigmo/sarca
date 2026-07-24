@@ -486,7 +486,13 @@ impl FilesRouter {
             Err(SarcaError::DoesNotExist(_)) => {
                 // UI folder paths omit the trailing slash; try as folder.
                 let folder_path = format!("{path}/");
-                return Self::download_folder(state, storage_id, &folder_path).await;
+                match Self::download_folder(state, storage_id, &folder_path).await {
+                    Err((StatusCode::NOT_FOUND, _)) => Err((
+                        StatusCode::NOT_FOUND,
+                        SarcaError::DoesNotExist("file".to_owned()).to_string(),
+                    )),
+                    other => other,
+                }
             }
             Err(e) => return Err(<(StatusCode, String)>::from(e)),
         }
@@ -524,11 +530,10 @@ impl FilesRouter {
             query.inline.as_deref(),
             Some("1") | Some("true") | Some("yes")
         ) || is_inline_previewable(&content_type);
-        let disposition = if want_inline {
-            format!("inline; filename=\"{filename}\"")
-        } else {
-            format!("attachment; filename=\"{filename}\"")
-        };
+        let disposition = content_disposition_value(
+            if want_inline { "inline" } else { "attachment" },
+            filename,
+        );
 
         let range = parse_bytes_range(
             headers
@@ -555,7 +560,7 @@ impl FilesRouter {
             *response.status_mut() = StatusCode::OK;
             let headers_mut = response.headers_mut();
             headers_mut.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
-            headers_mut.insert(header::CONTENT_DISPOSITION, disposition.parse().unwrap());
+            headers_mut.insert(header::CONTENT_DISPOSITION, disposition);
             headers_mut.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
             headers_mut.insert(header::CONTENT_LENGTH, "0".parse().unwrap());
             return Ok(response);
@@ -636,7 +641,7 @@ impl FilesRouter {
 
         let headers_mut = response.headers_mut();
         headers_mut.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
-        headers_mut.insert(header::CONTENT_DISPOSITION, disposition.parse().unwrap());
+        headers_mut.insert(header::CONTENT_DISPOSITION, disposition);
         headers_mut.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
         headers_mut.insert(
             header::CONTENT_LENGTH,
@@ -816,12 +821,13 @@ impl FilesRouter {
         let stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(stream);
         let body = StreamBody::new(stream);
 
-        let disposition = format!("attachment; filename=\"{folder_name}.zip\"");
+        let disposition =
+            content_disposition_value("attachment", &format!("{folder_name}.zip"));
         let mut response = body.into_response();
         *response.status_mut() = StatusCode::OK;
         let headers_mut = response.headers_mut();
         headers_mut.insert(header::CONTENT_TYPE, "application/zip".parse().unwrap());
-        headers_mut.insert(header::CONTENT_DISPOSITION, disposition.parse().unwrap());
+        headers_mut.insert(header::CONTENT_DISPOSITION, disposition);
         headers_mut.insert(
             header::CONTENT_LENGTH,
             zip_len.to_string().parse().unwrap(),
@@ -946,6 +952,56 @@ impl FilesRouter {
             .move_to(storage_id, &body.path, &body.destination_folder, &user)
             .await?;
         Ok(StatusCode::OK)
+    }
+}
+
+/// Build a valid `Content-Disposition` header for possibly non-ASCII filenames.
+///
+/// Plain `filename="…"` must be ASCII (`HeaderValue` rejects Unicode). Use an
+/// ASCII fallback plus RFC 5987 `filename*=UTF-8''…` so Cyrillic / spaces work.
+fn content_disposition_value(disposition: &str, filename: &str) -> header::HeaderValue {
+    let ascii_name: String = filename
+        .chars()
+        .map(|c| match c {
+            ' '..='~' if c != '"' && c != '\\' => c,
+            _ => '_',
+        })
+        .collect();
+    let ascii_name = if ascii_name.chars().all(|c| c == '_') {
+        "download".to_owned()
+    } else {
+        ascii_name
+    };
+    let encoded = percent_encoding::utf8_percent_encode(
+        filename,
+        percent_encoding::NON_ALPHANUMERIC,
+    );
+    let value = format!("{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}");
+    value
+        .parse()
+        .unwrap_or_else(|_| header::HeaderValue::from_static("attachment; filename=\"download\""))
+}
+
+#[cfg(test)]
+mod content_disposition_tests {
+    use super::content_disposition_value;
+
+    #[test]
+    fn ascii_filename_parses() {
+        let v = content_disposition_value("inline", "transcript.md");
+        let s = v.to_str().unwrap();
+        assert!(s.contains("filename=\"transcript.md\""));
+        assert!(s.contains("filename*=UTF-8''"));
+        assert!(s.contains("transcript"));
+    }
+
+    #[test]
+    fn cyrillic_filename_is_ascii_header() {
+        let v = content_disposition_value("inline", "1 часть.mp4");
+        assert!(v.to_str().is_ok(), "HeaderValue must be ASCII-safe");
+        let s = v.to_str().unwrap();
+        assert!(s.contains("filename*=UTF-8''"));
+        assert!(s.contains("%D1%87"));
     }
 }
 
