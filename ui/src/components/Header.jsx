@@ -52,7 +52,7 @@ const Header = () => {
 				<A href="/" style={{ 'min-width': 0, 'flex-shrink': 1 }}>
 					<Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0 }}>
 						<AppIcon size={34} />
-						<Box sx={{ minWidth: 0, display: { xs: 'none', sm: 'block' } }}>
+						<Box class="header-brand-text" sx={{ minWidth: 0 }}>
 							<Typography
 								variant="h5"
 								noWrap
