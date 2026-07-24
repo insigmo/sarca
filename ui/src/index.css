@@ -1883,6 +1883,10 @@ a.default-link:hover {
 		min-height: 56px;
 	}
 
+	.app-shell-toolbar-spacer {
+		min-height: 56px !important;
+	}
+
 	.app-shell-main {
 		/* nav 68 + gap 12 + safe-area + small buffer */
 		padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)) !important;
@@ -1904,10 +1908,6 @@ a.default-link:hover {
 	.settings-modal--storage {
 		height: min(88vh, 720px);
 		max-height: 88vh;
-	}
-
-	.settings-modal {
-		padding-bottom: env(safe-area-inset-bottom, 0px);
 	}
 
 	.settings-modal__body {

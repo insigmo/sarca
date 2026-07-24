@@ -26,6 +26,7 @@ const BasicLayout = () => {
 			<Header />
 			<Box>
 				<Toolbar
+					class="app-shell-toolbar-spacer"
 					sx={{
 						minHeight: { xs: 56, sm: 64 },
 						paddingTop: 'env(safe-area-inset-top, 0px)',
