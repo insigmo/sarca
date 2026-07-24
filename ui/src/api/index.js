@@ -194,25 +194,6 @@ const oauthStartUrl = (provider) => `${API_BASE}/auth/oauth/${provider}/start`
 /////////////////////////////////////////////////////////////
 
 /**
- * @typedef {Object} ChannelInput
- * @property {number} chat_id
- * @property {string} [name]
- */
-
-/**
- *
- * @param {string} name
- * @param {ChannelInput[]} channels 1..3 Telegram channels replicating this storage
- * @returns
- */
-const createStorage = async (name, channels) => {
-	return await apiRequest('/storages', 'post', getAuthToken(), {
-		name,
-		channels,
-	})
-}
-
-/**
  * @typedef {Object} Storage
  * @property {string} id
  * @property {string} name
@@ -528,6 +509,34 @@ const getFSLayer = async (storage_id, path) => {
 	const suffix = path ? encodeFilePath(path) : ''
 	return await apiRequest(
 		`/storages/${storage_id}/files/tree/${suffix}`,
+		'get',
+		getAuthToken(),
+	)
+}
+
+/**
+ * @typedef {Object} FileInfo
+ * @property {string} path
+ * @property {string} name
+ * @property {number} size
+ * @property {boolean} is_file
+ * @property {boolean} has_thumb
+ * @property {boolean} is_uploaded
+ * @property {number|null} [chunk_size_bytes]
+ * @property {number} chunks_count
+ * @property {string|null} [content_type]
+ * @property {string|null} [deleted_at]
+ */
+
+/**
+ * @param {string} storage_id
+ * @param {string} path
+ * @returns {Promise<FileInfo>}
+ */
+const getFileInfo = async (storage_id, path) => {
+	const suffix = path ? encodeFilePath(path) : ''
+	return await apiRequest(
+		`/storages/${storage_id}/files/info/${suffix}`,
 		'get',
 		getAuthToken(),
 	)
@@ -1272,7 +1281,6 @@ const API = {
 		oauthStartUrl,
 	},
 	storages: {
-		createStorage,
 		listStorages,
 		getStorage,
 		getStorageDetail,
@@ -1297,6 +1305,7 @@ const API = {
 		createFolder,
 		uploadFile,
 		getFSLayer,
+		getFileInfo,
 		download,
 		getInlineMediaUrl,
 		thumb,

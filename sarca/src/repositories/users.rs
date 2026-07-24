@@ -2,9 +2,11 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::common::db::errors::map_not_found;
-use crate::errors::{SarcaError, SarcaResult};
-use crate::models::users::{InDBUser, User};
+use crate::{
+    common::db::errors::map_not_found,
+    errors::{SarcaError, SarcaResult},
+    models::users::{InDBUser, User},
+};
 
 pub struct UsersRepository<'d> {
     db: &'d PgPool,
@@ -12,7 +14,9 @@ pub struct UsersRepository<'d> {
 
 impl<'d> UsersRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn create(&self, in_obj: InDBUser) -> SarcaResult<User> {
@@ -30,13 +34,15 @@ impl<'d> UsersRepository<'d> {
         .bind(in_obj.email_verified_at)
         .execute(self.db)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(dbe) if dbe.constraint() == Some("users_email_key") => {
-                SarcaError::AlreadyExists("user with given email".into())
-            }
-            _ => {
-                tracing::error!("{e}");
-                SarcaError::Unknown
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(dbe) if dbe.constraint() == Some("users_email_key") => {
+                    SarcaError::AlreadyExists("user with given email".into())
+                },
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
             }
         })?;
 
@@ -53,7 +59,7 @@ impl<'d> UsersRepository<'d> {
             .bind(email)
             .fetch_one(self.db)
             .await
-            .map_err(|e| map_not_found(e, "user"))
+            .map_err(|e| map_not_found(&e, "user"))
     }
 
     pub async fn get_by_id(&self, id: Uuid) -> SarcaResult<User> {
@@ -61,7 +67,7 @@ impl<'d> UsersRepository<'d> {
             .bind(id)
             .fetch_one(self.db)
             .await
-            .map_err(|e| map_not_found(e, "user"))
+            .map_err(|e| map_not_found(&e, "user"))
     }
 
     pub async fn update_password_hash(&self, email: &str, password_hash: &str) -> SarcaResult<()> {

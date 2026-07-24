@@ -1,11 +1,16 @@
 use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
-use crate::common::types::ChatId;
-use crate::errors::{SarcaError, SarcaResult};
-use crate::models::chunk_replicas::{
-    ChunkReplica, ReplicationStats, REPLICA_STATUS_FAILED, REPLICA_STATUS_PENDING,
-    REPLICA_STATUS_UPLOADED,
+use crate::{
+    common::types::ChatId,
+    errors::{SarcaError, SarcaResult},
+    models::chunk_replicas::{
+        ChunkReplica,
+        REPLICA_STATUS_FAILED,
+        REPLICA_STATUS_PENDING,
+        REPLICA_STATUS_UPLOADED,
+        ReplicationStats,
+    },
 };
 
 pub const TABLE: &str = "chunk_replicas";
@@ -34,7 +39,9 @@ pub struct ChunkReplicasRepository<'d> {
 
 impl<'d> ChunkReplicasRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn insert_batch(&self, replicas: Vec<ChunkReplica>) -> SarcaResult<()> {
@@ -44,7 +51,8 @@ impl<'d> ChunkReplicasRepository<'d> {
 
         QueryBuilder::new(
             format!(
-                "INSERT INTO {TABLE} (id, chunk_id, channel_id, telegram_file_id, telegram_message_id, status)"
+                "INSERT INTO {TABLE} (id, chunk_id, channel_id, telegram_file_id, \
+                 telegram_message_id, status)"
             )
             .as_str(),
         )
@@ -133,7 +141,8 @@ impl<'d> ChunkReplicasRepository<'d> {
     ) -> SarcaResult<()> {
         sqlx::query(
             format!(
-                "UPDATE {TABLE} SET telegram_file_id = $2, telegram_message_id = $3, status = '{REPLICA_STATUS_UPLOADED}' WHERE id = $1"
+                "UPDATE {TABLE} SET telegram_file_id = $2, telegram_message_id = $3, status = \
+                 '{REPLICA_STATUS_UPLOADED}' WHERE id = $1"
             )
             .as_str(),
         )
@@ -147,16 +156,19 @@ impl<'d> ChunkReplicasRepository<'d> {
     }
 
     pub async fn mark_failed(&self, id: Uuid) -> SarcaResult<()> {
-        sqlx::query(format!("UPDATE {TABLE} SET status = '{REPLICA_STATUS_FAILED}' WHERE id = $1").as_str())
-            .bind(id)
-            .execute(self.db)
-            .await
-            .map_err(|_| SarcaError::Unknown)
-            .map(|_| ())
+        sqlx::query(
+            format!("UPDATE {TABLE} SET status = '{REPLICA_STATUS_FAILED}' WHERE id = $1").as_str(),
+        )
+        .bind(id)
+        .execute(self.db)
+        .await
+        .map_err(|_| SarcaError::Unknown)
+        .map(|_| ())
     }
 
     /// Queue every chunk of `storage_id`'s files for replication into `channel_id`
-    /// (used for catch-up on a new or repaired channel). No-op for chunks already queued/replicated.
+    /// (used for catch-up on a new or repaired channel). No-op for chunks already
+    /// queued/replicated.
     pub async fn enqueue_for_channel(&self, storage_id: Uuid, channel_id: Uuid) -> SarcaResult<()> {
         let chunk_ids: Vec<(Uuid,)> = sqlx::query_as(
             "
@@ -185,7 +197,8 @@ impl<'d> ChunkReplicasRepository<'d> {
 
         let mut builder = QueryBuilder::new(
             format!(
-                "INSERT INTO {TABLE} (id, chunk_id, channel_id, telegram_file_id, telegram_message_id, status)"
+                "INSERT INTO {TABLE} (id, chunk_id, channel_id, telegram_file_id, \
+                 telegram_message_id, status)"
             )
             .as_str(),
         );
@@ -198,14 +211,10 @@ impl<'d> ChunkReplicasRepository<'d> {
                 .push_bind(r.status);
         });
         builder.push(" ON CONFLICT (chunk_id, channel_id) DO NOTHING");
-        builder
-            .build()
-            .execute(self.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
-            })?;
+        builder.build().execute(self.db).await.map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
 
         Ok(())
     }

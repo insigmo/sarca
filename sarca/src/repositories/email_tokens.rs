@@ -2,9 +2,11 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::common::db::errors::map_not_found;
-use crate::errors::{SarcaError, SarcaResult};
-use crate::models::email_tokens::EmailToken;
+use crate::{
+    common::db::errors::map_not_found,
+    errors::{SarcaError, SarcaResult},
+    models::email_tokens::EmailToken,
+};
 
 pub struct EmailTokensRepository<'d> {
     db: &'d PgPool,
@@ -12,7 +14,9 @@ pub struct EmailTokensRepository<'d> {
 
 impl<'d> EmailTokensRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn invalidate_unused(&self, user_id: Uuid, purpose: &str) -> SarcaResult<()> {
@@ -95,7 +99,7 @@ impl<'d> EmailTokensRepository<'d> {
         .bind(now)
         .fetch_one(self.db)
         .await
-        .map_err(|e| map_not_found(e, "token"))
+        .map_err(|e| map_not_found(&e, "token"))
     }
 
     pub async fn mark_used(&self, id: Uuid) -> SarcaResult<()> {

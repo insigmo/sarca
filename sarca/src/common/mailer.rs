@@ -1,9 +1,12 @@
 //! Outbound SMTP mailer. Soft-fails when SMTP is not configured.
 
 use lettre::{
+    AsyncSmtpTransport,
+    AsyncTransport,
+    Message,
+    Tokio1Executor,
     message::{Mailbox, MultiPart, SinglePart},
     transport::smtp::authentication::Credentials,
-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
 };
 
 use crate::{
@@ -17,30 +20,30 @@ pub struct Mailer<'c> {
 
 impl<'c> Mailer<'c> {
     pub fn new(config: &'c Config) -> Self {
-        Self { config }
-    }
-
-    pub fn require_configured(&self) -> SarcaResult<()> {
-        if self.config.smtp_configured() {
-            Ok(())
-        } else {
-            Err(SarcaError::MailNotConfigured)
+        Self {
+            config,
         }
     }
 
+    pub fn require_configured(&self) -> SarcaResult<()> {
+        if self.config.smtp_configured() { Ok(()) } else { Err(SarcaError::MailNotConfigured) }
+    }
+
     /// Send mail if SMTP is configured. Returns `MailNotConfigured` when host is empty.
-    pub async fn send(&self, to_email: &str, subject: &str, text: &str, html: &str) -> SarcaResult<()> {
+    pub async fn send(
+        &self,
+        to_email: &str,
+        subject: &str,
+        text: &str,
+        html: &str,
+    ) -> SarcaResult<()> {
         self.require_configured()?;
         let host = self.config.smtp_host.as_deref().expect("checked above");
 
-        let from: Mailbox = self
-            .config
-            .smtp_from
-            .parse()
-            .map_err(|e| {
-                tracing::error!("invalid SMTP_FROM: {e}");
-                SarcaError::Unknown
-            })?;
+        let from: Mailbox = self.config.smtp_from.parse().map_err(|e| {
+            tracing::error!("invalid SMTP_FROM: {e}");
+            SarcaError::Unknown
+        })?;
         let to: Mailbox = to_email.parse().map_err(|e| {
             tracing::error!("invalid recipient email: {e}");
             SarcaError::Unknown
@@ -77,33 +80,35 @@ impl<'c> Mailer<'c> {
         }
     }
 
-    fn build_transport(
-        &self,
-        host: &str,
-    ) -> SarcaResult<AsyncSmtpTransport<Tokio1Executor>> {
+    fn build_transport(&self, host: &str) -> SarcaResult<AsyncSmtpTransport<Tokio1Executor>> {
         let tls = self.config.smtp_tls.to_ascii_lowercase();
         let mut builder = match tls.as_str() {
-            "none" => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
-                .port(self.config.smtp_port),
-            "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(host)
-                .map_err(|e| {
-                    tracing::error!("SMTP relay setup failed: {e}");
-                    SarcaError::Unknown
-                })?
-                .port(self.config.smtp_port),
+            "none" => {
+                AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
+                    .port(self.config.smtp_port)
+            },
+            "tls" => {
+                AsyncSmtpTransport::<Tokio1Executor>::relay(host)
+                    .map_err(|e| {
+                        tracing::error!("SMTP relay setup failed: {e}");
+                        SarcaError::Unknown
+                    })?
+                    .port(self.config.smtp_port)
+            },
             // starttls (default)
-            _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
-                .map_err(|e| {
-                    tracing::error!("SMTP starttls setup failed: {e}");
-                    SarcaError::Unknown
-                })?
-                .port(self.config.smtp_port),
+            _ => {
+                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
+                    .map_err(|e| {
+                        tracing::error!("SMTP starttls setup failed: {e}");
+                        SarcaError::Unknown
+                    })?
+                    .port(self.config.smtp_port)
+            },
         };
 
-        if let (Some(user), Some(pass)) = (
-            self.config.smtp_username.as_deref(),
-            self.config.smtp_password.as_deref(),
-        ) {
+        if let (Some(user), Some(pass)) =
+            (self.config.smtp_username.as_deref(), self.config.smtp_password.as_deref())
+        {
             builder = builder.credentials(Credentials::new(user.to_owned(), pass.to_owned()));
         }
 
@@ -122,11 +127,7 @@ pub fn verify_email_body(base_url: &str, token: &str) -> (String, String, String
 }
 
 pub fn reset_email_body(base_url: &str, token: &str) -> (String, String, String) {
-    let link = format!(
-        "{}/reset-password?token={}",
-        base_url.trim_end_matches('/'),
-        token
-    );
+    let link = format!("{}/reset-password?token={}", base_url.trim_end_matches('/'), token);
     let subject = "Reset your Sarca password".to_owned();
     let text = format!("Reset your password by opening this link:\n\n{link}\n");
     let html = format!(

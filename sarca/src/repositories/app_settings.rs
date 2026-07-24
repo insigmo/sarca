@@ -18,20 +18,21 @@ pub struct AppSettingsRepository<'d> {
 
 impl<'d> AppSettingsRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn get_value(&self, key: &str) -> SarcaResult<Option<String>> {
-        let row: Option<(String,)> = sqlx::query_as(
-            format!("SELECT value FROM {TABLE} WHERE key = $1").as_str(),
-        )
-        .bind(key)
-        .fetch_optional(self.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("{e}");
-            SarcaError::Unknown
-        })?;
+        let row: Option<(String,)> =
+            sqlx::query_as(format!("SELECT value FROM {TABLE} WHERE key = $1").as_str())
+                .bind(key)
+                .fetch_optional(self.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                })?;
         Ok(row.map(|(v,)| v))
     }
 
@@ -61,17 +62,16 @@ impl<'d> AppSettingsRepository<'d> {
             .get_value(TRASH_RETENTION_DAYS_KEY)
             .await?
             .unwrap_or_else(|| DEFAULT_TRASH_RETENTION_DAYS.to_string());
-        raw.parse::<i32>().map_err(|_| SarcaError::Unknown).map(|days| {
-            days.clamp(MIN_TRASH_RETENTION_DAYS, MAX_TRASH_RETENTION_DAYS)
-        })
+        raw.parse::<i32>()
+            .map_err(|_| SarcaError::Unknown)
+            .map(|days| days.clamp(MIN_TRASH_RETENTION_DAYS, MAX_TRASH_RETENTION_DAYS))
     }
 
     pub async fn set_trash_retention_days(&self, days: i32) -> SarcaResult<()> {
         if !(MIN_TRASH_RETENTION_DAYS..=MAX_TRASH_RETENTION_DAYS).contains(&days) {
             return Err(SarcaError::InvalidTrashRetention);
         }
-        self.set_value(TRASH_RETENTION_DAYS_KEY, &days.to_string())
-            .await
+        self.set_value(TRASH_RETENTION_DAYS_KEY, &days.to_string()).await
     }
 
     pub async fn set_telegram_api_credentials(
@@ -88,15 +88,10 @@ impl<'d> AppSettingsRepository<'d> {
             .get_value(LOCAL_API_SKIPPED_KEY)
             .await?
             .as_deref()
-            .map(|v| v == "true" || v == "1")
-            .unwrap_or(false))
+            .is_some_and(|v| v == "true" || v == "1"))
     }
 
     pub async fn set_local_api_skipped(&self, skipped: bool) -> SarcaResult<()> {
-        self.set_value(
-            LOCAL_API_SKIPPED_KEY,
-            if skipped { "true" } else { "false" },
-        )
-        .await
+        self.set_value(LOCAL_API_SKIPPED_KEY, if skipped { "true" } else { "false" }).await
     }
 }

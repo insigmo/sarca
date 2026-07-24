@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     extract::State,
-    headers::{authorization::Bearer, Authorization, HeaderMapExt},
+    headers::{Authorization, HeaderMapExt, authorization::Bearer},
     http::{HeaderMap, HeaderValue, Request},
     middleware::Next,
     response::Response,
@@ -26,7 +26,7 @@ pub async fn logged_in_required<B>(
     next: Next<B>,
 ) -> Result<Response, (StatusCode, String)> {
     let auth_user = authenticate_request(&req, &state.config.secret_key)
-        .map_err(|e| <(StatusCode, String)>::from(e))?;
+        .map_err(<(StatusCode, String)>::from)?;
 
     req.extensions_mut().insert(auth_user);
     Ok(next.run(req).await)
@@ -57,9 +57,8 @@ fn authenticate_request<B>(req: &Request<B>, secret_key: &str) -> SarcaResult<Au
 #[inline]
 #[allow(dead_code)]
 fn authenticate(headers: &HeaderMap<HeaderValue>, secret_key: &str) -> SarcaResult<AuthUser> {
-    let auth_header = headers
-        .typed_get::<Authorization<Bearer>>()
-        .ok_or(SarcaError::NotAuthenticated)?;
+    let auth_header =
+        headers.typed_get::<Authorization<Bearer>>().ok_or(SarcaError::NotAuthenticated)?;
 
     JWTManager::validate(auth_header.token(), secret_key)
 }

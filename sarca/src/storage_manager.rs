@@ -2,8 +2,12 @@ use sqlx::PgPool;
 
 use crate::{
     common::channels::{
-        ClientData, ClientMessage, StorageManagerData, StorageManagerListener,
-        StorageManagerMessage, UploadFileData,
+        ClientData,
+        ClientMessage,
+        StorageManagerData,
+        StorageManagerListener,
+        StorageManagerMessage,
+        UploadFileData,
     },
     config::Config,
     services::storage_manager::StorageManagerService,
@@ -17,13 +21,17 @@ pub struct StorageManager {
 
 impl StorageManager {
     pub fn new(rx: StorageManagerListener, db: PgPool, config: Config) -> Self {
-        Self { rx, db, config }
+        Self {
+            rx,
+            db,
+            config,
+        }
     }
 
     pub async fn run(&mut self) {
         while let Some(msg) = self.rx.recv().await {
             tracing::debug!("got msg");
-            self.handle_msg(msg).await
+            self.handle_msg(msg).await;
         }
     }
 

@@ -11,9 +11,14 @@ use crate::{
     repositories::{app_settings::AppSettingsRepository, storages::StoragesRepository},
     schemas::{
         setup::{
-            BotValidateSchema, ChannelPollResultSchema, LocalApiCredentialsSchema,
-            LocalApiSaveResultSchema, LocalApiVerifySchema, SetupCreateStorageResultSchema,
-            SetupCreateStorageSchema, SetupStatusSchema,
+            BotValidateSchema,
+            ChannelPollResultSchema,
+            LocalApiCredentialsSchema,
+            LocalApiSaveResultSchema,
+            LocalApiVerifySchema,
+            SetupCreateStorageResultSchema,
+            SetupCreateStorageSchema,
+            SetupStatusSchema,
         },
         storage_workers::InStorageWorkerSchema,
         storages::{ChannelInput, InStorageSchema},
@@ -87,9 +92,7 @@ impl<'d> SetupService<'d> {
             ));
         }
 
-        self.settings
-            .set_telegram_api_credentials(&api_id, &api_hash)
-            .await?;
+        self.settings.set_telegram_api_credentials(&api_id, &api_hash).await?;
         // Clear skip so Phase A can re-verify.
         self.settings.set_local_api_skipped(false).await?;
 
@@ -102,7 +105,7 @@ impl<'d> SetupService<'d> {
             Err(e) => {
                 tracing::warn!("could not write TELEGRAM_API_* to sarca.conf: {e}");
                 false
-            }
+            },
         };
 
         let restart_hint = if Self::uses_local_api(self.telegram_base_url) {
@@ -113,8 +116,8 @@ impl<'d> SetupService<'d> {
             )
         } else {
             Some(
-                "Credentials saved. Set TELEGRAM_LOCAL_API=true (and TELEGRAM_API_BASE_URL) \
-                 in sarca.conf, start Local Bot API, then restart Sarca."
+                "Credentials saved. Set TELEGRAM_LOCAL_API=true (and TELEGRAM_API_BASE_URL) in \
+                 sarca.conf, start Local Bot API, then restart Sarca."
                     .to_owned(),
             )
         };
@@ -151,15 +154,19 @@ impl<'d> SetupService<'d> {
             .send()
             .await
         {
-            Ok(_) => LocalApiVerifySchema {
-                ok: true,
-                uses_local_api: true,
-                message: format!("Reached Local Bot API at {url}"),
+            Ok(_) => {
+                LocalApiVerifySchema {
+                    ok: true,
+                    uses_local_api: true,
+                    message: format!("Reached Local Bot API at {url}"),
+                }
             },
-            Err(e) => LocalApiVerifySchema {
-                ok: false,
-                uses_local_api: true,
-                message: format!("Cannot reach Local Bot API at {url}: {e}"),
+            Err(e) => {
+                LocalApiVerifySchema {
+                    ok: false,
+                    uses_local_api: true,
+                    message: format!("Cannot reach Local Bot API at {url}: {e}"),
+                }
             },
         }
     }
@@ -167,9 +174,7 @@ impl<'d> SetupService<'d> {
     pub async fn validate_bot(&self, token: &str) -> SarcaResult<BotValidateSchema> {
         let token = token.trim();
         if token.is_empty() || !token.contains(':') {
-            return Err(SarcaError::TelegramAPIError(
-                "Bot token looks invalid".into(),
-            ));
+            return Err(SarcaError::TelegramAPIError("Bot token looks invalid".into()));
         }
         let client = TelegramTokenClient::new(self.telegram_base_url, token);
         let me = client.get_me().await?;
@@ -207,10 +212,7 @@ impl<'d> SetupService<'d> {
                 Err(_) => chat.title,
             };
 
-            match client
-                .get_chat_member_status(chat.chat_id, me.id)
-                .await
-            {
+            match client.get_chat_member_status(chat.chat_id, me.id).await {
                 Ok(status) if status == "administrator" || status == "creator" => {
                     return Ok(ChannelPollResultSchema {
                         found: true,
@@ -218,17 +220,14 @@ impl<'d> SetupService<'d> {
                         title: Some(title),
                         hint: None,
                     });
-                }
+                },
                 Ok(_) => {
                     saw_non_admin = true;
-                }
+                },
                 Err(e) => {
-                    tracing::warn!(
-                        "setup poll: getChatMember for {} failed: {e}",
-                        chat.chat_id
-                    );
+                    tracing::warn!("setup poll: getChatMember for {} failed: {e}", chat.chat_id);
                     saw_non_admin = true;
-                }
+                },
             }
         }
 
@@ -238,8 +237,8 @@ impl<'d> SetupService<'d> {
             title: None,
             hint: if saw_non_admin {
                 Some(
-                    "Bot was added to a channel but does not have admin rights. \
-                     Make it an admin with Post messages and Delete messages."
+                    "Bot was added to a channel but does not have admin rights. Make it an admin \
+                     with Post messages and Delete messages."
                         .to_owned(),
                 )
             } else {

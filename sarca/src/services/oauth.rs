@@ -1,6 +1,6 @@
 //! Google + GitHub OAuth start / callback / one-time exchange.
 
-use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde::Deserialize;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -49,12 +49,13 @@ impl<'d> OAuthService<'d> {
                 let client_id = config.oauth_google_client_id.as_deref().unwrap();
                 let redirect_raw = format!("{base}/api/auth/oauth/google/callback");
                 let redirect = utf8_percent_encode(&redirect_raw, NON_ALPHANUMERIC).to_string();
-                let scope = utf8_percent_encode("openid email profile", NON_ALPHANUMERIC).to_string();
+                let scope =
+                    utf8_percent_encode("openid email profile", NON_ALPHANUMERIC).to_string();
                 Ok(format!(
                     "https://accounts.google.com/o/oauth2/v2/auth?client_id={client_id}\
                      &redirect_uri={redirect}&response_type=code&scope={scope}&state={state}"
                 ))
-            }
+            },
             PROVIDER_GITHUB => {
                 if !config.github_oauth_configured() {
                     return Err(SarcaError::OAuthNotConfigured);
@@ -62,12 +63,13 @@ impl<'d> OAuthService<'d> {
                 let client_id = config.oauth_github_client_id.as_deref().unwrap();
                 let redirect_raw = format!("{base}/api/auth/oauth/github/callback");
                 let redirect = utf8_percent_encode(&redirect_raw, NON_ALPHANUMERIC).to_string();
-                let scope = utf8_percent_encode("read:user user:email", NON_ALPHANUMERIC).to_string();
+                let scope =
+                    utf8_percent_encode("read:user user:email", NON_ALPHANUMERIC).to_string();
                 Ok(format!(
                     "https://github.com/login/oauth/authorize?client_id={client_id}\
                      &redirect_uri={redirect}&scope={scope}&state={state}"
                 ))
-            }
+            },
             _ => Err(SarcaError::OAuthNotConfigured),
         }
     }
@@ -84,12 +86,13 @@ impl<'d> OAuthService<'d> {
         }
     }
 
-    pub async fn link_or_create(&self, profile: &OAuthProfile) -> SarcaResult<(Uuid, String, bool)> {
+    pub async fn link_or_create(
+        &self,
+        profile: &OAuthProfile,
+    ) -> SarcaResult<(Uuid, String, bool)> {
         // Existing oauth link
-        if let Ok(acct) = self
-            .oauth
-            .get_by_provider(&profile.provider, &profile.provider_user_id)
-            .await
+        if let Ok(acct) =
+            self.oauth.get_by_provider(&profile.provider, &profile.provider_user_id).await
         {
             let user = self.users.get_by_id(acct.user_id).await?;
             if profile.email_verified && !user.email_verified() {
@@ -101,9 +104,7 @@ impl<'d> OAuthService<'d> {
 
         // Email match → link
         if let Ok(user) = self.users.get_by_email(&profile.email).await {
-            self.oauth
-                .create(user.id, &profile.provider, &profile.provider_user_id)
-                .await?;
+            self.oauth.create(user.id, &profile.provider, &profile.provider_user_id).await?;
             if profile.email_verified && !user.email_verified() {
                 let _ = self.users.mark_email_verified(user.id).await;
             }
@@ -114,9 +115,7 @@ impl<'d> OAuthService<'d> {
         // Create new OAuth-only user
         let in_user = InDBUser::new_oauth(profile.email.clone(), profile.email_verified);
         let user = self.users.create(in_user).await?;
-        self.oauth
-            .create(user.id, &profile.provider, &profile.provider_user_id)
-            .await?;
+        self.oauth.create(user.id, &profile.provider, &profile.provider_user_id).await?;
         let verified = user.email_verified();
         Ok((user.id, user.email, verified))
     }
@@ -127,10 +126,7 @@ impl<'d> OAuthService<'d> {
         code: &str,
         csrf_state: &str,
     ) -> SarcaResult<String> {
-        let entry = state
-            .take_oauth_state(csrf_state)
-            .await
-            .ok_or(SarcaError::OAuthFailed)?;
+        let entry = state.take_oauth_state(csrf_state).await.ok_or(SarcaError::OAuthFailed)?;
         if entry.provider != provider {
             return Err(SarcaError::OAuthFailed);
         }
@@ -140,39 +136,23 @@ impl<'d> OAuthService<'d> {
             OAuthService::new(&state.db).link_or_create(&profile).await?;
 
         let exchange_code = Uuid::new_v4().to_string();
-        state
-            .put_oauth_exchange(exchange_code.clone(), user_id, email, email_verified)
-            .await;
+        state.put_oauth_exchange(exchange_code.clone(), user_id, email, email_verified).await;
 
         let base = state.config.public_base_url.trim_end_matches('/');
         Ok(format!("{base}/oauth/callback?code={exchange_code}"))
     }
 
-    pub async fn exchange(
-        state: &AppState,
-        code: &str,
-    ) -> SarcaResult<TokenSchema> {
-        let entry = state
-            .take_oauth_exchange(code)
-            .await
-            .ok_or(SarcaError::InvalidToken)?;
+    pub async fn exchange(state: &AppState, code: &str) -> SarcaResult<TokenSchema> {
+        let entry = state.take_oauth_exchange(code).await.ok_or(SarcaError::InvalidToken)?;
         let auth = crate::common::jwt_manager::AuthUser::new(entry.user_id, entry.email);
-        Ok(AuthService::issue_tokens(
-            auth,
-            entry.email_verified,
-            &state.config,
-        ))
+        Ok(AuthService::issue_tokens(auth, entry.email_verified, &state.config))
     }
 
     async fn google_profile(code: &str, config: &Config) -> SarcaResult<OAuthProfile> {
-        let client_id = config
-            .oauth_google_client_id
-            .as_deref()
-            .ok_or(SarcaError::OAuthNotConfigured)?;
-        let client_secret = config
-            .oauth_google_client_secret
-            .as_deref()
-            .ok_or(SarcaError::OAuthNotConfigured)?;
+        let client_id =
+            config.oauth_google_client_id.as_deref().ok_or(SarcaError::OAuthNotConfigured)?;
+        let client_secret =
+            config.oauth_google_client_secret.as_deref().ok_or(SarcaError::OAuthNotConfigured)?;
         let base = config.public_base_url.trim_end_matches('/');
         let redirect_uri = format!("{base}/api/auth/oauth/google/callback");
 
@@ -244,14 +224,10 @@ impl<'d> OAuthService<'d> {
     }
 
     async fn github_profile(code: &str, config: &Config) -> SarcaResult<OAuthProfile> {
-        let client_id = config
-            .oauth_github_client_id
-            .as_deref()
-            .ok_or(SarcaError::OAuthNotConfigured)?;
-        let client_secret = config
-            .oauth_github_client_secret
-            .as_deref()
-            .ok_or(SarcaError::OAuthNotConfigured)?;
+        let client_id =
+            config.oauth_github_client_id.as_deref().ok_or(SarcaError::OAuthNotConfigured)?;
+        let client_secret =
+            config.oauth_github_client_secret.as_deref().ok_or(SarcaError::OAuthNotConfigured)?;
         let base = config.public_base_url.trim_end_matches('/');
         let redirect_uri = format!("{base}/api/auth/oauth/github/callback");
 

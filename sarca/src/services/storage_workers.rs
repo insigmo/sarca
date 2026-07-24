@@ -21,7 +21,10 @@ impl<'d> StorageWorkersService<'d> {
     pub fn new(db: &'d PgPool) -> Self {
         let repo = StorageWorkersRepository::new(db);
         let access_repo = AccessRepository::new(db);
-        Self { repo, access_repo }
+        Self {
+            repo,
+            access_repo,
+        }
     }
 
     pub async fn create(
@@ -30,21 +33,13 @@ impl<'d> StorageWorkersService<'d> {
         user: &AuthUser,
     ) -> SarcaResult<StorageWorker> {
         // checking if user already has a storage worker with such name
-        if let Ok(_) = self
-            .repo
-            .get_by_name_and_user_id(&in_schema.name, user.id)
-            .await
-        {
+        if self.repo.get_by_name_and_user_id(&in_schema.name, user.id).await.is_ok() {
             return Err(SarcaError::StorageWorkerNameConflict);
         }
 
         // creating storage worker
-        let in_model = InStorageWorker::new(
-            in_schema.name,
-            user.id,
-            in_schema.token,
-            in_schema.storage_id,
-        );
+        let in_model =
+            InStorageWorker::new(in_schema.name, user.id, in_schema.token, in_schema.storage_id);
         self.repo.create(in_model).await
     }
 

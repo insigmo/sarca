@@ -19,11 +19,7 @@ impl InDBUser {
         Self {
             email,
             password_hash: None,
-            email_verified_at: if email_verified {
-                Some(Utc::now())
-            } else {
-                None
-            },
+            email_verified_at: if email_verified { Some(Utc::now()) } else { None },
         }
     }
 }

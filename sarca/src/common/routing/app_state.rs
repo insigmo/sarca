@@ -53,7 +53,7 @@ impl AppState {
             state,
             OAuthStateEntry {
                 provider,
-                expires_at: Instant::now() + Duration::from_secs(600),
+                expires_at: Instant::now() + Duration::from_mins(10),
             },
         );
     }
@@ -79,7 +79,7 @@ impl AppState {
                 user_id,
                 email,
                 email_verified,
-                expires_at: Instant::now() + Duration::from_secs(120),
+                expires_at: Instant::now() + Duration::from_mins(2),
             },
         );
     }
@@ -87,8 +87,7 @@ impl AppState {
     pub async fn take_oauth_exchange(&self, code: &str) -> Option<OAuthExchangeEntry> {
         let mut map = self.oauth_exchanges.lock().await;
         Self::purge_expired_exchanges(&mut map);
-        map.remove(code)
-            .filter(|e| e.expires_at > Instant::now())
+        map.remove(code).filter(|e| e.expires_at > Instant::now())
     }
 
     fn purge_expired_states(map: &mut HashMap<String, OAuthStateEntry>) {

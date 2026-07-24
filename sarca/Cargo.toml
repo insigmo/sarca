@@ -2,11 +2,50 @@
 name = "sarca"
 version = "0.0.20"
 edition = "2021"
+description = "Self-hosted cloud storage that keeps files in Telegram channels"
+license = "MIT"
+repository = "https://github.com/insigmo/sarca"
+readme = "../README.md"
+keywords = ["storage", "telegram", "self-hosted"]
+categories = ["web-programming"]
 
 [profile.release]
 strip = true
 codegen-units = 1
 lto = true
+
+# Strict Clippy: all + pedantic + nursery + cargo as deny.
+# Only allow lints that are impractical for this Axum/SQL architecture.
+[lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
+multiple_crate_versions = "allow"
+module_name_repetitions = "allow"
+# Axum handlers / service methods return large futures by design.
+large_futures = "allow"
+# SQL strings prefer r#"…"# even when # is unnecessary.
+needless_raw_string_hashes = "allow"
+# Many small helpers are not const-safe once they touch non-const APIs; noise.
+missing_const_for_fn = "allow"
+# Byte offsets / Telegram sizes / JPEG dims — casts are intentional.
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+# Axum handler signatures stay `async` for uniformity even without await.
+unused_async = "allow"
+# Large request buffers / zip builders.
+large_stack_frames = "allow"
+# Keep statement order readable next to SQL / match arms.
+items_after_statements = "allow"
+# Serde / public JSON field names.
+struct_field_names = "allow"
 
 [dependencies]
 # routing

@@ -26,15 +26,13 @@ pub async fn create_db(
 
     tracing::debug!("creating database");
 
-    let result = sqlx::query(format!("CREATE DATABASE {dbname}").as_str())
-        .execute(&db)
-        .await;
+    let result = sqlx::query(format!("CREATE DATABASE {dbname}").as_str()).execute(&db).await;
 
     match &result {
         Ok(_) => {
             tracing::debug!("created database");
-            return Ok(());
-        }
+            Ok(())
+        },
         Err(sqlx::Error::Database(dbe)) => {
             if let Some(code) = dbe.code() {
                 if code == "42P04" {
@@ -42,13 +40,14 @@ pub async fn create_db(
                     return Ok(());
                 }
             }
-            return Err(format!("create database failed: {dbe}"));
-        }
-        Err(e) => return Err(format!("create database failed: {e}")),
+            Err(format!("create database failed: {dbe}"))
+        },
+        Err(e) => Err(format!("create database failed: {e}")),
     }
 }
 
 #[inline]
+#[allow(clippy::too_many_lines)]
 pub async fn init_db(db: &PgPool) {
     tracing::debug!("initing database");
 
@@ -284,7 +283,8 @@ pub async fn init_db(db: &PgPool) {
               AND table_name = 'file_chunks'
               AND column_name = 'telegram_file_id'
         ) THEN
-            INSERT INTO chunk_replicas (id, chunk_id, channel_id, telegram_file_id, telegram_message_id, status)
+            INSERT INTO chunk_replicas (id, chunk_id, channel_id, telegram_file_id, \
+         telegram_message_id, status)
             SELECT gen_random_uuid(), fc.id, sc.id, fc.telegram_file_id, NULL, 'uploaded'
             FROM file_chunks fc
             JOIN files f ON f.id = fc.file_id
@@ -400,9 +400,8 @@ pub async fn init_db(db: &PgPool) {
         sqlx::query(statement)
             .execute(&mut *transaction)
             .await
-            .map_err(|e| {
+            .inspect_err(|_e| {
                 tracing::error!("error during initing database with query:\n{statement}");
-                e
             })
             .unwrap();
     }
@@ -415,38 +414,36 @@ pub async fn create_superuser(db: &PgPool, config: &Config) {
     let password_hash = PasswordManager::generate(&config.superuser_pass).unwrap();
     let mut user = InDBUser::new_password(config.superuser_email.clone(), password_hash.clone());
     user.email_verified_at = Some(chrono::Utc::now());
-    let result = UsersRepository::new(&db).create(user).await;
+    let result = UsersRepository::new(db).create(user).await;
 
     match result {
         Ok(_) => tracing::debug!("created superuser"),
 
         // Keep password in sync with sarca.conf on every boot.
-        Err(e) if matches!(e, SarcaError::AlreadyExists(_)) => {
-            if let Err(err) = UsersRepository::new(&db)
+        Err(SarcaError::AlreadyExists(_)) => {
+            if let Err(err) = UsersRepository::new(db)
                 .update_password_hash(&config.superuser_email, &password_hash)
                 .await
             {
                 panic!("can't sync superuser password: {err}");
             }
             tracing::debug!("superuser already exists; password synced from config");
-        }
+        },
 
         // in case of another error kind -> terminating process
         _ => {
             panic!("can't create superuser; terminating process")
-        }
-    };
+        },
+    }
 }
 
-/// Convert a channel id (without `-100`) into a Telegram chat_id for channels/supergroups.
+/// Convert a channel id (without `-100`) into a Telegram `chat_id` for channels/supergroups.
 /// Negative values are treated as already-complete chat ids.
-pub(crate) fn channel_id_to_chat_id(channel_id: i64) -> i64 {
+pub fn channel_id_to_chat_id(channel_id: i64) -> i64 {
     if channel_id < 0 {
         return channel_id;
     }
-    format!("-100{channel_id}")
-        .parse()
-        .expect("channel id should form a valid Telegram chat_id")
+    format!("-100{channel_id}").parse().expect("channel id should form a valid Telegram chat_id")
 }
 
 /// If `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID`, and `STORAGE_NAME` are all set,
@@ -463,17 +460,16 @@ pub async fn bootstrap_storage_from_env(db: &PgPool, config: &Config) {
 
     if !any_set {
         tracing::info!(
-            "TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID / STORAGE_NAME not set — \
-             create a storage and register a bot via the UI \
-             (Storages → New storage, Storage workers → New worker)"
+            "TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID / STORAGE_NAME not set — create a storage \
+             and register a bot via the UI (Storages → New storage, Storage workers → New worker)"
         );
         return;
     }
 
     if !all_set {
         tracing::warn!(
-            "Incomplete env bootstrap: set all of TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, \
-             and STORAGE_NAME, or leave all empty and configure via the UI"
+            "Incomplete env bootstrap: set all of TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, and \
+             STORAGE_NAME, or leave all empty and configure via the UI"
         );
         return;
     }
@@ -483,18 +479,16 @@ pub async fn bootstrap_storage_from_env(db: &PgPool, config: &Config) {
     let storage_name = storage_name.expect("checked above");
     let chat_id = channel_id_to_chat_id(channel_id);
 
-    let user = match UsersRepository::new(db)
-        .get_by_email(&config.superuser_email)
-        .await
-    {
+    let user = match UsersRepository::new(db).get_by_email(&config.superuser_email).await {
         Ok(user) => AuthUser::new(user.id, user.email),
         Err(e) => {
             tracing::error!("env bootstrap: cannot load superuser: {e}");
             return;
-        }
+        },
     };
 
-    let storages = StoragesService::new(db, &config.telegram_api_base_url, config.telegram_rate_limit);
+    let storages =
+        StoragesService::new(db, &config.telegram_api_base_url, config.telegram_rate_limit);
     let storage = match storages
         .create(
             InStorageSchema {
@@ -515,38 +509,33 @@ pub async fn bootstrap_storage_from_env(db: &PgPool, config: &Config) {
                 chat_id
             );
             storage
-        }
+        },
         Err(SarcaError::StorageNameConflict) => {
-            match StoragesRepository::new(db)
-                .get_by_name_and_user_id(storage_name, user.id)
-                .await
-            {
+            match StoragesRepository::new(db).get_by_name_and_user_id(storage_name, user.id).await {
                 Ok(storage) => {
                     tracing::debug!(
                         "env bootstrap: storage \"{}\" already exists; reusing",
                         storage_name
                     );
                     storage
-                }
+                },
                 Err(e) => {
-                    tracing::error!(
-                        "env bootstrap: storage name conflict but lookup failed: {e}"
-                    );
+                    tracing::error!("env bootstrap: storage name conflict but lookup failed: {e}");
                     return;
-                }
+                },
             }
-        }
+        },
         Err(SarcaError::StorageChatIdConflict) => {
             tracing::warn!(
-                "env bootstrap: chat_id {chat_id} already used by another storage; \
-                 configure via the UI or pick a different TELEGRAM_CHANNEL_ID"
+                "env bootstrap: chat_id {chat_id} already used by another storage; configure via \
+                 the UI or pick a different TELEGRAM_CHANNEL_ID"
             );
             return;
-        }
+        },
         Err(e) => {
             tracing::error!("env bootstrap: failed to create storage: {e}");
             return;
-        }
+        },
     };
 
     let workers = StorageWorkersService::new(db);
@@ -561,14 +550,12 @@ pub async fn bootstrap_storage_from_env(db: &PgPool, config: &Config) {
         )
         .await
     {
-        Ok(_) => tracing::info!(
-            "env bootstrap: attached bot as storage worker \"{}\"",
-            storage_name
-        ),
-        Err(SarcaError::StorageWorkerNameConflict)
-        | Err(SarcaError::StorageWorkerTokenConflict) => {
-            tracing::debug!("env bootstrap: storage worker already exists; skipping")
-        }
+        Ok(_) => {
+            tracing::info!("env bootstrap: attached bot as storage worker \"{}\"", storage_name);
+        },
+        Err(SarcaError::StorageWorkerNameConflict | SarcaError::StorageWorkerTokenConflict) => {
+            tracing::debug!("env bootstrap: storage worker already exists; skipping");
+        },
         Err(e) => tracing::error!("env bootstrap: failed to create storage worker: {e}"),
     }
 }
@@ -579,12 +566,12 @@ mod tests {
 
     #[test]
     fn prepends_minus_100_for_positive_channel_id() {
-        assert_eq!(channel_id_to_chat_id(1234567890), -1001234567890);
+        assert_eq!(channel_id_to_chat_id(1_234_567_890), -1_001_234_567_890);
     }
 
     #[test]
     fn keeps_negative_chat_id() {
-        assert_eq!(channel_id_to_chat_id(-1001234567890), -1001234567890);
+        assert_eq!(channel_id_to_chat_id(-1_001_234_567_890), -1_001_234_567_890);
         assert_eq!(channel_id_to_chat_id(-456), -456);
     }
 }

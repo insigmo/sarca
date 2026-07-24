@@ -2,7 +2,10 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{errors::{SarcaError, SarcaResult}, models::share_links::ShareLink};
+use crate::{
+    errors::{SarcaError, SarcaResult},
+    models::share_links::ShareLink,
+};
 
 pub const TABLE: &str = "share_links";
 
@@ -12,7 +15,9 @@ pub struct ShareLinksRepository<'d> {
 
 impl<'d> ShareLinksRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn create(

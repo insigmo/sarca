@@ -28,8 +28,10 @@ impl ChunkCache {
     fn path_for(&self, telegram_file_id: &str) -> PathBuf {
         // Telegram file_ids are long and may contain odd characters; hash for a stable path.
         let digest = {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
+            use std::{
+                collections::hash_map::DefaultHasher,
+                hash::{Hash, Hasher},
+            };
             let mut h = DefaultHasher::new();
             telegram_file_id.hash(&mut h);
             h.finish()

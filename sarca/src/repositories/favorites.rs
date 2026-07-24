@@ -15,7 +15,9 @@ pub struct FavoritesRepository<'d> {
 
 impl<'d> FavoritesRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     /// Live uploaded files starred by the user in this storage, newest star first.
@@ -64,12 +66,7 @@ impl<'d> FavoritesRepository<'d> {
     }
 
     /// Idempotent star. Returns Ok even if already starred.
-    pub async fn add(
-        &self,
-        user_id: Uuid,
-        storage_id: Uuid,
-        file_id: Uuid,
-    ) -> SarcaResult<()> {
+    pub async fn add(&self, user_id: Uuid, storage_id: Uuid, file_id: Uuid) -> SarcaResult<()> {
         sqlx::query(
             format!(
                 "

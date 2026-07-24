@@ -57,8 +57,8 @@ const Storages = () => {
 				when={storages().length}
 				fallback={
 					<div class="storages-empty">
-						No storages yet — the setup wizard will guide you, or use Advanced create
-						/ set TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, and STORAGE_NAME in
+						No storages yet — the setup wizard will guide you, or set
+						TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, and STORAGE_NAME in
 						sarca.conf.
 					</div>
 				}

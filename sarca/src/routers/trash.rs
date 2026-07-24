@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension,
+    Json,
+    Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
-    Extension, Json, Router,
 };
 use uuid::Uuid;
 
@@ -26,7 +28,7 @@ impl TrashRouter {
             .with_state(state)
     }
 
-    fn service<'d>(state: &'d AppState) -> TrashService<'d> {
+    fn service(state: &AppState) -> TrashService<'_> {
         TrashService::new(
             &state.db,
             &state.config.telegram_api_base_url,
@@ -41,11 +43,7 @@ impl TrashRouter {
         Query(query): Query<TrashListQuery>,
     ) -> Result<impl IntoResponse, (StatusCode, String)> {
         let path = query.path.as_deref().unwrap_or("");
-        Self::service(&state)
-            .list(storage_id, path, &user)
-            .await
-            .map(Json)
-            .map_err(Into::into)
+        Self::service(&state).list(storage_id, path, &user).await.map(Json).map_err(Into::into)
     }
 
     async fn restore(
@@ -55,14 +53,9 @@ impl TrashRouter {
         Json(body): Json<RestoreTrashSchema>,
     ) -> Result<StatusCode, (StatusCode, String)> {
         Self::service(&state)
-            .restore(
-                storage_id,
-                &body.path,
-                body.on_conflict.as_deref(),
-                &user,
-            )
+            .restore(storage_id, &body.path, body.on_conflict.as_deref(), &user)
             .await
-            .map(|_| StatusCode::NO_CONTENT)
+            .map(|()| StatusCode::NO_CONTENT)
             .map_err(Into::into)
     }
 
@@ -74,7 +67,7 @@ impl TrashRouter {
         Self::service(&state)
             .empty(storage_id, &user)
             .await
-            .map(|_| StatusCode::NO_CONTENT)
+            .map(|()| StatusCode::NO_CONTENT)
             .map_err(Into::into)
     }
 
@@ -83,13 +76,11 @@ impl TrashRouter {
         Extension(user): Extension<AuthUser>,
         Path((storage_id, path)): Path<(Uuid, String)>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        let path = percent_encoding::percent_decode_str(&path)
-            .decode_utf8_lossy()
-            .to_string();
+        let path = percent_encoding::percent_decode_str(&path).decode_utf8_lossy().to_string();
         Self::service(&state)
             .delete_forever(storage_id, &path, &user)
             .await
-            .map(|_| StatusCode::NO_CONTENT)
+            .map(|()| StatusCode::NO_CONTENT)
             .map_err(Into::into)
     }
 }

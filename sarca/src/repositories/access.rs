@@ -1,10 +1,12 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::common::db::errors::map_not_found;
-use crate::errors::{SarcaError, SarcaResult};
-use crate::models::access::{AccessType, UserWithAccess};
-use crate::schemas::access::GrantAccess;
+use crate::{
+    common::db::errors::map_not_found,
+    errors::{SarcaError, SarcaResult},
+    models::access::{AccessType, UserWithAccess},
+    schemas::access::GrantAccess,
+};
 
 pub const TABLE: &str = "access";
 
@@ -14,7 +16,9 @@ pub struct AccessRepository<'d> {
 
 impl<'d> AccessRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn create_or_update(
@@ -25,7 +29,8 @@ impl<'d> AccessRepository<'d> {
         let id = Uuid::new_v4();
 
         tracing::debug!(
-            "[ACCESS REPO] Attempting to grant access: storage_id={}, user_email={}, access_type={:?}",
+            "[ACCESS REPO] Attempting to grant access: storage_id={}, user_email={}, \
+             access_type={:?}",
             storage_id,
             grant_access.user_email,
             grant_access.access_type
@@ -51,20 +56,19 @@ impl<'d> AccessRepository<'d> {
         .bind(grant_access.access_type)
         .execute(self.db)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(ref dbe) if dbe.is_foreign_key_violation() => {
-                SarcaError::DoesNotExist(format!("storage with id \"{}\"", storage_id))
-            }
-            _ => {
-                tracing::error!("{e}");
-                SarcaError::Unknown
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(ref dbe) if dbe.is_foreign_key_violation() => {
+                    SarcaError::DoesNotExist(format!("storage with id \"{storage_id}\""))
+                },
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
             }
         })?;
 
-        tracing::debug!(
-            "[ACCESS REPO] Query affected {} rows",
-            result.rows_affected()
-        );
+        tracing::debug!("[ACCESS REPO] Query affected {} rows", result.rows_affected());
 
         if result.rows_affected() == 0 {
             tracing::error!(
@@ -104,7 +108,7 @@ impl<'d> AccessRepository<'d> {
         .bind(storage_id)
         .fetch_all(self.db)
         .await
-        .map_err(|e| map_not_found(e, "user"))
+        .map_err(|e| map_not_found(&e, "user"))
     }
 
     #[inline]
@@ -134,7 +138,7 @@ impl<'d> AccessRepository<'d> {
         .bind(storage_id)
         .fetch_one(self.db)
         .await
-        .map_err(|e| map_not_found(e, "access"))?;
+        .map_err(|e| map_not_found(&e, "access"))?;
 
         Ok(has_access.0)
     }
@@ -153,7 +157,7 @@ impl<'d> AccessRepository<'d> {
         .bind(storage_id)
         .execute(self.db)
         .await
-        .map_err(|e| map_not_found(e, "access"))?;
+        .map_err(|e| map_not_found(&e, "access"))?;
 
         Ok(())
     }

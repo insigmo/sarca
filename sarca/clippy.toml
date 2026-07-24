@@ -1,0 +1,13 @@
+# Strict Clippy thresholds (used with Cargo.toml [lints.clippy] denies).
+
+cognitive-complexity-threshold = 25
+too-many-arguments-threshold = 10
+too-many-lines-threshold = 250
+type-complexity-threshold = 250
+trivial-copy-size-limit = 8
+pass-by-value-size-limit = 256
+enum-variant-size-threshold = 200
+vec-box-size-threshold = 8
+large-error-threshold = 128
+future-size-threshold = 2048
+stack-size-threshold = 524288

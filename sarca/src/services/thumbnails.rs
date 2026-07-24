@@ -1,8 +1,9 @@
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::{
+    path::{Path, PathBuf},
+    process::Stdio,
+};
 
-use image::imageops::FilterType;
-use image::ImageFormat;
+use image::{ImageFormat, imageops::FilterType};
 use tokio::process::Command;
 
 const THUMB_MAX_EDGE: u32 = 128;
@@ -23,18 +24,22 @@ pub async fn generate(file_path: &Path, logical_path: &str) -> Result<Option<Vec
 
     let raw = match kind {
         ThumbKind::Image => generate_image(file_path).await?,
-        ThumbKind::Video => match generate_video(file_path).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::warn!("video thumbnail skipped: {e}");
-                return Ok(None);
+        ThumbKind::Video => {
+            match generate_video(file_path).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::warn!("video thumbnail skipped: {e}");
+                    return Ok(None);
+                },
             }
         },
-        ThumbKind::Pdf => match generate_pdf(file_path).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::warn!("pdf thumbnail skipped: {e}");
-                return Ok(None);
+        ThumbKind::Pdf => {
+            match generate_pdf(file_path).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::warn!("pdf thumbnail skipped: {e}");
+                    return Ok(None);
+                },
             }
         },
     };
@@ -50,7 +55,7 @@ fn detect_kind(logical_path: &str) -> Option<ThumbKind> {
     let ext = Path::new(logical_path)
         .extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())?;
+        .map(str::to_ascii_lowercase)?;
 
     match ext.as_str() {
         "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" => Some(ThumbKind::Image),
@@ -61,9 +66,7 @@ fn detect_kind(logical_path: &str) -> Option<ThumbKind> {
 }
 
 async fn generate_image(file_path: &Path) -> Result<Vec<u8>, String> {
-    tokio::fs::read(file_path)
-        .await
-        .map_err(|e| format!("read image: {e}"))
+    tokio::fs::read(file_path).await.map_err(|e| format!("read image: {e}"))
 }
 
 async fn generate_video(file_path: &Path) -> Result<Vec<u8>, String> {
@@ -75,22 +78,9 @@ async fn generate_video(file_path: &Path) -> Result<Vec<u8>, String> {
     let pattern = tmp.join("kf_%02d.jpg");
 
     let status = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-        ])
+        .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
         .arg(file_path)
-        .args([
-            "-vf",
-            "select=eq(pict_type\\,I)",
-            "-vsync",
-            "vfr",
-            "-frames:v",
-            "3",
-        ])
+        .args(["-vf", "select=eq(pict_type\\,I)", "-vsync", "vfr", "-frames:v", "3"])
         .arg(&pattern)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -117,9 +107,8 @@ async fn generate_video(file_path: &Path) -> Result<Vec<u8>, String> {
             return Err("ffmpeg could not extract a frame".into());
         }
 
-        let bytes = tokio::fs::read(&fallback)
-            .await
-            .map_err(|e| format!("read fallback frame: {e}"))?;
+        let bytes =
+            tokio::fs::read(&fallback).await.map_err(|e| format!("read fallback frame: {e}"))?;
         let _ = tokio::fs::remove_dir_all(&tmp).await;
         return Ok(bytes);
     }
@@ -140,9 +129,7 @@ async fn generate_video(file_path: &Path) -> Result<Vec<u8>, String> {
     };
 
     // Prefer the 3rd keyframe when present (kf_03); otherwise last available.
-    let bytes = tokio::fs::read(&frame)
-        .await
-        .map_err(|e| format!("read keyframe: {e}"))?;
+    let bytes = tokio::fs::read(&frame).await.map_err(|e| format!("read keyframe: {e}"))?;
     let _ = tokio::fs::remove_dir_all(&tmp).await;
     Ok(bytes)
 }
@@ -171,9 +158,7 @@ async fn generate_pdf(file_path: &Path) -> Result<Vec<u8>, String> {
         return Err("pdftoppm failed to render first page".into());
     }
 
-    let bytes = tokio::fs::read(&page)
-        .await
-        .map_err(|e| format!("read pdf page: {e}"))?;
+    let bytes = tokio::fs::read(&page).await.map_err(|e| format!("read pdf page: {e}"))?;
     let _ = tokio::fs::remove_dir_all(&tmp).await;
     Ok(bytes)
 }
@@ -183,17 +168,13 @@ fn resize_to_jpeg(raw: &[u8]) -> Result<Vec<u8>, String> {
     let resized = img.resize(THUMB_MAX_EDGE, THUMB_MAX_EDGE, FilterType::Triangle);
     let mut out = Vec::new();
     let mut cursor = std::io::Cursor::new(&mut out);
-    resized
-        .write_to(&mut cursor, ImageFormat::Jpeg)
-        .map_err(|e| format!("encode jpeg: {e}"))?;
+    resized.write_to(&mut cursor, ImageFormat::Jpeg).map_err(|e| format!("encode jpeg: {e}"))?;
     Ok(out)
 }
 
 async fn tempfile_dir() -> Result<PathBuf, String> {
     let dir = std::env::temp_dir().join(format!("sarca-thumb-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&dir)
-        .await
-        .map_err(|e| format!("create temp dir: {e}"))?;
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("create temp dir: {e}"))?;
     Ok(dir)
 }
 
@@ -211,9 +192,5 @@ async fn which(bin: &str) -> Option<PathBuf> {
         return None;
     }
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(path))
-    }
+    if path.is_empty() { None } else { Some(PathBuf::from(path)) }
 }
