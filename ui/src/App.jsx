@@ -8,7 +8,6 @@ import Storages from './pages/Storages'
 import StorageCreateForm from './pages/Storages/StorageCreateForm'
 import AlertStack from './components/AlertStack'
 import Files from './pages/Files'
-import UploadFileTo from './pages/Files/UploadFileTo'
 import Register from './pages/Register'
 import NotFound from './pages/404'
 import { initTheme, useThemeMode } from './common/theme'
@@ -173,7 +172,6 @@ const App = () => {
 							<Route path="/storages" component={Storages} />
 							<Route path="/storages/register" component={StorageCreateForm} />
 							<Route path="/storages/:id/files/*path" component={Files} />
-							<Route path="/storages/:id/upload_to" component={UploadFileTo} />
 							<Route path="/storage_workers" component={WorkersRedirect} />
 							<Route path="/storage_workers/register" component={WorkersRedirect} />
 							<Route path="*404" component={NotFound} />

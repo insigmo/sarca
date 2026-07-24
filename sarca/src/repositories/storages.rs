@@ -67,6 +67,7 @@ impl<'d> StoragesRepository<'d> {
                 LEFT JOIN {FILES_TABLE} f ON s.id = f.storage_id
                     AND f.path NOT LIKE '%/'
                     AND f.is_uploaded = true
+                    AND f.deleted_at IS NULL
                 WHERE a.user_id = $1
                 GROUP by s.id
             "

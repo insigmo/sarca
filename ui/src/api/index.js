@@ -1,6 +1,7 @@
 import createLocalStore from '../../libs'
 
 import apiRequest, { apiMultipartRequest, API_BASE } from './request'
+import { alertStore } from '../components/AlertStack'
 
 /////////////////////////////////////////////////////////////
 ////  USERS
@@ -374,34 +375,6 @@ const uploadFile = async (storage_id, path, file, onProgress, options = {}) => {
 }
 
 /**
- *
- * @param {string} storage_id
- * @param {string} path
- * @param {File|Blob} file
- * @param {(progress: number) => void} [onProgress]
- * @param {{ silent?: boolean }} [options]
- * @returns
- */
-const uploadFileTo = async (storage_id, path, file, onProgress, options = {}) => {
-	const form = new FormData()
-	const basename = String(file?.name || 'unnamed')
-		.split(/[/\\]/)
-		.pop()
-		.trim() || 'unnamed'
-	form.append('path', path ?? '')
-	form.append('filename', basename)
-	form.append('file', file, basename)
-
-	return await apiMultipartRequest(
-		`/storages/${storage_id}/files/upload_to`,
-		getAuthToken(),
-		form,
-		onProgress,
-		options,
-	)
-}
-
-/**
  * @typedef {Object} FSElement
  * @property {string} path
  * @property {string} name
@@ -508,6 +481,86 @@ const deleteFile = async (storage_id, path) => {
 }
 
 /**
+ * @param {string} storage_id
+ * @param {string} [path]
+ * @returns {Promise<import("./index").FSElement[]>}
+ */
+const listTrash = async (storage_id, path = '') => {
+	const params = new URLSearchParams()
+	if (path) params.set('path', path)
+	const qs = params.toString()
+	return await apiRequest(
+		`/storages/${storage_id}/trash${qs ? `?${qs}` : ''}`,
+		'get',
+		getAuthToken(),
+	)
+}
+
+/**
+ * @param {string} storage_id
+ * @param {string} path
+ * @param {'replace' | 'rename'} [on_conflict]
+ */
+const restoreTrash = async (storage_id, path, on_conflict) => {
+	const body = { path }
+	if (on_conflict) body.on_conflict = on_conflict
+	try {
+		await apiRequest(
+			`/storages/${storage_id}/trash/restore`,
+			'post',
+			getAuthToken(),
+			body,
+			false,
+			false,
+			true,
+		)
+	} catch (err) {
+		// 409 without on_conflict is handled by the restore-conflict dialog.
+		if (err.status === 409 && !on_conflict) {
+			throw err
+		}
+		alertStore.addAlert(err.message, 'error')
+		throw err
+	}
+}
+
+/**
+ * @param {string} storage_id
+ * @param {string} path
+ */
+const deleteForever = async (storage_id, path) => {
+	await apiRequest(
+		`/storages/${storage_id}/trash/${encodeFilePath(path)}`,
+		'delete',
+		getAuthToken(),
+	)
+}
+
+/**
+ * @param {string} storage_id
+ */
+const emptyTrash = async (storage_id) => {
+	await apiRequest(`/storages/${storage_id}/trash`, 'delete', getAuthToken())
+}
+
+/**
+ * @returns {Promise<{ retention_days: number }>}
+ */
+const getTrashSettings = async () => {
+	return await apiRequest('/settings/trash', 'get', getAuthToken())
+}
+
+/**
+ * @param {number} retention_days
+ * @returns {Promise<{ retention_days: number }>}
+ */
+const setTrashSettings = async (retention_days) => {
+	return await apiRequest('/settings/trash', 'put', getAuthToken(), {
+		retention_days,
+	})
+}
+
+/**
  *
  * @param {string} storage_id
  * @param {string} path current folder path (may be empty)
@@ -592,15 +645,22 @@ const API = {
 	files: {
 		createFolder,
 		uploadFile,
-		uploadFileTo,
 		getFSLayer,
 		download,
 		getInlineMediaUrl,
 		thumb,
 		deleteFile,
+		listTrash,
+		restoreTrash,
+		deleteForever,
+		emptyTrash,
 		search,
 		rename,
 		moveFile,
+	},
+	settings: {
+		getTrashSettings,
+		setTrashSettings,
 	},
 }
 
