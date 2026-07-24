@@ -18,7 +18,10 @@ use crate::{
     models::storages::Storage,
     schemas::{
         access::{GrantAccess, RestrictAccess},
-        storages::{InStorageSchema, StoragesListSchema, UpdateStorageSchema},
+        storages::{
+            AddChannelSchema, InStorageSchema, StoragesListSchema, UpdateChannelSchema,
+            UpdateStorageSchema,
+        },
     },
     services::storages::StoragesService,
 };
@@ -42,6 +45,18 @@ impl StoragesRouter {
                     .post(Self::grant_access)
                     .delete(Self::restrict_access),
             )
+            .route(
+                "/:storage_id/channels",
+                axum::routing::post(Self::add_channel),
+            )
+            .route(
+                "/:storage_id/channels/:channel_id",
+                axum::routing::put(Self::update_channel).delete(Self::remove_channel),
+            )
+            .route(
+                "/:storage_id/replication/retry",
+                axum::routing::post(Self::retry_replication),
+            )
             .nest("/:storage_id/files", files_router)
             .route_layer(middleware::from_fn_with_state(
                 state.clone(),
@@ -50,14 +65,20 @@ impl StoragesRouter {
             .with_state(state)
     }
 
+    fn service<'d>(state: &'d AppState) -> StoragesService<'d> {
+        StoragesService::new(
+            &state.db,
+            &state.config.telegram_api_base_url,
+            state.config.telegram_rate_limit,
+        )
+    }
+
     async fn create(
         State(state): State<Arc<AppState>>,
         Extension(user): Extension<AuthUser>,
         Json(in_schema): Json<InStorageSchema>,
     ) -> impl IntoResponse {
-        let storage = StoragesService::new(&state.db)
-            .create(in_schema, &user)
-            .await?;
+        let storage = Self::service(&state).create(in_schema, &user).await?;
         Ok::<_, (StatusCode, String)>((StatusCode::CREATED, Json(storage)))
     }
 
@@ -65,7 +86,7 @@ impl StoragesRouter {
         State(state): State<Arc<AppState>>,
         Extension(user): Extension<AuthUser>,
     ) -> impl IntoResponse {
-        let storages = StoragesService::new(&state.db)
+        let storages = Self::service(&state)
             .list(&user)
             .await
             .map(|s| StoragesListSchema::new(s))?;
@@ -80,9 +101,9 @@ impl StoragesRouter {
         State(state): State<Arc<AppState>>,
         Extension(user): Extension<AuthUser>,
         Path(id): Path<Uuid>,
-    ) -> Result<Json<Storage>, (StatusCode, String)> {
-        let storage = StoragesService::new(&state.db).get(id, &user).await?;
-        Ok(Json(storage))
+    ) -> impl IntoResponse {
+        let storage = Self::service(&state).get_detail(id, &user).await?;
+        Ok::<_, (StatusCode, String)>(Json(storage))
     }
 
     async fn update(
@@ -91,9 +112,7 @@ impl StoragesRouter {
         Path(id): Path<Uuid>,
         Json(in_schema): Json<UpdateStorageSchema>,
     ) -> Result<Json<Storage>, (StatusCode, String)> {
-        let storage = StoragesService::new(&state.db)
-            .update(id, in_schema, &user)
-            .await?;
+        let storage = Self::service(&state).update(id, in_schema, &user).await?;
         Ok(Json(storage))
     }
 
@@ -102,8 +121,54 @@ impl StoragesRouter {
         Extension(user): Extension<AuthUser>,
         Path(id): Path<Uuid>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        StoragesService::new(&state.db).delete(id, &user).await?;
+        Self::service(&state).delete(id, &user).await?;
         Ok(StatusCode::NO_CONTENT)
+    }
+
+    async fn add_channel(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+        Path(storage_id): Path<Uuid>,
+        Json(in_schema): Json<AddChannelSchema>,
+    ) -> impl IntoResponse {
+        let channel = Self::service(&state)
+            .add_channel(storage_id, in_schema, &user)
+            .await?;
+        Ok::<_, (StatusCode, String)>((StatusCode::CREATED, Json(channel)))
+    }
+
+    async fn update_channel(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+        Path((storage_id, channel_id)): Path<(Uuid, Uuid)>,
+        Json(patch): Json<UpdateChannelSchema>,
+    ) -> impl IntoResponse {
+        let channel = Self::service(&state)
+            .update_channel(storage_id, channel_id, patch, &user)
+            .await?;
+        Ok::<_, (StatusCode, String)>(Json(channel))
+    }
+
+    async fn remove_channel(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+        Path((storage_id, channel_id)): Path<(Uuid, Uuid)>,
+    ) -> Result<StatusCode, (StatusCode, String)> {
+        Self::service(&state)
+            .remove_channel(storage_id, channel_id, &user)
+            .await?;
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    async fn retry_replication(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+        Path(storage_id): Path<Uuid>,
+    ) -> impl IntoResponse {
+        let stats = Self::service(&state)
+            .retry_replication(storage_id, &user)
+            .await?;
+        Ok::<_, (StatusCode, String)>(Json(stats))
     }
 
     async fn grant_access(
@@ -112,9 +177,7 @@ impl StoragesRouter {
         Path(id): Path<Uuid>,
         Json(in_schema): Json<GrantAccess>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        StoragesService::new(&state.db)
-            .grant_access(id, in_schema, &user)
-            .await?;
+        Self::service(&state).grant_access(id, in_schema, &user).await?;
         Ok(StatusCode::NO_CONTENT)
     }
 
@@ -123,7 +186,7 @@ impl StoragesRouter {
         Extension(user): Extension<AuthUser>,
         Path(id): Path<Uuid>,
     ) -> impl IntoResponse {
-        let users = StoragesService::new(&state.db)
+        let users = Self::service(&state)
             .list_users_with_access(id, &user)
             .await?;
         Ok::<_, (StatusCode, String)>(Json(users))
@@ -135,7 +198,7 @@ impl StoragesRouter {
         Path(id): Path<Uuid>,
         Json(in_schema): Json<RestrictAccess>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        StoragesService::new(&state.db)
+        Self::service(&state)
             .restrict_access(id, in_schema, &user)
             .await?;
         Ok(StatusCode::NO_CONTENT)
