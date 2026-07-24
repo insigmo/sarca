@@ -1,4 +1,4 @@
-use std::{io, path::Path, pin::Pin, sync::Arc};
+use std::{collections::HashMap, io, path::Path, pin::Pin, sync::Arc};
 
 use axum::{
     body::{Bytes, StreamBody},
@@ -13,27 +13,32 @@ use async_stream::try_stream;
 use futures::{Stream, StreamExt};
 use percent_encoding::percent_decode_str;
 use reqwest::header;
-use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::{
     common::{
         access::check_access,
         channels::UploadProgressEvent,
+        chunk_cache::ChunkCache,
         jwt_manager::AuthUser,
         routing::{app_state::AppState, middlewares::auth::logged_in_required},
-        telegram_api::bot_api::TelegramBotApi,
+        telegram_api::bot_api::{is_chat_dead_error, TelegramBotApi},
     },
     errors::{SarcaError, SarcaResult},
     models::access::AccessType,
     models::files::InFile,
-    repositories::{access::AccessRepository, files::FilesRepository},
+    models::storage_channels::StorageChannel,
+    repositories::{
+        access::AccessRepository, files::FilesRepository,
+        storage_channels::StorageChannelsRepository, storages::StoragesRepository,
+    },
     schemas::files::{
         InFileSchema, InFolderSchema, MoveSchema, RenameSchema, SearchQuery, UploadParams,
     },
     services::files::FilesService,
     services::storage_workers_scheduler::StorageWorkersScheduler,
 };
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
 pub struct FilesRouter;
@@ -117,6 +122,7 @@ impl FilesRouter {
 
         let (mut filename_field, mut filename_from_file, mut parent_path, mut file_size) =
             (None::<String>, None::<String>, None::<String>, 0i64);
+        let mut file_content_type = None::<String>;
 
         while let Some(mut field) = multipart
             .next_field()
@@ -130,6 +136,9 @@ impl FilesRouter {
                     let raw_name = field.file_name().unwrap_or("").to_owned();
                     if !raw_name.trim().is_empty() {
                         filename_from_file = Some(raw_name);
+                    }
+                    if let Some(ct) = field.content_type() {
+                        file_content_type = Some(ct.to_string());
                     }
                     while let Some(chunk) = field
                         .chunk()
@@ -187,7 +196,10 @@ impl FilesRouter {
             .await
             .map_err(<(StatusCode, String)>::from)?;
 
-        let in_file = InFile::new(path, file_size, storage_id);
+        let chunk_size_bytes = state
+            .config
+            .chunk_size_bytes_for_file(&path, file_content_type.as_deref());
+        let in_file = InFile::new(path, file_size, storage_id).with_chunk_size(chunk_size_bytes);
         let (progress_tx, progress_rx) = mpsc::channel(64);
         let db = state.db.clone();
         let client_tx = state.tx.clone();
@@ -237,6 +249,7 @@ impl FilesRouter {
         // `path` is the destination folder (may be empty for root).
         let (mut filename_field, mut filename_from_file, mut parent_path, mut file_size) =
             (None::<String>, None::<String>, None::<String>, 0i64);
+        let mut file_content_type = None::<String>;
 
         while let Some(mut field) = multipart
             .next_field()
@@ -267,6 +280,9 @@ impl FilesRouter {
                     let raw_name = field.file_name().unwrap_or("").to_owned();
                     if !raw_name.trim().is_empty() {
                         filename_from_file = Some(raw_name);
+                    }
+                    if let Some(ct) = field.content_type() {
+                        file_content_type = Some(ct.to_string());
                     }
                     while let Some(chunk) = field
                         .chunk()
@@ -306,7 +322,11 @@ impl FilesRouter {
             .await
             .map_err(<(StatusCode, String)>::from)?;
 
-        let in_schema = InFileSchema::new(storage_id, path, tmp_path.clone(), file_size);
+        let chunk_size_bytes = state
+            .config
+            .chunk_size_bytes_for_file(&path, file_content_type.as_deref());
+        let in_schema =
+            InFileSchema::new(storage_id, path, tmp_path.clone(), file_size, chunk_size_bytes);
         let (progress_tx, progress_rx) = mpsc::channel(64);
         let db = state.db.clone();
         let client_tx = state.tx.clone();
@@ -515,8 +535,11 @@ impl FilesRouter {
         chunks.sort_by_key(|c| c.position);
 
         let file_size = file.size.max(0) as u64;
-        let chunk_size =
-            (state.config.telegram_chunk_size_mb as u64).saturating_mul(1024 * 1024).max(1);
+        let chunk_size = file
+            .chunk_size_bytes
+            .filter(|&n| n > 0)
+            .map(|n| n as u64)
+            .unwrap_or_else(|| state.config.default_chunk_size_bytes());
 
         let filename = Path::new(&path)
             .file_name()
@@ -581,6 +604,43 @@ impl FilesRouter {
         let base_url = state.config.telegram_api_base_url.clone();
         let rate = state.config.telegram_rate_limit;
         let db = state.db.clone();
+        let cache = ChunkCache::new(&state.config.work_dir);
+        let is_video = crate::models::files::is_video(path, Some(&content_type));
+
+        let channels = ordered_active_channels(&db, storage_id)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
+        if channels.is_empty() {
+            return Err(<(StatusCode, String)>::from(SarcaError::NoActiveChannel));
+        }
+        let candidates = resolve_chunk_candidates(&db, file.id, &channels)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
+
+        fn primary_candidate(candidates: &ChunkCandidates, position: i16) -> Option<String> {
+            candidates
+                .get(&position)
+                .and_then(|v| v.first())
+                .map(|(f, _)| f.clone())
+        }
+
+        // Warm the next Telegram chunk while the player consumes the current Range.
+        if is_video {
+            if let Some(next_chunk) = chunks.get(last_chunk_idx + 1) {
+                if let Some(file_id) = primary_candidate(&candidates, next_chunk.position) {
+                    prefetch_telegram_chunk(
+                        cache.clone(),
+                        base_url.clone(),
+                        db.clone(),
+                        rate,
+                        storage_id,
+                        file_id,
+                    );
+                }
+            }
+        }
+
+        let chunks_positions: Vec<i16> = chunks.iter().map(|c| c.position).collect();
 
         let stream = try_stream! {
             let mut remaining = content_length;
@@ -592,43 +652,50 @@ impl FilesRouter {
                 }
 
                 let chunk_start = idx as u64 * chunk_size;
-                let mut skip = cursor.saturating_sub(chunk_start);
+                let skip = cursor.saturating_sub(chunk_start);
 
-                let scheduler = StorageWorkersScheduler::new(&db, rate);
-                let api = TelegramBotApi::new(&base_url, scheduler);
+                if is_video {
+                    if let Some(next_chunk) = chunks_positions.get(idx + 1) {
+                        if let Some(file_id) = primary_candidate(&candidates, *next_chunk) {
+                            prefetch_telegram_chunk(
+                                cache.clone(),
+                                base_url.clone(),
+                                db.clone(),
+                                rate,
+                                storage_id,
+                                file_id,
+                            );
+                        }
+                    }
+                }
 
-                let mut s = api
-                    .download_stream(&chunk.telegram_file_id, storage_id)
+                let chunk_candidates = candidates.get(&chunk.position).cloned().unwrap_or_default();
+                let cached = ensure_chunk_cached(&cache, &base_url, &db, rate, storage_id, &chunk_candidates)
                     .await
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
-                while let Some(item) = s.next().await {
-                    if remaining == 0 {
+                let mut file = tokio::fs::File::open(&cached)
+                    .await
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                if skip > 0 {
+                    file.seek(std::io::SeekFrom::Start(skip))
+                        .await
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                }
+
+                let mut buf = vec![0u8; 64 * 1024];
+                while remaining > 0 {
+                    let n = file
+                        .read(&mut buf)
+                        .await
+                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                    if n == 0 {
                         break;
                     }
-
-                    let bytes = item
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-
-                    if skip > 0 {
-                        let blen = bytes.len() as u64;
-                        if skip >= blen {
-                            skip -= blen;
-                            continue;
-                        }
-                        let from = skip as usize;
-                        skip = 0;
-                        let slice = bytes.slice(from..);
-                        let take = (slice.len() as u64).min(remaining) as usize;
-                        remaining -= take as u64;
-                        cursor += take as u64;
-                        yield slice.slice(..take);
-                    } else {
-                        let take = (bytes.len() as u64).min(remaining) as usize;
-                        remaining -= take as u64;
-                        cursor += take as u64;
-                        yield bytes.slice(..take);
-                    }
+                    let take = (n as u64).min(remaining) as usize;
+                    remaining -= take as u64;
+                    cursor += take as u64;
+                    yield Bytes::copy_from_slice(&buf[..take]);
                 }
             }
         };
@@ -732,6 +799,15 @@ impl FilesRouter {
             let rate = state.config.telegram_rate_limit;
             let db = state.db.clone();
 
+            let channels = ordered_active_channels(&db, storage_id).await.map_err(|e| {
+                let _ = std::fs::remove_file(&zip_path);
+                <(StatusCode, String)>::from(e)
+            })?;
+            if channels.is_empty() {
+                let _ = std::fs::remove_file(&zip_path);
+                return Err(<(StatusCode, String)>::from(SarcaError::NoActiveChannel));
+            }
+
             for file in files {
                 let entry_name = file
                     .path
@@ -759,16 +835,28 @@ impl FilesRouter {
                     })?;
                 chunks.sort_by_key(|c| c.position);
 
+                let candidates = resolve_chunk_candidates(&db, file.id, &channels)
+                    .await
+                    .map_err(|e| {
+                        let _ = std::fs::remove_file(&zip_path);
+                        <(StatusCode, String)>::from(e)
+                    })?;
+
                 for chunk in chunks {
-                    let scheduler = StorageWorkersScheduler::new(&db, rate);
-                    let api = TelegramBotApi::new(&base_url, scheduler);
-                    let mut stream = api
-                        .download_stream(&chunk.telegram_file_id, storage_id)
-                        .await
-                        .map_err(|e| {
-                            let _ = std::fs::remove_file(&zip_path);
-                            <(StatusCode, String)>::from(e)
-                        })?;
+                    let chunk_candidates =
+                        candidates.get(&chunk.position).cloned().unwrap_or_default();
+                    let mut stream = download_chunk_stream_with_failover(
+                        &base_url,
+                        &db,
+                        rate,
+                        storage_id,
+                        &chunk_candidates,
+                    )
+                    .await
+                    .map_err(|e| {
+                        let _ = std::fs::remove_file(&zip_path);
+                        <(StatusCode, String)>::from(e)
+                    })?;
 
                     while let Some(item) = stream.next().await {
                         let bytes = item.map_err(|e| {
@@ -953,6 +1041,126 @@ impl FilesRouter {
             .await?;
         Ok(StatusCode::OK)
     }
+}
+
+/// telegram_file_id + channel_id candidates for a chunk, ordered by channel priority.
+type ChunkCandidates = HashMap<i16, Vec<(String, Uuid)>>;
+
+/// Active channels of a storage, ordered by download priority: current primary first,
+/// then the rest by position. Empty if the storage has no active channel.
+async fn ordered_active_channels(
+    db: &sqlx::PgPool,
+    storage_id: Uuid,
+) -> SarcaResult<Vec<StorageChannel>> {
+    let storage = StoragesRepository::new(db).get_by_id(storage_id).await?;
+    let mut channels: Vec<StorageChannel> = StorageChannelsRepository::new(db)
+        .list_by_storage(storage_id)
+        .await?
+        .into_iter()
+        .filter(|c| c.is_active())
+        .collect();
+    channels.sort_by_key(|c| {
+        if c.position == storage.primary_position {
+            (0i16, c.position)
+        } else {
+            (1i16, c.position)
+        }
+    });
+    Ok(channels)
+}
+
+/// For every chunk position of `file_id`, collect the telegram_file_id + channel_id of
+/// each active channel that already has it replicated, ordered by channel priority.
+async fn resolve_chunk_candidates(
+    db: &sqlx::PgPool,
+    file_id: Uuid,
+    channels: &[StorageChannel],
+) -> SarcaResult<ChunkCandidates> {
+    let files_repo = FilesRepository::new(db);
+    let mut map: ChunkCandidates = HashMap::new();
+    for channel in channels {
+        let replicas = files_repo
+            .list_chunks_with_replica_for_channel(file_id, channel.id)
+            .await?;
+        for r in replicas {
+            map.entry(r.position)
+                .or_default()
+                .push((r.telegram_file_id, channel.id));
+        }
+    }
+    Ok(map)
+}
+
+/// Fetch (and cache) a chunk's bytes, trying each channel candidate in priority order
+/// and marking channels dead when Telegram reports them unreachable.
+async fn ensure_chunk_cached(
+    cache: &ChunkCache,
+    base_url: &str,
+    db: &sqlx::PgPool,
+    rate: u8,
+    storage_id: Uuid,
+    candidates: &[(String, Uuid)],
+) -> SarcaResult<std::path::PathBuf> {
+    let mut last_err = SarcaError::DoesNotExist("chunk on any replicated channel".to_owned());
+    for (telegram_file_id, channel_id) in candidates {
+        let scheduler = StorageWorkersScheduler::new(db, rate);
+        let api = TelegramBotApi::new(base_url, scheduler);
+        match cache.ensure(telegram_file_id, storage_id, &api).await {
+            Ok(path) => return Ok(path),
+            Err(e) => {
+                tracing::warn!("[DOWNLOAD] chunk fetch failed via channel {channel_id}: {e}");
+                if is_chat_dead_error(&e) {
+                    let _ = StorageChannelsRepository::new(db).mark_dead(*channel_id).await;
+                }
+                last_err = e;
+            }
+        }
+    }
+    Err(last_err)
+}
+
+/// Same as [`ensure_chunk_cached`] but streams straight from Telegram (used for ZIP
+/// folder downloads, which don't benefit from the on-disk chunk cache).
+async fn download_chunk_stream_with_failover(
+    base_url: &str,
+    db: &sqlx::PgPool,
+    rate: u8,
+    storage_id: Uuid,
+    candidates: &[(String, Uuid)],
+) -> SarcaResult<Pin<Box<dyn Stream<Item = Result<tokio_util::bytes::Bytes, SarcaError>> + Send>>> {
+    let mut last_err = SarcaError::DoesNotExist("chunk on any replicated channel".to_owned());
+    for (telegram_file_id, channel_id) in candidates {
+        let scheduler = StorageWorkersScheduler::new(db, rate);
+        let api = TelegramBotApi::new(base_url, scheduler);
+        match api.download_stream(telegram_file_id, storage_id).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => {
+                tracing::warn!("[DOWNLOAD] zip chunk fetch failed via channel {channel_id}: {e}");
+                if is_chat_dead_error(&e) {
+                    let _ = StorageChannelsRepository::new(db).mark_dead(*channel_id).await;
+                }
+                last_err = e;
+            }
+        }
+    }
+    Err(last_err)
+}
+
+fn prefetch_telegram_chunk(
+    cache: ChunkCache,
+    base_url: String,
+    db: sqlx::PgPool,
+    rate: u8,
+    storage_id: Uuid,
+    telegram_file_id: String,
+) {
+    tokio::spawn(async move {
+        let scheduler = StorageWorkersScheduler::new(&db, rate);
+        let api = TelegramBotApi::new(&base_url, scheduler);
+        if let Err(e) = cache.ensure(&telegram_file_id, storage_id, &api).await {
+            tracing::debug!("video chunk prefetch failed: {e}");
+        }
+    });
 }
 
 /// Build a valid `Content-Disposition` header for possibly non-ASCII filenames.
