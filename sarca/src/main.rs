@@ -91,10 +91,23 @@ async fn main() {
     init_db(&db).await;
 
     match crate::repositories::files::FilesRepository::new(&db)
-        .cleanup_stale_uploads(60)
+        .list_stale_upload_ids()
         .await
     {
-        Ok(n) if n > 0 => tracing::info!("cleaned up {n} stale unfinished uploads"),
+        Ok(ids) if !ids.is_empty() => {
+            let n = ids.len();
+            match crate::services::trash::purge_file_ids(
+                &db,
+                &config.telegram_api_base_url,
+                config.telegram_rate_limit,
+                &ids,
+            )
+            .await
+            {
+                Ok(()) => tracing::info!("cleaned up {n} stale unfinished uploads"),
+                Err(e) => tracing::warn!("stale upload cleanup failed: {e}"),
+            }
+        }
         Ok(_) => {}
         Err(e) => tracing::warn!("stale upload cleanup failed: {e}"),
     }

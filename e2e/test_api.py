@@ -1,4 +1,4 @@
-"""API end-to-end tests covering auth, FS ops, workers, search, rename/move."""
+"""API end-to-end tests covering auth, FS ops, workers, search, rename/move, trash."""
 
 from __future__ import annotations
 
@@ -7,6 +7,43 @@ import uuid
 
 import httpx
 import pytest
+
+
+def _tree_names(client: httpx.Client, auth_headers: dict[str, str], storage_id: str) -> set[str]:
+    r = client.get(f"/api/storages/{storage_id}/files/tree/", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    return {e["name"] for e in r.json()}
+
+
+def _trash_names(
+    client: httpx.Client,
+    auth_headers: dict[str, str],
+    storage_id: str,
+    path: str = "",
+) -> set[str]:
+    params = {"path": path} if path else None
+    r = client.get(
+        f"/api/storages/{storage_id}/trash",
+        headers=auth_headers,
+        params=params,
+    )
+    assert r.status_code == 200, r.text
+    return {e["name"] for e in r.json()}
+
+
+def _create_folder(
+    client: httpx.Client,
+    auth_headers: dict[str, str],
+    storage_id: str,
+    folder_name: str,
+    path: str = "",
+) -> None:
+    r = client.post(
+        f"/api/storages/{storage_id}/files/create_folder",
+        headers=auth_headers,
+        json={"path": path, "folder_name": folder_name},
+    )
+    assert r.status_code in (200, 201), r.text
 
 
 def test_login_returns_access_and_refresh(tokens: dict[str, str]) -> None:
@@ -214,3 +251,173 @@ def test_upload_parent_trailing_slash_without_worker(
     tree = client.get(f"/api/storages/{storage_id}/files/tree/", headers=auth_headers)
     assert tree.status_code == 200
     assert all(e["name"] not in ("pic.png", "album") for e in tree.json())
+
+
+def test_trash_soft_delete_list_and_restore(
+    client: httpx.Client, auth_headers: dict[str, str], storage_id: str
+) -> None:
+    _create_folder(client, auth_headers, storage_id, "keep")
+    _create_folder(client, auth_headers, storage_id, "gone")
+    _create_folder(client, auth_headers, storage_id, "nested", path="gone")
+
+    r = client.delete(f"/api/storages/{storage_id}/files/gone/", headers=auth_headers)
+    assert r.status_code in (200, 204), r.text
+
+    live = _tree_names(client, auth_headers, storage_id)
+    assert "keep" in live
+    assert "gone" not in live
+
+    trash = _trash_names(client, auth_headers, storage_id)
+    assert "gone" in trash
+    assert "keep" not in trash
+
+    # Folder container is browsable in trash
+    trash_inner = _trash_names(client, auth_headers, storage_id, path="gone")
+    assert "nested" in trash_inner
+
+    r = client.post(
+        f"/api/storages/{storage_id}/trash/restore",
+        headers=auth_headers,
+        json={"path": "gone/"},
+    )
+    assert r.status_code == 204, r.text
+
+    live = _tree_names(client, auth_headers, storage_id)
+    assert "gone" in live
+    assert "keep" in live
+    assert "gone" not in _trash_names(client, auth_headers, storage_id)
+
+    nested = client.get(
+        f"/api/storages/{storage_id}/files/tree/gone",
+        headers=auth_headers,
+    )
+    assert nested.status_code == 200, nested.text
+    assert any(e["name"] == "nested" for e in nested.json())
+
+
+def test_trash_restore_conflict_replace(
+    client: httpx.Client, auth_headers: dict[str, str], storage_id: str
+) -> None:
+    _create_folder(client, auth_headers, storage_id, "alpha")
+    r = client.delete(f"/api/storages/{storage_id}/files/alpha/", headers=auth_headers)
+    assert r.status_code in (200, 204), r.text
+
+    _create_folder(client, auth_headers, storage_id, "alpha")  # live collision
+
+    r = client.post(
+        f"/api/storages/{storage_id}/trash/restore",
+        headers=auth_headers,
+        json={"path": "alpha/"},
+    )
+    assert r.status_code == 409, r.text
+    assert "already exists" in r.text.lower()
+
+    r = client.post(
+        f"/api/storages/{storage_id}/trash/restore",
+        headers=auth_headers,
+        json={"path": "alpha/", "on_conflict": "replace"},
+    )
+    assert r.status_code == 204, r.text
+
+    live = _tree_names(client, auth_headers, storage_id)
+    assert "alpha" in live
+    assert "alpha" not in _trash_names(client, auth_headers, storage_id)
+
+
+def test_trash_restore_conflict_rename(
+    client: httpx.Client, auth_headers: dict[str, str], storage_id: str
+) -> None:
+    """Folder restore with on_conflict=rename must keep trailing-slash semantics."""
+    _create_folder(client, auth_headers, storage_id, "beta")
+    r = client.delete(f"/api/storages/{storage_id}/files/beta/", headers=auth_headers)
+    assert r.status_code in (200, 204), r.text
+
+    _create_folder(client, auth_headers, storage_id, "beta")  # live collision
+
+    r = client.post(
+        f"/api/storages/{storage_id}/trash/restore",
+        headers=auth_headers,
+        json={"path": "beta/", "on_conflict": "rename"},
+    )
+    assert r.status_code == 204, r.text
+
+    live = _tree_names(client, auth_headers, storage_id)
+    assert "beta" in live
+    assert "beta (1)" in live
+    assert "beta" not in _trash_names(client, auth_headers, storage_id)
+
+
+def test_trash_delete_forever(
+    client: httpx.Client, auth_headers: dict[str, str], storage_id: str
+) -> None:
+    _create_folder(client, auth_headers, storage_id, "doomed")
+    r = client.delete(f"/api/storages/{storage_id}/files/doomed/", headers=auth_headers)
+    assert r.status_code in (200, 204), r.text
+    assert "doomed" in _trash_names(client, auth_headers, storage_id)
+
+    r = client.delete(
+        f"/api/storages/{storage_id}/trash/doomed/",
+        headers=auth_headers,
+    )
+    assert r.status_code == 204, r.text
+
+    assert "doomed" not in _trash_names(client, auth_headers, storage_id)
+    assert "doomed" not in _tree_names(client, auth_headers, storage_id)
+
+
+def test_trash_empty(
+    client: httpx.Client, auth_headers: dict[str, str], storage_id: str
+) -> None:
+    _create_folder(client, auth_headers, storage_id, "one")
+    _create_folder(client, auth_headers, storage_id, "two")
+    client.delete(f"/api/storages/{storage_id}/files/one/", headers=auth_headers)
+    client.delete(f"/api/storages/{storage_id}/files/two/", headers=auth_headers)
+
+    trash = _trash_names(client, auth_headers, storage_id)
+    assert "one" in trash and "two" in trash
+
+    r = client.delete(f"/api/storages/{storage_id}/trash", headers=auth_headers)
+    assert r.status_code == 204, r.text
+
+    assert _trash_names(client, auth_headers, storage_id) == set()
+    live = _tree_names(client, auth_headers, storage_id)
+    assert "one" not in live and "two" not in live
+
+
+def test_trash_retention_settings(
+    client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    r = client.get("/api/settings/trash", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    original = r.json()["retention_days"]
+    assert isinstance(original, int)
+    assert 1 <= original <= 30
+
+    new_days = 7 if original != 7 else 14
+    r = client.put(
+        "/api/settings/trash",
+        headers=auth_headers,
+        json={"retention_days": new_days},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["retention_days"] == new_days
+
+    r = client.get("/api/settings/trash", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert r.json()["retention_days"] == new_days
+
+    # restore prior value so local/dev instances stay unchanged
+    r = client.put(
+        "/api/settings/trash",
+        headers=auth_headers,
+        json={"retention_days": original},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["retention_days"] == original
+
+    r = client.put(
+        "/api/settings/trash",
+        headers=auth_headers,
+        json={"retention_days": 0},
+    )
+    assert r.status_code == 400, r.text

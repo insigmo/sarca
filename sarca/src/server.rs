@@ -15,8 +15,9 @@ use crate::{
     common::routing::app_state::AppState,
     conf,
     routers::{
-        auth::AuthRouter, settings::SettingsRouter, setup::SetupRouter,
-        storage_workers::StorageWorkersRouter, storages::StoragesRouter, users::UsersRouter,
+        auth::AuthRouter, public_shares::PublicSharesRouter, settings::SettingsRouter,
+        setup::SetupRouter, storage_workers::StorageWorkersRouter, storages::StoragesRouter,
+        users::UsersRouter,
     },
 };
 
@@ -61,6 +62,10 @@ impl Server {
             )
             .nest("/settings", SettingsRouter::get_router(app_state.clone()))
             .nest("/setup", SetupRouter::get_router(app_state.clone()))
+            .nest(
+                "/public/shares",
+                PublicSharesRouter::get_router(app_state.clone()),
+            )
             // Keep unknown /api/* from falling through to the SPA HTML fallback.
             .fallback(|| async { (StatusCode::NOT_FOUND, "Not Found") })
             .layer(ConcurrencyLimitLayer::new(workers.into()))
