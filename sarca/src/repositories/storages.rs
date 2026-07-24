@@ -21,19 +21,19 @@ impl<'d> StoragesRepository<'d> {
         let id = Uuid::new_v4();
 
         sqlx::query(
-            format!("INSERT INTO {TABLE} (id, name, chat_id) VALUES ($1, $2, $3)").as_str(),
+            format!(
+                "INSERT INTO {TABLE} (id, name, primary_position) VALUES ($1, $2, $3)"
+            )
+            .as_str(),
         )
         .bind(id)
         .bind(in_obj.name.clone())
-        .bind(in_obj.chat_id)
+        .bind(in_obj.primary_position)
         .execute(self.db)
         .await
         .map_err(|e| match e {
             sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
                 SarcaError::UserWasRemoved
-            }
-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
-                SarcaError::StorageChatIdConflict
             }
             _ => {
                 tracing::error!("{e}");
@@ -41,7 +41,7 @@ impl<'d> StoragesRepository<'d> {
             }
         })?;
 
-        let storage = Storage::new(id, in_obj.name, in_obj.chat_id);
+        let storage = Storage::new(id, in_obj.name, in_obj.primary_position);
         Ok(storage)
     }
 
@@ -54,7 +54,14 @@ impl<'d> StoragesRepository<'d> {
         let result = sqlx::query_as(
             format!(
                 "
-                SELECT s.*, COUNT(f.id) AS files_amount, COALESCE(SUM(f.size), 0)::BigInt as size 
+                SELECT
+                    s.*,
+                    COUNT(f.id) AS files_amount,
+                    COALESCE(SUM(f.size), 0)::BigInt as size,
+                    EXISTS(
+                        SELECT 1 FROM storage_channels sc
+                        WHERE sc.storage_id = s.id AND sc.status = 'dead'
+                    ) AS has_dead_channel
                 FROM {TABLE} s
                 JOIN {ACCESS_TABLE} a ON s.id = a.storage_id
                 LEFT JOIN {FILES_TABLE} f ON s.id = f.storage_id
@@ -130,6 +137,18 @@ impl<'d> StoragesRepository<'d> {
         .fetch_one(self.db)
         .await
         .map_err(|e| map_not_found(e, "storage"))
+    }
+
+    pub async fn set_primary_position(&self, storage_id: Uuid, position: i16) -> SarcaResult<()> {
+        sqlx::query(
+            format!("UPDATE {TABLE} SET primary_position = $2 WHERE id = $1").as_str(),
+        )
+        .bind(storage_id)
+        .bind(position)
+        .execute(self.db)
+        .await
+        .map_err(|e| map_not_found(e, "storage"))?;
+        Ok(())
     }
 
     pub async fn delete_storage(&self, storage_id: Uuid) -> SarcaResult<()> {

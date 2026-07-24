@@ -17,7 +17,7 @@ pub enum SarcaError {
     DoesNotExist(String),
     #[error("User already has a storage with such name")]
     StorageNameConflict,
-    #[error("User already has a storage with such chat id")]
+    #[error("This chat is already used by another channel")]
     StorageChatIdConflict,
     #[error("User already has a storage worker with such name")]
     StorageWorkerNameConflict,
@@ -39,6 +39,12 @@ pub enum SarcaError {
     CannotManageAccessOfYourself,
     #[error("Storage does not have workers")]
     StorageDoesNotHaveWorkers,
+    #[error("A storage can have at most 3 channels")]
+    TooManyChannels,
+    #[error("Cannot remove the last active channel")]
+    LastActiveChannel,
+    #[error("Storage has no active channel available")]
+    NoActiveChannel,
     #[error("unknown error")]
     Unknown,
     #[error("{0} header is required")]
@@ -56,6 +62,8 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::StorageWorkerNameConflict
             | SarcaError::StorageWorkerTokenConflict
             | SarcaError::StorageDoesNotHaveWorkers
+            | SarcaError::TooManyChannels
+            | SarcaError::LastActiveChannel
             | SarcaError::CannotManageAccessOfYourself => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
             SarcaError::DoesNotExist(_) => (StatusCode::NOT_FOUND, e.to_string()),
@@ -67,6 +75,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::InvalidFolderName
             | SarcaError::InvalidPath
             | SarcaError::NoStorageWorkers
+            | SarcaError::NoActiveChannel
             | SarcaError::TelegramAPIError(_) => (StatusCode::BAD_REQUEST, e.to_string()),
             _ => {
                 tracing::error!("{e}");
