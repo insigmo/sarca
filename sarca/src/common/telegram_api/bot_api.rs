@@ -347,6 +347,63 @@ impl<'t> TelegramBotApi<'t> {
         Ok(result.result.document)
     }
 
+    /// Local Bot API writes files as owner-only briefly; our entrypoint chmod loop
+    /// opens them for Sarca (`nobody`). Retry PermissionDenied / NotFound so downloads
+    /// don't fail in that race window.
+    async fn open_local_bot_api_file(path: &str) -> SarcaResult<tokio::fs::File> {
+        const ATTEMPTS: u32 = 25;
+        const DELAY_MS: u64 = 200;
+
+        let mut last_err: Option<std::io::Error> = None;
+        for attempt in 1..=ATTEMPTS {
+            match tokio::fs::File::open(path).await {
+                Ok(file) => return Ok(file),
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
+                    ) =>
+                {
+                    tracing::warn!(
+                        "[TELEGRAM API] local file open attempt {attempt}/{ATTEMPTS} \
+                         path={} err={e}",
+                        path
+                    );
+                    last_err = Some(e);
+                    tokio::time::sleep(Duration::from_millis(DELAY_MS)).await;
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "[TELEGRAM API] local file open failed path={} err={e}",
+                        path
+                    );
+                    return Err(SarcaError::TelegramAPIError(format!(
+                        "Failed to open local bot api file: {e}"
+                    )));
+                }
+            }
+        }
+
+        let e = last_err.expect("at least one permission/not-found error");
+        tracing::error!(
+            "[TELEGRAM API] local file open failed path={} err={e} after {ATTEMPTS} attempts. \
+             Ensure telegram-bot-api-data is mounted and world-readable.",
+            path
+        );
+        Err(SarcaError::TelegramAPIError(format!(
+            "Failed to open local bot api file: {e}"
+        )))
+    }
+
+    async fn read_local_bot_api_file(path: &str) -> SarcaResult<Vec<u8>> {
+        let mut file = Self::open_local_bot_api_file(path).await?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).await.map_err(|e| {
+            SarcaError::TelegramAPIError(format!("Failed to read local bot api file: {e}"))
+        })?;
+        Ok(bytes)
+    }
+
     pub async fn download(
         &self,
         telegram_file_id: &str,
@@ -418,20 +475,7 @@ impl<'t> TelegramBotApi<'t> {
                 ));
             }
 
-            match tokio::fs::read(&body.result.file_path).await {
-                Ok(bytes) => return Ok(bytes),
-                Err(e) => {
-                    tracing::error!(
-                        "[TELEGRAM API] local file read failed path={} err={e}. \
-                         Ensure telegram-bot-api-data is mounted at /var/lib/telegram-bot-api \
-                         and is world-readable (see telegram-bot-api entrypoint).",
-                        body.result.file_path
-                    );
-                    return Err(SarcaError::TelegramAPIError(format!(
-                        "Failed to read local bot api file: {e}"
-                    )));
-                }
-            }
+            return Self::read_local_bot_api_file(&body.result.file_path).await;
         }
 
         // downloading the file itself
@@ -519,17 +563,7 @@ impl<'t> TelegramBotApi<'t> {
                 ));
             }
 
-            let file = tokio::fs::File::open(&body.result.file_path)
-                .await
-                .map_err(|e| {
-                    tracing::error!(
-                        "[TELEGRAM API] local file open failed path={} err={e}",
-                        body.result.file_path
-                    );
-                    SarcaError::TelegramAPIError(format!(
-                        "Failed to open local bot api file: {e}"
-                    ))
-                })?;
+            let file = Self::open_local_bot_api_file(&body.result.file_path).await?;
             let stream = ReaderStream::new(file).map(|res| {
                 res.map_err(|e| {
                     SarcaError::TelegramAPIError(format!(

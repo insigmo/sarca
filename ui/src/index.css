@@ -1084,6 +1084,36 @@ a.default-link:hover {
 	}
 }
 
+/* —— Download preparing overlay —— */
+.download-preparing {
+	position: fixed;
+	inset: 0;
+	z-index: 100001;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	padding: 24px;
+	background: rgba(5, 8, 22, 0.58);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+	color: #fff;
+	text-align: center;
+}
+
+.download-preparing__text {
+	font-size: 1.05rem;
+	font-weight: 700;
+	letter-spacing: -0.01em;
+}
+
+.download-preparing__hint {
+	font-size: 0.85rem;
+	opacity: 0.72;
+	max-width: 280px;
+}
+
 /* —— File viewer / media player (true fullscreen via Portal → body) —— */
 .file-viewer {
 	position: fixed !important;
@@ -1115,7 +1145,7 @@ a.default-link:hover {
 	position: absolute;
 	top: 18px;
 	right: 18px;
-	z-index: 20;
+	z-index: 40;
 	width: 56px;
 	height: 56px;
 	border: 1px solid rgba(255, 255, 255, 0.22);
@@ -1142,7 +1172,7 @@ a.default-link:hover {
 	position: absolute;
 	top: 18px;
 	right: 86px;
-	z-index: 20;
+	z-index: 40;
 	width: 48px;
 	height: 48px;
 	border: 1px solid rgba(255, 255, 255, 0.22);
@@ -1167,7 +1197,7 @@ a.default-link:hover {
 .file-viewer__nav {
 	position: absolute;
 	top: 50%;
-	z-index: 20;
+	z-index: 25;
 	transform: translateY(-50%);
 	width: 56px;
 	height: 56px;
@@ -1190,38 +1220,6 @@ a.default-link:hover {
 	box-shadow: 0 0 0 4px rgba(217, 164, 65, 0.25), 0 10px 32px rgba(0, 0, 0, 0.4);
 }
 
-.file-viewer__nav-zone {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	width: 96px;
-	z-index: 20;
-	display: flex;
-	align-items: center;
-	pointer-events: none;
-}
-
-.file-viewer__nav-zone .file-viewer__nav {
-	position: relative;
-	top: auto;
-	left: auto;
-	right: auto;
-	transform: none;
-	pointer-events: auto;
-}
-
-.file-viewer__nav-zone--prev {
-	left: 0;
-	justify-content: flex-start;
-	padding-left: 18px;
-}
-
-.file-viewer__nav-zone--next {
-	right: 0;
-	justify-content: flex-end;
-	padding-right: 18px;
-}
-
 .file-viewer__nav--prev {
 	left: 18px;
 }
@@ -1230,42 +1228,61 @@ a.default-link:hover {
 	right: 18px;
 }
 
-.file-viewer__nav-zone .file-viewer__nav--prev,
-.file-viewer__nav-zone .file-viewer__nav--next {
-	left: auto;
-	right: auto;
+.file-viewer__nav--prev:hover {
+	transform: translateY(-50%) scale(1.06);
 }
 
-.file-viewer__nav-zone .file-viewer__nav:hover {
-	transform: scale(1.06);
+.file-viewer__nav--next:hover {
+	transform: translateY(-50%) scale(1.06);
 }
 
-/* Markdown / HTML: hide side nav until the cursor nears an edge. */
+/* Thin edge sensors for HTML iframe (mousemove does not reach parent). */
+.file-viewer__edge-sense {
+	position: absolute;
+	top: 96px;
+	bottom: 24px;
+	width: 28px;
+	z-index: 18;
+	pointer-events: none;
+}
+
+.file-viewer__edge-sense--prev {
+	left: 0;
+}
+
+.file-viewer__edge-sense--next {
+	right: 0;
+}
+
+/* Markdown / HTML: hide side nav until cursor nears an edge; only the button is clickable. */
 @media (hover: hover) and (pointer: fine) {
-	.file-viewer--doc-nav .file-viewer__nav-zone {
+	.file-viewer--doc-nav .file-viewer__edge-sense {
 		pointer-events: auto;
 	}
 
-	.file-viewer--doc-nav .file-viewer__nav-zone .file-viewer__nav {
+	.file-viewer--doc-nav .file-viewer__nav {
 		opacity: 0;
-		transform: translateX(-8px);
 		pointer-events: none;
 	}
 
-	.file-viewer--doc-nav .file-viewer__nav-zone--next .file-viewer__nav {
-		transform: translateX(8px);
+	.file-viewer--doc-nav .file-viewer__nav--prev {
+		transform: translate(-10px, -50%);
 	}
 
-	.file-viewer--doc-nav .file-viewer__nav-zone:hover .file-viewer__nav,
-	.file-viewer--doc-nav .file-viewer__nav-zone:focus-within .file-viewer__nav {
+	.file-viewer--doc-nav .file-viewer__nav--next {
+		transform: translate(10px, -50%);
+	}
+
+	.file-viewer--doc-nav .file-viewer__nav--peek,
+	.file-viewer--doc-nav .file-viewer__nav:focus-visible {
 		opacity: 1;
-		transform: none;
 		pointer-events: auto;
+		transform: translateY(-50%);
 	}
 
-	.file-viewer--doc-nav .file-viewer__nav-zone:hover .file-viewer__nav:hover,
-	.file-viewer--doc-nav .file-viewer__nav-zone:focus-within .file-viewer__nav:hover {
-		transform: scale(1.06);
+	.file-viewer--doc-nav .file-viewer__nav--peek:hover,
+	.file-viewer--doc-nav .file-viewer__nav:focus-visible:hover {
+		transform: translateY(-50%) scale(1.06);
 	}
 }
 
@@ -1507,12 +1524,12 @@ a.default-link:hover {
 	transform: translateY(-6px);
 }
 
-.file-viewer--chrome-hidden .file-viewer__nav-zone--prev .file-viewer__nav {
-	transform: translateX(-8px);
+.file-viewer--chrome-hidden .file-viewer__nav--prev {
+	transform: translate(-8px, -50%);
 }
 
-.file-viewer--chrome-hidden .file-viewer__nav-zone--next .file-viewer__nav {
-	transform: translateX(8px);
+.file-viewer--chrome-hidden .file-viewer__nav--next {
+	transform: translate(8px, -50%);
 }
 
 .file-viewer--chrome-hidden .file-viewer__player .file-viewer__controls {
@@ -1729,16 +1746,17 @@ a.default-link:hover {
 		font-size: 1.6rem;
 	}
 
-	.file-viewer__nav-zone {
-		width: 72px;
+	.file-viewer__nav--prev {
+		left: 10px;
 	}
 
-	.file-viewer__nav-zone--prev {
-		padding-left: 10px;
+	.file-viewer__nav--next {
+		right: 10px;
 	}
 
-	.file-viewer__nav-zone--next {
-		padding-right: 10px;
+	.file-viewer__edge-sense {
+		width: 22px;
+		top: 88px;
 	}
 
 	.file-viewer__volume-slider {

@@ -42,6 +42,11 @@ fi
 # `nobody` in another container with the same volume mounted, so it cannot traverse
 # those dirs unless they are world-executable/readable. Keep permissions open enough
 # for cross-container reads (files stay on the private Docker volume).
+#
+# Also set a permissive umask so newly created files are more likely world-readable
+# before the chmod loop catches them (Sarca retries PermissionDenied briefly).
+umask 022
+
 fix_bot_api_perms() {
 	chmod -R a+rX "$DATA_DIR" 2>/dev/null || true
 }
@@ -49,7 +54,7 @@ fix_bot_api_perms() {
 fix_bot_api_perms
 (
 	while true; do
-		sleep 5
+		sleep 1
 		fix_bot_api_perms
 	done
 ) &

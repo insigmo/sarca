@@ -44,6 +44,7 @@ const formatTime = (sec) => {
 const FileViewer = (props) => {
 	const { addAlert } = alertStore
 	const [loading, setLoading] = createSignal(false)
+	const [isDownloading, setIsDownloading] = createSignal(false)
 	const [error, setError] = createSignal(null)
 	const [textContent, setTextContent] = createSignal('')
 	const [docxHtml, setDocxHtml] = createSignal('')
@@ -60,6 +61,8 @@ const FileViewer = (props) => {
 	const [progress, setProgress] = createSignal(0)
 	const [chromeVisible, setChromeVisible] = createSignal(true)
 	const [isFullscreen, setIsFullscreen] = createSignal(false)
+	const [navPeekLeft, setNavPeekLeft] = createSignal(false)
+	const [navPeekRight, setNavPeekRight] = createSignal(false)
 
 	/** @type {HTMLVideoElement | HTMLAudioElement | undefined} */
 	let mediaEl
@@ -77,6 +80,26 @@ const FileViewer = (props) => {
 
 	const streamKinds = () =>
 		['image', 'video', 'audio', 'pdf'].includes(kind())
+
+	const updateDocNavPeek = (clientX, clientY, target) => {
+		if (!isDocNavKind() || !target) {
+			setNavPeekLeft(false)
+			setNavPeekRight(false)
+			return
+		}
+		const rect = target.getBoundingClientRect()
+		const x = clientX - rect.left
+		const y = clientY - rect.top
+		// Keep top chrome (close / download) free of edge peek.
+		if (y < 96) {
+			setNavPeekLeft(false)
+			setNavPeekRight(false)
+			return
+		}
+		const zone = 72
+		setNavPeekLeft(x <= zone)
+		setNavPeekRight(x >= rect.width - zone)
+	}
 
 	const viewableFiles = createMemo(() =>
 		(props.files || []).filter((f) => f.is_file && f.name !== '..'),
@@ -286,9 +309,9 @@ const FileViewer = (props) => {
 	})
 
 	const downloadFile = async () => {
-		if (!props.file) return
+		if (!props.file || isDownloading()) return
 		try {
-			setLoading(true)
+			setIsDownloading(true)
 			const blob = await API.files.download(props.storageId, props.file.path)
 			const href = URL.createObjectURL(blob)
 			const a = Object.assign(document.createElement('a'), {
@@ -300,11 +323,12 @@ const FileViewer = (props) => {
 			a.click()
 			URL.revokeObjectURL(href)
 			a.remove()
+			addAlert('Download started', 'success')
 		} catch (err) {
 			console.error(err)
 			addAlert('Download failed', 'error')
 		} finally {
-			setLoading(false)
+			setIsDownloading(false)
 		}
 	}
 
@@ -449,8 +473,13 @@ const FileViewer = (props) => {
 					role="dialog"
 					aria-modal="true"
 					aria-label={props.file?.name}
-					onMouseMove={() => {
+					onMouseMove={(e) => {
 						if (kind() === 'video') revealChrome()
+						updateDocNavPeek(e.clientX, e.clientY, e.currentTarget)
+					}}
+					onMouseLeave={() => {
+						setNavPeekLeft(false)
+						setNavPeekRight(false)
 					}}
 				>
 					<button
@@ -470,6 +499,7 @@ const FileViewer = (props) => {
 						class="file-viewer__download"
 						aria-label="Download"
 						title="Download"
+						disabled={isDownloading()}
 						onClick={downloadFile}
 						onMouseEnter={() => pinChrome(true)}
 						onMouseLeave={() => pinChrome(false)}
@@ -488,36 +518,77 @@ const FileViewer = (props) => {
 						</span>
 					</div>
 
+					<Show when={isDocNavKind() && hasPrev()}>
+						<div
+							class="file-viewer__edge-sense file-viewer__edge-sense--prev"
+							aria-hidden="true"
+							onMouseEnter={() => setNavPeekLeft(true)}
+							onMouseLeave={(e) => {
+								if (!e.relatedTarget?.closest?.('.file-viewer__nav--prev')) {
+									setNavPeekLeft(false)
+								}
+							}}
+						/>
+					</Show>
+					<Show when={isDocNavKind() && hasNext()}>
+						<div
+							class="file-viewer__edge-sense file-viewer__edge-sense--next"
+							aria-hidden="true"
+							onMouseEnter={() => setNavPeekRight(true)}
+							onMouseLeave={(e) => {
+								if (!e.relatedTarget?.closest?.('.file-viewer__nav--next')) {
+									setNavPeekRight(false)
+								}
+							}}
+						/>
+					</Show>
+
 					<Show when={hasPrev()}>
-						<div class="file-viewer__nav-zone file-viewer__nav-zone--prev">
-							<button
-								type="button"
-								class="file-viewer__nav file-viewer__nav--prev"
-								aria-label="Previous file"
-								title="Previous file"
-								onClick={goPrev}
-								onMouseEnter={() => pinChrome(true)}
-								onMouseLeave={() => pinChrome(false)}
-							>
-								<ChevronLeftIcon fontSize="inherit" />
-							</button>
-						</div>
+						<button
+							type="button"
+							class="file-viewer__nav file-viewer__nav--prev"
+							classList={{
+								'file-viewer__nav--peek': !isDocNavKind() || navPeekLeft(),
+							}}
+							aria-label="Previous file"
+							title="Previous file"
+							tabIndex={isDocNavKind() && !navPeekLeft() ? -1 : 0}
+							onClick={goPrev}
+							onMouseEnter={() => {
+								if (isDocNavKind()) setNavPeekLeft(true)
+								pinChrome(true)
+							}}
+							onMouseLeave={() => {
+								if (isDocNavKind()) setNavPeekLeft(false)
+								pinChrome(false)
+							}}
+						>
+							<ChevronLeftIcon fontSize="inherit" />
+						</button>
 					</Show>
 
 					<Show when={hasNext()}>
-						<div class="file-viewer__nav-zone file-viewer__nav-zone--next">
-							<button
-								type="button"
-								class="file-viewer__nav file-viewer__nav--next"
-								aria-label="Next file"
-								title="Next file"
-								onClick={goNext}
-								onMouseEnter={() => pinChrome(true)}
-								onMouseLeave={() => pinChrome(false)}
-							>
-								<ChevronRightIcon fontSize="inherit" />
-							</button>
-						</div>
+						<button
+							type="button"
+							class="file-viewer__nav file-viewer__nav--next"
+							classList={{
+								'file-viewer__nav--peek': !isDocNavKind() || navPeekRight(),
+							}}
+							aria-label="Next file"
+							title="Next file"
+							tabIndex={isDocNavKind() && !navPeekRight() ? -1 : 0}
+							onClick={goNext}
+							onMouseEnter={() => {
+								if (isDocNavKind()) setNavPeekRight(true)
+								pinChrome(true)
+							}}
+							onMouseLeave={() => {
+								if (isDocNavKind()) setNavPeekRight(false)
+								pinChrome(false)
+							}}
+						>
+							<ChevronRightIcon fontSize="inherit" />
+						</button>
 					</Show>
 
 					<div class="file-viewer__stage">
@@ -718,6 +789,16 @@ const FileViewer = (props) => {
 							</Show>
 						</Show>
 					</div>
+
+					<Show when={isDownloading()}>
+						<div class="download-preparing" role="status" aria-live="polite">
+							<CircularProgress color="secondary" size={42} />
+							<div class="download-preparing__text">Preparing download…</div>
+							<div class="download-preparing__hint">
+								Please wait while the file is prepared
+							</div>
+						</div>
+					</Show>
 				</div>
 			</Portal>
 		</Show>

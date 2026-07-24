@@ -3,6 +3,7 @@ import MenuItem from '@suid/material/MenuItem'
 import ListItemIcon from '@suid/material/ListItemIcon'
 import ListItemText from '@suid/material/ListItemText'
 import IconButton from '@suid/material/IconButton'
+import CircularProgress from '@suid/material/CircularProgress'
 import MoreVertIcon from '@suid/icons-material/MoreVert'
 import VisibilityIcon from '@suid/icons-material/Visibility'
 import DownloadIcon from '@suid/icons-material/Download'
@@ -11,6 +12,7 @@ import DeleteIcon from '@suid/icons-material/Delete'
 import DriveFileRenameOutlineIcon from '@suid/icons-material/DriveFileRenameOutline'
 import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
 import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import { useNavigate, useParams } from '@solidjs/router'
 
 import API from '../api'
@@ -38,6 +40,7 @@ const FSListItem = (props) => {
 		createSignal(false)
 	const [isInfoDialogOpened, setIsInfoDialogOpened] = createSignal(false)
 	const [thumbUrl, setThumbUrl] = createSignal(null)
+	const [isDownloading, setIsDownloading] = createSignal(false)
 	const { addAlert } = alertStore
 	const navigate = useNavigate()
 	const params = useParams()
@@ -98,7 +101,7 @@ const FSListItem = (props) => {
 	const download = async () => {
 		handleCloseMore()
 
-		if (isParentNav()) {
+		if (isParentNav() || isDownloading()) {
 			return
 		}
 
@@ -115,6 +118,7 @@ const FSListItem = (props) => {
 
 		const path = isFile ? props.fsElement.path : normalizedPath()
 
+		setIsDownloading(true)
 		try {
 			const blob = await API.files.download(params.id, path)
 			const href = URL.createObjectURL(blob)
@@ -130,8 +134,14 @@ const FSListItem = (props) => {
 			a.click()
 			URL.revokeObjectURL(href)
 			a.remove()
+			addAlert(
+				isFile ? 'Download started' : 'ZIP ready — download started',
+				'success',
+			)
 		} catch (err) {
 			console.error(err)
+		} finally {
+			setIsDownloading(false)
 		}
 	}
 
@@ -254,7 +264,10 @@ const FSListItem = (props) => {
 					<ListItemText>Info</ListItemText>
 				</MenuItem>
 
-				<MenuItem onClick={download} disabled={isParentNav()}>
+				<MenuItem
+					onClick={download}
+					disabled={isParentNav() || isDownloading()}
+				>
 					<ListItemIcon>
 						<DownloadIcon fontSize="small" />
 					</ListItemIcon>
@@ -297,6 +310,22 @@ const FSListItem = (props) => {
 				isOpened={isInfoDialogOpened()}
 				onClose={() => setIsInfoDialogOpened(false)}
 			/>
+
+			<Show when={isDownloading()}>
+				<Portal mount={document.body}>
+					<div class="download-preparing" role="status" aria-live="polite">
+						<CircularProgress color="secondary" size={42} />
+						<div class="download-preparing__text">
+							{props.fsElement.is_file
+								? 'Preparing download…'
+								: 'Preparing ZIP archive…'}
+						</div>
+						<div class="download-preparing__hint">
+							This may take a while for large folders
+						</div>
+					</div>
+				</Portal>
+			</Show>
 		</>
 	)
 }

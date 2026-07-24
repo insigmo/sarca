@@ -320,8 +320,9 @@ const uploadFileTo = async (storage_id, path, file, onProgress, options = {}) =>
  * @returns {Promise<FSElement[]>}
  */
 const getFSLayer = async (storage_id, path) => {
+	const suffix = path ? encodeFilePath(path) : ''
 	return await apiRequest(
-		`/storages/${storage_id}/files/tree/${path}`,
+		`/storages/${storage_id}/files/tree/${suffix}`,
 		'get',
 		getAuthToken(),
 	)
@@ -335,7 +336,7 @@ const getFSLayer = async (storage_id, path) => {
  */
 const download = async (storage_id, path) => {
 	const response = await apiRequest(
-		`/storages/${storage_id}/files/download/${path}`,
+		`/storages/${storage_id}/files/download/${encodeFilePath(path)}`,
 		'get',
 		getAuthToken(),
 		undefined,
@@ -346,15 +347,20 @@ const download = async (storage_id, path) => {
 }
 
 /**
- * Encode each path segment for use in a download URL.
+ * Encode each path segment for use in a files API URL.
+ * Preserves a trailing slash so folder downloads hit the ZIP path.
  * @param {string} path
  */
-const encodeFilePath = (path) =>
-	String(path || '')
+const encodeFilePath = (path) => {
+	const raw = String(path || '')
+	const trailing = raw.endsWith('/')
+	const encoded = raw
 		.split('/')
 		.filter((p) => p.length)
 		.map(encodeURIComponent)
 		.join('/')
+	return trailing && encoded ? `${encoded}/` : encoded
+}
 
 /**
  * Authenticated URL for `<video>` / `<audio>` / `<img>` / `<iframe>` streaming.
@@ -381,7 +387,7 @@ const getInlineMediaUrl = (storage_id, path) => {
  */
 const thumb = async (storage_id, path) => {
 	const response = await apiRequest(
-		`/storages/${storage_id}/files/thumb/${path}`,
+		`/storages/${storage_id}/files/thumb/${encodeFilePath(path)}`,
 		'get',
 		getAuthToken(),
 		undefined,
@@ -398,7 +404,7 @@ const thumb = async (storage_id, path) => {
  */
 const deleteFile = async (storage_id, path) => {
 	await apiRequest(
-		`/storages/${storage_id}/files/${path}`,
+		`/storages/${storage_id}/files/${encodeFilePath(path)}`,
 		'delete',
 		getAuthToken(),
 	)
@@ -413,7 +419,8 @@ const deleteFile = async (storage_id, path) => {
  */
 const search = async (storage_id, path, search_path) => {
 	const params = new URLSearchParams({ search_path })
-	const base = path ? `search/${path}` : 'search'
+	const encoded = path ? encodeFilePath(path) : ''
+	const base = encoded ? `search/${encoded}` : 'search'
 	return await apiRequest(
 		`/storages/${storage_id}/files/${base}?${params}`,
 		'get',
