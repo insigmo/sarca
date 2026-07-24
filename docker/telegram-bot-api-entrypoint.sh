@@ -4,6 +4,7 @@
 set -e
 
 CONF="${SARCA_CONF:-/sarca.conf}"
+DATA_DIR="${TELEGRAM_WORK_DIR:-/var/lib/telegram-bot-api}"
 
 conf_get() {
 	key="$1"
@@ -36,5 +37,21 @@ if [ -z "$TELEGRAM_API_ID" ] || [ -z "$TELEGRAM_API_HASH" ]; then
 	echo "error: set TELEGRAM_API_ID and TELEGRAM_API_HASH in sarca.conf" >&2
 	exit 1
 fi
+
+# Local Bot API creates per-bot dirs as 0750 (owner telegram-bot-api). Sarca runs as
+# `nobody` in another container with the same volume mounted, so it cannot traverse
+# those dirs unless they are world-executable/readable. Keep permissions open enough
+# for cross-container reads (files stay on the private Docker volume).
+fix_bot_api_perms() {
+	chmod -R a+rX "$DATA_DIR" 2>/dev/null || true
+}
+
+fix_bot_api_perms
+(
+	while true; do
+		sleep 5
+		fix_bot_api_perms
+	done
+) &
 
 exec /docker-entrypoint.sh "$@"

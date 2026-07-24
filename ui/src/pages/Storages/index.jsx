@@ -1,12 +1,15 @@
 import Stack from '@suid/material/Stack'
 import Button from '@suid/material/Button'
+import IconButton from '@suid/material/IconButton'
 import AddIcon from '@suid/icons-material/Add'
+import SettingsOutlinedIcon from '@suid/icons-material/SettingsOutlined'
 import { For, Show, createSignal, onMount } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 
 import API from '../../api'
 import { convertSize } from '../../common/size_converter'
 import FileTypeIcon from '../../components/FileTypeIcon'
+import StorageSettingsModal from '../../components/StorageSettingsModal'
 import WaveDivider from '../../components/WaveDivider'
 
 const Storages = () => {
@@ -14,12 +17,22 @@ const Storages = () => {
 	 * @type {[import("solid-js").Accessor<import("../../api").StorageWithInfo[]>, any]}
 	 */
 	const [storages, setStorages] = createSignal([])
+	/**
+	 * @type {[import("solid-js").Accessor<import("../../api").StorageWithInfo | null>, any]}
+	 */
+	const [settingsStorage, setSettingsStorage] = createSignal(null)
 	const navigate = useNavigate()
 
 	onMount(async () => {
 		const storagesSchema = await API.storages.listStorages()
 		setStorages(storagesSchema.storages)
 	})
+
+	const openSettings = (e, storage) => {
+		e.stopPropagation()
+		e.preventDefault()
+		setSettingsStorage(storage)
+	}
 
 	return (
 		<Stack>
@@ -64,7 +77,7 @@ const Storages = () => {
 								aria-label={`Open storage ${storage.name}`}
 							>
 								<div class="storage-card__top">
-									<FileTypeIcon name="docs.folder" isFile={false} size={48} />
+									<FileTypeIcon name="docs.folder" isFile={false} size={56} />
 									<div style={{ 'min-width': 0, flex: 1 }}>
 										<h2 class="storage-card__title">{storage.name}</h2>
 										<p class="storage-card__meta">
@@ -72,16 +85,37 @@ const Storages = () => {
 											{storage.files_amount === 1 ? 'file' : 'files'}
 											{' · '}
 											{convertSize(storage.size)}
-											{' · '}
-											Chat {storage.chat_id}
 										</p>
 									</div>
+									<IconButton
+										class="storage-card__settings"
+										size="small"
+										aria-label={`Settings for ${storage.name}`}
+										onClick={(e) => openSettings(e, storage)}
+										onMouseDown={(e) => e.stopPropagation()}
+										onKeyDown={(e) => e.stopPropagation()}
+									>
+										<SettingsOutlinedIcon fontSize="small" />
+									</IconButton>
 								</div>
 							</article>
 						)}
 					</For>
 				</div>
 			</Show>
+
+			<StorageSettingsModal
+				storage={settingsStorage()}
+				onClose={() => setSettingsStorage(null)}
+				onRenamed={(updated) => {
+					setStorages((list) =>
+						list.map((s) => (s.id === updated.id ? { ...s, name: updated.name } : s)),
+					)
+				}}
+				onDeleted={(id) => {
+					setStorages((list) => list.filter((s) => s.id !== id))
+				}}
+			/>
 		</Stack>
 	)
 }

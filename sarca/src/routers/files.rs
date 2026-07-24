@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::{
     common::{
         access::check_access,
+        channels::UploadProgressEvent,
         jwt_manager::AuthUser,
         routing::{app_state::AppState, middlewares::auth::logged_in_required},
         telegram_api::bot_api::TelegramBotApi,
@@ -33,6 +34,7 @@ use crate::{
     services::files::FilesService,
     services::storage_workers_scheduler::StorageWorkersScheduler,
 };
+use tokio::sync::mpsc;
 
 pub struct FilesRouter;
 
@@ -96,7 +98,7 @@ impl FilesRouter {
         Extension(user): Extension<AuthUser>,
         RoutePath(storage_id): RoutePath<Uuid>,
         mut multipart: Multipart,
-    ) -> Result<StatusCode, (StatusCode, String)> {
+    ) -> Result<Response, (StatusCode, String)> {
         // stream multipart to disk
         let upload_dir = Path::new(&state.config.work_dir).join("uploads");
         tokio::fs::create_dir_all(&upload_dir).await.map_err(|e| {
@@ -113,7 +115,8 @@ impl FilesRouter {
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't create temp file".to_owned()))?;
 
-        let (mut filename, mut parent_path, mut file_size) = (None::<String>, None::<String>, 0i64);
+        let (mut filename_field, mut filename_from_file, mut parent_path, mut file_size) =
+            (None::<String>, None::<String>, None::<String>, 0i64);
 
         while let Some(mut field) = multipart
             .next_field()
@@ -125,11 +128,9 @@ impl FilesRouter {
             match name.as_str() {
                 "file" => {
                     let raw_name = field.file_name().unwrap_or("").to_owned();
-                    filename = Some(if raw_name.trim().is_empty() {
-                        "unnamed".to_owned()
-                    } else {
-                        raw_name
-                    });
+                    if !raw_name.trim().is_empty() {
+                        filename_from_file = Some(raw_name);
+                    }
                     while let Some(chunk) = field
                         .chunk()
                         .await
@@ -139,7 +140,22 @@ impl FilesRouter {
                         tmp_file
                             .write_all(&chunk)
                             .await
-                            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't write temp file".to_owned()))?;
+                            .map_err(|_| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Can't write temp file".to_owned(),
+                                )
+                            })?;
+                    }
+                }
+                "filename" => {
+                    let raw_name = field
+                        .text()
+                        .await
+                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid filename".to_owned()))?;
+                    let decoded = percent_decode_str(&raw_name).decode_utf8_lossy();
+                    if !decoded.trim().is_empty() {
+                        filename_field = Some(decoded.into_owned());
                     }
                 }
                 "path" => {
@@ -147,10 +163,8 @@ impl FilesRouter {
                         .text()
                         .await
                         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid path".to_owned()))?;
-                    let decoded = percent_decode_str(&raw_path)
-                        .decode_utf8()
-                        .unwrap_or(std::borrow::Cow::Borrowed(&raw_path));
-                    parent_path = Some(decoded.to_string());
+                    let decoded = percent_decode_str(&raw_path).decode_utf8_lossy();
+                    parent_path = Some(decoded.into_owned());
                 }
                 _ => (),
             }
@@ -161,21 +175,42 @@ impl FilesRouter {
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't flush temp file".to_owned()))?;
 
-        let parent_path = parent_path.ok_or((StatusCode::BAD_REQUEST, "path field is required".to_owned()))?;
-        let filename = filename.ok_or((StatusCode::BAD_REQUEST, "file field is required".to_owned()))?;
+        let parent_path =
+            parent_path.ok_or((StatusCode::BAD_REQUEST, "path field is required".to_owned()))?;
+        let filename = filename_field
+            .or(filename_from_file)
+            .unwrap_or_else(|| "unnamed".to_owned());
         let path = Self::construct_path(&parent_path, &filename)?;
 
+        FilesService::new(&state.db, state.tx.clone())
+            .ensure_upload_allowed(storage_id, &user)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
+
         let in_file = InFile::new(path, file_size, storage_id);
+        let (progress_tx, progress_rx) = mpsc::channel(64);
+        let db = state.db.clone();
+        let client_tx = state.tx.clone();
+        let user = user.clone();
+        let tmp_for_task = tmp_path.clone();
 
-        let result = FilesService::new(&state.db, state.tx.clone())
-            .upload_anyway_from_path(in_file, tmp_path.clone(), file_size, &user)
-            .await;
+        let upload_task = tokio::spawn(async move {
+            let result = FilesService::new(&db, client_tx)
+                .upload_anyway_from_path_with_progress(
+                    in_file,
+                    tmp_for_task.clone(),
+                    file_size,
+                    &user,
+                    Some(progress_tx),
+                )
+                .await;
+            if result.is_err() {
+                let _ = tokio::fs::remove_file(&tmp_for_task).await;
+            }
+            result
+        });
 
-        if let Err(e) = result {
-            let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(<(StatusCode, String)>::from(e));
-        }
-        Ok(StatusCode::CREATED)
+        Ok(Self::ndjson_upload_progress_response(progress_rx, upload_task))
     }
 
     async fn upload_to(
@@ -183,7 +218,7 @@ impl FilesRouter {
         Extension(user): Extension<AuthUser>,
         RoutePath(storage_id): RoutePath<Uuid>,
         mut multipart: Multipart,
-    ) -> Result<StatusCode, (StatusCode, String)> {
+    ) -> Result<Response, (StatusCode, String)> {
         let upload_dir = Path::new(&state.config.work_dir).join("uploads");
         tokio::fs::create_dir_all(&upload_dir).await.map_err(|e| {
             (
@@ -199,9 +234,9 @@ impl FilesRouter {
             .await
             .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't create temp file".to_owned()))?;
 
-        // `path` is the destination folder (may be empty for root); filename comes from the file field.
-        let (mut parent_path, mut filename, mut file_size) =
-            (None::<String>, None::<String>, 0i64);
+        // `path` is the destination folder (may be empty for root).
+        let (mut filename_field, mut filename_from_file, mut parent_path, mut file_size) =
+            (None::<String>, None::<String>, None::<String>, 0i64);
 
         while let Some(mut field) = multipart
             .next_field()
@@ -215,18 +250,24 @@ impl FilesRouter {
                         .text()
                         .await
                         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid path".to_owned()))?;
-                    let decoded = percent_decode_str(&raw_path)
-                        .decode_utf8()
-                        .unwrap_or(std::borrow::Cow::Borrowed(&raw_path));
-                    parent_path = Some(decoded.to_string());
+                    let decoded = percent_decode_str(&raw_path).decode_utf8_lossy();
+                    parent_path = Some(decoded.into_owned());
+                }
+                "filename" => {
+                    let raw_name = field
+                        .text()
+                        .await
+                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid filename".to_owned()))?;
+                    let decoded = percent_decode_str(&raw_name).decode_utf8_lossy();
+                    if !decoded.trim().is_empty() {
+                        filename_field = Some(decoded.into_owned());
+                    }
                 }
                 "file" => {
                     let raw_name = field.file_name().unwrap_or("").to_owned();
-                    filename = Some(if raw_name.trim().is_empty() {
-                        "unnamed".to_owned()
-                    } else {
-                        raw_name
-                    });
+                    if !raw_name.trim().is_empty() {
+                        filename_from_file = Some(raw_name);
+                    }
                     while let Some(chunk) = field
                         .chunk()
                         .await
@@ -236,7 +277,12 @@ impl FilesRouter {
                         tmp_file
                             .write_all(&chunk)
                             .await
-                            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't write temp file".to_owned()))?;
+                            .map_err(|_| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Can't write temp file".to_owned(),
+                                )
+                            })?;
                     }
                 }
                 _ => (),
@@ -250,21 +296,34 @@ impl FilesRouter {
 
         let parent_path =
             parent_path.ok_or((StatusCode::BAD_REQUEST, "path field is required".to_owned()))?;
-        let filename =
-            filename.ok_or((StatusCode::BAD_REQUEST, "file field is required".to_owned()))?;
+        let filename = filename_field
+            .or(filename_from_file)
+            .unwrap_or_else(|| "unnamed".to_owned());
         let path = Self::construct_path(&parent_path, &filename)?;
+
+        FilesService::new(&state.db, state.tx.clone())
+            .ensure_upload_allowed(storage_id, &user)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
+
         let in_schema = InFileSchema::new(storage_id, path, tmp_path.clone(), file_size);
+        let (progress_tx, progress_rx) = mpsc::channel(64);
+        let db = state.db.clone();
+        let client_tx = state.tx.clone();
+        let user = user.clone();
+        let tmp_for_task = tmp_path.clone();
 
-        let result = FilesService::new(&state.db, state.tx.clone())
-            .upload_to(in_schema, &user)
-            .await;
+        let upload_task = tokio::spawn(async move {
+            let result = FilesService::new(&db, client_tx)
+                .upload_to_with_progress(in_schema, &user, Some(progress_tx))
+                .await;
+            if result.is_err() {
+                let _ = tokio::fs::remove_file(&tmp_for_task).await;
+            }
+            result
+        });
 
-        if let Err(e) = result {
-            let _ = tokio::fs::remove_file(&tmp_path).await;
-            return Err(<(StatusCode, String)>::from(e));
-        }
-
-        Ok(StatusCode::CREATED)
+        Ok(Self::ndjson_upload_progress_response(progress_rx, upload_task))
     }
 
     async fn create_folder(
@@ -281,16 +340,110 @@ impl FilesRouter {
         Ok(StatusCode::CREATED)
     }
 
+    /// Stream NDJSON upload progress (`phase=telegram|done|error`) while Telegram upload runs.
+    fn ndjson_upload_progress_response(
+        mut progress_rx: mpsc::Receiver<UploadProgressEvent>,
+        upload_task: tokio::task::JoinHandle<SarcaResult<()>>,
+    ) -> Response {
+        let stream = async_stream::stream! {
+            let mut upload_task = upload_task;
+            let mut progress_open = true;
+            loop {
+                tokio::select! {
+                    ev = progress_rx.recv(), if progress_open => {
+                        match ev {
+                            Some(ev) => {
+                                if let Ok(mut line) = serde_json::to_string(&ev) {
+                                    line.push('\n');
+                                    yield Ok::<Bytes, std::io::Error>(Bytes::from(line));
+                                }
+                            }
+                            None => progress_open = false,
+                        }
+                    }
+                    joined = &mut upload_task => {
+                        while let Ok(ev) = progress_rx.try_recv() {
+                            if let Ok(mut line) = serde_json::to_string(&ev) {
+                                line.push('\n');
+                                yield Ok(Bytes::from(line));
+                            }
+                        }
+                        match joined {
+                            Ok(Ok(())) => {
+                                yield Ok(Bytes::from("{\"phase\":\"done\"}\n"));
+                            }
+                            Ok(Err(e)) => {
+                                let (_status, msg) = <(StatusCode, String)>::from(e);
+                                let line = serde_json::json!({
+                                    "phase": "error",
+                                    "message": msg,
+                                })
+                                .to_string()
+                                    + "\n";
+                                yield Ok(Bytes::from(line));
+                            }
+                            Err(e) => {
+                                let line = serde_json::json!({
+                                    "phase": "error",
+                                    "message": e.to_string(),
+                                })
+                                .to_string()
+                                    + "\n";
+                                yield Ok(Bytes::from(line));
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+        };
+
+        (
+            StatusCode::CREATED,
+            [(header::CONTENT_TYPE, "application/x-ndjson")],
+            StreamBody::new(stream),
+        )
+            .into_response()
+    }
+
+    /// Basename only — browsers may put `dir/file.ext` into multipart filename
+    /// when uploading a folder (`webkitdirectory`).
+    fn file_basename(filename: &str) -> String {
+        filename
+            .trim()
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string()
+    }
+
+    /// Normalize a parent folder path: Unicode/spaces OK, reject `..`, drop empty/`.` segments.
+    fn normalize_parent(parent: &str) -> SarcaResult<String> {
+        let mut parts = Vec::new();
+        for part in parent.split(['/', '\\']) {
+            let part = part.trim();
+            if part.is_empty() || part == "." {
+                continue;
+            }
+            if part == ".." {
+                return Err(SarcaError::InvalidPath);
+            }
+            parts.push(part);
+        }
+        Ok(parts.join("/"))
+    }
+
     /// Join a parent folder path with a file name into a logical FS file path.
     /// Avoids `Path::join("")` → trailing `/` (folder marker).
     fn construct_path(parent: &str, filename: &str) -> SarcaResult<String> {
-        let parent = parent.trim().trim_end_matches('/').trim_start_matches('/');
-        let filename = filename.trim().trim_matches('/');
-        if filename.is_empty() || filename == "." || filename == ".." || filename.contains('/') {
+        let parent = Self::normalize_parent(parent)?;
+        let filename = Self::file_basename(filename);
+        if filename.is_empty() || filename == "." || filename == ".." {
             return Err(SarcaError::InvalidPath);
         }
         let path = if parent.is_empty() {
-            filename.to_string()
+            filename
         } else {
             format!("{parent}/{filename}")
         };
@@ -687,9 +840,37 @@ mod construct_path_tests {
             Err(SarcaError::InvalidPath)
         ));
         assert!(matches!(
-            FilesRouter::construct_path("docs", "a/b"),
+            FilesRouter::construct_path("docs/..", "a.png"),
             Err(SarcaError::InvalidPath)
         ));
+    }
+
+    #[test]
+    fn uses_basename_from_relative_multipart_filename() {
+        assert_eq!(
+            FilesRouter::construct_path(
+                "Пассивный доход до 125 000 ₽. Тариф Премиум (2026)",
+                "Пассивный доход до 125 000 ₽. Тариф Премиум (2026)/lesson 1.mp4"
+            )
+            .unwrap(),
+            "Пассивный доход до 125 000 ₽. Тариф Премиум (2026)/lesson 1.mp4"
+        );
+        assert_eq!(
+            FilesRouter::construct_path("docs", r"folder\file.mp4").unwrap(),
+            "docs/file.mp4"
+        );
+    }
+
+    #[test]
+    fn trims_segment_edges_keeps_unicode_and_spaces() {
+        assert_eq!(
+            FilesRouter::construct_path(
+                "  Пассивный доход до 125 000 ₽. Тариф Премиум (2026)  ",
+                "  video.mp4  "
+            )
+            .unwrap(),
+            "Пассивный доход до 125 000 ₽. Тариф Премиум (2026)/video.mp4"
+        );
     }
 }
 

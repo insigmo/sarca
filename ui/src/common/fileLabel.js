@@ -11,13 +11,13 @@ export const fileBaseName = (name, isFile = true) => {
 }
 
 /**
- * Extension label like `.folder`, `.jpeg`, `.zip`.
+ * Extension label like `folder`, `jpeg`, `zip`.
  * @param {string} name
  * @param {boolean} [isFile=true]
  */
 export const fileExtensionLabel = (name, isFile = true) => {
-	if (!isFile || name === '..') return '.folder'
+	if (!isFile || name === '..') return 'folder'
 	const i = name.lastIndexOf('.')
-	if (i < 0 || i === name.length - 1) return '.file'
-	return `.${name.slice(i + 1).toLowerCase()}`
+	if (i < 0 || i === name.length - 1) return 'file'
+	return name.slice(i + 1).toLowerCase()
 }

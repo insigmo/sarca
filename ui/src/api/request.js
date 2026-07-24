@@ -125,19 +125,86 @@ const apiRequest = async (
 }
 
 /**
+ * Format bytes for upload status (binary units).
+ * @param {number} n
+ */
+export const formatUploadBytes = (n) => {
+	const v = Number(n) || 0
+	if (v < 1024) return `${v} B`
+	if (v < 1024 * 1024) return `${(v / 1024).toFixed(1)} KiB`
+	if (v < 1024 * 1024 * 1024) return `${(v / (1024 * 1024)).toFixed(1)} MiB`
+	return `${(v / (1024 * 1024 * 1024)).toFixed(2)} GiB`
+}
+
+/**
+ * @typedef {Object} UploadProgressEvent
+ * @property {'server' | 'telegram'} phase
+ * @property {number} percent
+ * @property {number} [uploaded]
+ * @property {number} [total]
+ * @property {number} [chunk]
+ * @property {number} [chunks]
+ */
+
+/**
  *
  * @param {string} path
  * @param {string | null | undefined} auth_token
  * @param {FormData} form
- * @param {(progress: number) => void} [onProgress]
+ * @param {(progress: UploadProgressEvent) => void} [onProgress]
+ * @param {{ silent?: boolean }} [options]
  * @returns
  */
-export const apiMultipartRequest = (path, auth_token, form, onProgress) => {
+export const apiMultipartRequest = (path, auth_token, form, onProgress, options = {}) => {
 	const { addAlert } = alertStore
 	const fullpath = `${API_BASE}${path}`
+	const silent = Boolean(options.silent)
 
 	return new Promise((resolve, reject) => {
 		const xhr = new XMLHttpRequest()
+		let parsedLen = 0
+		let streamError = null
+		let streamDone = false
+
+		const emit = (ev) => {
+			if (onProgress) onProgress(ev)
+		}
+
+		const consumeNdjson = (text) => {
+			if (!text || text.length <= parsedLen) return
+			const chunk = text.slice(parsedLen)
+			const parts = chunk.split('\n')
+			const incomplete = parts.pop() ?? ''
+			parsedLen = text.length - incomplete.length
+
+			for (const line of parts) {
+				const trimmed = line.trim()
+				if (!trimmed) continue
+				try {
+					const ev = JSON.parse(trimmed)
+					if (ev.phase === 'telegram') {
+						const total = Number(ev.total) || 0
+						const uploaded = Number(ev.uploaded) || 0
+						const percent = total > 0 ? (uploaded / total) * 100 : 0
+						emit({
+							phase: 'telegram',
+							percent,
+							uploaded,
+							total,
+							chunk: ev.chunk,
+							chunks: ev.chunks,
+						})
+					} else if (ev.phase === 'error') {
+						streamError = ev.message || 'Upload failed'
+					} else if (ev.phase === 'done') {
+						streamDone = true
+						emit({ phase: 'telegram', percent: 100 })
+					}
+				} catch {
+					// ignore partial / non-json fragments
+				}
+			}
+		}
 
 		xhr.open('POST', fullpath)
 
@@ -145,27 +212,50 @@ export const apiMultipartRequest = (path, auth_token, form, onProgress) => {
 			xhr.setRequestHeader('Authorization', auth_token)
 		}
 
-		if (onProgress) {
-			xhr.upload.onprogress = (event) => {
-				if (event.lengthComputable) {
-					const percentComplete = (event.loaded / event.total) * 100
-					onProgress(percentComplete)
-				}
+		xhr.upload.onprogress = (event) => {
+			if (event.lengthComputable) {
+				emit({
+					phase: 'server',
+					percent: (event.loaded / event.total) * 100,
+					uploaded: event.loaded,
+					total: event.total,
+				})
 			}
+		}
+
+		xhr.onprogress = () => {
+			consumeNdjson(xhr.responseText || '')
 		}
 
 		xhr.onload = async () => {
 			if (xhr.status === 401 && auth_token) {
 				const newToken = await tryRefreshToken()
 				if (newToken) {
-					apiMultipartRequest(path, newToken, form, onProgress)
+					apiMultipartRequest(path, newToken, form, onProgress, options)
 						.then(resolve)
 						.catch(reject)
 					return
 				}
 			}
 
+			consumeNdjson(xhr.responseText || '')
+
 			if (xhr.status >= 200 && xhr.status < 300) {
+				if (streamError) {
+					if (!silent) addAlert(streamError, 'error')
+					reject(new Error(streamError))
+					return
+				}
+				if (
+					xhr.responseText &&
+					xhr.responseText.includes('"phase"') &&
+					!streamDone
+				) {
+					const msg = 'Upload did not complete'
+					if (!silent) addAlert(msg, 'error')
+					reject(new Error(msg))
+					return
+				}
 				try {
 					const json = JSON.parse(xhr.responseText)
 					resolve(json)
@@ -174,13 +264,13 @@ export const apiMultipartRequest = (path, auth_token, form, onProgress) => {
 				}
 			} else {
 				const errorMsg = xhr.responseText || 'Upload failed'
-				addAlert(errorMsg, 'error')
+				if (!silent) addAlert(errorMsg, 'error')
 				reject(new Error(errorMsg))
 			}
 		}
 
 		xhr.onerror = () => {
-			addAlert('Network Error', 'error')
+			if (!silent) addAlert('Network Error', 'error')
 			reject(new Error('Network Error'))
 		}
 

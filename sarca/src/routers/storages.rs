@@ -18,7 +18,7 @@ use crate::{
     models::storages::Storage,
     schemas::{
         access::{GrantAccess, RestrictAccess},
-        storages::{InStorageSchema, StoragesListSchema},
+        storages::{InStorageSchema, StoragesListSchema, UpdateStorageSchema},
     },
     services::storages::StoragesService,
 };
@@ -32,7 +32,10 @@ impl StoragesRouter {
         let files_router = FilesRouter::get_router(state.clone());
         Router::new()
             .route("/", get(Self::list).post(Self::create))
-            .route("/:storage_id", get(Self::get).delete(Self::delete))
+            .route(
+                "/:storage_id",
+                get(Self::get).put(Self::update).delete(Self::delete),
+            )
             .route(
                 "/:storage_id/access",
                 get(Self::list_users_with_access)
@@ -79,6 +82,18 @@ impl StoragesRouter {
         Path(id): Path<Uuid>,
     ) -> Result<Json<Storage>, (StatusCode, String)> {
         let storage = StoragesService::new(&state.db).get(id, &user).await?;
+        Ok(Json(storage))
+    }
+
+    async fn update(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+        Path(id): Path<Uuid>,
+        Json(in_schema): Json<UpdateStorageSchema>,
+    ) -> Result<Json<Storage>, (StatusCode, String)> {
+        let storage = StoragesService::new(&state.db)
+            .update(id, in_schema, &user)
+            .await?;
         Ok(Json(storage))
     }
 

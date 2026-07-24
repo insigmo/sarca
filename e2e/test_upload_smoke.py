@@ -134,6 +134,7 @@ def _upload(
         data=data,
     )
     assert r.status_code == 201, f"upload {filename} failed: {r.status_code} {r.text}"
+    assert '"phase":"done"' in r.text or '"phase": "done"' in r.text, r.text
 
 
 def test_upload_image_and_video_smoke(

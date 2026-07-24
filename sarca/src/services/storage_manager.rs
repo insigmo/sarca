@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::{
     common::{
-        channels::{UploadFileData},
+        channels::{UploadFileData, UploadProgressEvent},
         telegram_api::bot_api::TelegramBotApi,
         types::ChatId,
     },
@@ -46,9 +46,22 @@ impl<'d> StorageManagerService<'d> {
 
         let mut offset: u64 = 0;
         let total: u64 = data.file_size.max(0) as u64;
+        let chunk_size = self.chunk_size as u64;
+        let total_chunks = if total == 0 {
+            1u32
+        } else {
+            ((total + chunk_size - 1) / chunk_size) as u32
+        };
+
+        if let Some(tx) = data.progress.as_ref() {
+            let _ = tx
+                .send(UploadProgressEvent::telegram(0, total, 1, total_chunks))
+                .await;
+        }
 
         while offset < total {
-            let len = std::cmp::min(self.chunk_size as u64, total - offset);
+            let len = std::cmp::min(chunk_size, total - offset);
+            let chunk_no = (position as u32) + 1;
             let chunk = self
                 .upload_chunk_from_file(
                     storage.id,
@@ -58,11 +71,25 @@ impl<'d> StorageManagerService<'d> {
                     &data.file_path,
                     offset,
                     len,
+                    total,
+                    chunk_no,
+                    total_chunks,
+                    data.progress.clone(),
                 )
                 .await?;
             chunks.push(chunk);
             offset += len;
             position += 1;
+            if let Some(tx) = data.progress.as_ref() {
+                let _ = tx
+                    .send(UploadProgressEvent::telegram(
+                        offset,
+                        total,
+                        chunk_no.min(total_chunks),
+                        total_chunks,
+                    ))
+                    .await;
+            }
         }
 
         let result = self.files_repo.create_chunks_batch(chunks).await;
@@ -125,11 +152,25 @@ impl<'d> StorageManagerService<'d> {
         file_path: &std::path::Path,
         offset: u64,
         len: u64,
+        file_total: u64,
+        chunk_no: u32,
+        total_chunks: u32,
+        progress: Option<tokio::sync::mpsc::Sender<UploadProgressEvent>>,
     ) -> SarcaResult<FileChunk> {
         let scheduler = StorageWorkersScheduler::new(self.db, self.rate_limit);
 
         let document = TelegramBotApi::new(self.telegram_baseurl, scheduler)
-            .upload_file_part(file_path, offset, len, chat_id, storage_id)
+            .upload_file_part(
+                file_path,
+                offset,
+                len,
+                chat_id,
+                storage_id,
+                file_total,
+                chunk_no,
+                total_chunks,
+                progress,
+            )
             .await?;
 
         tracing::debug!(
