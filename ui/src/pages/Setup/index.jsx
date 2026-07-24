@@ -496,17 +496,6 @@ const SetupWizard = () => {
 							</Stack>
 						</Show>
 					</Box>
-
-					<Typography variant="body2" color="text.secondary">
-						Prefer the old form?{' '}
-						<Link
-							component="button"
-							type="button"
-							onClick={() => navigate('/storages/register/manual')}
-						>
-							Advanced create
-						</Link>
-					</Typography>
 				</Show>
 			</Stack>
 		</Show>

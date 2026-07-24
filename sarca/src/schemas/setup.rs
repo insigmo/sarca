@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::common::types::ChatId;
 
 #[derive(Debug, Serialize)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct SetupStatusSchema {
     pub has_storages: bool,
     pub uses_local_api: bool,

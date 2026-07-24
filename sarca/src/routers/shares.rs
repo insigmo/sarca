@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension,
+    Json,
+    Router,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get},
-    Extension, Json, Router,
 };
 use uuid::Uuid;
 
@@ -25,7 +27,7 @@ impl SharesRouter {
             .with_state(state)
     }
 
-    fn service<'d>(state: &'d AppState) -> SharesService<'d> {
+    fn service(state: &AppState) -> SharesService<'_> {
         SharesService::new(&state.db)
     }
 
@@ -36,13 +38,7 @@ impl SharesRouter {
         Json(body): Json<CreateShareSchema>,
     ) -> Result<impl IntoResponse, (StatusCode, String)> {
         let link = Self::service(&state)
-            .create(
-                storage_id,
-                &body.path,
-                body.expires_at,
-                body.password.as_deref(),
-                &user,
-            )
+            .create(storage_id, &body.path, body.expires_at, body.password.as_deref(), &user)
             .await?;
         Ok((StatusCode::CREATED, Json(link)))
     }
@@ -52,11 +48,7 @@ impl SharesRouter {
         Extension(user): Extension<AuthUser>,
         Path(storage_id): Path<Uuid>,
     ) -> Result<impl IntoResponse, (StatusCode, String)> {
-        Self::service(&state)
-            .list(storage_id, &user)
-            .await
-            .map(Json)
-            .map_err(Into::into)
+        Self::service(&state).list(storage_id, &user).await.map(Json).map_err(Into::into)
     }
 
     async fn revoke(
@@ -67,7 +59,7 @@ impl SharesRouter {
         Self::service(&state)
             .revoke(storage_id, share_id, &user)
             .await
-            .map(|_| StatusCode::NO_CONTENT)
+            .map(|()| StatusCode::NO_CONTENT)
             .map_err(Into::into)
     }
 }

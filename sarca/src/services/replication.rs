@@ -2,12 +2,14 @@ use std::time::Duration;
 
 use sqlx::PgPool;
 
-use crate::{
-    common::telegram_api::bot_api::{is_chat_dead_error, TelegramBotApi},
-    repositories::{chunk_replicas::ChunkReplicasRepository, storage_channels::StorageChannelsRepository},
-};
-
 use super::storage_workers_scheduler::StorageWorkersScheduler;
+use crate::{
+    common::telegram_api::bot_api::{TelegramBotApi, is_chat_dead_error},
+    repositories::{
+        chunk_replicas::ChunkReplicasRepository,
+        storage_channels::StorageChannelsRepository,
+    },
+};
 
 const BATCH_SIZE: i64 = 25;
 
@@ -26,7 +28,7 @@ impl ReplicationService {
             Err(e) => {
                 tracing::warn!("[REPLICATION] failed to list pending jobs: {e}");
                 return 0;
-            }
+            },
         };
 
         let count = jobs.len();
@@ -35,26 +37,25 @@ impl ReplicationService {
             let scheduler = StorageWorkersScheduler::new(db, rate_limit);
             let api = TelegramBotApi::new(base_url, scheduler);
 
-            let source = match replicas_repo
-                .find_source_for_chunk(job.chunk_id, job.channel_id)
-                .await
-            {
-                Ok(Some(source)) => source,
-                Ok(None) => {
-                    tracing::debug!(
-                        "[REPLICATION] no live source replica yet for chunk {}; will retry later",
-                        job.chunk_id
-                    );
-                    continue;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "[REPLICATION] failed to find source replica for chunk {}: {e}",
-                        job.chunk_id
-                    );
-                    continue;
-                }
-            };
+            let source =
+                match replicas_repo.find_source_for_chunk(job.chunk_id, job.channel_id).await {
+                    Ok(Some(source)) => source,
+                    Ok(None) => {
+                        tracing::debug!(
+                            "[REPLICATION] no live source replica yet for chunk {}; will retry \
+                             later",
+                            job.chunk_id
+                        );
+                        continue;
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            "[REPLICATION] failed to find source replica for chunk {}: {e}",
+                            job.chunk_id
+                        );
+                        continue;
+                    },
+                };
 
             let result = match (source.telegram_file_id.clone(), source.telegram_message_id) {
                 (Some(file_id), Some(message_id)) => {
@@ -66,10 +67,14 @@ impl ReplicationService {
                         source.storage_id,
                     )
                     .await
-                }
-                (Some(file_id), None) => match api.download(&file_id, source.storage_id).await {
-                    Ok(bytes) => api.upload(&bytes, job.target_chat_id, source.storage_id).await,
-                    Err(e) => Err(e),
+                },
+                (Some(file_id), None) => {
+                    match api.download(&file_id, source.storage_id).await {
+                        Ok(bytes) => {
+                            api.upload(&bytes, job.target_chat_id, source.storage_id).await
+                        },
+                        Err(e) => Err(e),
+                    }
                 },
                 (None, _) => {
                     tracing::warn!(
@@ -77,7 +82,7 @@ impl ReplicationService {
                         job.chunk_id
                     );
                     continue;
-                }
+                },
             };
 
             match result {
@@ -91,7 +96,7 @@ impl ReplicationService {
                             job.id
                         );
                     }
-                }
+                },
                 Err(e) => {
                     tracing::warn!(
                         "[REPLICATION] failed to replicate chunk {} into channel {}: {e}",
@@ -102,7 +107,7 @@ impl ReplicationService {
                     if is_chat_dead_error(&e) {
                         let _ = channels_repo.mark_dead(job.channel_id).await;
                     }
-                }
+                },
             }
         }
 

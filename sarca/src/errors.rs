@@ -82,9 +82,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::TrashPathConflict => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
             SarcaError::DoesNotExist(_) => (StatusCode::NOT_FOUND, e.to_string()),
-            SarcaError::FolderTooLargeForZip => {
-                (StatusCode::PAYLOAD_TOO_LARGE, e.to_string())
-            }
+            SarcaError::FolderTooLargeForZip => (StatusCode::PAYLOAD_TOO_LARGE, e.to_string()),
             SarcaError::HeaderMissed(_)
             | SarcaError::HeaderIsInvalid(..)
             | SarcaError::InvalidFolderName
@@ -100,11 +98,8 @@ impl From<SarcaError> for (StatusCode, String) {
             SarcaError::MailNotConfigured => (StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
             _ => {
                 tracing::error!("{e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Something went wrong".to_owned(),
-                )
-            }
+                (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong".to_owned())
+            },
         }
     }
 }
@@ -112,11 +107,11 @@ impl From<SarcaError> for (StatusCode, String) {
 impl From<reqwest::Error> for SarcaError {
     fn from(e: reqwest::Error) -> Self {
         match e.status() {
-            Some(e) if e.is_client_error() => SarcaError::TelegramAPIError(e.to_string()),
+            Some(e) if e.is_client_error() => Self::TelegramAPIError(e.to_string()),
             Some(_) | None => {
                 tracing::error!("{e}");
-                SarcaError::Unknown
-            }
+                Self::Unknown
+            },
         }
     }
 }

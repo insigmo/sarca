@@ -3,10 +3,14 @@ use std::path::Path;
 use sqlx::{PgPool, QueryBuilder};
 use uuid::Uuid;
 
-use crate::common::db::errors::map_not_found;
-use crate::errors::{SarcaError, SarcaResult};
-use crate::models::file_chunks::{FileChunk, FileChunkWithReplica};
-use crate::models::files::{DBFSElement, FSElement, File, InFile, SearchFSElement};
+use crate::{
+    common::db::errors::map_not_found,
+    errors::{SarcaError, SarcaResult},
+    models::{
+        file_chunks::{FileChunk, FileChunkWithReplica},
+        files::{DBFSElement, FSElement, File, InFile, SearchFSElement},
+    },
+};
 
 pub const FILES_TABLE: &str = "files";
 pub const CHUNKS_TABLE: &str = "file_chunks";
@@ -18,20 +22,23 @@ pub struct FilesRepository<'d> {
 
 impl<'d> FilesRepository<'d> {
     pub fn new(db: &'d PgPool) -> Self {
-        Self { db }
+        Self {
+            db,
+        }
     }
 
     pub async fn create_folder(&self, in_obj: InFile) -> SarcaResult<File> {
-        self._create_file(in_obj, true).await
+        self.create_file_row(in_obj, true).await
     }
 
-    async fn _create_file(&self, in_obj: InFile, is_uploaded: bool) -> SarcaResult<File> {
+    async fn create_file_row(&self, in_obj: InFile, is_uploaded: bool) -> SarcaResult<File> {
         let id = Uuid::new_v4();
 
         sqlx::query(
             format!(
                 "
-                INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded, chunk_size_bytes)
+                INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded, \
+                 chunk_size_bytes)
                 VALUES ($1, $2, $3, $4, $5, $6);
             "
             )
@@ -45,16 +52,18 @@ impl<'d> FilesRepository<'d> {
         .bind(in_obj.chunk_size_bytes)
         .execute(self.db)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
-                SarcaError::DoesNotExist("such storage".to_string())
-            }
-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
-                SarcaError::AlreadyExists("File with such name".to_string())
-            }
-            _ => {
-                tracing::error!("{e}");
-                SarcaError::Unknown
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+                    SarcaError::DoesNotExist("such storage".to_string())
+                },
+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+                    SarcaError::AlreadyExists("File with such name".to_string())
+                },
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
             }
         })?;
 
@@ -75,12 +84,12 @@ impl<'d> FilesRepository<'d> {
 
         // lol/kek/sdf.nj.dskf/sdkl.fdsklf/lol .kek.dsf
         let (path_with_stem, suffix) = {
-            let mut splited_path: Vec<_> = in_obj.path.split("/").collect();
+            let mut splited_path: Vec<_> = in_obj.path.split('/').collect();
             let last = splited_path.last_mut().unwrap();
             let (stem, suffix) = last
-                .split_once(".")
+                .split_once('.')
                 .map(|(stem, suffix)| (stem, format!(".{suffix}")))
-                .unwrap_or((last, "".to_owned()));
+                .unwrap_or((last, String::new()));
             *last = stem;
             (splited_path.join("/"), suffix)
         };
@@ -172,18 +181,14 @@ impl<'d> FilesRepository<'d> {
     }
 
     pub async fn create_chunks_batch(&self, chunks: Vec<FileChunk>) -> SarcaResult<()> {
-        QueryBuilder::new(
-            format!("INSERT INTO {CHUNKS_TABLE} (id, file_id, position)").as_str(),
-        )
-        .push_values(chunks, |mut q, chunk| {
-            q.push_bind(chunk.id)
-                .push_bind(chunk.file_id)
-                .push_bind(chunk.position);
-        })
-        .build()
-        .execute(self.db)
-        .await
-        .map_err(|_| SarcaError::Unknown)?;
+        QueryBuilder::new(format!("INSERT INTO {CHUNKS_TABLE} (id, file_id, position)").as_str())
+            .push_values(chunks, |mut q, chunk| {
+                q.push_bind(chunk.id).push_bind(chunk.file_id).push_bind(chunk.position);
+            })
+            .build()
+            .execute(self.db)
+            .await
+            .map_err(|_| SarcaError::Unknown)?;
 
         Ok(())
     }
@@ -224,20 +229,12 @@ impl<'d> FilesRepository<'d> {
     /// NOTE:
     ///
     /// `prefix` must be without leading and trailing slashes
-    pub async fn list_dir(
-        &self,
-        storage_id: Uuid,
-        prefix: &str,
-    ) -> SarcaResult<Vec<FSElement>> {
+    pub async fn list_dir(&self, storage_id: Uuid, prefix: &str) -> SarcaResult<Vec<FSElement>> {
         let query = {
-            let adding_to_position = !prefix.is_empty() as usize + 1;
-            let split_position = prefix.matches("/").count() + adding_to_position;
+            let adding_to_position = usize::from(!prefix.is_empty()) + 1;
+            let split_position = prefix.matches('/').count() + adding_to_position;
             let split_part = format!("SPLIT_PART(path, '/', {split_position})");
-            let path_filter = if prefix.is_empty() {
-                ""
-            } else {
-                "AND path LIKE $1 || '%'"
-            };
+            let path_filter = if prefix.is_empty() { "" } else { "AND path LIKE $1 || '%'" };
 
             format!(
                 "
@@ -246,23 +243,21 @@ impl<'d> FilesRepository<'d> {
                     $1 || {split_part} = path AS is_file,
                     CASE
                         WHEN $1 || {split_part} = path THEN size
-                        ELSE (SELECT SUM(size) FROM {FILES_TABLE} WHERE deleted_at IS NULL AND path LIKE $1 || {split_part} || '/' || '%')::BigInt
+                        ELSE (SELECT SUM(size) FROM {FILES_TABLE} WHERE deleted_at IS NULL AND \
+                 path LIKE $1 || {split_part} || '/' || '%')::BigInt
                     END AS size,
                     CASE
                         WHEN $1 || {split_part} = path THEN (thumb_telegram_file_id IS NOT NULL)
                         ELSE false
                     END AS has_thumb
                 FROM {FILES_TABLE}
-                WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NULL AND {split_part} <> '';
+                WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NULL AND \
+                 {split_part} <> '';
             "
             )
         };
 
-        let prefix = if prefix.is_empty() {
-            prefix.to_string()
-        } else {
-            format!("{prefix}/")
-        };
+        let prefix = if prefix.is_empty() { prefix.to_string() } else { format!("{prefix}/") };
 
         let fs_layer = sqlx::query_as::<_, DBFSElement>(&query)
             .bind(&prefix)
@@ -321,7 +316,8 @@ impl<'d> FilesRepository<'d> {
     pub async fn get_file_by_path(&self, path: &str, storage_id: Uuid) -> SarcaResult<File> {
         sqlx::query_as(
             format!(
-                "SELECT * FROM {FILES_TABLE} WHERE storage_id = $1 AND path = $2 AND deleted_at IS NULL"
+                "SELECT * FROM {FILES_TABLE} WHERE storage_id = $1 AND path = $2 AND deleted_at \
+                 IS NULL"
             )
             .as_str(),
         )
@@ -329,7 +325,7 @@ impl<'d> FilesRepository<'d> {
         .bind(path)
         .fetch_one(self.db)
         .await
-        .map_err(|e| map_not_found(e, "file"))
+        .map_err(|e| map_not_found(&e, "file"))
     }
 
     /// Sum of uploaded file sizes under a folder prefix (prefix must end with `/`).
@@ -399,7 +395,7 @@ impl<'d> FilesRepository<'d> {
             .bind(id)
             .fetch_one(self.db)
             .await
-            .map_err(|e| map_not_found(e, "file"))
+            .map_err(|e| map_not_found(&e, "file"))
     }
 
     pub async fn set_thumb(
@@ -503,7 +499,21 @@ impl<'d> FilesRepository<'d> {
             .bind(file_id)
             .fetch_all(self.db)
             .await
-            .map_err(|e| map_not_found(e, "file chunks"))
+            .map_err(|e| map_not_found(&e, "file chunks"))
+    }
+
+    pub async fn count_chunks_of_file(&self, file_id: Uuid) -> SarcaResult<i64> {
+        let row: (i64,) = sqlx::query_as(
+            format!("SELECT COUNT(*)::BigInt FROM {CHUNKS_TABLE} WHERE file_id = $1").as_str(),
+        )
+        .bind(file_id)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+        Ok(row.0)
     }
 
     pub async fn set_as_uploaded(&self, file_id: Uuid) -> SarcaResult<()> {
@@ -516,7 +526,7 @@ impl<'d> FilesRepository<'d> {
     }
 
     pub async fn delete(&self, path: &str, storage_id: Uuid) -> SarcaResult<()> {
-        let mut transaction = self.db.begin().await.map_err(|e| map_not_found(e, ""))?;
+        let mut transaction = self.db.begin().await.map_err(|e| map_not_found(&e, ""))?;
 
         // Folders may arrive without a trailing slash from the UI.
         let is_folder = path.ends_with('/');
@@ -539,16 +549,26 @@ impl<'d> FilesRepository<'d> {
             .bind(&probe)
             .fetch_one(&mut *transaction)
             .await
-            .map_err(|e| map_not_found(e, "file"))?;
+            .map_err(|e| map_not_found(&e, "file"))?;
 
-            if has_folder.0 {
-                probe
-            } else {
-                String::new()
-            }
+            if has_folder.0 { probe } else { String::new() }
         };
 
-        let affected = if !folder_prefix.is_empty() {
+        let affected = if folder_prefix.is_empty() {
+            sqlx::query(&format!(
+                "
+                UPDATE {FILES_TABLE}
+                SET deleted_at = NOW()
+                WHERE storage_id = $1 AND deleted_at IS NULL AND path = $2;
+                "
+            ))
+            .bind(storage_id)
+            .bind(path)
+            .execute(&mut *transaction)
+            .await
+            .map_err(|e| map_not_found(&e, "file"))?
+            .rows_affected()
+        } else {
             sqlx::query(&format!(
                 "
                 UPDATE {FILES_TABLE}
@@ -562,21 +582,7 @@ impl<'d> FilesRepository<'d> {
             .bind(&folder_prefix)
             .execute(&mut *transaction)
             .await
-            .map_err(|e| map_not_found(e, "file"))?
-            .rows_affected()
-        } else {
-            sqlx::query(&format!(
-                "
-                UPDATE {FILES_TABLE}
-                SET deleted_at = NOW()
-                WHERE storage_id = $1 AND deleted_at IS NULL AND path = $2;
-                "
-            ))
-            .bind(storage_id)
-            .bind(path)
-            .execute(&mut *transaction)
-            .await
-            .map_err(|e| map_not_found(e, "file"))?
+            .map_err(|e| map_not_found(&e, "file"))?
             .rows_affected()
         };
 
@@ -585,15 +591,13 @@ impl<'d> FilesRepository<'d> {
         }
 
         // Recreate parent folder marker only for non-root parents that became empty.
-        let deleted_path = if !folder_prefix.is_empty() {
-            folder_prefix.trim_end_matches('/').to_string()
-        } else {
+        let deleted_path = if folder_prefix.is_empty() {
             path.to_string()
+        } else {
+            folder_prefix.trim_end_matches('/').to_string()
         };
-        if let Some(parent) = Path::new(&deleted_path)
-            .parent()
-            .and_then(|p| p.to_str())
-            .filter(|p| !p.is_empty())
+        if let Some(parent) =
+            Path::new(&deleted_path).parent().and_then(|p| p.to_str()).filter(|p| !p.is_empty())
         {
             let new_id = Uuid::new_v4();
             let parent = format!("{parent}/");
@@ -617,13 +621,10 @@ impl<'d> FilesRepository<'d> {
             .bind(storage_id)
             .execute(&mut *transaction)
             .await
-            .map_err(|e| map_not_found(e, "some entity"))?;
+            .map_err(|e| map_not_found(&e, "some entity"))?;
         }
 
-        transaction
-            .commit()
-            .await
-            .map_err(|e| map_not_found(e, ""))?;
+        transaction.commit().await.map_err(|e| map_not_found(&e, ""))?;
 
         Ok(())
     }
@@ -654,19 +655,13 @@ impl<'d> FilesRepository<'d> {
         storage_id: Uuid,
         live_only: bool,
     ) -> SarcaResult<()> {
-        let deleted_filter = if live_only {
-            "AND deleted_at IS NULL"
-        } else {
-            "AND deleted_at IS NOT NULL"
-        };
+        let deleted_filter =
+            if live_only { "AND deleted_at IS NULL" } else { "AND deleted_at IS NOT NULL" };
         let is_folder = old_path.ends_with('/');
         if is_folder {
             let old_prefix = old_path;
-            let new_prefix = if new_path.ends_with('/') {
-                new_path.to_string()
-            } else {
-                format!("{new_path}/")
-            };
+            let new_prefix =
+                if new_path.ends_with('/') { new_path.to_string() } else { format!("{new_path}/") };
             let skip = old_prefix.len();
             sqlx::query(&format!(
                 "
@@ -702,20 +697,12 @@ impl<'d> FilesRepository<'d> {
     }
 
     /// Directory listing for trashed items under `prefix` (without leading/trailing slashes).
-    pub async fn list_trash(
-        &self,
-        storage_id: Uuid,
-        prefix: &str,
-    ) -> SarcaResult<Vec<FSElement>> {
+    pub async fn list_trash(&self, storage_id: Uuid, prefix: &str) -> SarcaResult<Vec<FSElement>> {
         let query = {
-            let adding_to_position = !prefix.is_empty() as usize + 1;
-            let split_position = prefix.matches("/").count() + adding_to_position;
+            let adding_to_position = usize::from(!prefix.is_empty()) + 1;
+            let split_position = prefix.matches('/').count() + adding_to_position;
             let split_part = format!("SPLIT_PART(path, '/', {split_position})");
-            let path_filter = if prefix.is_empty() {
-                ""
-            } else {
-                "AND path LIKE $1 || '%'"
-            };
+            let path_filter = if prefix.is_empty() { "" } else { "AND path LIKE $1 || '%'" };
 
             format!(
                 "
@@ -724,23 +711,21 @@ impl<'d> FilesRepository<'d> {
                     $1 || {split_part} = path AS is_file,
                     CASE
                         WHEN $1 || {split_part} = path THEN size
-                        ELSE (SELECT SUM(size) FROM {FILES_TABLE} WHERE deleted_at IS NOT NULL AND path LIKE $1 || {split_part} || '/' || '%')::BigInt
+                        ELSE (SELECT SUM(size) FROM {FILES_TABLE} WHERE deleted_at IS NOT NULL AND \
+                 path LIKE $1 || {split_part} || '/' || '%')::BigInt
                     END AS size,
                     CASE
                         WHEN $1 || {split_part} = path THEN (thumb_telegram_file_id IS NOT NULL)
                         ELSE false
                     END AS has_thumb
                 FROM {FILES_TABLE}
-                WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NOT NULL AND {split_part} <> '';
+                WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NOT NULL AND \
+                 {split_part} <> '';
             "
             )
         };
 
-        let prefix = if prefix.is_empty() {
-            prefix.to_string()
-        } else {
-            format!("{prefix}/")
-        };
+        let prefix = if prefix.is_empty() { prefix.to_string() } else { format!("{prefix}/") };
 
         let fs_layer = sqlx::query_as::<_, DBFSElement>(&query)
             .bind(&prefix)
@@ -776,7 +761,8 @@ impl<'d> FilesRepository<'d> {
     ) -> SarcaResult<File> {
         sqlx::query_as(
             format!(
-                "SELECT * FROM {FILES_TABLE} WHERE storage_id = $1 AND path = $2 AND deleted_at IS NOT NULL"
+                "SELECT * FROM {FILES_TABLE} WHERE storage_id = $1 AND path = $2 AND deleted_at \
+                 IS NOT NULL"
             )
             .as_str(),
         )
@@ -784,15 +770,11 @@ impl<'d> FilesRepository<'d> {
         .bind(path)
         .fetch_one(self.db)
         .await
-        .map_err(|e| map_not_found(e, "file"))
+        .map_err(|e| map_not_found(&e, "file"))
     }
 
     /// Resolve trashed file ids matching a path or folder prefix.
-    pub async fn list_trashed_ids(
-        &self,
-        storage_id: Uuid,
-        path: &str,
-    ) -> SarcaResult<Vec<Uuid>> {
+    pub async fn list_trashed_ids(&self, storage_id: Uuid, path: &str) -> SarcaResult<Vec<Uuid>> {
         let is_folder = path.ends_with('/');
         let folder_prefix = if is_folder {
             path.to_string()
@@ -812,16 +794,23 @@ impl<'d> FilesRepository<'d> {
             .bind(&probe)
             .fetch_one(self.db)
             .await
-            .map_err(|e| map_not_found(e, "file"))?;
+            .map_err(|e| map_not_found(&e, "file"))?;
 
-            if has_folder.0 {
-                probe
-            } else {
-                String::new()
-            }
+            if has_folder.0 { probe } else { String::new() }
         };
 
-        let rows: Vec<(Uuid,)> = if !folder_prefix.is_empty() {
+        let rows: Vec<(Uuid,)> = if folder_prefix.is_empty() {
+            sqlx::query_as(&format!(
+                "
+                SELECT id FROM {FILES_TABLE}
+                WHERE storage_id = $1 AND deleted_at IS NOT NULL AND path = $2
+                "
+            ))
+            .bind(storage_id)
+            .bind(path)
+            .fetch_all(self.db)
+            .await
+        } else {
             sqlx::query_as(&format!(
                 "
                 SELECT id FROM {FILES_TABLE}
@@ -832,17 +821,6 @@ impl<'d> FilesRepository<'d> {
             ))
             .bind(storage_id)
             .bind(&folder_prefix)
-            .fetch_all(self.db)
-            .await
-        } else {
-            sqlx::query_as(&format!(
-                "
-                SELECT id FROM {FILES_TABLE}
-                WHERE storage_id = $1 AND deleted_at IS NOT NULL AND path = $2
-                "
-            ))
-            .bind(storage_id)
-            .bind(path)
             .fetch_all(self.db)
             .await
         }
@@ -904,7 +882,7 @@ impl<'d> FilesRepository<'d> {
         Ok(())
     }
 
-    /// Clear deleted_at for a trashed path (file) or folder prefix.
+    /// Clear `deleted_at` for a trashed path (file) or folder prefix.
     pub async fn restore(&self, path: &str, storage_id: Uuid) -> SarcaResult<()> {
         let is_folder = path.ends_with('/');
         let folder_prefix = if is_folder {
@@ -925,27 +903,21 @@ impl<'d> FilesRepository<'d> {
             .bind(&probe)
             .fetch_one(self.db)
             .await
-            .map_err(|e| map_not_found(e, "file"))?;
+            .map_err(|e| map_not_found(&e, "file"))?;
 
-            if has_folder.0 {
-                probe
-            } else {
-                String::new()
-            }
+            if has_folder.0 { probe } else { String::new() }
         };
 
-        let affected = if !folder_prefix.is_empty() {
+        let affected = if folder_prefix.is_empty() {
             sqlx::query(&format!(
                 "
                 UPDATE {FILES_TABLE}
                 SET deleted_at = NULL
-                WHERE storage_id = $1
-                  AND deleted_at IS NOT NULL
-                  AND (path = $2 OR path LIKE $2 || '%')
+                WHERE storage_id = $1 AND deleted_at IS NOT NULL AND path = $2
                 "
             ))
             .bind(storage_id)
-            .bind(&folder_prefix)
+            .bind(path)
             .execute(self.db)
             .await
             .map_err(|e| {
@@ -958,11 +930,13 @@ impl<'d> FilesRepository<'d> {
                 "
                 UPDATE {FILES_TABLE}
                 SET deleted_at = NULL
-                WHERE storage_id = $1 AND deleted_at IS NOT NULL AND path = $2
+                WHERE storage_id = $1
+                  AND deleted_at IS NOT NULL
+                  AND (path = $2 OR path LIKE $2 || '%')
                 "
             ))
             .bind(storage_id)
-            .bind(path)
+            .bind(&folder_prefix)
             .execute(self.db)
             .await
             .map_err(|e| {
@@ -985,10 +959,8 @@ impl<'d> FilesRepository<'d> {
         storage_id: Uuid,
     ) -> SarcaResult<()> {
         let trimmed = path.trim_end_matches('/');
-        let Some(parent) = Path::new(trimmed)
-            .parent()
-            .and_then(|p| p.to_str())
-            .filter(|p| !p.is_empty())
+        let Some(parent) =
+            Path::new(trimmed).parent().and_then(|p| p.to_str()).filter(|p| !p.is_empty())
         else {
             return Ok(());
         };
@@ -1088,9 +1060,7 @@ impl<'d> FilesRepository<'d> {
                 && self
                     .live_path_exists(&format!("{}/", path.trim_end_matches('/')), storage_id)
                     .await?
-                && !self
-                    .live_path_exists(path.trim_end_matches('/'), storage_id)
-                    .await?);
+                && !self.live_path_exists(path.trim_end_matches('/'), storage_id).await?);
 
         let normalized = if as_folder {
             let stem = path.trim_end_matches('/');
@@ -1159,16 +1129,23 @@ impl<'d> FilesRepository<'d> {
             .bind(&probe)
             .fetch_one(self.db)
             .await
-            .map_err(|e| map_not_found(e, "file"))?;
+            .map_err(|e| map_not_found(&e, "file"))?;
 
-            if has_folder.0 {
-                probe
-            } else {
-                String::new()
-            }
+            if has_folder.0 { probe } else { String::new() }
         };
 
-        let rows: Vec<(Uuid,)> = if !folder_prefix.is_empty() {
+        let rows: Vec<(Uuid,)> = if folder_prefix.is_empty() {
+            sqlx::query_as(&format!(
+                "
+                SELECT id FROM {FILES_TABLE}
+                WHERE storage_id = $1 AND deleted_at IS NULL AND path = $2
+                "
+            ))
+            .bind(storage_id)
+            .bind(path)
+            .fetch_all(self.db)
+            .await
+        } else {
             sqlx::query_as(&format!(
                 "
                 SELECT id FROM {FILES_TABLE}
@@ -1179,17 +1156,6 @@ impl<'d> FilesRepository<'d> {
             ))
             .bind(storage_id)
             .bind(&folder_prefix)
-            .fetch_all(self.db)
-            .await
-        } else {
-            sqlx::query_as(&format!(
-                "
-                SELECT id FROM {FILES_TABLE}
-                WHERE storage_id = $1 AND deleted_at IS NULL AND path = $2
-                "
-            ))
-            .bind(storage_id)
-            .bind(path)
             .fetch_all(self.db)
             .await
         }
@@ -1258,11 +1224,7 @@ impl<'d> FilesRepository<'d> {
     }
 
     /// Insert a live file row copying size/flags/thumb/chunk size from `source`.
-    pub async fn insert_cloned_file(
-        &self,
-        source: &File,
-        dest_path: &str,
-    ) -> SarcaResult<File> {
+    pub async fn insert_cloned_file(&self, source: &File, dest_path: &str) -> SarcaResult<File> {
         let id = Uuid::new_v4();
         sqlx::query_as(
             format!(
@@ -1287,13 +1249,15 @@ impl<'d> FilesRepository<'d> {
         .bind(source.chunk_size_bytes)
         .fetch_one(self.db)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
-                SarcaError::AlreadyExists("File with such name".to_string())
-            }
-            _ => {
-                tracing::error!("{e}");
-                SarcaError::Unknown
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+                    SarcaError::AlreadyExists("File with such name".to_string())
+                },
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
             }
         })
     }
