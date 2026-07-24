@@ -17,7 +17,6 @@ pub struct PendingReplicaJob {
     pub chunk_id: Uuid,
     pub channel_id: Uuid,
     pub target_chat_id: ChatId,
-    pub storage_id: Uuid,
 }
 
 /// An existing uploaded replica usable as a copy/download source for a chunk.
@@ -73,7 +72,7 @@ impl<'d> ChunkReplicasRepository<'d> {
         sqlx::query_as(
             format!(
                 "
-                SELECT cr.id, cr.chunk_id, cr.channel_id, sc.chat_id AS target_chat_id, sc.storage_id
+                SELECT cr.id, cr.chunk_id, cr.channel_id, sc.chat_id AS target_chat_id
                 FROM {TABLE} cr
                 JOIN storage_channels sc ON sc.id = cr.channel_id
                 WHERE cr.status IN ('{REPLICA_STATUS_PENDING}', '{REPLICA_STATUS_FAILED}')
@@ -156,29 +155,6 @@ impl<'d> ChunkReplicasRepository<'d> {
             .map(|_| ())
     }
 
-    pub async fn list_by_chunk(&self, chunk_id: Uuid) -> SarcaResult<Vec<ChunkReplica>> {
-        sqlx::query_as(format!("SELECT * FROM {TABLE} WHERE chunk_id = $1").as_str())
-            .bind(chunk_id)
-            .fetch_all(self.db)
-            .await
-            .map_err(|_| SarcaError::Unknown)
-    }
-
-    pub async fn get_for_chunk_and_channel(
-        &self,
-        chunk_id: Uuid,
-        channel_id: Uuid,
-    ) -> SarcaResult<Option<ChunkReplica>> {
-        sqlx::query_as(
-            format!("SELECT * FROM {TABLE} WHERE chunk_id = $1 AND channel_id = $2").as_str(),
-        )
-        .bind(chunk_id)
-        .bind(channel_id)
-        .fetch_optional(self.db)
-        .await
-        .map_err(|_| SarcaError::Unknown)
-    }
-
     /// Queue every chunk of `storage_id`'s files for replication into `channel_id`
     /// (used for catch-up on a new or repaired channel). No-op for chunks already queued/replicated.
     pub async fn enqueue_for_channel(&self, storage_id: Uuid, channel_id: Uuid) -> SarcaResult<()> {
@@ -232,15 +208,6 @@ impl<'d> ChunkReplicasRepository<'d> {
             })?;
 
         Ok(())
-    }
-
-    pub async fn delete_by_channel(&self, channel_id: Uuid) -> SarcaResult<()> {
-        sqlx::query(format!("DELETE FROM {TABLE} WHERE channel_id = $1").as_str())
-            .bind(channel_id)
-            .execute(self.db)
-            .await
-            .map_err(|_| SarcaError::Unknown)
-            .map(|_| ())
     }
 
     pub async fn retry_failed(&self, storage_id: Uuid) -> SarcaResult<()> {

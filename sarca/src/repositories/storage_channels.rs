@@ -35,21 +35,6 @@ impl<'d> StorageChannelsRepository<'d> {
             .map_err(|e| map_not_found(e, "storage channel"))
     }
 
-    pub async fn get_at_position(
-        &self,
-        storage_id: Uuid,
-        position: i16,
-    ) -> SarcaResult<StorageChannel> {
-        sqlx::query_as(
-            format!("SELECT * FROM {TABLE} WHERE storage_id = $1 AND position = $2").as_str(),
-        )
-        .bind(storage_id)
-        .bind(position)
-        .fetch_one(self.db)
-        .await
-        .map_err(|e| map_not_found(e, "storage channel"))
-    }
-
     /// First free slot (1..=3) not currently used by `storage_id`, or `None` if all 3 taken.
     pub async fn next_free_position(&self, storage_id: Uuid) -> SarcaResult<Option<i16>> {
         let channels = self.list_by_storage(storage_id).await?;
@@ -145,20 +130,6 @@ impl<'d> StorageChannelsRepository<'d> {
         let row: (i64,) = sqlx::query_as(
             format!("SELECT COUNT(*) FROM {TABLE} WHERE storage_id = $1 AND status = 'active'")
                 .as_str(),
-        )
-        .bind(storage_id)
-        .fetch_one(self.db)
-        .await
-        .map_err(|_| SarcaError::Unknown)?;
-        Ok(row.0)
-    }
-
-    pub async fn has_dead(&self, storage_id: Uuid) -> SarcaResult<bool> {
-        let row: (bool,) = sqlx::query_as(
-            format!(
-                "SELECT EXISTS(SELECT 1 FROM {TABLE} WHERE storage_id = $1 AND status = 'dead')"
-            )
-            .as_str(),
         )
         .bind(storage_id)
         .fetch_one(self.db)

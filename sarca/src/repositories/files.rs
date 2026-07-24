@@ -203,7 +203,7 @@ impl<'d> FilesRepository<'d> {
         sqlx::query_as(
             format!(
                 "
-                SELECT fc.id, fc.file_id, fc.position, cr.telegram_file_id, cr.channel_id
+                SELECT fc.position, cr.telegram_file_id
                 FROM {CHUNKS_TABLE} fc
                 JOIN chunk_replicas cr ON cr.chunk_id = fc.id
                     AND cr.channel_id = $2
@@ -223,17 +223,6 @@ impl<'d> FilesRepository<'d> {
             tracing::error!("{e}");
             SarcaError::Unknown
         })
-    }
-
-    pub async fn count_chunks_of_file(&self, file_id: Uuid) -> SarcaResult<i64> {
-        let row: (i64,) = sqlx::query_as(
-            format!("SELECT COUNT(*) FROM {CHUNKS_TABLE} WHERE file_id = $1").as_str(),
-        )
-        .bind(file_id)
-        .fetch_one(self.db)
-        .await
-        .map_err(|_| SarcaError::Unknown)?;
-        Ok(row.0)
     }
 
     /// NOTE:

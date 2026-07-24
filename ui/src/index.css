@@ -656,7 +656,9 @@ a.default-link:hover {
 .settings-overlay {
 	position: fixed;
 	inset: 0;
-	z-index: 1200;
+	/* Above MUI fixed AppBar (1100). Overlay must also escape .app-shell-main
+	   stacking (Portal → body) or the header still paints on top. */
+	z-index: 1300;
 	background: var(--sarca-overlay);
 	backdrop-filter: blur(10px);
 	-webkit-backdrop-filter: blur(10px);
@@ -664,6 +666,7 @@ a.default-link:hover {
 	align-items: center;
 	justify-content: center;
 	padding: 24px;
+	padding-top: max(24px, env(safe-area-inset-top, 0px));
 	animation: sarca-fade 0.22s ease both;
 }
 
@@ -717,7 +720,7 @@ a.default-link:hover {
 
 .settings-modal--storage {
 	width: min(480px, 100%);
-	max-height: min(86vh, 640px);
+	max-height: min(calc(100vh - 48px), 640px);
 }
 
 .storage-settings-meta {

@@ -1,8 +1,6 @@
-import Divider from '@suid/material/Divider'
 import Box from '@suid/material/Box'
 import Button from '@suid/material/Button'
 import TextField from '@suid/material/TextField'
-import Typography from '@suid/material/Typography'
 import { useNavigate, useParams } from '@solidjs/router'
 import Stack from '@suid/material/Stack'
 import ChevronLeftIcon from '@suid/icons-material/ChevronLeft'
@@ -63,9 +61,6 @@ const UploadFileTo = () => {
 					'& > :not(style)': { my: 1.5 },
 				}}
 			>
-				<Typography variant="h5">Upload file to</Typography>
-
-				<Divider />
 				<TextField
 					id="path"
 					name="path"

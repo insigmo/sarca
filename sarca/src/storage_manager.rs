@@ -40,7 +40,6 @@ impl StorageManager {
             &self.db,
             &self.config.telegram_api_base_url,
             self.config.telegram_rate_limit,
-            (self.config.telegram_chunk_size_mb as usize) * 1024 * 1024,
         )
         .upload(data)
         .await;

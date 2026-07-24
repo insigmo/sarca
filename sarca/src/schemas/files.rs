@@ -13,15 +13,23 @@ pub struct InFileSchema {
     pub path: String,
     pub size: i64,
     pub file_path: PathBuf,
+    pub chunk_size_bytes: i64,
 }
 
 impl InFileSchema {
-    pub fn new(storage_id: Uuid, path: String, file_path: PathBuf, size: i64) -> Self {
+    pub fn new(
+        storage_id: Uuid,
+        path: String,
+        file_path: PathBuf,
+        size: i64,
+        chunk_size_bytes: i64,
+    ) -> Self {
         Self {
             storage_id,
             path,
             size,
             file_path,
+            chunk_size_bytes,
         }
     }
 }

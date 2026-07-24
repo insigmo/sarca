@@ -345,7 +345,7 @@ const Files = () => {
 							<ListItemIcon>
 								<UploadFileIcon />
 							</ListItemIcon>
-							<ListItemText>Upload file to</ListItemText>
+							<ListItemText>Upload to folder</ListItemText>
 						</MenuItem>
 					</Menu>
 				</div>
