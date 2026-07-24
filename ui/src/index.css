@@ -461,6 +461,23 @@ a.default-link:hover {
 	color: var(--sarca-ink-soft);
 }
 
+.setup-wizard__card {
+	padding: 28px 24px;
+	border-radius: var(--sarca-radius);
+	border: 1px solid var(--sarca-border);
+	background: var(--sarca-glass);
+	backdrop-filter: blur(20px);
+	-webkit-backdrop-filter: blur(20px);
+	box-shadow: var(--sarca-shadow-soft);
+}
+
+.setup-wizard__card code {
+	font-size: 0.9em;
+	padding: 0.1em 0.35em;
+	border-radius: 6px;
+	background: var(--sarca-surface);
+}
+
 /* —— Files page canvas —— */
 .files-page {
 	position: relative;
