@@ -388,9 +388,9 @@ install_docker() {
   echo "Next:"
   echo "  cd ${dest}"
   echo "  # edit sarca.conf (SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID/HASH)"
-  echo "  docker compose pull"
-  echo "  docker compose up -d"
-  echo "  open http://127.0.0.1:8000"
+  echo "  docker compose --env-file sarca.conf pull"
+  echo "  docker compose --env-file sarca.conf up -d"
+  echo "  open http://127.0.0.1:\${PORT:-8000}  (PORT from sarca.conf)"
 }
 
 case "${MODE}" in

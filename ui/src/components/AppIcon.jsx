@@ -14,8 +14,9 @@ const AppIcon = (props) => {
 			height={size()}
 			class={props.class}
 			style={{
-				'border-radius': '10px',
+				'border-radius': '12px',
 				display: 'block',
+				'box-shadow': '0 6px 16px rgba(61, 74, 214, 0.28)',
 			}}
 		/>
 	)

@@ -57,17 +57,17 @@ Edit `%LOCALAPPDATA%\Sarca\sarca.conf`, then run `sarca.cmd` from the install fo
 
 ### Docker Compose
 
-`compose.yml` mounts `./sarca.conf` into the containers (no `--env-file`). Edit that file for secrets and Telegram credentials; Docker networking (`DATABASE_HOST=db`, `WORK_DIR=/work`, local Bot API) is set in compose.
+`compose.yml` mounts `./sarca.conf` into the containers. Secrets and Telegram credentials live there. Docker networking (`DATABASE_HOST=db`, `WORK_DIR=/work`) is set in compose. **`PORT` is read from `sarca.conf`** for both the published host port and the process listen port — always pass `--env-file sarca.conf` so Compose can interpolate it.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
 cd sarca
-# edit sarca.conf: SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID, TELEGRAM_API_HASH
+# edit sarca.conf: SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID, TELEGRAM_API_HASH, PORT
 # keep DATABASE_USER/PASSWORD/NAME = sarca (matches compose db service)
-docker compose up -d
+docker compose --env-file sarca.conf up -d
 ```
 
-Open http://127.0.0.1:8000
+Open http://127.0.0.1:$PORT (default `8000` if unset in conf).
 
 Logs:
 

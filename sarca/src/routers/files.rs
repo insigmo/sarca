@@ -3,7 +3,7 @@ use std::{io, path::Path, pin::Pin, sync::Arc};
 use axum::{
     body::{Bytes, StreamBody},
     extract::{DefaultBodyLimit, Multipart, Path as RoutePath, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     middleware,
     response::{AppendHeaders, IntoResponse, Response},
     routing::{get, post},
@@ -58,11 +58,12 @@ impl FilesRouter {
         Extension(user): Extension<AuthUser>,
         RoutePath((storage_id, path)): RoutePath<(Uuid, String)>,
         query: Query<SearchQuery>,
+        headers: HeaderMap,
     ) -> impl IntoResponse {
         let (root_path, path) = path.split_once("/").unwrap_or((&path, ""));
         match root_path {
             "tree" => Self::tree(state, user, storage_id, path).await,
-            "download" => Self::download(state, user, storage_id, path).await,
+            "download" => Self::download(state, user, storage_id, path, &query.0, &headers).await,
             "thumb" => Self::thumb(state, user, storage_id, path).await,
             "search" => {
                 if let Some(search_path) = query.0.search_path {
@@ -304,8 +305,9 @@ impl FilesRouter {
         user: AuthUser,
         storage_id: Uuid,
         path: &str,
+        query: &SearchQuery,
+        headers: &HeaderMap,
     ) -> Result<Response, (StatusCode, String)> {
-        // 0) checking access
         check_access(
             &AccessRepository::new(&state.db),
             user.id,
@@ -315,12 +317,10 @@ impl FilesRouter {
         .await
         .map_err(|e| <(StatusCode, String)>::from(e))?;
 
-        // 1) validation
         if path.starts_with('/') || path.contains("//") {
             return Err((StatusCode::BAD_REQUEST, SarcaError::InvalidPath.to_string()));
         }
 
-        // 2) locate file + chunks
         let files_repo = FilesRepository::new(&state.db);
         let file = files_repo
             .get_file_by_path(path, storage_id)
@@ -333,13 +333,87 @@ impl FilesRouter {
             .map_err(|e| <(StatusCode, String)>::from(e))?;
         chunks.sort_by_key(|c| c.position);
 
+        let file_size = file.size.max(0) as u64;
+        let chunk_size =
+            (state.config.telegram_chunk_size_mb as u64).saturating_mul(1024 * 1024).max(1);
+
+        let filename = Path::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("unnamed.bin");
+        let content_type = mime_guess::from_path(filename)
+            .first_or_octet_stream()
+            .to_string();
+
+        let want_inline = matches!(
+            query.inline.as_deref(),
+            Some("1") | Some("true") | Some("yes")
+        ) || is_inline_previewable(&content_type);
+        let disposition = if want_inline {
+            format!("inline; filename=\"{filename}\"")
+        } else {
+            format!("attachment; filename=\"{filename}\"")
+        };
+
+        let range = parse_bytes_range(
+            headers
+                .get(header::RANGE)
+                .and_then(|v| v.to_str().ok()),
+            file_size,
+        );
+
+        let (start, end, status) = match range {
+            Ok(None) => (0u64, file_size.saturating_sub(1), StatusCode::OK),
+            Ok(Some((s, e))) => (s, e, StatusCode::PARTIAL_CONTENT),
+            Err(()) => {
+                return Err((
+                    StatusCode::RANGE_NOT_SATISFIABLE,
+                    format!("Requested range not satisfiable; file size is {file_size}"),
+                ));
+            }
+        };
+
+        // Empty file
+        if file_size == 0 {
+            let body = StreamBody::new(futures::stream::empty::<Result<Bytes, io::Error>>());
+            let mut response = body.into_response();
+            *response.status_mut() = StatusCode::OK;
+            let headers_mut = response.headers_mut();
+            headers_mut.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+            headers_mut.insert(header::CONTENT_DISPOSITION, disposition.parse().unwrap());
+            headers_mut.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+            headers_mut.insert(header::CONTENT_LENGTH, "0".parse().unwrap());
+            return Ok(response);
+        }
+
+        let end = end.min(file_size.saturating_sub(1));
+        if start > end {
+            return Err((
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                format!("Requested range not satisfiable; file size is {file_size}"),
+            ));
+        }
+
+        let content_length = end - start + 1;
+        let first_chunk_idx = (start / chunk_size) as usize;
+        let last_chunk_idx = (end / chunk_size) as usize;
+
         let base_url = state.config.telegram_api_base_url.clone();
         let rate = state.config.telegram_rate_limit;
         let db = state.db.clone();
 
-        // 3) stream each telegram chunk sequentially to the client
         let stream = try_stream! {
-            for chunk in chunks {
+            let mut remaining = content_length;
+            let mut cursor = start;
+
+            for (idx, chunk) in chunks.into_iter().enumerate() {
+                if idx < first_chunk_idx || idx > last_chunk_idx || remaining == 0 {
+                    continue;
+                }
+
+                let chunk_start = idx as u64 * chunk_size;
+                let mut skip = cursor.saturating_sub(chunk_start);
+
                 let scheduler = StorageWorkersScheduler::new(&db, rate);
                 let api = TelegramBotApi::new(&base_url, scheduler);
 
@@ -349,9 +423,32 @@ impl FilesRouter {
                     .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
                 while let Some(item) = s.next().await {
+                    if remaining == 0 {
+                        break;
+                    }
+
                     let bytes = item
                         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
-                    yield bytes;
+
+                    if skip > 0 {
+                        let blen = bytes.len() as u64;
+                        if skip >= blen {
+                            skip -= blen;
+                            continue;
+                        }
+                        let from = skip as usize;
+                        skip = 0;
+                        let slice = bytes.slice(from..);
+                        let take = (slice.len() as u64).min(remaining) as usize;
+                        remaining -= take as u64;
+                        cursor += take as u64;
+                        yield slice.slice(..take);
+                    } else {
+                        let take = (bytes.len() as u64).min(remaining) as usize;
+                        remaining -= take as u64;
+                        cursor += take as u64;
+                        yield bytes.slice(..take);
+                    }
                 }
             }
         };
@@ -359,23 +456,25 @@ impl FilesRouter {
         let stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(stream);
         let body = StreamBody::new(stream);
 
-        let filename = Path::new(&path)
-            .file_name()
-            .map(|name| name.to_str().unwrap_or_default())
-            .unwrap_or("unnamed.bin");
-        let content_type = mime_guess::from_path(filename)
-            .first_or_octet_stream()
-            .to_string();
+        let mut response = (body).into_response();
+        *response.status_mut() = status;
 
-        let headers = AppendHeaders([
-            (header::CONTENT_TYPE, content_type),
-            (
-                header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{filename}\""),
-            ),
-        ]);
+        let headers_mut = response.headers_mut();
+        headers_mut.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
+        headers_mut.insert(header::CONTENT_DISPOSITION, disposition.parse().unwrap());
+        headers_mut.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+        headers_mut.insert(
+            header::CONTENT_LENGTH,
+            content_length.to_string().parse().unwrap(),
+        );
+        if status == StatusCode::PARTIAL_CONTENT {
+            headers_mut.insert(
+                header::CONTENT_RANGE,
+                format!("bytes {start}-{end}/{file_size}").parse().unwrap(),
+            );
+        }
 
-        Ok((headers, body).into_response())
+        Ok(response)
     }
 
     async fn thumb(
@@ -495,6 +594,57 @@ impl FilesRouter {
             .await?;
         Ok(StatusCode::OK)
     }
+}
+
+/// Whether the mime type should default to inline preview.
+fn is_inline_previewable(content_type: &str) -> bool {
+    content_type.starts_with("image/")
+        || content_type.starts_with("video/")
+        || content_type.starts_with("audio/")
+        || content_type == "application/pdf"
+        || content_type.starts_with("text/")
+}
+
+/// Parse `Range: bytes=start-end`. Returns `Ok(None)` if no range.
+/// `Err(())` if the range is invalid / unsatisfiable.
+fn parse_bytes_range(header: Option<&str>, file_size: u64) -> Result<Option<(u64, u64)>, ()> {
+    let Some(header) = header else {
+        return Ok(None);
+    };
+    let header = header.trim();
+    if file_size == 0 {
+        return Err(());
+    }
+    let Some(spec) = header.strip_prefix("bytes=") else {
+        return Err(());
+    };
+    // Only single range supported
+    if spec.contains(',') {
+        return Err(());
+    }
+    let (start_s, end_s) = spec.split_once('-').ok_or(())?;
+    if start_s.is_empty() {
+        // suffix: bytes=-N
+        let n: u64 = end_s.parse().map_err(|_| ())?;
+        if n == 0 {
+            return Err(());
+        }
+        let start = file_size.saturating_sub(n);
+        return Ok(Some((start, file_size - 1)));
+    }
+    let start: u64 = start_s.parse().map_err(|_| ())?;
+    if start >= file_size {
+        return Err(());
+    }
+    let end = if end_s.is_empty() {
+        file_size - 1
+    } else {
+        end_s.parse::<u64>().map_err(|_| ())?.min(file_size - 1)
+    };
+    if end < start {
+        return Err(());
+    }
+    Ok(Some((start, end)))
 }
 
 #[cfg(test)]

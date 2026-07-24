@@ -1,11 +1,10 @@
-import ListItem from '@suid/material/ListItem'
-import ListItemButton from '@suid/material/ListItemButton'
-import ListItemIcon from '@suid/material/ListItemIcon'
-import ListItemText from '@suid/material/ListItemText'
 import MenuMUI from '@suid/material/Menu'
 import MenuItem from '@suid/material/MenuItem'
+import ListItemIcon from '@suid/material/ListItemIcon'
+import ListItemText from '@suid/material/ListItemText'
 import IconButton from '@suid/material/IconButton'
 import MoreVertIcon from '@suid/icons-material/MoreVert'
+import VisibilityIcon from '@suid/icons-material/Visibility'
 import DownloadIcon from '@suid/icons-material/Download'
 import InfoIcon from '@suid/icons-material/Info'
 import DeleteIcon from '@suid/icons-material/Delete'
@@ -17,17 +16,20 @@ import { useNavigate, useParams } from '@solidjs/router'
 import API from '../api'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
-import FileTypeIcon, { FILE_TYPE_ICON_SIZE } from './FileTypeIcon'
+import FileTypeIcon from './FileTypeIcon'
 import { alertStore } from './AlertStack'
+import { fileBaseName, fileExtensionLabel } from '../common/fileLabel'
 
 /**
  * @typedef {Object} FSListItemProps
  * @property {import("../api").FSElement} fsElement
  * @property {string} storageId
  * @property {() => {}} onDelete
+ * @property {(file: import("../api").FSElement) => void} [onOpen]
  */
 
 /**
+ * Grid tile for a file or folder (reference-style 3D icon + name + extension).
  * @param {FSListItemProps} props
  */
 const FSListItem = (props) => {
@@ -49,7 +51,14 @@ const FSListItem = (props) => {
 	const handleNavigate = () => {
 		if (!props.fsElement.is_file) {
 			navigate(`/storages/${props.storageId}/files/${props.fsElement.path}`)
+		} else {
+			props.onOpen?.(props.fsElement)
 		}
+	}
+
+	const openViewer = () => {
+		handleCloseMore()
+		props.onOpen?.(props.fsElement)
 	}
 
 	const isParentNav = () => props.fsElement.name === '..'
@@ -150,40 +159,53 @@ const FSListItem = (props) => {
 		}
 	}
 
+	const displayName = () =>
+		fileBaseName(props.fsElement.name, props.fsElement.is_file)
+	const displayExt = () =>
+		fileExtensionLabel(props.fsElement.name, props.fsElement.is_file)
+
 	return (
 		<>
-			<ListItem disablePadding class="fs-list-item">
-				<ListItemButton onClick={handleNavigate} sx={{ py: 1.1, borderRadius: 2 }}>
-					<ListItemIcon sx={{ minWidth: FILE_TYPE_ICON_SIZE + 16 }}>
-						<FileTypeIcon
-							name={props.fsElement.name}
-							isFile={props.fsElement.is_file}
-							thumbUrl={thumbUrl()}
-						/>
-					</ListItemIcon>
-					<ListItemText
-						primary={props.fsElement.name}
-						primaryTypographyProps={{
-							sx: {
-								fontWeight: 600,
-								letterSpacing: '-0.01em',
-								overflow: 'hidden',
-								textOverflow: 'ellipsis',
-							},
-						}}
-					/>
-				</ListItemButton>
+			<div
+				class="fs-grid-item"
+				role="button"
+				tabIndex={0}
+				onClick={handleNavigate}
+				onKeyDown={(e) => {
+					if (e.key === 'Enter' || e.key === ' ') {
+						e.preventDefault()
+						handleNavigate()
+					}
+				}}
+			>
 				<Show when={!isParentNav()}>
-					<IconButton
-						onClick={(event) => {
-							setMoreAnchorEl(event.currentTarget)
-						}}
-						aria-label="More actions"
-					>
-						<MoreVertIcon />
-					</IconButton>
+					<div class="fs-grid-item__more">
+						<IconButton
+							size="small"
+							onClick={(event) => {
+								event.stopPropagation()
+								setMoreAnchorEl(event.currentTarget)
+							}}
+							aria-label="More actions"
+						>
+							<MoreVertIcon fontSize="small" />
+						</IconButton>
+					</div>
 				</Show>
-			</ListItem>
+
+				<FileTypeIcon
+					name={props.fsElement.name}
+					isFile={props.fsElement.is_file}
+					thumbUrl={thumbUrl()}
+					size={64}
+				/>
+
+				<div class="fs-grid-item__name" title={props.fsElement.name}>
+					{displayName()}
+				</div>
+				<div class="fs-grid-item__ext">{displayExt()}</div>
+			</div>
+
 			<MenuMUI
 				id="basic-menu"
 				anchorEl={moreAnchorEl()}
@@ -191,6 +213,16 @@ const FSListItem = (props) => {
 				onClose={handleCloseMore}
 				MenuListProps={{ 'aria-labelledby': 'basic-button' }}
 			>
+				<MenuItem
+					onClick={openViewer}
+					disabled={!props.fsElement.is_file}
+				>
+					<ListItemIcon>
+						<VisibilityIcon fontSize="small" />
+					</ListItemIcon>
+					<ListItemText>Open</ListItemText>
+				</MenuItem>
+
 				<MenuItem onClick={() => setIsInfoDialogOpened(true)}>
 					<ListItemIcon>
 						<InfoIcon fontSize="small" />

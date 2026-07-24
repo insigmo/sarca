@@ -30,7 +30,9 @@ services:
       - sarca-work-volume:/work
     environment:
       # Docker network layout — overrides host-oriented values in mounted conf.
-      PORT: "8001"
+      # PORT is taken from sarca.conf via `docker compose --env-file sarca.conf`
+      # so the published host port matches the process listen port.
+      PORT: ${PORT:-8000}
       DATABASE_HOST: db
       WORK_DIR: /work
       # Use public Bot API by default (local telegram-bot-api needs valid
@@ -39,7 +41,7 @@ services:
       TELEGRAM_LOCAL_API: "false"
       TELEGRAM_API_BASE_URL: https://api.telegram.org
     ports:
-      - "8001:8001"
+      - "${PORT:-8000}:${PORT:-8000}"
     restart: unless-stopped
     depends_on:
       - db

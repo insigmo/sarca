@@ -3,6 +3,8 @@ version: "3"
 vars:
   NATIVE_PREFIX:
     sh: 'echo "${HOME}/.local/share/sarca"'
+  # Compose interpolates ${PORT} from sarca.conf (host publish + container listen).
+  COMPOSE: docker compose --env-file sarca.conf
 
 tasks:
   default:
@@ -17,10 +19,13 @@ tasks:
       - |
         set -e
         UI_DIR="{{.ROOT_DIR}}/ui"
+        build() {
+          (cd "$UI_DIR" && VITE_API_BASE=/api pnpm install && VITE_API_BASE=/api pnpm run build)
+        }
         if command -v pnpm >/dev/null 2>&1; then
-          (cd "$UI_DIR" && pnpm install && pnpm run build)
+          build
         elif bash -lc 'command -v pnpm' >/dev/null 2>&1; then
-          bash -lc "cd \"$UI_DIR\" && pnpm install && pnpm run build"
+          bash -lc "cd \"$UI_DIR\" && VITE_API_BASE=/api pnpm install && VITE_API_BASE=/api pnpm run build"
         else
           echo "error: pnpm not found" >&2
           exit 1
@@ -71,12 +76,13 @@ tasks:
       - chmod +x "{{.ROOT_DIR}}/docker/sarca-entrypoint.sh" "{{.ROOT_DIR}}/docker/telegram-bot-api-entrypoint.sh"
       - test -x "{{.ROOT_DIR}}/runtime/sarca"
       - test -f "{{.ROOT_DIR}}/ui/dist/index.html"
-      - docker compose up -d --build --force-recreate --remove-orphans
+      - test -f "{{.ROOT_DIR}}/sarca.conf"
+      - "{{.COMPOSE}} up -d --build --force-recreate --remove-orphans"
 
   down:
     desc: Stop and remove stack
     cmds:
-      - docker compose down
+      - "{{.COMPOSE}} down"
 
   restart:
     desc: Restart stack with fresh binary+UI
@@ -91,7 +97,8 @@ tasks:
         set -e
         cd "{{.ROOT_DIR}}"
         if [ ! -d .venv ]; then python3 -m venv .venv; .venv/bin/pip install -r e2e/requirements.txt; fi
-        # Prefer credentials from sarca.conf (ignore ambient e2e env).
+        PORT="$(grep -E '^[[:space:]]*PORT=' sarca.conf 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+        PORT="${PORT:-8000}"
         env -u SUPERUSER_EMAIL -u SUPERUSER_PASS \
-          SARCA_BASE_URL="${SARCA_BASE_URL:-http://127.0.0.1:8001}" \
+          SARCA_BASE_URL="${SARCA_BASE_URL:-http://127.0.0.1:${PORT}}" \
           .venv/bin/python -m pytest -q -m smoke e2e/test_upload_smoke.py -s
