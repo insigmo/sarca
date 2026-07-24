@@ -3,6 +3,7 @@ pub mod channel_health;
 pub mod files;
 pub mod replication;
 pub mod settings;
+pub mod setup;
 pub mod storage_manager;
 pub mod storage_workers;
 pub mod storage_workers_scheduler;

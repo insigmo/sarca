@@ -32,6 +32,61 @@ pub fn load_sarca_conf() -> Option<PathBuf> {
     None
 }
 
+/// First existing `sarca.conf` among the usual candidates (may be None).
+pub fn resolve_conf_path() -> Option<PathBuf> {
+    for path in conf_candidates() {
+        let path = migrate_legacy_env(&path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Best-effort upsert of KEY=VALUE lines in `sarca.conf`. Returns Ok(false) if no file / not writable.
+pub fn upsert_conf_keys(keys: &[(&str, &str)]) -> Result<bool, String> {
+    let Some(path) = resolve_conf_path() else {
+        return Ok(false);
+    };
+    upsert_conf_keys_at(&path, keys)?;
+    Ok(true)
+}
+
+fn upsert_conf_keys_at(path: &Path, keys: &[(&str, &str)]) -> Result<(), String> {
+    let original = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut lines: Vec<String> = original.lines().map(|l| l.to_string()).collect();
+    let mut found = vec![false; keys.len()];
+
+    for line in lines.iter_mut() {
+        let trimmed = line.trim().to_owned();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((raw_key, _)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let key = raw_key.trim();
+        for (i, (k, v)) in keys.iter().enumerate() {
+            if key == *k {
+                *line = format!("{k}={v}");
+                found[i] = true;
+            }
+        }
+    }
+
+    for (i, (k, v)) in keys.iter().enumerate() {
+        if !found[i] {
+            lines.push(format!("{k}={v}"));
+        }
+    }
+
+    let mut out = lines.join("\n");
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    fs::write(path, out).map_err(|e| e.to_string())
+}
+
 fn conf_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(exe) = env::current_exe() {
@@ -186,6 +241,27 @@ mod tests {
         assert_eq!(resolved, conf);
         assert!(conf.is_file());
         assert!(!legacy.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn upsert_replaces_and_appends_keys() {
+        let dir = tempfile_dir();
+        let conf = dir.join(CONF_NAME);
+        fs::write(&conf, "PORT=8000\nTELEGRAM_API_ID=old\n").unwrap();
+        upsert_conf_keys_at(
+            &conf,
+            &[
+                ("TELEGRAM_API_ID", "12345"),
+                ("TELEGRAM_API_HASH", "abcdef"),
+            ],
+        )
+        .unwrap();
+        let text = fs::read_to_string(&conf).unwrap();
+        assert!(text.contains("TELEGRAM_API_ID=12345"));
+        assert!(text.contains("TELEGRAM_API_HASH=abcdef"));
+        assert!(text.contains("PORT=8000"));
+        assert!(!text.contains("TELEGRAM_API_ID=old"));
         let _ = fs::remove_dir_all(&dir);
     }
 
