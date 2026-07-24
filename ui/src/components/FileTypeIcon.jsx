@@ -21,7 +21,7 @@ const Tile = (props) => (
 )
 
 const Glyph = (props) => (
-	<svg viewBox="0 0 48 48" width="28" height="28" focusable="false" class="file-type-icon__glyph">
+	<svg viewBox="0 0 48 48" width="100%" height="100%" focusable="false" class="file-type-icon__glyph">
 		{props.children}
 	</svg>
 )
@@ -280,6 +280,8 @@ const glyphForKind = (kind) => {
 		case 'pdf':
 			return <PdfGlyph />
 		case 'document':
+			return <DocumentGlyph />
+		case 'presentation':
 			return <DocumentGlyph />
 		case 'text':
 			return <TextGlyph />

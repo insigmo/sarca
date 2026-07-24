@@ -1,63 +1,38 @@
 import { useBeforeLeave, useNavigate, useParams } from '@solidjs/router'
 import { Show, createSignal, mapArray, onCleanup, onMount } from 'solid-js'
-import List from '@suid/material/List'
 import MenuItem from '@suid/material/MenuItem'
 import ListItemIcon from '@suid/material/ListItemIcon'
 import ListItemText from '@suid/material/ListItemText'
 import UploadFileIcon from '@suid/icons-material/UploadFile'
 import UploadFolderIcon from '@suid/icons-material/DriveFolderUpload'
-import FolderOpenIcon from '@suid/icons-material/FolderOpen'
-import LockIcon from '@suid/icons-material/Lock'
-import Grid from '@suid/material/Grid'
 import Stack from '@suid/material/Stack'
 import Typography from '@suid/material/Typography'
-import Divider from '@suid/material/Divider'
-import Fab from '@suid/material/Fab'
-import ToggleButton from '@suid/material/ToggleButton'
-import ToggleButtonGroup from '@suid/material/ToggleButtonGroup'
-import AddIcon from '@suid/icons-material/Add'
 import LinearProgress from '@suid/material/LinearProgress'
 import Box from '@suid/material/Box'
-import TextField from '@suid/material/TextField'
-import InputAdornment from '@suid/material/InputAdornment'
-import SearchIcon from '@suid/icons-material/Search'
-import IconButton from '@suid/material/IconButton'
-import ClearIcon from '@suid/icons-material/Clear'
 
 import API from '../../api'
 import FSListItem from '../../components/FSListItem'
 import Menu from '../../components/Menu'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
 import { alertStore } from '../../components/AlertStack'
-import Access from '../../components/Access'
-import GrantAccess from '../../components/GrantAccess'
+import FileViewer from '../../components/FileViewer'
+import { filesChromeStore } from '../../common/filesChrome'
 
 const Files = () => {
 	const { addAlert } = alertStore
+	const chrome = filesChromeStore
 	/**
 	 * @type {[import("solid-js").Accessor<import("../../api").FSElement[]>, any]}
 	 */
 	const [fsLayer, setFsLayer] = createSignal([])
-	/**
-	 * @type {[import("solid-js").Accessor<import("../../api").Storage>, any]}
-	 */
-	const [storage, setStorage] = createSignal()
-	const [isAccessPage, setIsAccessPage] = createSignal(false)
 	const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
 		createSignal(false)
-	const [isGrantAccessButtonVisible, setIsGrantButtonAccessVisible] =
-		createSignal(false)
-	const [isGrantAccessVisible, setIsGrantAccessVisible] = createSignal(false)
-	/**
-	 * @type {[import("solid-js").Accessor<import("../api").UserWithAccess[]>, any]}
-	 */
-	const [users, setUsers] = createSignal([])
-	const [searchQuery, setSearchQuery] = createSignal('')
-	const [isSearching, setIsSearching] = createSignal(false)
-
-	// PROGRESS BAR STATE
 	const [uploadProgress, setUploadProgress] = createSignal(0)
 	const [isUploading, setIsUploading] = createSignal(false)
+	/**
+	 * @type {[import("solid-js").Accessor<import("../../api").FSElement | null>, any]}
+	 */
+	const [viewerFile, setViewerFile] = createSignal(null)
 
 	const navigate = useNavigate()
 	const params = useParams()
@@ -65,21 +40,9 @@ const Files = () => {
 
 	let uploadFileInputElement
 
-	const fetchUsersWithAccess = async () => {
-		try {
-			const users = await API.access.listUsersWithAccess(params.id)
-			setUsers(users)
-			setIsGrantButtonAccessVisible(true)
-		} catch (err) {
-			addAlert('You do not have permissions to manage access', 'error')
-			console.error(err)
-			setIsGrantButtonAccessVisible(false)
-		}
-	}
-
 	const fetchStorage = async () => {
 		const storage = await API.storages.getStorage(params.id)
-		setStorage(storage)
+		chrome.setStorageName(storage.name)
 	}
 
 	const fetchFSLayer = async (path = params.path) => {
@@ -99,8 +62,8 @@ const Files = () => {
 		}
 
 		setFsLayer(fsLayerRes)
-		setIsSearching(false)
-		setSearchQuery('')
+		chrome.setIsSearching(false)
+		chrome.setSearchQuery('')
 	}
 
 	/**
@@ -122,29 +85,36 @@ const Files = () => {
 			has_thumb: false,
 		}))
 		setFsLayer(mapped)
-		setIsSearching(true)
+		chrome.setIsSearching(true)
 	}
 
 	const clearSearch = async () => {
-		setSearchQuery('')
+		chrome.setSearchQuery('')
+		chrome.setIsSearching(false)
 		await fetchFSLayer()
 	}
 
 	const reload = async () => {
 		if (window.location.pathname.startsWith(basePath)) {
-			console.log(window.location.pathname)
 			await fetchFSLayer()
 		}
 	}
 
 	onMount(() => {
+		chrome.activate({
+			storageId: params.id,
+			storageName: '',
+			onSearch: runSearch,
+			onClear: clearSearch,
+		})
 		Promise.all([fetchStorage(), fetchFSLayer()]).then()
-
-		// Either me or the solidjs-router creator is dumb af so I have to use this sht
 		window.addEventListener('popstate', reload, false)
 	})
 
-	onCleanup(() => window.removeEventListener('popstate', reload, false))
+	onCleanup(() => {
+		window.removeEventListener('popstate', reload, false)
+		chrome.deactivate()
+	})
 
 	useBeforeLeave(async (e) => {
 		if (e.to.startsWith(basePath)) {
@@ -166,15 +136,14 @@ const Files = () => {
 	}
 
 	/**
-	 *
 	 * @param {string} folderName
 	 */
 	const createFolder = async (folderName) => {
-		const basePath = params.path.endsWith('/')
+		const folderBase = params.path.endsWith('/')
 			? params.path.slice(0, -1)
 			: params.path
 
-		await API.files.createFolder(params.id, basePath, folderName)
+		await API.files.createFolder(params.id, folderBase, folderName)
 		addAlert(`Created folder "${folderName}"`, 'success')
 		await fetchFSLayer()
 	}
@@ -184,7 +153,6 @@ const Files = () => {
 	}
 
 	/**
-	 *
 	 * @param {Event} event
 	 */
 	const uploadFile = async (event) => {
@@ -213,171 +181,95 @@ const Files = () => {
 
 	return (
 		<>
-			<Stack container>
-				<Grid container sx={{ mb: 2 }}>
-					<Grid item xs={4}>
-						<Typography variant="h4">{storage()?.name}</Typography>
-					</Grid>
-
-					<Grid item xs={4}>
-						<ToggleButtonGroup
-							exclusive
-							value={isAccessPage()}
-							color="primary"
-							onChange={(_, val) => setIsAccessPage(val)}
-							sx={{ display: 'flex', justifyContent: 'center' }}
+			<Stack class="files-page" spacing={1.5}>
+				<div class="files-page__toolbar">
+					<Menu button_title="Create">
+						<MenuItem onClick={openCreateFolderDialog}>
+							<ListItemIcon>
+								<UploadFolderIcon />
+							</ListItemIcon>
+							<ListItemText>Create folder</ListItemText>
+						</MenuItem>
+						<MenuItem onClick={uploadFileClickHandler}>
+							<ListItemIcon>
+								<UploadFileIcon />
+							</ListItemIcon>
+							<ListItemText>Upload file</ListItemText>
+						</MenuItem>
+						<MenuItem
+							onClick={() => navigate(`/storages/${params.id}/upload_to`)}
 						>
-							<ToggleButton value={false}>
-								<FolderOpenIcon fontSize="small" />
-								&nbsp; Files
-							</ToggleButton>
-							<ToggleButton value={true}>
-								<LockIcon fontSize="small" />
-								&nbsp; Access
-							</ToggleButton>
-						</ToggleButtonGroup>
-					</Grid>
+							<ListItemIcon>
+								<UploadFileIcon />
+							</ListItemIcon>
+							<ListItemText>Upload file to</ListItemText>
+						</MenuItem>
+					</Menu>
+				</div>
 
-					<Grid
-						item
-						xs={4}
-						sx={{ display: 'flex', justifyContent: 'flex-end' }}
-					>
-						<Show
-							when={!isAccessPage()}
-							fallback={
-								<Show when={isGrantAccessButtonVisible()}>
-									<Fab
-										variant="extended"
-										color="secondary"
-										onClick={() => setIsGrantAccessVisible(true)}
-									>
-										<AddIcon sx={{ mr: 1 }} />
-										Grant access
-									</Fab>
-									<GrantAccess
-										isVisible={isGrantAccessVisible()}
-										afterGrant={fetchUsersWithAccess}
-										onClose={() => setIsGrantAccessVisible(false)}
-									/>
-								</Show>
-							}
-						>
-							<Menu button_title="Create">
-								<MenuItem onClick={openCreateFolderDialog}>
-									<ListItemIcon>
-										<UploadFolderIcon />
-									</ListItemIcon>
-									<ListItemText>Create folder</ListItemText>
-								</MenuItem>
-								<MenuItem onClick={uploadFileClickHandler}>
-									<ListItemIcon>
-										<UploadFileIcon />
-									</ListItemIcon>
-									<ListItemText>Upload file</ListItemText>
-								</MenuItem>
-								<MenuItem
-									onClick={() => navigate(`/storages/${params.id}/upload_to`)}
-								>
-									<ListItemIcon>
-										<UploadFileIcon />
-									</ListItemIcon>
-									<ListItemText>Upload file to</ListItemText>
-								</MenuItem>
-							</Menu>
-						</Show>
-					</Grid>
-				</Grid>
-
-				<Show
-					when={!isAccessPage()}
-					fallback={
-						<Access
-							setIsGrantAccessVisible={setIsGrantAccessVisible}
-							users={users()}
-							onMount={fetchUsersWithAccess}
-							refetchUsers={fetchUsersWithAccess}
+				<Show when={isUploading()}>
+					<Box sx={{ width: '100%', maxWidth: 480 }}>
+						<Typography variant="caption" display="block" gutterBottom>
+							Uploading: {Math.round(uploadProgress())}%
+						</Typography>
+						<LinearProgress
+							variant="determinate"
+							value={uploadProgress()}
+							sx={{
+								height: 10,
+								borderRadius: 999,
+								background: 'var(--sarca-progress-track)',
+								'& .MuiLinearProgress-bar': {
+									borderRadius: 999,
+									background: 'var(--sarca-progress-fill)',
+								},
+							}}
 						/>
-					}
-				>
-					<Grid>
-						<Box sx={{ maxWidth: 540, mx: 'auto', mb: 2 }}>
-							<TextField
-								fullWidth
-								size="small"
-								label="Search files"
-								value={searchQuery()}
-								onChange={(e) => setSearchQuery(e.target.value)}
-								onKeyDown={(e) => {
-									if (e.key === 'Enter') {
-										runSearch(searchQuery())
-									}
-								}}
-								InputProps={{
-									startAdornment: (
-										<InputAdornment position="start">
-											<SearchIcon fontSize="small" />
-										</InputAdornment>
-									),
-									endAdornment: (
-										<InputAdornment position="end">
-											<Show when={searchQuery() || isSearching()}>
-												<IconButton size="small" onClick={clearSearch}>
-													<ClearIcon fontSize="small" />
-												</IconButton>
-											</Show>
-										</InputAdornment>
-									),
-								}}
-							/>
-						</Box>
-
-						<Show when={isUploading()}>
-							<Box sx={{ width: '100%', mb: 2 }}>
-								<Typography variant="caption" display="block" gutterBottom>
-									Uploading: {Math.round(uploadProgress())}%
-								</Typography>
-								<LinearProgress
-									variant="determinate"
-									value={uploadProgress()}
-								/>
-							</Box>
-						</Show>
-
-						<Show
-							when={fsLayer().length}
-							fallback={
-								<>{isSearching() ? 'No search results' : 'Not files yet'}</>
-							}
-						>
-							<List sx={{ minWidth: 320, maxWidth: 540, mx: 'auto' }}>
-								<Divider />
-								{mapArray(fsLayer, (fsElement) => (
-									<>
-										<FSListItem
-											fsElement={fsElement}
-											storageId={params.id}
-											onDelete={fetchFSLayer}
-										/>
-										<Divider />
-									</>
-								))}
-							</List>
-						</Show>
-					</Grid>
-
-					<CreateFolderDialog
-						isOpened={isCreateFolderDialogOpen()}
-						onCreate={createFolder}
-						onClose={closeCreateFolderDialog}
-					/>
-					<input
-						ref={uploadFileInputElement}
-						type="file"
-						style="display: none"
-						onChange={uploadFile}
-					/>
+					</Box>
 				</Show>
+
+				<div class="files-canvas glass-panel">
+					<Show
+						when={fsLayer().length}
+						fallback={
+							<div class="files-canvas__empty">
+								{chrome.isSearching() ? 'No search results' : 'No files yet'}
+							</div>
+						}
+					>
+						<div class="files-grid">
+							{mapArray(fsLayer, (fsElement) => (
+								<FSListItem
+									fsElement={fsElement}
+									storageId={params.id}
+									onDelete={fetchFSLayer}
+									onOpen={(file) => setViewerFile(file)}
+								/>
+							))}
+						</div>
+					</Show>
+				</div>
+
+				<FileViewer
+					open={Boolean(viewerFile())}
+					file={viewerFile()}
+					files={fsLayer()}
+					storageId={params.id}
+					onClose={() => setViewerFile(null)}
+					onNavigate={(file) => setViewerFile(file)}
+				/>
+
+				<CreateFolderDialog
+					isOpened={isCreateFolderDialogOpen()}
+					onCreate={createFolder}
+					onClose={closeCreateFolderDialog}
+				/>
+				<input
+					ref={uploadFileInputElement}
+					type="file"
+					style="display: none"
+					onChange={uploadFile}
+				/>
 			</Stack>
 		</>
 	)
