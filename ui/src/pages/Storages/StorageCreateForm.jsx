@@ -3,20 +3,61 @@ import Box from '@suid/material/Box'
 import Button from '@suid/material/Button'
 import TextField from '@suid/material/TextField'
 import Typography from '@suid/material/Typography'
-import { createSignal } from 'solid-js'
+import { For, createSignal } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 import Stack from '@suid/material/Stack'
 import IconButton from '@suid/material/IconButton'
 import HelpOutlineIcon from '@suid/icons-material/HelpOutline'
 import ChevronLeftIcon from '@suid/icons-material/ChevronLeft'
+import AddIcon from '@suid/icons-material/Add'
+import DeleteIcon from '@suid/icons-material/Delete'
 
 import API from '../../api'
 import { alertStore } from '../../components/AlertStack'
 
+const MAX_CHANNELS = 3
+
+let nextKey = 0
+const emptyChannel = () => ({ key: nextKey++, chatId: '', name: '', error: null })
+
+/**
+ * @param {string} value
+ * @returns {string | null}
+ */
+const validateChatId = (value) => {
+	if (value === '' || value === null || value === undefined) {
+		return 'Chat id is required'
+	}
+	const n = Number(value)
+	if (!Number.isFinite(n) || n >= 0) {
+		return 'Chat id must be a negative integer'
+	}
+	// No additional validation - accept any negative number
+	// Both regular groups (-XXXXXXXXX) and supergroups (-100XXXXXXXXXX) are valid
+	return null
+}
+
 const StorageCreateForm = () => {
-	const [chatIdErr, setChatIdErr] = createSignal(null)
+	const [name, setName] = createSignal('')
+	const [nameErr, setNameErr] = createSignal(null)
+	const [channels, setChannels] = createSignal([emptyChannel()])
 	const { addAlert } = alertStore
 	const navigate = useNavigate()
+
+	const updateChannel = (key, patch) => {
+		setChannels((list) =>
+			list.map((c) => (c.key === key ? { ...c, ...patch } : c)),
+		)
+	}
+
+	const addChannelRow = () => {
+		if (channels().length >= MAX_CHANNELS) return
+		setChannels((list) => [...list, emptyChannel()])
+	}
+
+	const removeChannelRow = (key) => {
+		setChannels((list) => list.filter((c) => c.key !== key))
+	}
 
 	/**
 	 *
@@ -25,37 +66,36 @@ const StorageCreateForm = () => {
 	const handleSubmit = async (event) => {
 		event.preventDefault()
 
-		const data = new FormData(event.currentTarget)
+		const trimmedName = name().trim()
+		if (!trimmedName) {
+			setNameErr('Name is required')
+			return
+		}
+		setNameErr(null)
 
-		const name = data.get('name')
-		const chatId = parseInt(data.get('chat_id'))
+		let hasError = false
+		setChannels((list) =>
+			list.map((c) => {
+				const error = validateChatId(c.chatId)
+				if (error) hasError = true
+				return { ...c, error }
+			}),
+		)
+		if (hasError) return
 
-		await API.storages.createStorage(name, chatId)
+		const payload = channels().map((c) => {
+			const trimmedChannelName = c.name.trim()
+			return {
+				chat_id: parseInt(c.chatId, 10),
+				...(trimmedChannelName ? { name: trimmedChannelName } : {}),
+			}
+		})
 
-		addAlert(`Created storage "${name}"`, 'success')
+		await API.storages.createStorage(trimmedName, payload)
+
+		addAlert(`Created storage "${trimmedName}"`, 'success')
 
 		navigate('/storages')
-	}
-
-	/**
-	 *
-	 * @param {SubmitEvent} event
-	 */
-	const validateChatId = (event) => {
-		event.preventDefault()
-		const value = event.currentTarget.value
-
-		let err = null
-
-		if (value > 0) {
-			err = 'Chat id must be a negative integer'
-		} else if (value === '') {
-			err = 'Chat id is required'
-		}
-		// No additional validation - accept any negative number
-		// Both regular groups (-XXXXXXXXX) and supergroups (-100XXXXXXXXXX) are valid
-
-		setChatIdErr(err)
 	}
 
 	return (
@@ -76,14 +116,14 @@ const StorageCreateForm = () => {
 				sx={{
 					py: 2,
 					mx: 'auto',
-					maxWidth: 400,
+					maxWidth: 420,
 					display: 'flex',
 					flexDirection: 'column',
-					alignItems: 'center',
+					alignItems: 'stretch',
 					'& > :not(style)': { my: 1.5 },
 				}}
 			>
-				<Typography variant="h5">
+				<Typography variant="h5" sx={{ textAlign: 'center' }}>
 					Register new storage
 					<a
 						href="https://github.com/insigmo/sarca#usage"
@@ -100,24 +140,77 @@ const StorageCreateForm = () => {
 					name="name"
 					label="Name"
 					variant="standard"
+					value={name()}
+					onChange={(_, v) => setName(v)}
+					error={typeof nameErr() === 'string'}
+					helperText={nameErr() || ''}
 					fullWidth
 					required
 				/>
-				<TextField
-					id="chat_id"
-					name="chat_id"
-					label="Chat id"
-					type="number"
-					variant="standard"
-					onChange={validateChatId}
-					helperText={
-						chatIdErr() ||
-						'Get chat ID via @userinfobot or @getidsbot. Use the ID exactly as provided.'
-					}
-					error={typeof chatIdErr() === 'string'}
-					fullWidth
-					required
-				/>
+
+				<Divider textAlign="left">Channels</Divider>
+
+				<For each={channels()}>
+					{(channel, index) => (
+						<Box
+							sx={{
+								display: 'flex',
+								flexDirection: 'column',
+								gap: 1,
+								p: 1.5,
+								borderRadius: 2,
+								border: '1px solid rgba(127,127,127,0.25)',
+							}}
+						>
+							<Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+								<Typography variant="subtitle2" color="text.secondary">
+									Channel {index() + 1}
+								</Typography>
+								{channels().length > 1 && (
+									<IconButton
+										size="small"
+										aria-label={`Remove channel ${index() + 1}`}
+										onClick={() => removeChannelRow(channel.key)}
+									>
+										<DeleteIcon fontSize="small" />
+									</IconButton>
+								)}
+							</Box>
+							<TextField
+								label="Chat id"
+								type="number"
+								variant="standard"
+								value={channel.chatId}
+								onChange={(_, v) => updateChannel(channel.key, { chatId: v, error: null })}
+								helperText={
+									channel.error ||
+									'Get chat ID via @userinfobot or @getidsbot. Use the ID exactly as provided.'
+								}
+								error={typeof channel.error === 'string'}
+								fullWidth
+								required
+							/>
+							<TextField
+								label="Name (optional)"
+								variant="standard"
+								value={channel.name}
+								onChange={(_, v) => updateChannel(channel.key, { name: v })}
+								helperText="Auto-detected from Telegram if left blank"
+								fullWidth
+							/>
+						</Box>
+					)}
+				</For>
+
+				<Button
+					onClick={addChannelRow}
+					variant="outlined"
+					startIcon={<AddIcon />}
+					disabled={channels().length >= MAX_CHANNELS}
+				>
+					Add another channel
+				</Button>
+
 				<Button type="submit" variant="contained" color="secondary">
 					Register
 				</Button>
