@@ -121,7 +121,30 @@ impl<'d> StoragesRepository<'d> {
         .map_err(|e| map_not_found(e, "storage"))
     }
 
+    pub async fn update_name(&self, storage_id: Uuid, name: &str) -> SarcaResult<Storage> {
+        sqlx::query_as(
+            format!("UPDATE {TABLE} SET name = $2 WHERE id = $1 RETURNING *").as_str(),
+        )
+        .bind(storage_id)
+        .bind(name)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| map_not_found(e, "storage"))
+    }
+
     pub async fn delete_storage(&self, storage_id: Uuid) -> SarcaResult<()> {
+        // storage_workers.storage_id has no ON DELETE; detach first
+        sqlx::query(
+            "UPDATE storage_workers SET storage_id = NULL WHERE storage_id = $1",
+        )
+        .bind(storage_id)
+        .execute(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+
         sqlx::query(format!("DELETE FROM {TABLE} WHERE id = $1").as_str())
             .bind(storage_id)
             .execute(self.db)
