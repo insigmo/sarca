@@ -1580,7 +1580,7 @@ a.default-link:hover {
 	position: fixed;
 	left: 12px;
 	right: 12px;
-	bottom: 12px;
+	bottom: calc(12px + env(safe-area-inset-bottom, 0px));
 	z-index: 1200;
 	height: 68px;
 	padding: 0 28px;
@@ -1609,6 +1609,9 @@ a.default-link:hover {
 	display: flex;
 	flex-direction: column;
 	align-items: center;
+	min-width: 44px;
+	min-height: 44px;
+	justify-content: center;
 	gap: 2px;
 	color: var(--sarca-ink-soft);
 	background: none;
@@ -1881,7 +1884,8 @@ a.default-link:hover {
 	}
 
 	.app-shell-main {
-		padding-bottom: 108px !important;
+		/* nav 68 + gap 12 + safe-area + small buffer */
+		padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)) !important;
 	}
 
 	.settings-overlay {
@@ -1900,6 +1904,14 @@ a.default-link:hover {
 	.settings-modal--storage {
 		height: min(88vh, 720px);
 		max-height: 88vh;
+	}
+
+	.settings-modal {
+		padding-bottom: env(safe-area-inset-bottom, 0px);
+	}
+
+	.settings-modal__body {
+		padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
 	}
 
 	.settings-modal__layout {
