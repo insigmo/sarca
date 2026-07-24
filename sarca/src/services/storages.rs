@@ -6,7 +6,7 @@ use crate::{
     common::{
         access::check_access,
         jwt_manager::AuthUser,
-        telegram_api::bot_api::TelegramBotApi,
+        telegram_api::{bot_api::TelegramBotApi, token_client::TelegramTokenClient},
         types::ChatId,
     },
     errors::{SarcaError, SarcaResult},
@@ -14,12 +14,14 @@ use crate::{
         access::{AccessType, UserWithAccess},
         chunk_replicas::ReplicationStats,
         storage_channels::{InStorageChannel, StorageChannel},
+        storage_workers::InStorageWorker,
         storages::{InStorage, Storage, StorageWithInfo},
     },
     repositories::{
         access::AccessRepository,
         chunk_replicas::ChunkReplicasRepository,
         storage_channels::StorageChannelsRepository,
+        storage_workers::StorageWorkersRepository,
         storages::StoragesRepository,
     },
     schemas::{
@@ -27,6 +29,9 @@ use crate::{
         storages::{
             AddChannelSchema,
             InStorageSchema,
+            RefreshChannelsResultSchema,
+            SetStorageBotSchema,
+            StorageBotSchema,
             StorageDetailSchema,
             UpdateChannelSchema,
             UpdateStorageSchema,
@@ -34,6 +39,14 @@ use crate::{
     },
     services::channel_health::ChannelHealthService,
 };
+
+fn mask_bot_token(token: &str) -> String {
+    if token.len() <= 10 {
+        return "••••••••".to_owned();
+    }
+    let dots = "•".repeat(18.min(token.len().saturating_sub(8)));
+    format!("{}{}{}", &token[..4], dots, &token[token.len() - 4..])
+}
 
 const MAX_CHANNELS: usize = 3;
 
@@ -167,6 +180,13 @@ impl<'d> StoragesService<'d> {
         let has_dead_channel =
             channels.iter().any(super::super::models::storage_channels::StorageChannel::is_dead);
         let replication = self.replicas_repo.replication_stats(id).await?;
+        let bot = StorageWorkersRepository::new(self.db).get_by_storage_id(id).await?.map(|w| {
+            StorageBotSchema {
+                id: w.id,
+                name: w.name,
+                token_masked: mask_bot_token(&w.token),
+            }
+        });
 
         Ok(StorageDetailSchema {
             id: storage.id,
@@ -175,6 +195,130 @@ impl<'d> StoragesService<'d> {
             has_dead_channel,
             channels,
             replication,
+            bot,
+        })
+    }
+
+    /// Attach or replace the Telegram bot for this storage (1:1).
+    pub async fn set_bot(
+        &self,
+        storage_id: Uuid,
+        body: SetStorageBotSchema,
+        user: &AuthUser,
+    ) -> SarcaResult<StorageBotSchema> {
+        check_access(&self.access_repo, user.id, storage_id, &AccessType::A).await?;
+        // Ensure storage exists / is visible.
+        let _ = self.repo.get_by_id(storage_id).await?;
+
+        let token = body.token.trim();
+        if token.is_empty() || !token.contains(':') {
+            return Err(SarcaError::TelegramAPIError("Bot token looks invalid".into()));
+        }
+
+        let client = TelegramTokenClient::new(self.telegram_baseurl, token);
+        let me = client.get_me().await?;
+        if let Err(e) = client.delete_webhook().await {
+            tracing::warn!("deleteWebhook during set_bot: {e}");
+        }
+
+        let workers = StorageWorkersRepository::new(self.db);
+        let mut name = me.username;
+        if name.trim().is_empty() {
+            name = format!("bot_{}", me.id);
+        }
+
+        let worker = if let Some(existing) = workers.get_by_storage_id(storage_id).await? {
+            // Allow keeping the same display name on this worker; only conflict
+            // with a *different* worker of this user.
+            if let Ok(other) = workers.get_by_name_and_user_id(&name, user.id).await {
+                if other.id != existing.id {
+                    name = format!("{name}_{}", &storage_id.to_string()[..8]);
+                }
+            }
+            workers.update_credentials(existing.id, &name, token).await?
+        } else {
+            if workers.get_by_name_and_user_id(&name, user.id).await.is_ok() {
+                name = format!("{name}_{}", &storage_id.to_string()[..8]);
+            }
+            workers
+                .create(InStorageWorker::new(
+                    name.clone(),
+                    user.id,
+                    token.to_owned(),
+                    Some(storage_id),
+                ))
+                .await?
+        };
+
+        Ok(StorageBotSchema {
+            id: worker.id,
+            name: worker.name,
+            token_masked: mask_bot_token(&worker.token),
+        })
+    }
+
+    /// Discover admin chats for this storage's bot and add missing ones (cap 3, add-only).
+    pub async fn refresh_channels(
+        &self,
+        storage_id: Uuid,
+        user: &AuthUser,
+    ) -> SarcaResult<RefreshChannelsResultSchema> {
+        check_access(&self.access_repo, user.id, storage_id, &AccessType::A).await?;
+
+        let worker = StorageWorkersRepository::new(self.db)
+            .get_by_storage_id(storage_id)
+            .await?
+            .ok_or(SarcaError::StorageDoesNotHaveWorkers)?;
+
+        let channels = self.channels_repo.list_by_storage(storage_id).await?;
+        let exclude: Vec<ChatId> = channels.iter().map(|c| c.chat_id).collect();
+
+        let client = TelegramTokenClient::new(self.telegram_baseurl, &worker.token);
+        let (discovered, hint) = client.discover_admin_chats(&exclude).await?;
+
+        let mut added = Vec::new();
+        let mut skipped_in_use = Vec::new();
+        let mut skipped_full = false;
+        let mut channel_count = channels.len();
+
+        for (chat_id, title) in discovered {
+            if channel_count >= MAX_CHANNELS {
+                skipped_full = true;
+                break;
+            }
+            match self
+                .add_channel(
+                    storage_id,
+                    AddChannelSchema {
+                        chat_id,
+                        name: Some(title),
+                    },
+                    user,
+                )
+                .await
+            {
+                Ok(channel) => {
+                    channel_count += 1;
+                    added.push(channel);
+                },
+                Err(SarcaError::StorageChatIdConflict) => {
+                    skipped_in_use.push(chat_id);
+                },
+                Err(SarcaError::TooManyChannels) => {
+                    skipped_full = true;
+                    break;
+                },
+                Err(e) => return Err(e),
+            }
+        }
+
+        let channels = self.channels_repo.list_by_storage(storage_id).await?;
+        Ok(RefreshChannelsResultSchema {
+            added,
+            skipped_full,
+            skipped_in_use,
+            channels,
+            hint,
         })
     }
 
