@@ -560,6 +560,81 @@ const setTrashSettings = async (retention_days) => {
 	})
 }
 
+/////////////////////////////////////////////////////////////
+////  SETUP WIZARD
+/////////////////////////////////////////////////////////////
+
+/**
+ * @typedef {Object} SetupStatus
+ * @property {boolean} has_storages
+ * @property {boolean} uses_local_api
+ * @property {boolean} local_api_ready
+ * @property {boolean} local_api_skipped
+ * @property {boolean} needs_local_api_phase
+ * @property {boolean} conf_writable
+ */
+
+/** @returns {Promise<SetupStatus>} */
+const getSetupStatus = async () => {
+	return await apiRequest('/setup/status', 'get', getAuthToken())
+}
+
+/**
+ * @param {string} api_id
+ * @param {string} api_hash
+ */
+const saveLocalApi = async (api_id, api_hash) => {
+	return await apiRequest('/setup/local-api', 'post', getAuthToken(), {
+		api_id,
+		api_hash,
+	})
+}
+
+/** @returns {Promise<{ ok: boolean, uses_local_api: boolean, message: string }>} */
+const verifyLocalApi = async () => {
+	return await apiRequest('/setup/local-api/verify', 'post', getAuthToken())
+}
+
+const skipLocalApi = async () => {
+	return await apiRequest('/setup/local-api/skip', 'post', getAuthToken())
+}
+
+/**
+ * @param {string} token
+ * @returns {Promise<{ bot_id: number, username: string }>}
+ */
+const validateBot = async (token) => {
+	return await apiRequest('/setup/bot/validate', 'post', getAuthToken(), {
+		token,
+	})
+}
+
+/**
+ * @param {string} token
+ * @param {number[]} [exclude_chat_ids]
+ * @returns {Promise<{ found: boolean, chat_id?: number, title?: string }>}
+ */
+const pollChannel = async (token, exclude_chat_ids = []) => {
+	return await apiRequest('/setup/channel/poll', 'post', getAuthToken(), {
+		token,
+		exclude_chat_ids,
+	})
+}
+
+/**
+ * @param {string} name
+ * @param {string} token
+ * @param {number[]} chat_ids
+ * @returns {Promise<{ id: string, name: string }>}
+ */
+const setupCreateStorage = async (name, token, chat_ids) => {
+	return await apiRequest('/setup/storages', 'post', getAuthToken(), {
+		name,
+		token,
+		chat_ids,
+	})
+}
+
 /**
  *
  * @param {string} storage_id
@@ -661,6 +736,15 @@ const API = {
 	settings: {
 		getTrashSettings,
 		setTrashSettings,
+	},
+	setup: {
+		getSetupStatus,
+		saveLocalApi,
+		verifyLocalApi,
+		skipLocalApi,
+		validateBot,
+		pollChannel,
+		setupCreateStorage,
 	},
 }
 

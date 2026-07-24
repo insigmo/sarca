@@ -105,32 +105,30 @@ set -a && . ../sarca.conf && set +a
 
 Open the UI and sign in with the superuser from `sarca.conf` (or register a new user if registration is enabled for your setup).
 
-### 2. Create a Telegram channel / group
+### 2. Run the setup wizard
 
-1. Create a channel or group (private is recommended)
-2. Create one or more bots with [@BotFather](https://t.me/BotFather)
-3. Add the bots as admins with permission to send (and preferably delete) messages/documents
-4. Get the `chat_id` (for example by forwarding a message to `@RawDataBot`)
+On first login (no storages yet), or via **Storages → New storage**, Sarca opens a setup wizard:
 
-`chat_id` rules:
+1. **Local Bot API (optional once):** paste `api_id` / `api_hash` from [my.telegram.org](https://my.telegram.org) for files larger than ~20 MB, or skip.
+2. **Bot:** create a bot with [@BotFather](https://t.me/BotFather) and paste the token.
+3. **Channel:** create a private channel, add the bot as admin (post + delete), then post any message — Sarca detects the `chat_id` automatically.
+4. Optionally detect up to 3 channels for replication, then finish — storage + worker are created together.
+
+Advanced form (manual `chat_id`): **Storages → New storage → Advanced create**, or `/storages/register/manual`.
+
+**Optional auto-setup:** set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID` (channel id **without** the `-100` prefix), and `STORAGE_NAME` in `sarca.conf`. On startup Sarca creates the storage and attaches the bot for the superuser.
+
+`chat_id` rules (manual / bootstrap):
 
 - Supergroups / channels: usually `-100…`
 - Regular groups: negative id without the `-100` prefix
 - Private chats (positive ids) are not supported
 
-**Optional auto-setup:** set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID` (channel id **without** the `-100` prefix), and `STORAGE_NAME` in `sarca.conf`. On startup Sarca creates the storage and attaches the bot for the superuser. If those are left empty, configure them in the UI instead.
+### 3. Add more workers (optional)
 
-### 3. Create a storage
+In **Settings → Workers**, add more bot tokens bound to a storage to raise throughput (Telegram rate-limits each bot).
 
-In the UI go to **Storages → New storage** and provide a name + `chat_id` (skip if you used auto-setup above).
-
-### 4. Attach storage workers
-
-Go to **Storage workers**, create a worker with the bot token, and bind it to your storage (skip if you used auto-setup above).
-
-You can add several bots to raise throughput (Telegram rate-limits each bot).
-
-### 5. Upload and manage files
+### 4. Upload and manage files
 
 Open the storage filesystem to:
 
@@ -154,7 +152,7 @@ TELEGRAM_CHUNK_SIZE_MB=1950
 WORK_DIR=/work
 ```
 
-Get `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` from https://my.telegram.org
+Get `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` from https://my.telegram.org (or paste them in the setup wizard — it writes `sarca.conf` when possible; restart Local Bot API after changing credentials).
 
 ## Releases
 
