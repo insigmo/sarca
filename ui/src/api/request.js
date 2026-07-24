@@ -54,7 +54,7 @@ const tryRefreshToken = async () => {
 }
 
 /**
- * @typedef {'get' | 'post' | 'patch' | 'delete'} Method
+ * @typedef {'get' | 'post' | 'put' | 'patch' | 'delete'} Method
  */
 
 /**

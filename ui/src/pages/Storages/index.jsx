@@ -3,6 +3,7 @@ import Button from '@suid/material/Button'
 import IconButton from '@suid/material/IconButton'
 import AddIcon from '@suid/icons-material/Add'
 import SettingsOutlinedIcon from '@suid/icons-material/SettingsOutlined'
+import WarningAmberIcon from '@suid/icons-material/WarningAmber'
 import { For, Show, createSignal, onMount } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 
@@ -79,7 +80,19 @@ const Storages = () => {
 								<div class="storage-card__top">
 									<FileTypeIcon name="docs.folder" isFile={false} size={56} />
 									<div style={{ 'min-width': 0, flex: 1 }}>
-										<h2 class="storage-card__title">{storage.name}</h2>
+										<h2 class="storage-card__title">
+											{storage.name}
+											<Show when={storage.has_dead_channel}>
+												<span
+													class="storage-card__warning"
+													role="img"
+													aria-label={`${storage.name} has a deleted channel — open settings to fix`}
+													title="A channel was deleted — open settings to fix"
+												>
+													<WarningAmberIcon fontSize="small" />
+												</span>
+											</Show>
+										</h2>
 										<p class="storage-card__meta">
 											{storage.files_amount}{' '}
 											{storage.files_amount === 1 ? 'file' : 'files'}

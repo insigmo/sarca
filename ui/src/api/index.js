@@ -63,15 +63,21 @@ const refresh = async (refresh_token) => {
 /////////////////////////////////////////////////////////////
 
 /**
+ * @typedef {Object} ChannelInput
+ * @property {number} chat_id
+ * @property {string} [name]
+ */
+
+/**
  *
  * @param {string} name
- * @param {number} chat_id
+ * @param {ChannelInput[]} channels 1..3 Telegram channels replicating this storage
  * @returns
  */
-const createStorage = async (name, chat_id) => {
+const createStorage = async (name, channels) => {
 	return await apiRequest('/storages', 'post', getAuthToken(), {
 		name,
-		chat_id,
+		channels,
 	})
 }
 
@@ -79,13 +85,14 @@ const createStorage = async (name, chat_id) => {
  * @typedef {Object} Storage
  * @property {string} id
  * @property {string} name
- * @property {number} chat_id
+ * @property {number} primary_position
  */
 
 /**
  * @typedef {Object} StorageWithInfoProperties
  * @property {number} size
  * @property {number} files_amount
+ * @property {boolean} has_dead_channel
  * @typedef {Storage & StorageWithInfoProperties} StorageWithInfo
  */
 
@@ -108,6 +115,96 @@ const listStorages = async () => {
  */
 const getStorage = async (id) => {
 	return await apiRequest(`/storages/${id}`, 'get', getAuthToken())
+}
+
+/**
+ * @typedef {'active' | 'dead'} ChannelStatus
+ */
+
+/**
+ * @typedef {Object} StorageChannel
+ * @property {string} id
+ * @property {number} position
+ * @property {number} chat_id
+ * @property {string} name
+ * @property {ChannelStatus} status
+ */
+
+/**
+ * @typedef {Object} ReplicationStats
+ * @property {number} pending
+ * @property {number} uploaded
+ * @property {number} failed
+ */
+
+/**
+ * @typedef {Object} StorageDetailProperties
+ * @property {boolean} has_dead_channel
+ * @property {StorageChannel[]} channels
+ * @property {ReplicationStats} replication
+ * @typedef {Storage & StorageDetailProperties} StorageDetail
+ */
+
+/**
+ * Full storage detail: channels + replication stats, used by the settings modal.
+ * @param {string} id
+ * @returns {Promise<StorageDetail>}
+ */
+const getStorageDetail = getStorage
+
+/**
+ * @param {string} storageId
+ * @param {number} chatId
+ * @param {string} [name]
+ * @returns {Promise<StorageChannel>}
+ */
+const addChannel = async (storageId, chatId, name) => {
+	return await apiRequest(
+		`/storages/${storageId}/channels`,
+		'post',
+		getAuthToken(),
+		{ chat_id: chatId, ...(name ? { name } : {}) },
+	)
+}
+
+/**
+ * @param {string} storageId
+ * @param {string} channelId
+ * @param {{ chat_id?: number, name?: string }} patch
+ * @returns {Promise<StorageChannel>}
+ */
+const updateChannel = async (storageId, channelId, patch) => {
+	return await apiRequest(
+		`/storages/${storageId}/channels/${channelId}`,
+		'put',
+		getAuthToken(),
+		patch,
+	)
+}
+
+/**
+ * @param {string} storageId
+ * @param {string} channelId
+ */
+const removeChannel = async (storageId, channelId) => {
+	await apiRequest(
+		`/storages/${storageId}/channels/${channelId}`,
+		'delete',
+		getAuthToken(),
+	)
+}
+
+/**
+ * Move failed replicas back to pending so the replication worker retries them.
+ * @param {string} storageId
+ * @returns {Promise<ReplicationStats | void>}
+ */
+const retryReplication = async (storageId) => {
+	return await apiRequest(
+		`/storages/${storageId}/replication/retry`,
+		'post',
+		getAuthToken(),
+	)
 }
 
 /**
@@ -474,8 +571,13 @@ const API = {
 		createStorage,
 		listStorages,
 		getStorage,
+		getStorageDetail,
 		renameStorage,
 		deleteStorage,
+		addChannel,
+		updateChannel,
+		removeChannel,
+		retryReplication,
 	},
 	access: {
 		grantAccess,
