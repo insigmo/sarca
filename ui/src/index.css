@@ -1205,6 +1205,38 @@ a.default-link:hover {
 	font-weight: 700;
 }
 
+.settings-account {
+	display: flex;
+	flex-direction: column;
+	gap: 16px;
+	padding: 4px 0 8px;
+}
+
+.settings-account__row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+	flex-wrap: wrap;
+	padding: 14px 16px;
+	border: 1px solid var(--sarca-border);
+	border-radius: 16px;
+	background: color-mix(in srgb, var(--sarca-ink) 3%, transparent);
+}
+
+.settings-account__label {
+	margin: 0;
+	font-weight: 700;
+	font-size: 0.95rem;
+	color: var(--sarca-ink);
+}
+
+.settings-account__hint {
+	margin: 4px 0 0;
+	font-size: 0.82rem;
+	color: var(--sarca-ink-soft);
+}
+
 .bot-section {
 	margin: 0 0 20px;
 }
