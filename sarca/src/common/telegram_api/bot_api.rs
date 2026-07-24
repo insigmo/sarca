@@ -14,7 +14,10 @@ use crate::{
     services::storage_workers_scheduler::StorageWorkersScheduler,
 };
 
-use super::schemas::{DownloadBodySchema, UploadBodySchema, UploadSchema};
+use super::schemas::{
+    ChatInfo, CopyMessageBodySchema, DownloadBodySchema, GetChatBodySchema, UploadBodySchema,
+    UploadOutcome,
+};
 
 const MAX_ATTEMPTS: u32 = 3;
 const BASE_BACKOFF_MS: u64 = 200;
@@ -102,7 +105,7 @@ impl<'t> TelegramBotApi<'t> {
         file: &[u8],
         chat_id: ChatId,
         storage_id: Uuid,
-    ) -> SarcaResult<UploadSchema> {
+    ) -> SarcaResult<UploadOutcome> {
         if chat_id < 0 && chat_id > -10000000000 {
             tracing::info!(
                 "[TELEGRAM API] Using regular group (chat_id={}). If bot can't find the chat, \
@@ -177,7 +180,10 @@ impl<'t> TelegramBotApi<'t> {
             })
         );
 
-        Ok(result.result.document)
+        Ok(UploadOutcome {
+            file_id: result.result.document.file_id,
+            message_id: result.result.message_id,
+        })
     }
 
     /// Upload a part of a file from disk without buffering it fully in RAM.
@@ -195,7 +201,7 @@ impl<'t> TelegramBotApi<'t> {
         chunk_no: u32,
         total_chunks: u32,
         progress: Option<tokio::sync::mpsc::Sender<crate::common::channels::UploadProgressEvent>>,
-    ) -> SarcaResult<UploadSchema> {
+    ) -> SarcaResult<UploadOutcome> {
         use crate::common::channels::UploadProgressEvent;
         use futures::StreamExt;
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -344,7 +350,10 @@ impl<'t> TelegramBotApi<'t> {
             })
         );
 
-        Ok(result.result.document)
+        Ok(UploadOutcome {
+            file_id: result.result.document.file_id,
+            message_id: result.result.message_id,
+        })
     }
 
     /// Local Bot API writes files as owner-only briefly; our entrypoint chmod loop
@@ -591,9 +600,142 @@ impl<'t> TelegramBotApi<'t> {
         Ok(Box::pin(stream))
     }
 
+    /// Resolve a chat's display name (title, else username, else first name, else the id).
+    pub async fn get_chat(&self, chat_id: ChatId, storage_id: Uuid) -> SarcaResult<ChatInfo> {
+        let token = self.scheduler.get_token(storage_id).await?;
+        let url = self.build_url("", "getChat", token);
+        let masked_url = self.mask_url(&url);
+
+        let response = Self::send_with_retries("getChat", || {
+            reqwest::Client::new()
+                .get(&url)
+                .query(&[("chat_id", chat_id.to_string())])
+                .send()
+        })
+        .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            tracing::error!(
+                target: "http_outbound",
+                "{}",
+                json!({
+                    "status": status.as_u16(),
+                    "method": "GET",
+                    "url": masked_url,
+                    "body": { "chat_id": chat_id },
+                    "response": error_body,
+                })
+            );
+            return Err(SarcaError::TelegramAPIError(format!(
+                "{}: {}",
+                status, error_body
+            )));
+        }
+
+        let body: GetChatBodySchema = response.json().await?;
+        let title = body
+            .result
+            .title
+            .or(body.result.username)
+            .or(body.result.first_name)
+            .unwrap_or_else(|| chat_id.to_string());
+
+        Ok(ChatInfo {
+            id: body.result.id,
+            title,
+        })
+    }
+
+    /// Copy a message (with its document) from one chat to another without re-uploading.
+    ///
+    /// Telegram's `copyMessage` only returns the new `message_id`; the underlying file
+    /// stays the same document, so the caller-supplied `source_file_id` remains valid for
+    /// download via `getFile` as long as the bot can still reach any chat holding it.
+    pub async fn copy_message(
+        &self,
+        from_chat_id: ChatId,
+        message_id: i64,
+        to_chat_id: ChatId,
+        source_file_id: &str,
+        storage_id: Uuid,
+    ) -> SarcaResult<UploadOutcome> {
+        let token = self.scheduler.get_token(storage_id).await?;
+        let url = self.build_url("", "copyMessage", token);
+        let masked_url = self.mask_url(&url);
+
+        let response = Self::send_with_retries("copyMessage", || {
+            reqwest::Client::new()
+                .post(&url)
+                .form(&[
+                    ("chat_id", to_chat_id.to_string()),
+                    ("from_chat_id", from_chat_id.to_string()),
+                    ("message_id", message_id.to_string()),
+                ])
+                .send()
+        })
+        .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            tracing::error!(
+                target: "http_outbound",
+                "{}",
+                json!({
+                    "status": status.as_u16(),
+                    "method": "POST",
+                    "url": masked_url,
+                    "body": {
+                        "to_chat_id": to_chat_id,
+                        "from_chat_id": from_chat_id,
+                        "message_id": message_id
+                    },
+                    "response": error_body,
+                })
+            );
+            return Err(SarcaError::TelegramAPIError(format!(
+                "{}: {}",
+                status, error_body
+            )));
+        }
+
+        let body: CopyMessageBodySchema = response.json().await?;
+
+        Ok(UploadOutcome {
+            file_id: source_file_id.to_owned(),
+            message_id: body.result.message_id,
+        })
+    }
+
     /// Taking token by a value to force dropping it so it can be used only once
     #[inline]
     fn build_url(&self, pre: &str, relative: &str, token: String) -> String {
         format!("{}/{pre}bot{token}/{relative}", self.base_url)
     }
+}
+
+/// Whether a Telegram API error indicates the chat is gone / unreachable for the bot
+/// (as opposed to a transient network/rate-limit error).
+pub fn is_chat_dead_error(err: &SarcaError) -> bool {
+    let SarcaError::TelegramAPIError(msg) = err else {
+        return false;
+    };
+    let msg = msg.to_lowercase();
+    const DEAD_MARKERS: &[&str] = &[
+        "chat not found",
+        "bot was kicked",
+        "bot is not a member",
+        "user is deactivated",
+        "have no rights",
+        "not enough rights",
+        "chat_id is empty",
+        "peer_id_invalid",
+        "chat_id_invalid",
+        "forbidden",
+        "group chat was upgraded",
+        "member list is inaccessible",
+    ];
+    DEAD_MARKERS.iter().any(|marker| msg.contains(marker))
 }
