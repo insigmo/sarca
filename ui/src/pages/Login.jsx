@@ -8,6 +8,7 @@ import createLocalStore from '../../libs'
 import { A, useNavigate } from '@solidjs/router'
 
 import API from '../api'
+import OAuthButtons from '../components/OAuthButtons'
 import logoUrl from '../assets/logo.svg'
 
 const Login = () => {
@@ -34,7 +35,10 @@ const Login = () => {
 
 		setStore('access_token', tokenData.access_token)
 		setStore('refresh_token', tokenData.refresh_token)
-		setStore('user', { email })
+		setStore('user', {
+			email: tokenData.email || email,
+			email_verified: tokenData.email_verified,
+		})
 
 		const redirect_url = store.redirect || '/'
 		navigate(redirect_url)
@@ -44,8 +48,6 @@ const Login = () => {
 		<div class="auth-page">
 			<Paper class="auth-card" elevation={0}>
 				<Box
-					component="form"
-					onSubmit={handleSubmit}
 					sx={{
 						px: { xs: 3, sm: 4.5 },
 						py: { xs: 3.5, sm: 4 },
@@ -60,29 +62,45 @@ const Login = () => {
 						<p>Sign in to your cloud storage</p>
 					</div>
 
-					<TextField
-						name="email"
-						label="Email"
-						type="email"
-						autoComplete="email"
-						required
-					/>
-					<TextField
-						name="password"
-						label="Password"
-						type="password"
-						autoComplete="current-password"
-						required
-					/>
+					<Box
+						component="form"
+						onSubmit={handleSubmit}
+						sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+					>
+						<TextField
+							name="email"
+							label="Email"
+							type="email"
+							autoComplete="email"
+							required
+						/>
+						<TextField
+							name="password"
+							label="Password"
+							type="password"
+							autoComplete="current-password"
+							required
+						/>
 
-					<Stack spacing={1.5} sx={{ mt: 1 }}>
-						<Button type="submit" variant="contained" color="secondary" size="large">
-							Sign in
-						</Button>
-						<A class="default-link" href="/register" style={{ 'text-align': 'center' }}>
-							Don't have an account yet? Register
+						<A class="default-link auth-forgot-link" href="/forgot-password">
+							Forgot password?
 						</A>
-					</Stack>
+
+						<Stack spacing={1.5} sx={{ mt: 0.5 }}>
+							<Button type="submit" variant="contained" color="secondary" size="large">
+								Sign in
+							</Button>
+							<A
+								class="default-link"
+								href="/register"
+								style={{ 'text-align': 'center' }}
+							>
+								Don't have an account yet? Register
+							</A>
+						</Stack>
+					</Box>
+
+					<OAuthButtons />
 				</Box>
 			</Paper>
 		</div>

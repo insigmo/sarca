@@ -33,7 +33,7 @@ use crate::{
         storage_channels::StorageChannelsRepository, storages::StoragesRepository,
     },
     schemas::files::{
-        InFolderSchema, MoveSchema, RenameSchema, SearchQuery, UploadParams,
+        CopySchema, InFolderSchema, MoveSchema, RenameSchema, SearchQuery, UploadParams,
     },
     services::files::FilesService,
     services::storage_workers_scheduler::StorageWorkersScheduler,
@@ -50,6 +50,7 @@ impl FilesRouter {
             .route("/upload", post(Self::upload))
             .route("/rename", post(Self::rename))
             .route("/move", post(Self::move_to))
+            .route("/copy", post(Self::copy_to))
             .route("/*path", get(Self::dynamic_get).delete(Self::delete))
             .layer(DefaultBodyLimit::disable())
             .route_layer(middleware::from_fn_with_state(
@@ -57,6 +58,15 @@ impl FilesRouter {
                 logged_in_required,
             ))
             .with_state(state)
+    }
+
+    fn service<'d>(state: &'d AppState) -> FilesService<'d> {
+        FilesService::new(
+            &state.db,
+            state.tx.clone(),
+            &state.config.telegram_api_base_url,
+            state.config.telegram_rate_limit,
+        )
     }
 
     async fn dynamic_get(
@@ -91,7 +101,7 @@ impl FilesRouter {
         storage_id: Uuid,
         path: &str,
     ) -> Result<Response, (StatusCode, String)> {
-        let fs_layer = FilesService::new(&state.db, state.tx.clone())
+        let fs_layer = Self::service(&state)
             .list_dir(storage_id, path, &user)
             .await?;
         Ok(Json(fs_layer).into_response())
@@ -190,7 +200,7 @@ impl FilesRouter {
             .unwrap_or_else(|| "unnamed".to_owned());
         let path = Self::construct_path(&parent_path, &filename)?;
 
-        FilesService::new(&state.db, state.tx.clone())
+        Self::service(&state)
             .ensure_upload_allowed(storage_id, &user)
             .await
             .map_err(<(StatusCode, String)>::from)?;
@@ -202,11 +212,13 @@ impl FilesRouter {
         let (progress_tx, progress_rx) = mpsc::channel(64);
         let db = state.db.clone();
         let client_tx = state.tx.clone();
+        let base_url = state.config.telegram_api_base_url.clone();
+        let rate_limit = state.config.telegram_rate_limit;
         let user = user.clone();
         let tmp_for_task = tmp_path.clone();
 
         let upload_task = tokio::spawn(async move {
-            let result = FilesService::new(&db, client_tx)
+            let result = FilesService::new(&db, client_tx, &base_url, rate_limit)
                 .upload_anyway_from_path_with_progress(
                     in_file,
                     tmp_for_task.clone(),
@@ -232,7 +244,7 @@ impl FilesRouter {
     ) -> Result<StatusCode, (StatusCode, String)> {
         let in_schema = InFolderSchema::new(storage_id, params.path, params.folder_name);
 
-        FilesService::new(&state.db, state.tx.clone())
+        Self::service(&state)
             .create_folder(in_schema, &user)
             .await?;
         Ok(StatusCode::CREATED)
@@ -396,7 +408,7 @@ impl FilesRouter {
         }
     }
 
-    async fn download_file(
+    pub(crate) async fn download_file(
         state: Arc<AppState>,
         storage_id: Uuid,
         path: &str,
@@ -605,7 +617,7 @@ impl FilesRouter {
     /// Max total uncompressed size of files packed into a folder ZIP.
     const MAX_FOLDER_ZIP_BYTES: i64 = 10 * 1024 * 1024 * 1024; // 10 GiB
 
-    async fn download_folder(
+    pub(crate) async fn download_folder(
         state: Arc<AppState>,
         storage_id: Uuid,
         path: &str,
@@ -817,6 +829,15 @@ impl FilesRouter {
         .await
         .map_err(|e| <(StatusCode, String)>::from(e))?;
 
+        Self::thumb_for_path(state, storage_id, path).await
+    }
+
+    /// Thumbnail streaming without access check (caller must authorize).
+    pub(crate) async fn thumb_for_path(
+        state: Arc<AppState>,
+        storage_id: Uuid,
+        path: &str,
+    ) -> Result<Response, (StatusCode, String)> {
         if path.starts_with('/') || path.contains("//") {
             return Err((
                 StatusCode::BAD_REQUEST,
@@ -862,7 +883,12 @@ impl FilesRouter {
         path: &str,
         search_path: &str,
     ) -> Result<Response, (StatusCode, String)> {
-        FilesService::new(&state.db, state.tx.clone())
+        FilesService::new(
+            &state.db,
+            state.tx.clone(),
+            &state.config.telegram_api_base_url,
+            state.config.telegram_rate_limit,
+        )
             .search(storage_id, path, search_path, &user)
             .await
             .map(|files| Json(files).into_response())
@@ -874,7 +900,7 @@ impl FilesRouter {
         Extension(user): Extension<AuthUser>,
         RoutePath((storage_id, path)): RoutePath<(Uuid, String)>,
     ) -> Result<(), (StatusCode, String)> {
-        FilesService::new(&state.db, state.tx.clone())
+        Self::service(&state)
             .delete(&path, storage_id, &user)
             .await
             .map_err(|e| <(StatusCode, String)>::from(e))?;
@@ -902,7 +928,7 @@ impl FilesRouter {
             }
         };
 
-        FilesService::new(&state.db, state.tx.clone())
+        Self::service(&state)
             .rename(storage_id, &old_path, &new_path, &user)
             .await?;
         Ok(StatusCode::OK)
@@ -914,10 +940,34 @@ impl FilesRouter {
         RoutePath(storage_id): RoutePath<Uuid>,
         Json(body): Json<MoveSchema>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        FilesService::new(&state.db, state.tx.clone())
-            .move_to(storage_id, &body.path, &body.destination_folder, &user)
+        Self::service(&state)
+            .move_to(
+                storage_id,
+                &body.path,
+                &body.destination_folder,
+                body.on_conflict.as_deref(),
+                &user,
+            )
             .await?;
-        Ok(StatusCode::OK)
+        Ok(StatusCode::NO_CONTENT)
+    }
+
+    async fn copy_to(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+        RoutePath(storage_id): RoutePath<Uuid>,
+        Json(body): Json<CopySchema>,
+    ) -> Result<StatusCode, (StatusCode, String)> {
+        Self::service(&state)
+            .copy_to(
+                storage_id,
+                &body.path,
+                &body.destination_folder,
+                body.on_conflict.as_deref(),
+                &user,
+            )
+            .await?;
+        Ok(StatusCode::NO_CONTENT)
     }
 }
 

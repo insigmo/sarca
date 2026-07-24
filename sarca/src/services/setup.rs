@@ -189,7 +189,10 @@ impl<'d> SetupService<'d> {
         exclude: &[ChatId],
     ) -> SarcaResult<ChannelPollResultSchema> {
         let client = TelegramTokenClient::new(self.telegram_base_url, token.trim());
+        let me = client.get_me().await?;
         let chats = client.get_updates().await?;
+        let mut saw_non_admin = false;
+
         for chat in chats {
             if exclude.contains(&chat.chat_id) {
                 continue;
@@ -198,20 +201,50 @@ impl<'d> SetupService<'d> {
             if chat.chat_id >= 0 {
                 continue;
             }
+
             let title = match client.get_chat(chat.chat_id).await {
                 Ok(info) => info.title,
                 Err(_) => chat.title,
             };
-            return Ok(ChannelPollResultSchema {
-                found: true,
-                chat_id: Some(chat.chat_id),
-                title: Some(title),
-            });
+
+            match client
+                .get_chat_member_status(chat.chat_id, me.id)
+                .await
+            {
+                Ok(status) if status == "administrator" || status == "creator" => {
+                    return Ok(ChannelPollResultSchema {
+                        found: true,
+                        chat_id: Some(chat.chat_id),
+                        title: Some(title),
+                        hint: None,
+                    });
+                }
+                Ok(_) => {
+                    saw_non_admin = true;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "setup poll: getChatMember for {} failed: {e}",
+                        chat.chat_id
+                    );
+                    saw_non_admin = true;
+                }
+            }
         }
+
         Ok(ChannelPollResultSchema {
             found: false,
             chat_id: None,
             title: None,
+            hint: if saw_non_admin {
+                Some(
+                    "Bot was added to a channel but does not have admin rights. \
+                     Make it an admin with Post messages and Delete messages."
+                        .to_owned(),
+                )
+            } else {
+                None
+            },
         })
     }
 

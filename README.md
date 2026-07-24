@@ -13,6 +13,16 @@
   <a href="https://github.com/insigmo/sarca/pkgs/container/sarca"><img alt="GHCR" src="https://img.shields.io/badge/ghcr.io-sarca-14635C?style=flat-square&logo=docker"></a>
 </p>
 
+## Features
+
+- Upload / download, folders, search, rename / move / copy
+- Trash with restore and retention
+- Favorites & recent files
+- Public share links (expiry, optional password)
+- Multi-user access control, multiple storages & workers
+- Setup wizard for bot + channel
+- Optional email verify, password reset, Google / GitHub OAuth
+
 ## What it does
 
 Sarca turns Telegram into a backend for a personal or multi-user file cloud:
@@ -134,7 +144,7 @@ Open the storage filesystem to:
 
 - Upload / download files
 - Create folders
-- Search, rename, move, delete
+- Search, rename, move; delete moves items to trash (restore / delete forever / empty; retention setting)
 - Share access with other Sarca users (Viewer / Can edit / Admin)
 
 ### Local Bot API (large files)
@@ -187,16 +197,6 @@ If Sarca is useful to you, you can support development:
 **TON**: `UQDw5-4nyIrb1K1waDFH4oGYBIfZYfEoqmS26ix0kKAi6e-Q`
 
 **USDT**: `0x1D3dD608804E1992a37c9b2CA673522c1e17f543`
-
-## Features
-
-- [x] Upload / download files
-- [x] Folders
-- [x] File info
-- [x] Delete / rename / move
-- [x] Search
-- [x] Access control
-- [x] Multiple storage workers
 
 ## License
 

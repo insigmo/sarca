@@ -143,14 +143,18 @@ const SetupWizard = () => {
 			const res = await API.setup.validateBot(token().trim())
 			setBotUsername(res.username)
 			addAlert(`Bot @${res.username} looks good`, 'success')
+			setPollError('')
+			stopPolling()
 			setStep(2)
-			startPolling()
 		} catch {
 			/* apiRequest already alerts */
 		} finally {
 			setBusy(false)
 		}
 	}
+
+	const NOT_ADDED_MSG =
+		'Bot was not added to a channel, or was not given admin rights.'
 
 	const startPolling = () => {
 		stopPolling()
@@ -160,7 +164,7 @@ const SetupWizard = () => {
 		const tick = async () => {
 			if (Date.now() - pollStartedAt > POLL_TIMEOUT_MS) {
 				stopPolling()
-				setPollError('Timed out waiting for a channel message. Try again after posting.')
+				setPollError(NOT_ADDED_MSG)
 				return
 			}
 			try {
@@ -173,6 +177,11 @@ const SetupWizard = () => {
 						{ chat_id: res.chat_id, title: res.title || String(res.chat_id) },
 					])
 					addAlert(`Found channel: ${res.title || res.chat_id}`, 'success')
+					return
+				}
+				if (res.hint) {
+					stopPolling()
+					setPollError(res.hint)
 				}
 			} catch (e) {
 				stopPolling()
@@ -238,48 +247,61 @@ const SetupWizard = () => {
 								<code>sarca.conf</code>, start Local Bot API, and restart Sarca.
 							</Typography>
 						</Show>
-						<Stack spacing={2}>
-							<TextField
-								label="api_id"
-								value={apiId()}
-								onChange={(e) => setApiId(e.target.value)}
-								autoComplete="off"
-							/>
-							<TextField
-								label="api_hash"
-								value={apiHash()}
-								onChange={(e) => setApiHash(e.target.value)}
-								autoComplete="off"
-							/>
-							<Show when={localHint()}>
-								<Typography variant="body2" color="text.secondary">
-									{localHint()}
-								</Typography>
-							</Show>
-							<Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
-								<Button
-									variant="contained"
-									disabled={localBusy() || !apiId().trim() || !apiHash().trim()}
-									onClick={handleSaveLocal}
-								>
-									Save
-								</Button>
-								<Button
-									variant="outlined"
-									disabled={localBusy()}
-									onClick={handleVerifyLocal}
-								>
-									Verify
-								</Button>
-								<Button
-									color="inherit"
-									disabled={localBusy()}
-									onClick={handleSkipLocal}
-								>
-									Skip for now
-								</Button>
+						<Box
+							component="form"
+							onSubmit={(e) => {
+								e.preventDefault()
+								if (localBusy() || !apiId().trim() || !apiHash().trim()) return
+								handleSaveLocal()
+							}}
+						>
+							<Stack spacing={2}>
+								<TextField
+									label="api_id"
+									value={apiId()}
+									onChange={(e) => setApiId(e.target.value)}
+									autoComplete="off"
+								/>
+								<TextField
+									label="api_hash"
+									value={apiHash()}
+									onChange={(e) => setApiHash(e.target.value)}
+									autoComplete="off"
+								/>
+								<Show when={localHint()}>
+									<Typography variant="body2" color="text.secondary">
+										{localHint()}
+									</Typography>
+								</Show>
+								<Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+									<Button
+										type="submit"
+										variant="contained"
+										disabled={
+											localBusy() || !apiId().trim() || !apiHash().trim()
+										}
+									>
+										Save
+									</Button>
+									<Button
+										type="button"
+										variant="outlined"
+										disabled={localBusy()}
+										onClick={handleVerifyLocal}
+									>
+										Verify
+									</Button>
+									<Button
+										type="button"
+										color="inherit"
+										disabled={localBusy()}
+										onClick={handleSkipLocal}
+									>
+										Skip for now
+									</Button>
+								</Stack>
 							</Stack>
-						</Stack>
+						</Box>
 					</Box>
 				</Show>
 
@@ -289,58 +311,84 @@ const SetupWizard = () => {
 							New storage
 						</Typography>
 						<Typography color="text.secondary" sx={{ mb: 2 }}>
-							Create a Telegram bot and a private channel, then Sarca will detect the
-							channel when you post a message.
+							Create a Telegram bot and a private channel, then check that the bot
+							was added as an admin.
 						</Typography>
 
 						<Show when={step() === 0}>
-							<Stack spacing={2}>
-								<TextField
-									label="Storage name"
-									value={storageName()}
-									onChange={(e) => setStorageName(e.target.value)}
-									autoFocus
-								/>
-								<Button
-									variant="contained"
-									disabled={!storageName().trim()}
-									onClick={() => setStep(1)}
-								>
-									Continue
-								</Button>
-							</Stack>
+							<Box
+								component="form"
+								onSubmit={(e) => {
+									e.preventDefault()
+									if (!storageName().trim()) return
+									setStep(1)
+								}}
+							>
+								<Stack spacing={2}>
+									<TextField
+										label="Storage name"
+										value={storageName()}
+										onChange={(e) => setStorageName(e.target.value)}
+										autoFocus
+									/>
+									<Button
+										type="submit"
+										variant="contained"
+										disabled={!storageName().trim()}
+									>
+										Continue
+									</Button>
+								</Stack>
+							</Box>
 						</Show>
 
 						<Show when={step() === 1}>
-							<Stack spacing={2}>
-								<Typography>
-									1. Open{' '}
-									<Link
-										href="https://t.me/BotFather"
-										target="_blank"
-										rel="noreferrer"
-									>
-										@BotFather
-									</Link>
-									, send <code>/newbot</code>, and copy the token.
-								</Typography>
-								<TextField
-									label="Bot token"
-									value={token()}
-									onChange={(e) => setToken(e.target.value)}
-									autoComplete="off"
-								/>
-								<Stack direction="row" spacing={1}>
-									<Button onClick={() => setStep(0)}>Back</Button>
-									<Button
-										variant="contained"
-										disabled={busy() || !token().trim()}
-										onClick={handleValidateBot}
-									>
-										Validate bot
-									</Button>
+							<Box
+								component="form"
+								onSubmit={(e) => {
+									e.preventDefault()
+									if (busy() || !token().trim()) return
+									handleValidateBot()
+								}}
+							>
+								<Stack spacing={2}>
+									<Typography>
+										1. Click{' '}
+										<Link
+											href="https://t.me/BotFather"
+											target="_blank"
+											rel="noreferrer"
+										>
+											@BotFather
+										</Link>
+									</Typography>
+									<Typography>
+										2. Send a command <code>/newbot</code>
+									</Typography>
+									<Typography>
+										3. Create new bot and copy the token.
+									</Typography>
+									<TextField
+										label="Bot token"
+										value={token()}
+										onChange={(e) => setToken(e.target.value)}
+										autoComplete="off"
+										autoFocus
+									/>
+									<Stack direction="row" spacing={1}>
+										<Button type="button" onClick={() => setStep(0)}>
+											Back
+										</Button>
+										<Button
+											type="submit"
+											variant="contained"
+											disabled={busy() || !token().trim()}
+										>
+											Validate bot
+										</Button>
+									</Stack>
 								</Stack>
-							</Stack>
+							</Box>
 						</Show>
 
 						<Show when={step() === 2}>
@@ -351,31 +399,24 @@ const SetupWizard = () => {
 									</Typography>
 								</Show>
 								<Typography>
-									2. Create a <strong>private channel</strong> in Telegram.
+									1. Create a <strong>private channel</strong> in Telegram.
 								</Typography>
 								<Typography>
-									3. Add <strong>@{botUsername() || 'your bot'}</strong> as an
-									admin with permission to <em>Post messages</em> and{' '}
-									<em>Delete messages</em>.
-								</Typography>
-								<Typography>
-									4. Post any message in that channel — Sarca is listening…
+									2. Add <strong>@{botUsername() || 'your bot'}</strong> as an
+									admin with permission.
 								</Typography>
 
 								<Show when={polling()}>
 									<Stack direction="row" spacing={1} alignItems="center">
 										<CircularProgress size={22} />
 										<Typography variant="body2">
-											Waiting for a channel message…
+											Checking whether the bot was added as an admin…
 										</Typography>
 									</Stack>
 								</Show>
 
 								<Show when={pollError()}>
 									<Typography color="error">{pollError()}</Typography>
-									<Button variant="outlined" onClick={startPolling}>
-										Retry detect
-									</Button>
 								</Show>
 
 								<Show when={channels().length}>
@@ -406,20 +447,42 @@ const SetupWizard = () => {
 									<Button
 										onClick={() => {
 											stopPolling()
+											setPollError('')
 											setStep(1)
 										}}
 									>
 										Back
 									</Button>
+									<Show when={!polling() && channels().length === 0}>
+										<Button variant="contained" onClick={startPolling}>
+											Check channel
+										</Button>
+									</Show>
+									<Show when={polling()}>
+										<Button
+											variant="outlined"
+											onClick={() => {
+												stopPolling()
+												setPollError('')
+											}}
+										>
+											Stop
+										</Button>
+									</Show>
 									<Show
 										when={
+											!polling() &&
 											channels().length > 0 &&
-											channels().length < MAX_CHANNELS &&
-											!polling()
+											channels().length < MAX_CHANNELS
 										}
 									>
 										<Button variant="outlined" onClick={startPolling}>
 											Detect another channel
+										</Button>
+									</Show>
+									<Show when={!polling() && pollError() && !channels().length}>
+										<Button variant="outlined" onClick={startPolling}>
+											Try again
 										</Button>
 									</Show>
 									<Button
