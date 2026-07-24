@@ -22,6 +22,7 @@ export const fileKind = (name, isFile = true) => {
 	if (['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz'].includes(ext)) return 'archive'
 	if (['xls', 'xlsx', 'ods', 'csv'].includes(ext)) return 'spreadsheet'
 	if (['doc', 'docx', 'odt', 'rtf'].includes(ext)) return 'document'
+	if (['ppt', 'pptx', 'odp', 'key'].includes(ext)) return 'presentation'
 	if (['url', 'webloc', 'desktop'].includes(ext) || name.startsWith('http')) return 'link'
 	if (
 		[

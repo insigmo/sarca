@@ -59,7 +59,7 @@ const StorageCreateForm = () => {
 	}
 
 	return (
-		<Stack sx={{ maxWidth: 540, minWidth: 320, mx: 'auto' }}>
+		<Stack sx={{ maxWidth: 540, minWidth: 320, mx: 'auto' }} class="glass-panel" style={{ padding: '24px 28px 32px' }}>
 			<Box>
 				<Button
 					onClick={() => navigate('/storages')}

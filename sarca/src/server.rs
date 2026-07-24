@@ -44,25 +44,6 @@ impl Server {
         Self { router, ui_dir }
     }
 
-    /// Build a router with an explicit UI directory (for tests).
-    pub fn build_server_with_ui(
-        workers: usize,
-        app_state: Arc<AppState>,
-        ui_dir: PathBuf,
-    ) -> Self {
-        let index = ui_dir.join("index.html");
-        let assets = ui_dir.join("assets");
-        let serve_ui = ServeFile::new(index);
-        let serve_assets = ServeDir::new(assets);
-
-        let router = Router::new()
-            .nest("/api", Self::build_api_router(workers, app_state))
-            .nest_service("/assets", serve_assets)
-            .fallback_service(serve_ui);
-
-        Self { router, ui_dir }
-    }
-
     #[inline]
     fn build_api_router(workers: usize, app_state: Arc<AppState>) -> Router {
         let app_cors = cors::CorsLayer::new()
@@ -82,10 +63,6 @@ impl Server {
             .fallback(|| async { (StatusCode::NOT_FOUND, "Not Found") })
             .layer(ConcurrencyLimitLayer::new(workers.into()))
             .layer(app_cors)
-    }
-
-    pub fn router(self) -> Router {
-        self.router
     }
 
     pub async fn run(self, addr: &SocketAddr) {
@@ -130,13 +107,8 @@ impl Server {
 pub(crate) fn resolve_ui_dir() -> PathBuf {
     let candidates = ui_dir_candidates();
 
-    for candidate in &candidates {
-        let index = candidate.join("index.html");
-        if index.is_file() {
-            return candidate
-                .canonicalize()
-                .unwrap_or_else(|_| candidate.clone());
-        }
+    if let Some(dir) = find_ui_dir_among(&candidates) {
+        return dir;
     }
 
     eprintln!();
