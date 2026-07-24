@@ -20,6 +20,7 @@ import { alertStore } from './AlertStack'
  * @property {() => void} onClose
  * @property {() => void} afterGrant
  * @property {string | undefined} email
+ * @property {string} [storageId]
  */
 
 /**
@@ -30,6 +31,7 @@ const GrantAccess = (props) => {
 	const { addAlert } = alertStore
 	const params = useParams()
 	const getAction = () => (props.email?.length ? 'Change' : 'Grant')
+	const storageId = () => props.storageId || params.id
 
 	/**
 	 *
@@ -42,7 +44,7 @@ const GrantAccess = (props) => {
 		const email = props.email || data.get('email')
 		const access_type = data.get('access_type')
 
-		await API.access.grantAccess(params.id, email, access_type)
+		await API.access.grantAccess(storageId(), email, access_type)
 
 		props.onClose()
 		addAlert(

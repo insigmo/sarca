@@ -1,7 +1,11 @@
 import { alertStore } from '../components/AlertStack'
 import createLocalStore from '../../libs'
 
-const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api'
+// Same-origin by default so production / Docker UI talks to the Sarca that
+// served the page. Override with VITE_API_BASE for `pnpm dev` against a remote API.
+const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+
+export { API_BASE }
 
 let refreshPromise = null
 

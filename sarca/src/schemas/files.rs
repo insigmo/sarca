@@ -45,6 +45,9 @@ impl InFolderSchema {
 #[derive(Deserialize)]
 pub struct SearchQuery {
     pub search_path: Option<String>,
+    /// When true (or "1"), serve with Content-Disposition: inline for in-app preview.
+    #[serde(default)]
+    pub inline: Option<String>,
 }
 
 #[derive(Deserialize)]

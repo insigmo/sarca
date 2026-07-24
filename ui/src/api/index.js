@@ -1,6 +1,6 @@
 import createLocalStore from '../../libs'
 
-import apiRequest, { apiMultipartRequest } from './request'
+import apiRequest, { apiMultipartRequest, API_BASE } from './request'
 
 /////////////////////////////////////////////////////////////
 ////  USERS
@@ -316,6 +316,34 @@ const download = async (storage_id, path) => {
 }
 
 /**
+ * Encode each path segment for use in a download URL.
+ * @param {string} path
+ */
+const encodeFilePath = (path) =>
+	String(path || '')
+		.split('/')
+		.filter((p) => p.length)
+		.map(encodeURIComponent)
+		.join('/')
+
+/**
+ * Authenticated URL for `<video>` / `<audio>` / `<img>` / `<iframe>` streaming.
+ * Uses `?access_token=` so the browser can send Range requests without a custom fetch.
+ *
+ * @param {string} storage_id
+ * @param {string} path
+ * @returns {string}
+ */
+const getInlineMediaUrl = (storage_id, path) => {
+	const [store] = createLocalStore()
+	const params = new URLSearchParams({
+		inline: '1',
+		access_token: store.access_token || '',
+	})
+	return `${API_BASE}/storages/${storage_id}/files/download/${encodeFilePath(path)}?${params}`
+}
+
+/**
  *
  * @param {string} storage_id
  * @param {string} path
@@ -426,6 +454,7 @@ const API = {
 		uploadFileTo,
 		getFSLayer,
 		download,
+		getInlineMediaUrl,
 		thumb,
 		deleteFile,
 		search,
