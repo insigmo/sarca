@@ -841,6 +841,83 @@ a.default-link:hover {
 	margin-bottom: 4px;
 }
 
+.files-breadcrumb {
+	display: flex;
+	align-items: center;
+	flex: 1 1 auto;
+	min-width: 0;
+	margin-right: auto;
+	gap: 2px;
+	overflow-x: auto;
+	scrollbar-width: thin;
+	padding: 2px 0;
+}
+
+.files-breadcrumb__sep {
+	flex-shrink: 0;
+	opacity: 0.45;
+	color: var(--sarca-ink-soft);
+	font-size: 1rem !important;
+}
+
+.files-breadcrumb__crumb {
+	appearance: none;
+	border: 1px solid transparent;
+	background: transparent;
+	color: var(--sarca-ink-soft);
+	font: inherit;
+	font-size: 0.88rem;
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	padding: 4px 8px;
+	border-radius: 8px;
+	cursor: pointer;
+	white-space: nowrap;
+	max-width: 160px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	transition:
+		background 0.15s ease,
+		color 0.15s ease,
+		border-color 0.15s ease;
+}
+
+.files-breadcrumb__crumb:hover {
+	color: var(--sarca-ink);
+	background: color-mix(in srgb, var(--sarca-ink) 6%, transparent);
+}
+
+.files-breadcrumb__crumb--current {
+	color: var(--sarca-ink);
+	font-weight: 700;
+}
+
+.files-breadcrumb__crumb--drop {
+	color: var(--sarca-ink);
+	background: color-mix(in srgb, var(--sarca-teal) 18%, transparent);
+	border-color: color-mix(in srgb, var(--sarca-teal) 50%, transparent);
+	outline: 1px dashed color-mix(in srgb, var(--sarca-teal) 55%, transparent);
+}
+
+.files-bulk-bar {
+	display: inline-flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding: 4px 6px 4px 10px;
+	border-radius: 10px;
+	border: 1px solid var(--sarca-border);
+	background: color-mix(in srgb, var(--sarca-ink) 4%, transparent);
+}
+
+.files-bulk-bar__count {
+	font-size: 0.82rem;
+	font-weight: 600;
+	color: var(--sarca-ink-soft);
+	margin-right: 2px;
+	white-space: nowrap;
+}
+
 .files-page__nav-toggle {
 	display: none !important;
 }
@@ -1388,6 +1465,55 @@ a.default-link:hover {
 .fs-grid-item:hover .fs-grid-item__star,
 .fs-grid-item:focus-within .fs-grid-item__star {
 	opacity: 1;
+}
+
+.fs-grid-item--selected {
+	background: color-mix(in srgb, var(--sarca-teal) 16%, transparent);
+	outline: 1px solid color-mix(in srgb, var(--sarca-teal) 40%, transparent);
+}
+
+.fs-grid-item--drop-target,
+.fs-list-item--drop-target {
+	background: color-mix(in srgb, var(--sarca-teal) 20%, transparent);
+	outline: 2px dashed color-mix(in srgb, var(--sarca-teal) 55%, transparent);
+}
+
+.fs-grid-item__check {
+	position: absolute;
+	top: 4px;
+	left: 2px;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+	z-index: 2;
+}
+
+.fs-grid-item:hover .fs-grid-item__check,
+.fs-grid-item:focus-within .fs-grid-item__check,
+.fs-grid-item__check.fs-item-check--visible,
+.files-canvas--selecting .fs-grid-item__check {
+	opacity: 1;
+}
+
+.fs-list-item--selected {
+	background: color-mix(in srgb, var(--sarca-teal) 12%, transparent);
+}
+
+.fs-list-item__check {
+	flex-shrink: 0;
+	opacity: 0;
+	transition: opacity 0.15s ease;
+}
+
+.fs-list-item:hover .fs-list-item__check,
+.fs-list-item:focus-within .fs-list-item__check,
+.fs-list-item__check.fs-item-check--visible,
+.files-canvas--selecting .fs-list-item__check {
+	opacity: 1;
+}
+
+.files-canvas--drop-active {
+	outline: 2px dashed color-mix(in srgb, var(--sarca-teal) 50%, transparent);
+	outline-offset: -4px;
 }
 
 .fs-list-item {
@@ -2155,6 +2281,12 @@ a.default-link:hover {
 	line-height: 1.35;
 }
 
+.file-info-dialog__bytes {
+	margin-left: 0.55em;
+	color: var(--sarca-ink-soft);
+	font-weight: 450;
+}
+
 .file-info-dialog__actions {
 	padding: 8px 20px 18px !important;
 }
@@ -2226,6 +2358,11 @@ a.default-link:hover {
 
 	.fs-grid-item__star--active {
 		opacity: 1;
+	}
+
+	.fs-grid-item__check,
+	.fs-list-item__check {
+		opacity: 0.9;
 	}
 
 	.fs-list-item__more,
@@ -2446,37 +2583,10 @@ a.default-link:hover {
 	overflow: hidden;
 }
 
-.file-viewer__close {
-	position: absolute;
-	top: calc(18px + env(safe-area-inset-top, 0px));
-	right: calc(18px + env(safe-area-inset-right, 0px));
-	z-index: 40;
-	width: 56px;
-	height: 56px;
-	border: 1px solid rgba(255, 255, 255, 0.22);
-	border-radius: 50%;
-	display: grid;
-	place-items: center;
-	cursor: pointer;
-	font-size: 1.85rem;
-	color: #fff;
-	background: rgba(12, 16, 40, 0.45);
-	backdrop-filter: blur(18px);
-	-webkit-backdrop-filter: blur(18px);
-	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
-	transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
-}
-
-.file-viewer__close:hover {
-	transform: scale(1.08);
-	box-shadow: 0 0 0 4px rgba(217, 164, 65, 0.28), 0 10px 32px rgba(0, 0, 0, 0.4);
-	background: rgba(20, 24, 52, 0.65);
-}
-
+.file-viewer__close,
 .file-viewer__download {
 	position: absolute;
-	top: 18px;
-	right: 86px;
+	top: calc(18px + env(safe-area-inset-top, 0px));
 	z-index: 40;
 	width: 48px;
 	height: 48px;
@@ -2486,17 +2596,33 @@ a.default-link:hover {
 	place-items: center;
 	cursor: pointer;
 	font-size: 1.35rem;
+	line-height: 1;
 	color: #fff;
-	background: rgba(12, 16, 40, 0.4);
-	backdrop-filter: blur(16px);
-	-webkit-backdrop-filter: blur(16px);
-	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-	transition: transform 0.18s ease, box-shadow 0.18s ease;
+	background: rgba(12, 16, 40, 0.45);
+	backdrop-filter: blur(18px);
+	-webkit-backdrop-filter: blur(18px);
+	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+	transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.file-viewer__close {
+	right: calc(18px + env(safe-area-inset-right, 0px));
+}
+
+.file-viewer__close:hover {
+	transform: scale(1.08);
+	box-shadow: 0 0 0 4px rgba(217, 164, 65, 0.28), 0 10px 32px rgba(0, 0, 0, 0.4);
+	background: rgba(20, 24, 52, 0.65);
+}
+
+.file-viewer__download {
+	right: calc(18px + 48px + 10px + env(safe-area-inset-right, 0px));
 }
 
 .file-viewer__download:hover {
-	transform: scale(1.06);
-	box-shadow: 0 0 0 3px rgba(91, 108, 255, 0.28);
+	transform: scale(1.08);
+	box-shadow: 0 0 0 4px rgba(91, 108, 255, 0.28), 0 10px 32px rgba(0, 0, 0, 0.4);
+	background: rgba(20, 24, 52, 0.65);
 }
 
 .file-viewer__nav {
@@ -3035,19 +3161,20 @@ a.default-link:hover {
 }
 
 @media (max-width: 840px) {
-	.file-viewer__close {
+	.file-viewer__close,
+	.file-viewer__download {
 		top: calc(12px + env(safe-area-inset-top, 0px));
+		width: 44px;
+		height: 44px;
+		font-size: 1.25rem;
+	}
+
+	.file-viewer__close {
 		right: calc(12px + env(safe-area-inset-right, 0px));
-		width: 52px;
-		height: 52px;
-		font-size: 1.7rem;
 	}
 
 	.file-viewer__download {
-		top: 14px;
-		right: 74px;
-		width: 44px;
-		height: 44px;
+		right: calc(12px + 44px + 8px + env(safe-area-inset-right, 0px));
 	}
 
 	.file-viewer__nav {

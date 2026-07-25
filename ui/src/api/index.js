@@ -513,6 +513,12 @@ const uploadFile = async (storage_id, path, file, onProgress, options = {}) => {
 		.trim() || 'unnamed'
 	form.append('path', path ?? '')
 	form.append('filename', basename)
+	const lastModified = Number(file?.lastModified)
+	if (Number.isFinite(lastModified) && lastModified > 0) {
+		form.append('mtime', String(Math.round(lastModified)))
+		// Browser File API has no birthtime; lastModified is the best metadata we get.
+		form.append('created', String(Math.round(lastModified)))
+	}
 	form.append('file', file, basename)
 
 	return await apiMultipartRequest(
@@ -561,10 +567,11 @@ const getFSLayer = async (storage_id, path) => {
  * @property {boolean} is_file
  * @property {boolean} has_thumb
  * @property {boolean} is_uploaded
- * @property {number|null} [chunk_size_bytes]
- * @property {number} chunks_count
  * @property {string|null} [content_type]
  * @property {string|null} [deleted_at]
+ * @property {string|null} [added_at]
+ * @property {string|null} [created_at]
+ * @property {string|null} [modified_at]
  */
 
 /**
@@ -946,7 +953,9 @@ const listShares = async (storage_id) => {
 			false,
 			true,
 		)
-		return Array.isArray(data) ? data : data?.shares || []
+		return Array.isArray(data)
+			? data.filter((s) => !s.revoked_at)
+			: (data?.shares || []).filter((s) => !s.revoked_at)
 	} catch (err) {
 		const msg =
 			err.status === 404
