@@ -34,7 +34,7 @@ const Header = () => {
 								variant="h5"
 								noWrap
 								sx={{
-									fontFamily: "'Fraunces', Georgia, serif",
+									fontFamily: 'var(--sarca-display)',
 									fontWeight: 600,
 									letterSpacing: '-0.02em',
 									color: 'var(--sarca-header-ink)',

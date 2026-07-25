@@ -18,6 +18,8 @@ import ChevronRightIcon from '@suid/icons-material/ChevronRight'
 import ContentCopyIcon from '@suid/icons-material/ContentCopy'
 import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
 import DeleteIcon from '@suid/icons-material/Delete'
+import DeleteForeverIcon from '@suid/icons-material/DeleteForever'
+import RestoreFromTrashIcon from '@suid/icons-material/RestoreFromTrash'
 import CloseIcon from '@suid/icons-material/Close'
 import Button from '@suid/material/Button'
 import IconButton from '@suid/material/IconButton'
@@ -203,6 +205,11 @@ const Files = () => {
 	const [trashPath, setTrashPath] = createSignal('')
 	const [emptyTrashOpen, setEmptyTrashOpen] = createSignal(false)
 	const [restoreConflictPath, setRestoreConflictPath] = createSignal(null)
+	/**
+	 * Remaining trash items to restore after resolving a path conflict.
+	 * @type {[import('solid-js').Accessor<{ path: string, name: string }[]>, any]}
+	 */
+	const [restoreRemaining, setRestoreRemaining] = createSignal([])
 	/** @type {[import('solid-js').Accessor<Record<string, boolean>>, any]} */
 	const [favoritePaths, setFavoritePaths] = createSignal({})
 
@@ -227,6 +234,11 @@ const Files = () => {
 	 * @type {[import('solid-js').Accessor<null | { mode: 'copy'|'move', items: { path: string, name: string }[] }>, any]}
 	 */
 	const [folderPicker, setFolderPicker] = createSignal(null)
+	/**
+	 * Internal file clipboard for Ctrl+C / Ctrl+X / Ctrl+V.
+	 * @type {[import('solid-js').Accessor<null | { mode: 'copy'|'cut', items: { path: string, name: string }[] }>, any]}
+	 */
+	const [fileClipboard, setFileClipboard] = createSignal(null)
 	/**
 	 * Pending copy/move waiting on conflict resolution (may include remaining queue).
 	 * @type {[import('solid-js').Accessor<null | { mode: 'copy'|'move', path: string, destination: string, name: string, remaining: { path: string, name: string }[] }>, any]}
@@ -266,7 +278,10 @@ const Files = () => {
 	const sharedMode = () => listMode() === 'shared'
 	const browseMode = () => listMode() === 'browse'
 	const selectionModeEnabled = () =>
-		browseMode() || listMode() === 'favorites' || listMode() === 'recent'
+		browseMode() ||
+		trashMode() ||
+		listMode() === 'favorites' ||
+		listMode() === 'recent'
 
 	const selectedCount = createMemo(
 		() => Object.keys(selectedPaths()).length,
@@ -504,6 +519,7 @@ const Files = () => {
 		clearSelection()
 		setMarqueeBox(null)
 		marqueeGesture = null
+		setRestoreRemaining([])
 	})
 
 	const sortedFsLayer = createMemo(() => {
@@ -705,26 +721,60 @@ const Files = () => {
 		}
 	}
 
-	const restoreItem = async (el, onConflict) => {
-		const path = trashItemPath(el)
-		try {
-			await API.files.restoreTrash(params.id, path, onConflict)
-			addAlert(`Restored "${el.name}"`, 'success')
-			setRestoreConflictPath(null)
-			await fetchTrashLayer()
-		} catch (err) {
-			if (err.status === 409 && !onConflict) {
-				setRestoreConflictPath(path)
-				return
+	/**
+	 * @param {{ path: string, name: string }[]} items
+	 * @param {'replace'|'rename'} [onConflict]
+	 */
+	const restoreItems = async (items, onConflict) => {
+		if (!items.length) return
+		/** @type {string[]} */
+		const done = []
+
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i]
+			try {
+				await API.files.restoreTrash(params.id, item.path, onConflict)
+				done.push(item.name)
+			} catch (err) {
+				if (err.status === 409 && !onConflict) {
+					setRestoreConflictPath(item.path)
+					setRestoreRemaining(items.slice(i + 1))
+					return
+				}
+				/* alerted by API — continue remaining */
 			}
-			throw err
 		}
+
+		setRestoreConflictPath(null)
+		setRestoreRemaining([])
+		clearSelection()
+		if (done.length === 1) {
+			addAlert(`Restored "${done[0]}"`, 'success')
+		} else if (done.length > 1) {
+			addAlert(`Restored ${done.length} items`, 'success')
+		}
+		await fetchTrashLayer()
+	}
+
+	const restoreItem = async (el, onConflict) => {
+		await restoreItems(
+			[{ path: trashItemPath(el), name: el.name }],
+			onConflict,
+		)
 	}
 
 	const deleteForeverItem = async (el) => {
 		await API.files.deleteForever(params.id, trashItemPath(el))
 		addAlert(`Permanently deleted "${el.name}"`, 'success')
 		await fetchTrashLayer()
+	}
+
+	const confirmBulkRestore = async () => {
+		const items = selectedItems().map((el) => ({
+			path: trashItemPath(el),
+			name: el.name,
+		}))
+		await restoreItems(items)
 	}
 
 	const confirmEmptyTrash = async () => {
@@ -769,6 +819,90 @@ const Files = () => {
 		const items = selectedTransferItems()
 		if (!items.length) return
 		setFolderPicker({ mode: 'move', items })
+	}
+
+	/**
+	 * Copy or cut current selection into the in-app clipboard.
+	 * @param {'copy'|'cut'} mode
+	 */
+	const clipboardCapture = (mode) => {
+		if (trashMode() || sharedMode()) return
+		const items = selectedTransferItems()
+		if (!items.length) return
+		setFileClipboard({ mode, items })
+		addAlert(
+			mode === 'copy'
+				? items.length === 1
+					? `Copied "${items[0].name}"`
+					: `Copied ${items.length} items`
+				: items.length === 1
+					? `Cut "${items[0].name}"`
+					: `Cut ${items.length} items`,
+			'info',
+		)
+	}
+
+	/** Paste clipboard into the current browse folder. */
+	const clipboardPaste = async () => {
+		if (!browseMode()) return
+		const clip = fileClipboard()
+		if (!clip?.items?.length) return
+		const mode = clip.mode === 'cut' ? 'move' : 'copy'
+		const items = clip.items.map((item) => ({ ...item }))
+		await transferItems(mode, items, params.path || '')
+	}
+
+	/**
+	 * Prompt and rename a file/folder. Used by context menu and F2.
+	 * @param {import('../../api').FSElement} el
+	 */
+	const renameItem = async (el) => {
+		if (!el || el.name === '..' || trashMode()) return
+		const path = itemNormalizedPath(el)
+		const currentName = el.is_file
+			? el.name.includes('/')
+				? el.name.split('/').pop()
+				: el.name
+			: el.name.replace(/\/$/, '').split('/').pop() || el.name
+		const newName = window.prompt('New name', currentName)
+		if (!newName || newName === currentName) return
+		try {
+			await API.files.rename(params.id, path, newName)
+			addAlert(`Renamed to "${newName}"`, 'success')
+			clearSelection()
+			await refreshCurrent()
+		} catch {
+			/* alerted by API */
+		}
+	}
+
+	/** F2: rename the sole selected item (or the selection anchor). */
+	const renameSelected = async () => {
+		if (trashMode() || sharedMode()) return
+		const items = selectedItems()
+		if (!items.length) return
+		let el = items[0]
+		if (items.length > 1 && selectionAnchor != null) {
+			const anchored = items.find(
+				(item) => itemNormalizedPath(item) === selectionAnchor,
+			)
+			if (anchored) el = anchored
+		}
+		await renameItem(el)
+	}
+
+	/**
+	 * Right-click: select the item if it is not already in the selection.
+	 * @param {import('../../api').FSElement} el
+	 */
+	const onContextMenuItem = (el) => {
+		if (!selectionModeEnabled()) return
+		const path = itemNormalizedPath(el)
+		if (!path) return
+		if (!selectedPaths()[path]) {
+			setSelectedPaths({ [path]: true })
+			selectionAnchor = path
+		}
 	}
 
 	/**
@@ -817,6 +951,16 @@ const Files = () => {
 		setFolderPicker(null)
 		setPathConflict(null)
 		clearSelection()
+
+		// Cut clipboard is spent after a successful move paste / move transfer.
+		const clip = fileClipboard()
+		if (
+			mode === 'move' &&
+			clip?.mode === 'cut' &&
+			items.some((item) => clip.items.some((c) => c.path === item.path))
+		) {
+			setFileClipboard(null)
+		}
 
 		if (done.length === 1) {
 			addAlert(
@@ -870,17 +1014,26 @@ const Files = () => {
 		let ok = 0
 		for (const el of items) {
 			try {
-				await API.files.deleteFile(params.id, itemNormalizedPath(el))
+				if (trashMode()) {
+					await API.files.deleteForever(params.id, trashItemPath(el))
+				} else {
+					await API.files.deleteFile(params.id, itemNormalizedPath(el))
+				}
 				ok++
 			} catch {
 				/* alerted */
 			}
 		}
 		if (ok) {
+			const permanent = trashMode()
 			addAlert(
 				ok === 1
-					? `Deleted "${items[0].name}"`
-					: `Deleted ${ok} items`,
+					? permanent
+						? `Permanently deleted "${items[0].name}"`
+						: `Deleted "${items[0].name}"`
+					: permanent
+						? `Permanently deleted ${ok} items`
+						: `Deleted ${ok} items`,
 				'success',
 			)
 		}
@@ -935,29 +1088,6 @@ const Files = () => {
 		Promise.all([fetchStorage(), fetchFSLayer(), loadFavoritePaths()]).then()
 		window.addEventListener('popstate', reload, false)
 
-		const onKeyDown = (e) => {
-			const target = /** @type {HTMLElement} */ (e.target)
-			const typing =
-				target?.closest?.(
-					'input, textarea, [contenteditable="true"]',
-				) != null
-			if (typing) return
-
-			if (e.key === 'Escape' && selectionActive()) {
-				clearSelection()
-				return
-			}
-			if (
-				(e.key === 'a' || e.key === 'A') &&
-				(e.ctrlKey || e.metaKey) &&
-				selectionModeEnabled()
-			) {
-				e.preventDefault()
-				selectAllVisible()
-			}
-		}
-		window.addEventListener('keydown', onKeyDown)
-
 		const mobileMediaQuery = window.matchMedia('(max-width: 840px)')
 		const closeMobileNavOnDesktop = (event) => {
 			if (!event.matches) setMobileNavOpen(false)
@@ -966,8 +1096,80 @@ const Files = () => {
 
 		onCleanup(() => {
 			mobileMediaQuery.removeEventListener('change', closeMobileNavOnDesktop)
-			window.removeEventListener('keydown', onKeyDown)
 		})
+	})
+
+	/**
+	 * File-manager shortcuts. Use KeyboardEvent.code so they work on any
+	 * layout (e.g. Russian: physical A/C/X/V still match KeyA/KeyC/…).
+	 * @param {KeyboardEvent} e
+	 */
+	const onFilesKeyDown = (e) => {
+		const target = /** @type {HTMLElement | null} */ (e.target)
+		if (
+			target?.closest?.(
+				'input, textarea, select, [contenteditable="true"]',
+			)
+		) {
+			return
+		}
+		// Ignore while modal dialogs own the page.
+		if (
+			target?.closest?.(
+				'.MuiDialog-root, .MuiModal-root, [role="dialog"]',
+			)
+		) {
+			return
+		}
+
+		if (e.key === 'Escape' && selectionActive()) {
+			e.preventDefault()
+			clearSelection()
+			return
+		}
+
+		// F2 — rename (no Ctrl/meta required)
+		if (e.code === 'F2' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+			if (trashMode() || sharedMode() || !selectionActive()) return
+			e.preventDefault()
+			renameSelected()
+			return
+		}
+
+		const mod = e.ctrlKey || e.metaKey
+		if (!mod) return
+
+		switch (e.code) {
+			case 'KeyA':
+				if (!selectionModeEnabled()) return
+				e.preventDefault()
+				selectAllVisible()
+				return
+			case 'KeyC':
+				if (!selectionModeEnabled() || trashMode()) return
+				e.preventDefault()
+				clipboardCapture('copy')
+				return
+			case 'KeyX':
+				if (!browseMode()) return
+				e.preventDefault()
+				clipboardCapture('cut')
+				return
+			case 'KeyV':
+				if (!browseMode()) return
+				e.preventDefault()
+				clipboardPaste()
+				return
+			default:
+				break
+		}
+	}
+
+	onMount(() => {
+		window.addEventListener('keydown', onFilesKeyDown, true)
+	})
+	onCleanup(() => {
+		window.removeEventListener('keydown', onFilesKeyDown, true)
 	})
 
 	onCleanup(() => {
@@ -1391,7 +1593,11 @@ const Files = () => {
 					onUploadFolder={uploadFolderClickHandler}
 				/>
 				<div class="files-shell__main">
-					<Stack class="files-page" spacing={1.5}>
+					<Stack
+						class="files-page"
+						spacing={0}
+						sx={{ flex: 1, minHeight: 0, height: '100%', gap: '12px' }}
+					>
 				<div class="files-page__toolbar">
 					<IconButton
 						class="files-page__nav-toggle"
@@ -1460,33 +1666,59 @@ const Files = () => {
 							<span class="files-bulk-bar__count">
 								{selectedCount()} selected
 							</span>
-							<Button
-								variant="outlined"
-								color="inherit"
-								size="small"
-								startIcon={<ContentCopyIcon />}
-								onClick={openBulkCopy}
+							<Show
+								when={trashMode()}
+								fallback={
+									<>
+										<Button
+											variant="outlined"
+											color="inherit"
+											size="small"
+											startIcon={<ContentCopyIcon />}
+											onClick={openBulkCopy}
+										>
+											Copy
+										</Button>
+										<Button
+											variant="outlined"
+											color="inherit"
+											size="small"
+											startIcon={<DriveFileMoveIcon />}
+											onClick={openBulkMove}
+										>
+											Move
+										</Button>
+										<Button
+											variant="outlined"
+											color="warning"
+											size="small"
+											startIcon={<DeleteIcon />}
+											onClick={() => setBulkDeleteOpen(true)}
+										>
+											Delete
+										</Button>
+									</>
+								}
 							>
-								Copy
-							</Button>
-							<Button
-								variant="outlined"
-								color="inherit"
-								size="small"
-								startIcon={<DriveFileMoveIcon />}
-								onClick={openBulkMove}
-							>
-								Move
-							</Button>
-							<Button
-								variant="outlined"
-								color="warning"
-								size="small"
-								startIcon={<DeleteIcon />}
-								onClick={() => setBulkDeleteOpen(true)}
-							>
-								Delete
-							</Button>
+								<Button
+									variant="outlined"
+									color="inherit"
+									size="small"
+									startIcon={<RestoreFromTrashIcon />}
+									onClick={confirmBulkRestore}
+								>
+									Restore
+								</Button>
+								<Button
+									variant="outlined"
+									color="warning"
+									size="small"
+									startIcon={<DeleteForeverIcon />}
+									onClick={() => setBulkDeleteOpen(true)}
+								>
+									Delete forever
+								</Button>
+							</Show>
 							<IconButton
 								size="small"
 								aria-label="Clear selection"
@@ -1631,7 +1863,7 @@ const Files = () => {
 						ref={(el) => {
 							filesCanvasEl = el
 						}}
-						class="files-canvas glass-panel"
+						class="files-canvas"
 						classList={{
 							'files-canvas--list': viewMode() === 'list',
 							'files-canvas--selecting': selectionActive(),
@@ -1697,10 +1929,6 @@ const Files = () => {
 									selected={() =>
 										Boolean(selectedPaths()[pathKey])
 									}
-									selectionActive={selectionActive}
-									onToggleSelect={() =>
-										toggleSelectPath(pathKey)
-									}
 									onSelectItem={onSelectItem}
 									draggableItem={browseMode() && canSelect}
 									onDragStartItem={onDragStartItem}
@@ -1725,6 +1953,8 @@ const Files = () => {
 									onTrashNavigate={onTrashNavigate}
 									onCopyTo={openCopyTo}
 									onMoveTo={openMoveTo}
+									onRename={renameItem}
+									onContextMenuItem={onContextMenuItem}
 								/>
 								)
 							})}
@@ -1732,7 +1962,7 @@ const Files = () => {
 					</Show>
 					</div>}
 				>
-					<div class="files-canvas glass-panel">
+					<div class="files-canvas">
 						<SharedLinksPanel storageId={params.id} active={sharedMode()} />
 					</div>
 				</Show>
@@ -1772,14 +2002,18 @@ const Files = () => {
 				/>
 
 				<ActionConfirmDialog
-					action="Delete"
+					action={trashMode() ? 'Delete forever' : 'Delete'}
 					entity={
 						selectedCount() === 1 ? 'item' : `${selectedCount()} items`
 					}
 					actionDescription={
-						selectedCount() === 1
-							? 'move this item to trash'
-							: `move ${selectedCount()} items to trash`
+						trashMode()
+							? selectedCount() === 1
+								? 'permanently delete this item (including Telegram copies)'
+								: `permanently delete ${selectedCount()} items (including Telegram copies)`
+							: selectedCount() === 1
+								? 'move this item to trash'
+								: `move ${selectedCount()} items to trash`
 					}
 					isOpened={bulkDeleteOpen()}
 					onConfirm={confirmBulkDelete}
@@ -1802,6 +2036,7 @@ const Files = () => {
 					renameLabel={conflictRenameLabel()}
 					onCancel={() => {
 						setRestoreConflictPath(null)
+						setRestoreRemaining([])
 						setPathConflict(null)
 					}}
 					onChoose={async (choice) => {
@@ -1812,14 +2047,13 @@ const Files = () => {
 						}
 						const path = restoreConflictPath()
 						if (!path) return
-						try {
-							await API.files.restoreTrash(params.id, path, choice)
-							addAlert('Restored', 'success')
-							setRestoreConflictPath(null)
-							await fetchTrashLayer()
-						} catch {
-							/* alerted by API */
+						const current = {
+							path,
+							name: path.split('/').filter(Boolean).pop() || path,
 						}
+						const rest = restoreRemaining()
+						setRestoreRemaining([])
+						await restoreItems([current, ...rest], choice)
 					}}
 				/>
 				<input
