@@ -1,4 +1,4 @@
-const units = ['bytes', 'KiB', 'MiB', 'GiB', 'TiB']
+const units = ['bytes', 'KB', 'MB', 'GB', 'TB']
 
 /**
  *
