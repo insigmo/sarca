@@ -1,8 +1,17 @@
 name: Client artifacts
 
+# Parallel desktop (+ optional mobile) builds for all supported platforms.
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - "client/**"
+      - "crates/sarca-sync/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/client.yml"
   push:
+    branches: ["master", "feature/sync-clients"]
     paths:
       - "client/**"
       - "crates/sarca-sync/**"
@@ -10,45 +19,236 @@ on:
       - "Cargo.lock"
       - ".github/workflows/client.yml"
 
+concurrency:
+  group: client-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Workspace root target so artifacts land in a predictable place.
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target
+
 jobs:
   sync-crate:
+    name: sarca-sync tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: sync-crate
       - run: cargo test -p sarca-sync
 
-  linux-amd64:
-    runs-on: ubuntu-22.04
+  desktop:
+    name: ${{ matrix.name }}
     needs: sync-crate
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-amd64
+            os: ubuntu-22.04
+            rust_target: x86_64-unknown-linux-gnu
+            bundles: "deb,appimage"
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            rust_target: aarch64-unknown-linux-gnu
+            bundles: "deb,appimage"
+          - name: windows-amd64
+            os: windows-latest
+            rust_target: x86_64-pc-windows-msvc
+            bundles: "nsis,msi"
+          - name: windows-arm64
+            os: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+            bundles: "nsis"
+          - name: macos-arm64
+            os: macos-14
+            rust_target: aarch64-apple-darwin
+            bundles: "app,dmg"
+
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install WebKit/GTK
+
+      - name: Install Linux deps (WebKit/GTK)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: client-${{ matrix.name }}
+
       - uses: pnpm/action-setup@v4
         with:
           version: 9
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
-      - name: Build
+
+      - name: Install frontend deps
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Tauri client
+        working-directory: client
+        env:
+          # Unsigned macOS builds are fine for CI artifacts.
+          TAURI_SIGNING_PRIVATE_KEY: ""
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        run: >
+          pnpm tauri build
+          --target ${{ matrix.rust_target }}
+          --bundles ${{ matrix.bundles }}
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarca-client-${{ matrix.name }}
+          path: |
+            target/${{ matrix.rust_target }}/release/bundle/**
+            target/${{ matrix.rust_target }}/release/sarca-client
+            target/${{ matrix.rust_target }}/release/sarca-client.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  android:
+    name: android-arm64
+    needs: sync-crate
+    runs-on: ubuntu-22.04
+    # Mobile project is generated in CI until gen/android is checked in.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK / SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: client-android
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Init + build Android
+        working-directory: client
+        env:
+          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: |
+          set -euo pipefail
+          if [ ! -d src-tauri/gen/android ]; then
+            pnpm exec tauri android init <<<'y'
+          fi
+          pnpm tauri android build --apk --target aarch64
+
+      - name: Upload APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarca-client-android-arm64
+          path: |
+            client/src-tauri/gen/android/**/apk/**/*.apk
+            target/**/*.apk
+          if-no-files-found: warn
+          retention-days: 14
+
+  ios:
+    name: ios-arm64
+    needs: sync-crate
+    runs-on: macos-14
+    # Needs Apple signing for device IPA; CI builds what Xcode allows unsigned.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: client-ios
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Init + build iOS (simulator)
         working-directory: client
         run: |
-          pnpm install
-          pnpm tauri build
-        continue-on-error: true
-      - uses: actions/upload-artifact@v4
-        if: success()
-        with:
-          name: sarca-linux-amd64
-          path: client/src-tauri/target/release/bundle/**
+          set -euo pipefail
+          if [ ! -d src-tauri/gen/apple ]; then
+            pnpm exec tauri ios init <<<'y'
+          fi
+          # Simulator build avoids App Store signing secrets.
+          pnpm tauri ios build --target aarch64-sim --no-sign || \
+            pnpm tauri ios build --target aarch64 --no-sign
 
-  # Windows / macOS / ARM / mobile: run on matching runners via workflow_dispatch later.
-  # macOS: aarch64-apple-darwin only (no Intel).
-  # Android/iOS: require SDK/Xcode + `pnpm tauri android|ios init`.
+      - name: Upload iOS artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sarca-client-ios-arm64
+          path: |
+            client/src-tauri/gen/apple/**/*.app
+            client/src-tauri/gen/apple/**/*.ipa
+            target/**/*.app
+            target/**/*.ipa
+          if-no-files-found: warn
+          retention-days: 14
