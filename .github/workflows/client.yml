@@ -1,0 +1,54 @@
+name: Client artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "client/**"
+      - "crates/sarca-sync/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/client.yml"
+
+jobs:
+  sync-crate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p sarca-sync
+
+  linux-amd64:
+    runs-on: ubuntu-22.04
+    needs: sync-crate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install WebKit/GTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - name: Build
+        working-directory: client
+        run: |
+          pnpm install
+          pnpm tauri build
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: sarca-linux-amd64
+          path: client/src-tauri/target/release/bundle/**
+
+  # Windows / macOS / ARM / mobile: run on matching runners via workflow_dispatch later.
+  # macOS: aarch64-apple-darwin only (no Intel).
+  # Android/iOS: require SDK/Xcode + `pnpm tauri android|ios init`.

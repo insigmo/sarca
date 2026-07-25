@@ -1308,6 +1308,30 @@ const copyFile = async (storage_id, path, destination_folder, on_conflict) => {
 }
 
 /////////////////////////////////////////////////////////////
+////  SYNC
+/////////////////////////////////////////////////////////////
+
+const getSyncChangelog = async (storage_id, cursor = 0, limit = 500) => {
+	const q = new URLSearchParams({
+		cursor: String(cursor),
+		limit: String(limit),
+	})
+	return await apiRequest(
+		`/storages/${storage_id}/sync/changelog?${q}`,
+		'get',
+		getAuthToken(),
+	)
+}
+
+const getSyncSnapshot = async (storage_id) => {
+	return await apiRequest(
+		`/storages/${storage_id}/sync/snapshot`,
+		'get',
+		getAuthToken(),
+	)
+}
+
+/////////////////////////////////////////////////////////////
 ////  API
 /////////////////////////////////////////////////////////////
 
@@ -1373,6 +1397,10 @@ const API = {
 		rename,
 		moveFile,
 		copyFile,
+	},
+	sync: {
+		getSyncChangelog,
+		getSyncSnapshot,
 	},
 	shares: {
 		createShare,

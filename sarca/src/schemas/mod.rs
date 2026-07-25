@@ -8,4 +8,5 @@ pub mod setup;
 pub mod shares;
 pub mod storage_workers;
 pub mod storages;
+pub mod sync;
 pub mod users;
