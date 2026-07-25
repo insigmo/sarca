@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal } from 'solid-js'
+import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
 import Chip from '@suid/material/Chip'
 import CircularProgress from '@suid/material/CircularProgress'
 import IconButton from '@suid/material/IconButton'
@@ -17,20 +17,29 @@ const formatExpiry = (iso) => {
 		: `Expires ${date.toLocaleString()}`
 }
 
+/** Active shares only (API may still return soft-revoked rows on older servers). */
+const activeShares = (list) =>
+	(Array.isArray(list) ? list : []).filter((link) => !link.revoked_at)
+
 const SharedLinksPanel = (props) => {
 	const { addAlert } = alertStore
 	const [links, setLinks] = createSignal([])
 	const [loading, setLoading] = createSignal(false)
 	const [revokingId, setRevokingId] = createSignal(null)
+	let loadGen = 0
 
 	const load = async () => {
+		const gen = ++loadGen
 		setLoading(true)
 		try {
-			setLinks(await API.shares.listShares(props.storageId))
+			const data = await API.shares.listShares(props.storageId)
+			if (gen !== loadGen) return
+			setLinks(activeShares(data))
 		} catch {
+			if (gen !== loadGen) return
 			setLinks([])
 		} finally {
-			setLoading(false)
+			if (gen === loadGen) setLoading(false)
 		}
 	}
 
@@ -38,6 +47,10 @@ const SharedLinksPanel = (props) => {
 		if (!props.active) return
 		props.storageId
 		load()
+	})
+
+	onCleanup(() => {
+		loadGen += 1
 	})
 
 	const copyUrl = async (link) => {
@@ -50,12 +63,19 @@ const SharedLinksPanel = (props) => {
 		}
 	}
 
-	const revoke = async (id) => {
+	const revoke = async (link) => {
+		const id = link.id
+		if (revokingId()) return
 		setRevokingId(id)
 		try {
 			await API.shares.revokeShare(props.storageId, id)
 			addAlert('Share link revoked', 'success')
-			await load()
+			// Drop immediately; bump gen so an in-flight list cannot restore it.
+			loadGen += 1
+			setLinks((prev) =>
+				prev.filter((item) => String(item.id) !== String(id)),
+			)
+			setLoading(false)
 		} catch {
 			/* API helper reports the failure. */
 		} finally {
@@ -95,7 +115,7 @@ const SharedLinksPanel = (props) => {
 								<IconButton
 									aria-label="Revoke link"
 									disabled={revokingId() === link.id}
-									onClick={() => revoke(link.id)}
+									onClick={() => revoke(link)}
 								>
 									<DeleteOutlineIcon fontSize="small" />
 								</IconButton>
