@@ -6,7 +6,6 @@ import SettingsModal from '../components/SettingsModal'
 import StorageSettingsModal from '../components/StorageSettingsModal'
 import EmailVerifyBanner from '../components/EmailVerifyBanner'
 import Box from '@suid/material/Box'
-import Container from '@suid/material/Container'
 import CssBaseline from '@suid/material/CssBaseline'
 import Toolbar from '@suid/material/Toolbar'
 
@@ -24,7 +23,7 @@ const BasicLayout = () => {
 		<>
 			<CssBaseline />
 			<Header />
-			<Box>
+			<Box class="app-shell-root">
 				<Toolbar
 					class="app-shell-toolbar-spacer"
 					sx={{
@@ -34,22 +33,13 @@ const BasicLayout = () => {
 					}}
 				/>
 
-				<Box
-					sx={{
-						minHeight: {
-							xs: 'calc(100dvh - 56px - env(safe-area-inset-top, 0px))',
-							sm: 'calc(100vh - 64px)',
-						},
-					}}
-				>
-					<Container
-						maxWidth="lg"
-						class="app-shell-main"
-						sx={{ pt: { xs: 1.5, sm: 2 }, pb: 5 }}
-					>
+				<Box class="app-shell-stage">
+					<div class="app-shell-banner">
 						<EmailVerifyBanner />
+					</div>
+					<div class="app-shell-outlet app-shell-main">
 						<Outlet />
-					</Container>
+					</div>
 				</Box>
 			</Box>
 
