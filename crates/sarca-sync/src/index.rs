@@ -41,7 +41,9 @@ impl LocalIndex {
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        self.conn.lock().map_err(|_| anyhow::anyhow!("sync index mutex poisoned"))
+        self.conn
+            .lock()
+            .map_err(|_| anyhow::anyhow!("sync index mutex poisoned"))
     }
 
     fn migrate(&self) -> Result<()> {

@@ -10,10 +10,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::{
-    common::{
-        jwt_manager::AuthUser,
-        routing::app_state::AppState,
-    },
+    common::{jwt_manager::AuthUser, routing::app_state::AppState},
     schemas::sync::ChangelogQuery,
     services::sync::SyncService,
 };
@@ -33,7 +30,8 @@ impl SyncRouter {
         Extension(user): Extension<AuthUser>,
         Path(storage_id): Path<Uuid>,
         Query(query): Query<ChangelogQuery>,
-    ) -> Result<Json<crate::schemas::sync::ChangelogResponse>, (axum::http::StatusCode, String)> {
+    ) -> Result<Json<crate::schemas::sync::ChangelogResponse>, (axum::http::StatusCode, String)>
+    {
         let resp = SyncService::new(&state.db).changelog(storage_id, &user, query).await?;
         Ok(Json(resp))
     }
@@ -42,7 +40,8 @@ impl SyncRouter {
         State(state): State<Arc<AppState>>,
         Extension(user): Extension<AuthUser>,
         Path(storage_id): Path<Uuid>,
-    ) -> Result<Json<crate::schemas::sync::SnapshotResponse>, (axum::http::StatusCode, String)> {
+    ) -> Result<Json<crate::schemas::sync::SnapshotResponse>, (axum::http::StatusCode, String)>
+    {
         let resp = SyncService::new(&state.db).snapshot(storage_id, &user).await?;
         Ok(Json(resp))
     }
