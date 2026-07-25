@@ -192,15 +192,28 @@ jobs:
           fi
           pnpm tauri android build --apk --target aarch64 --ci
 
+      - name: Package APK
+        if: success()
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          shopt -s nullglob globstar
+          apk=""
+          for f in client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk target/**/*.apk; do
+            [[ -f "$f" ]] || continue
+            apk="$f"
+            [[ "$f" == *release*.apk && "$f" != *unsigned* ]] && break
+          done
+          test -n "$apk"
+          cp -a "$apk" dist/sarca_client_android_arm64.apk
+
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: sarca-client-android-arm64
-          path: |
-            client/src-tauri/gen/android/**/apk/**/*.apk
-            target/**/*.apk
-          if-no-files-found: warn
+          path: dist/sarca_client_android_arm64.apk
+          if-no-files-found: error
           retention-days: 14
 
   ios:
@@ -240,22 +253,37 @@ jobs:
           CI: true
         run: |
           set -euo pipefail
-          pnpm tauri ios --help
           if [ ! -d src-tauri/gen/apple ]; then
             pnpm tauri ios init --ci
           fi
           # Simulator build — no Apple signing secrets required.
           pnpm tauri ios build --target aarch64-sim --ci
 
+      - name: Package iOS artifact
+        if: success()
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          shopt -s nullglob globstar
+          ipas=(client/src-tauri/gen/apple/**/*.ipa target/**/*.ipa)
+          if ((${#ipas[@]})) && [[ -f "${ipas[0]}" ]]; then
+            cp -a "${ipas[0]}" dist/sarca_client_ios_arm64.ipa
+          else
+            app=""
+            for f in client/src-tauri/gen/apple/**/*.app target/**/*.app; do
+              [[ -d "$f" ]] || continue
+              app="$f"
+              break
+            done
+            test -n "$app"
+            ditto -c -k --sequesterRsrc --keepParent "$app" dist/sarca_client_ios_arm64-simulator.zip
+          fi
+
       - name: Upload iOS artifacts
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: sarca-client-ios-arm64
-          path: |
-            client/src-tauri/gen/apple/**/*.app
-            client/src-tauri/gen/apple/**/*.ipa
-            target/**/*.app
-            target/**/*.ipa
+          path: dist/sarca_client_ios_arm64*
           if-no-files-found: warn
           retention-days: 14

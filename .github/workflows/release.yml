@@ -405,8 +405,262 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Android APK (sideload). Optional keystore secrets sign a release APK;
+  # without them Tauri still produces an installable APK for testing.
+  build-client-android:
+    needs: [version]
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CI: true
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK / SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: release-client-android
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Android APK
+        working-directory: client
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ ! -d src-tauri/gen/android ]; then
+            pnpm tauri android init --ci --skip-targets-install
+          fi
+          if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
+            KS_PATH="${GITHUB_WORKSPACE}/client/src-tauri/release.keystore"
+            echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${KS_PATH}"
+            {
+              echo "storePassword=${ANDROID_KEYSTORE_PASSWORD}"
+              echo "keyPassword=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+              echo "keyAlias=${ANDROID_KEY_ALIAS:-sarca}"
+              echo "storeFile=${KS_PATH}"
+            } > src-tauri/gen/android/keystore.properties
+            echo "Using ANDROID_KEYSTORE_* secrets for APK signing."
+          else
+            echo "No ANDROID_KEYSTORE_* secrets — default/debug signing."
+          fi
+          pnpm tauri android build --apk --target aarch64 --ci
+
+      - name: Package APK for release
+        env:
+          ASSET: sarca_client_android_arm64
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          shopt -s nullglob globstar
+          candidates=(
+            client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            target/**/*.apk
+          )
+          apk=""
+          for f in "${candidates[@]}"; do
+            [[ -f "$f" ]] || continue
+            # Prefer release over debug when both exist.
+            if [[ "$f" == *release* ]] || [[ -z "$apk" ]]; then
+              apk="$f"
+            fi
+            if [[ "$f" == *release*.apk && "$f" != *unsigned* ]]; then
+              apk="$f"
+              break
+            fi
+          done
+          if [[ -z "$apk" ]]; then
+            echo "No APK produced" >&2
+            find client/src-tauri/gen/android -name '*.apk' 2>/dev/null | head -50 || true
+            find target -name '*.apk' 2>/dev/null | head -50 || true
+            exit 1
+          fi
+          cp -a "$apk" "dist/${ASSET}.apk"
+          echo "Packed ${ASSET}.apk from ${apk}"
+          cd dist
+          sha256sum "${ASSET}.apk" > "${ASSET}.apk.sha256"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: sarca_client_android_arm64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # iOS: signed IPA when Apple secrets are configured; otherwise simulator .app zip.
+  build-client-ios:
+    needs: [version]
+    runs-on: macos-14
+    continue-on-error: true
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CI: true
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: release-client-ios
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - name: Install frontend deps
+        working-directory: client
+        run: pnpm install --frozen-lockfile
+
+      - name: Import Apple signing material (optional)
+        id: signing
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${APPLE_CERTIFICATE_BASE64:-}" ]]; then
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "No Apple certificate secrets — building iOS Simulator artifact only."
+            exit 0
+          fi
+          CERT_PATH="${RUNNER_TEMP}/sarca-ios.p12"
+          echo "${APPLE_CERTIFICATE_BASE64}" | base64 -d > "${CERT_PATH}"
+          KEYCHAIN="${RUNNER_TEMP}/sarca-ios.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          security import "${CERT_PATH}" -P "${APPLE_CERTIFICATE_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN}"
+          security list-keychain -d user -s "${KEYCHAIN}" $(security list-keychain -d user | tr -d '"')
+          security set-key-partition-list -S apple-tool:,apple: -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build iOS
+        working-directory: client
+        env:
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          set -euo pipefail
+          if [ ! -d src-tauri/gen/apple ]; then
+            pnpm tauri ios init --ci
+          fi
+          if [[ "${SIGNED}" == "true" ]]; then
+            pnpm tauri ios build --target aarch64 --ci
+          else
+            pnpm tauri ios build --target aarch64-sim --ci
+          fi
+
+      - name: Package iOS for release
+        env:
+          ASSET: sarca_client_ios_arm64
+          SIGNED: ${{ steps.signing.outputs.signed }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          shopt -s nullglob globstar
+
+          ipas=(client/src-tauri/gen/apple/**/*.ipa target/**/*.ipa)
+          if ((${#ipas[@]})) && [[ -f "${ipas[0]}" ]]; then
+            cp -a "${ipas[0]}" "dist/${ASSET}.ipa"
+            echo "Packed IPA from ${ipas[0]}"
+          else
+            apps=(client/src-tauri/gen/apple/**/*.app target/**/*.app)
+            app=""
+            for f in "${apps[@]}"; do
+              [[ -d "$f" ]] || continue
+              app="$f"
+              break
+            done
+            if [[ -z "$app" ]]; then
+              echo "No IPA or .app produced" >&2
+              find client/src-tauri/gen/apple -maxdepth 6 \( -name '*.ipa' -o -name '*.app' \) 2>/dev/null | head -50 || true
+              exit 1
+            fi
+            if [[ "${SIGNED}" == "true" ]]; then
+              ditto -c -k --sequesterRsrc --keepParent "$app" "dist/${ASSET}-app.zip"
+              echo "No .ipa export; packed signed .app zip from ${app}"
+            else
+              ditto -c -k --sequesterRsrc --keepParent "$app" "dist/${ASSET}-simulator.zip"
+              echo "Packed simulator app from ${app}"
+            fi
+          fi
+
+          cd dist
+          for f in *; do
+            [ -f "$f" ] || continue
+            shasum -a 256 "$f" > "${f}.sha256"
+          done
+          test "$(find . -maxdepth 1 -type f ! -name '*.sha256' | wc -l)" -ge 1
+
+      - uses: actions/upload-artifact@v6
+        if: success()
+        with:
+          name: sarca_client_ios_arm64
+          path: dist/*
+          if-no-files-found: warn
+          retention-days: 1
+
   release:
-    needs: [version, build, build-client]
+    needs: [version, build, build-client, build-client-android, build-client-ios]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v7
@@ -432,6 +686,10 @@ jobs:
           echo "client_platforms=${clients}"
           test "${server}" -ge 4
           test "${clients}" -ge 5
+          test -f artifacts/sarca_client_android_arm64.apk
+          if ! find artifacts -type f \( -name 'sarca_client_ios_arm64.ipa' -o -name 'sarca_client_ios_arm64-simulator.zip' -o -name 'sarca_client_ios_arm64-app.zip' \) | grep -q .; then
+            echo "warning: no iOS client artifact (build may have failed without Apple secrets)" >&2
+          fi
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -460,8 +718,14 @@ jobs:
             | `sarca_client_windows_amd64-setup.exe` | Windows x86_64 |
             | `sarca_client_windows_arm64-setup.exe` | Windows ARM64 |
             | `sarca_client_macos_arm64.dmg` | macOS Apple Silicon |
+            | `sarca_client_android_arm64.apk` | Android arm64 (sideload) |
+            | `sarca_client_ios_arm64.ipa` | iOS device (when Apple signing secrets are set) |
+            | `sarca_client_ios_arm64-simulator.zip` | iOS Simulator fallback |
 
             Portable binaries are also attached where available (`sarca_client_linux_*`, `sarca_client_windows_*.exe`).
+
+            **Android:** install the APK (allow unknown sources). For Play Store signing, set `ANDROID_KEYSTORE_*` repo secrets.
+            **iOS device IPA:** requires `APPLE_CERTIFICATE_BASE64` + `APPLE_CERTIFICATE_PASSWORD` (and provisioning / API key as needed). Without them CI attaches a Simulator build only.
 
             **Install server (Linux / macOS)**
             ```bash
