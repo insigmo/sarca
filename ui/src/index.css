@@ -630,6 +630,11 @@ a.default-link:hover {
 	color: var(--sarca-teal-deep);
 }
 
+[data-theme='dark'] .files-sidebar__item--active {
+	background: color-mix(in srgb, var(--sarca-teal) 24%, transparent);
+	color: var(--sarca-ink);
+}
+
 .files-sidebar-backdrop,
 .files-sidebar--drawer {
 	display: none;
