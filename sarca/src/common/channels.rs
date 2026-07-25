@@ -92,6 +92,27 @@ impl UploadProgressEvent {
     }
 }
 
+/// Push an upload progress event without ever blocking the Storage Manager.
+///
+/// A full channel means the HTTP client is slow/stuck draining NDJSON — drop the
+/// event rather than stall Telegram (blocking here deadlocks the serial SM queue
+/// and holds the per-token send permit forever). A closed channel means the
+/// client canceled; return an error so the upload aborts promptly.
+pub fn emit_upload_progress(
+    tx: &mpsc::Sender<UploadProgressEvent>,
+    ev: UploadProgressEvent,
+) -> SarcaResult<()> {
+    if tx.is_closed() {
+        return Err(crate::errors::SarcaError::TelegramAPIError("Upload canceled".to_owned()));
+    }
+    match tx.try_send(ev) {
+        Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => Ok(()),
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(crate::errors::SarcaError::TelegramAPIError("Upload canceled".to_owned()))
+        },
+    }
+}
+
 //////////////////////////////////////
 //      Storage manager schemas
 //////////////////////////////////////

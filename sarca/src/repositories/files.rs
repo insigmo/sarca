@@ -862,6 +862,10 @@ impl<'d> FilesRepository<'d> {
     }
 
     /// Clear `deleted_at` for a trashed path (file) or folder prefix.
+    ///
+    /// Skips trashed rows whose path is already occupied by a live row (e.g. a
+    /// parent folder marker recreated earlier) so restore cannot hit the alive
+    /// unique index.
     pub async fn restore(&self, path: &str, storage_id: Uuid) -> SarcaResult<()> {
         let is_folder = path.ends_with('/');
         let folder_prefix = if is_folder {
@@ -890,9 +894,17 @@ impl<'d> FilesRepository<'d> {
         let affected = if folder_prefix.is_empty() {
             sqlx::query(&format!(
                 "
-                UPDATE {FILES_TABLE}
+                UPDATE {FILES_TABLE} AS t
                 SET deleted_at = NULL
-                WHERE storage_id = $1 AND deleted_at IS NOT NULL AND path = $2
+                WHERE t.storage_id = $1
+                  AND t.deleted_at IS NOT NULL
+                  AND t.path = $2
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {FILES_TABLE} AS live
+                      WHERE live.storage_id = t.storage_id
+                        AND live.path = t.path
+                        AND live.deleted_at IS NULL
+                  )
                 "
             ))
             .bind(storage_id)
@@ -900,18 +912,31 @@ impl<'d> FilesRepository<'d> {
             .execute(self.db)
             .await
             .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
+                match e {
+                    sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+                        SarcaError::TrashPathConflict
+                    },
+                    _ => {
+                        tracing::error!("{e}");
+                        SarcaError::Unknown
+                    },
+                }
             })?
             .rows_affected()
         } else {
             sqlx::query(&format!(
                 "
-                UPDATE {FILES_TABLE}
+                UPDATE {FILES_TABLE} AS t
                 SET deleted_at = NULL
-                WHERE storage_id = $1
-                  AND deleted_at IS NOT NULL
-                  AND (path = $2 OR path LIKE $2 || '%')
+                WHERE t.storage_id = $1
+                  AND t.deleted_at IS NOT NULL
+                  AND (t.path = $2 OR t.path LIKE $2 || '%')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM {FILES_TABLE} AS live
+                      WHERE live.storage_id = t.storage_id
+                        AND live.path = t.path
+                        AND live.deleted_at IS NULL
+                  )
                 "
             ))
             .bind(storage_id)
@@ -919,19 +944,41 @@ impl<'d> FilesRepository<'d> {
             .execute(self.db)
             .await
             .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
+                match e {
+                    sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+                        SarcaError::TrashPathConflict
+                    },
+                    _ => {
+                        tracing::error!("{e}");
+                        SarcaError::Unknown
+                    },
+                }
             })?
             .rows_affected()
         };
 
         if affected == 0 {
+            // Trashed rows may remain but be blocked by live twins at the same path.
+            let blocked = self.list_trashed_ids(storage_id, path).await?;
+            if !blocked.is_empty() {
+                return Err(SarcaError::TrashPathConflict);
+            }
+            // Idempotent: already fully restored.
+            if self.live_path_exists(path, storage_id).await?
+                || (!path.ends_with('/')
+                    && self.live_path_exists(&format!("{path}/"), storage_id).await?)
+            {
+                return Ok(());
+            }
             return Err(SarcaError::DoesNotExist("file".to_string()));
         }
         Ok(())
     }
 
     /// Ensure live parent folder markers exist for `path` (file or folder).
+    ///
+    /// For each missing segment, prefer undeleting an existing trashed folder
+    /// marker at that path; only insert a new empty folder when none exists.
     pub async fn ensure_live_parent_folders(
         &self,
         path: &str,
@@ -954,7 +1001,7 @@ impl<'d> FilesRepository<'d> {
             }
             acc.push_str(part);
             let folder_path = format!("{acc}/");
-            let exists: (bool,) = sqlx::query_as(&format!(
+            let live_exists: (bool,) = sqlx::query_as(&format!(
                 "
                 SELECT EXISTS(
                     SELECT 1 FROM {FILES_TABLE}
@@ -971,25 +1018,64 @@ impl<'d> FilesRepository<'d> {
                 SarcaError::Unknown
             })?;
 
-            if !exists.0 {
-                let id = Uuid::new_v4();
-                sqlx::query(&format!(
-                    "
-                    INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded)
-                    VALUES ($1, $2, 0, $3, true)
-                    ON CONFLICT (path, storage_id) WHERE deleted_at IS NULL DO NOTHING
-                    "
-                ))
-                .bind(id)
-                .bind(&folder_path)
-                .bind(storage_id)
-                .execute(self.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("{e}");
-                    SarcaError::Unknown
-                })?;
+            if live_exists.0 {
+                continue;
             }
+
+            // Prefer restoring a trashed folder marker (exact path only — do not
+            // pull nested trash contents back with the parent).
+            let restored = sqlx::query(&format!(
+                "
+                UPDATE {FILES_TABLE}
+                SET deleted_at = NULL
+                WHERE id = (
+                    SELECT id FROM {FILES_TABLE}
+                    WHERE storage_id = $1
+                      AND path = $2
+                      AND deleted_at IS NOT NULL
+                    ORDER BY deleted_at DESC
+                    LIMIT 1
+                )
+                "
+            ))
+            .bind(storage_id)
+            .bind(&folder_path)
+            .execute(self.db)
+            .await
+            .map_err(|e| {
+                match e {
+                    sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+                        SarcaError::TrashPathConflict
+                    },
+                    _ => {
+                        tracing::error!("{e}");
+                        SarcaError::Unknown
+                    },
+                }
+            })?
+            .rows_affected();
+
+            if restored > 0 {
+                continue;
+            }
+
+            let id = Uuid::new_v4();
+            sqlx::query(&format!(
+                "
+                INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded)
+                VALUES ($1, $2, 0, $3, true)
+                ON CONFLICT (path, storage_id) WHERE deleted_at IS NULL DO NOTHING
+                "
+            ))
+            .bind(id)
+            .bind(&folder_path)
+            .bind(storage_id)
+            .execute(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
         }
         Ok(())
     }
