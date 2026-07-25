@@ -16,8 +16,11 @@ TELEGRAM_API_BASE_URL=http://telegram-bot-api:8081
 # Requests per minute per bot (scheduler enforces this via DB)
 TELEGRAM_RATE_LIMIT=18
 
-# Chunk size (MB). For local Bot API you can go up to ~1950.
+# Chunk size (MB). For local Bot API you can go up to ~1950 per document.
+# Files larger than this are split into multiple Telegram documents.
 TELEGRAM_CHUNK_SIZE_MB=1950
+# Videos use smaller chunks (default 48) so Range playback can start sooner.
+# TELEGRAM_VIDEO_CHUNK_SIZE_MB=48
 
 # Where Sarca spools uploads before sending to Telegram
 WORK_DIR=/work

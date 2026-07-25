@@ -12,6 +12,7 @@ use crate::{
             ClientMessage,
             ClientSender,
             StorageManagerData,
+            StorageManagerMessage,
             UploadFileData,
             UploadProgressEvent,
         },
@@ -28,6 +29,7 @@ use crate::{
         access::AccessRepository,
         chunk_replicas::ChunkReplicasRepository,
         files::FilesRepository,
+        share_links::ShareLinksRepository,
         storage_workers::StorageWorkersRepository,
     },
     schemas::files::InFolderSchema,
@@ -135,6 +137,13 @@ impl<'d> FilesService<'d> {
                 SarcaError::Unknown
             })?;
 
+        // Signal spool+DB ready before queuing Telegram so the client can pipeline
+        // the next file's client→Sarca transfer. Storage Manager still serializes
+        // Telegram uploads one at a time.
+        if let Some(ref tx) = progress {
+            let _ = tx.send(UploadProgressEvent::spooled(file_size.max(0) as u64)).await;
+        }
+
         let message = ClientMessage {
             data: ClientData::UploadFile(UploadFileData {
                 file_id: file.id,
@@ -150,7 +159,17 @@ impl<'d> FilesService<'d> {
         let _ = self.tx.send(message).await;
 
         // 3. waiting for a storage manager result
-        let StorageManagerData::UploadFile(message_back) = resp_rx.await.unwrap().data;
+        // Prefer a clear error over panicking if the manager drops the oneshot
+        // (e.g. process shutdown while this upload is queued).
+        let message_back = match resp_rx.await {
+            Ok(StorageManagerMessage {
+                data: StorageManagerData::UploadFile(r),
+            }) => r,
+            Err(_) => {
+                tracing::error!("storage manager dropped upload response for {}", file.id);
+                Err(SarcaError::Unknown)
+            },
+        };
         if let Err(e) = message_back.and({
             tracing::debug!("file loaded successfully");
 
@@ -294,7 +313,17 @@ impl<'d> FilesService<'d> {
         }
 
         // 2. soft-delete only (Telegram untouched)
-        self.repo.delete(path, storage_id).await
+        let deleted_target = self.repo.delete(path, storage_id).await?;
+
+        // 3. Shares are path-keyed — drop links that targeted this file/folder.
+        let shares = ShareLinksRepository::new(self.db);
+        if let Err(e) = shares.delete_for_target(storage_id, &deleted_target).await {
+            tracing::warn!(
+                "[SHARES] failed to delete links for trashed path {deleted_target}: {e}"
+            );
+        }
+
+        Ok(())
     }
 
     pub async fn rename(
@@ -313,7 +342,9 @@ impl<'d> FilesService<'d> {
             return Err(SarcaError::InvalidPath);
         }
 
-        self.repo.update_path(old_path, new_path, storage_id).await
+        self.repo.update_path(old_path, new_path, storage_id).await?;
+        self.rewrite_share_paths(storage_id, old_path, new_path).await;
+        Ok(())
     }
 
     pub async fn move_to(
@@ -354,7 +385,16 @@ impl<'d> FilesService<'d> {
         new_path = self.resolve_dest_conflict(storage_id, &source, new_path, on_conflict).await?;
 
         self.repo.ensure_live_parent_folders(&new_path, storage_id).await?;
-        self.repo.update_path(&source, &new_path, storage_id).await
+        self.repo.update_path(&source, &new_path, storage_id).await?;
+        self.rewrite_share_paths(storage_id, &source, &new_path).await;
+        Ok(())
+    }
+
+    async fn rewrite_share_paths(&self, storage_id: Uuid, old_path: &str, new_path: &str) {
+        let shares = ShareLinksRepository::new(self.db);
+        if let Err(e) = shares.rewrite_paths(storage_id, old_path, new_path).await {
+            tracing::warn!("[SHARES] failed to rewrite links {old_path} → {new_path}: {e}");
+        }
     }
 
     pub async fn copy_to(

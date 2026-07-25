@@ -148,17 +148,23 @@ impl FilesRouter {
             (StatusCode::INTERNAL_SERVER_ERROR, "Can't create temp file".to_owned())
         })?;
 
+        let cleanup_tmp = |path: &Path| {
+            let path = path.to_path_buf();
+            tokio::spawn(async move {
+                let _ = tokio::fs::remove_file(&path).await;
+            });
+        };
+
         let (mut filename_field, mut filename_from_file, mut parent_path, mut file_size) =
             (None::<String>, None::<String>, None::<String>, 0i64);
         let mut file_content_type = None::<String>;
         let mut source_mtime = None::<chrono::DateTime<chrono::Utc>>;
         let mut source_created_at = None::<chrono::DateTime<chrono::Utc>>;
 
-        while let Some(mut field) = multipart
-            .next_field()
-            .await
-            .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid multipart".to_owned()))?
-        {
+        while let Some(mut field) = multipart.next_field().await.map_err(|_| {
+            cleanup_tmp(&tmp_path);
+            (StatusCode::BAD_REQUEST, "Invalid multipart".to_owned())
+        })? {
             let name = field.name().unwrap_or("").to_owned();
 
             match name.as_str() {
@@ -170,68 +176,90 @@ impl FilesRouter {
                     if let Some(ct) = field.content_type() {
                         file_content_type = Some(ct.to_string());
                     }
-                    while let Some(chunk) = field
-                        .chunk()
-                        .await
-                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid file stream".to_owned()))?
-                    {
+                    while let Some(chunk) = field.chunk().await.map_err(|_| {
+                        cleanup_tmp(&tmp_path);
+                        (StatusCode::BAD_REQUEST, "Invalid file stream".to_owned())
+                    })? {
                         file_size += chunk.len() as i64;
-                        tmp_file.write_all(&chunk).await.map_err(|_| {
-                            (StatusCode::INTERNAL_SERVER_ERROR, "Can't write temp file".to_owned())
+                        tmp_file.write_all(&chunk).await.map_err(|e| {
+                            cleanup_tmp(&tmp_path);
+                            let disk_full = e.raw_os_error() == Some(28) /* ENOSPC */
+                                || e.to_string().to_ascii_lowercase().contains("no space");
+                            if disk_full {
+                                (
+                                    StatusCode::INSUFFICIENT_STORAGE,
+                                    "Disk full while saving upload — free space under WORK_DIR \
+                                     and try again"
+                                        .to_owned(),
+                                )
+                            } else {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "Can't write temp file".to_owned(),
+                                )
+                            }
                         })?;
                     }
                 },
                 "filename" => {
-                    let raw_name = field
-                        .text()
-                        .await
-                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid filename".to_owned()))?;
+                    let raw_name = field.text().await.map_err(|_| {
+                        cleanup_tmp(&tmp_path);
+                        (StatusCode::BAD_REQUEST, "Invalid filename".to_owned())
+                    })?;
                     let decoded = percent_decode_str(&raw_name).decode_utf8_lossy();
                     if !decoded.trim().is_empty() {
                         filename_field = Some(decoded.into_owned());
                     }
                 },
                 "path" => {
-                    let raw_path = field
-                        .text()
-                        .await
-                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid path".to_owned()))?;
+                    let raw_path = field.text().await.map_err(|_| {
+                        cleanup_tmp(&tmp_path);
+                        (StatusCode::BAD_REQUEST, "Invalid path".to_owned())
+                    })?;
                     let decoded = percent_decode_str(&raw_path).decode_utf8_lossy();
                     parent_path = Some(decoded.into_owned());
                 },
                 "mtime" => {
-                    let raw = field
-                        .text()
-                        .await
-                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid mtime".to_owned()))?;
+                    let raw = field.text().await.map_err(|_| {
+                        cleanup_tmp(&tmp_path);
+                        (StatusCode::BAD_REQUEST, "Invalid mtime".to_owned())
+                    })?;
                     source_mtime = Self::parse_epoch_millis(&raw);
                 },
                 "created" => {
-                    let raw = field
-                        .text()
-                        .await
-                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid created".to_owned()))?;
+                    let raw = field.text().await.map_err(|_| {
+                        cleanup_tmp(&tmp_path);
+                        (StatusCode::BAD_REQUEST, "Invalid created".to_owned())
+                    })?;
                     source_created_at = Self::parse_epoch_millis(&raw);
                 },
                 _ => (),
             }
         }
 
-        tmp_file
-            .flush()
-            .await
-            .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Can't flush temp file".to_owned()))?;
+        tmp_file.flush().await.map_err(|_| {
+            cleanup_tmp(&tmp_path);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Can't flush temp file".to_owned())
+        })?;
 
-        let parent_path = parent_path
-            .ok_or_else(|| (StatusCode::BAD_REQUEST, "path field is required".to_owned()))?;
+        let Some(parent_path) = parent_path else {
+            cleanup_tmp(&tmp_path);
+            return Err((StatusCode::BAD_REQUEST, "path field is required".to_owned()));
+        };
         let filename =
             filename_field.or(filename_from_file).unwrap_or_else(|| "unnamed".to_owned());
-        let path = Self::construct_path(&parent_path, &filename)?;
+        let path = match Self::construct_path(&parent_path, &filename) {
+            Ok(p) => p,
+            Err(e) => {
+                cleanup_tmp(&tmp_path);
+                return Err(<(StatusCode, String)>::from(e));
+            },
+        };
 
-        Self::service(&state)
-            .ensure_upload_allowed(storage_id, &user)
-            .await
-            .map_err(<(StatusCode, String)>::from)?;
+        if let Err(e) = Self::service(&state).ensure_upload_allowed(storage_id, &user).await {
+            cleanup_tmp(&tmp_path);
+            return Err(<(StatusCode, String)>::from(e));
+        }
 
         // Browser File API exposes lastModified; birthtime is usually unavailable, so
         // fall back to mtime for "created" when the client omitted it.
@@ -281,19 +309,54 @@ impl FilesRouter {
         Ok(StatusCode::CREATED)
     }
 
-    /// Stream NDJSON upload progress (`phase=telegram|done|error`) while Telegram upload runs.
+    /// Stream NDJSON upload progress (`phase=spooled|telegram|waiting|heartbeat|done|error`).
+    ///
+    /// `spooled` is emitted after the multipart is on disk and the DB row exists, before
+    /// Telegram starts — clients may overlap the next file's client→Sarca upload.
+    ///
+    /// Heartbeats are emitted while Telegram is quiet (Storage Manager queue wait or long
+    /// flood sleeps) so reverse proxies / browsers do not idle-timeout the response.
+    ///
+    /// If the client disconnects (`AbortSignal` / tab close), the upload task is aborted so
+    /// unlimited flood-wait retries do not continue in the background.
     fn ndjson_upload_progress_response(
         mut progress_rx: mpsc::Receiver<UploadProgressEvent>,
         upload_task: tokio::task::JoinHandle<SarcaResult<()>>,
     ) -> Response {
+        struct AbortOnDrop(Option<tokio::task::AbortHandle>);
+        impl Drop for AbortOnDrop {
+            fn drop(&mut self) {
+                if let Some(h) = self.0.take() {
+                    h.abort();
+                }
+            }
+        }
+        impl AbortOnDrop {
+            fn disarm(&mut self) {
+                self.0.take();
+            }
+        }
+
+        /// How often to push a keepalive NDJSON line when progress is silent.
+        const HEARTBEAT_SECS: u64 = 15;
+
+        let abort_guard = AbortOnDrop(Some(upload_task.abort_handle()));
         let stream = async_stream::stream! {
+            let mut abort_guard = abort_guard;
             let mut upload_task = upload_task;
             let mut progress_open = true;
+            let mut heartbeat =
+                tokio::time::interval(std::time::Duration::from_secs(HEARTBEAT_SECS));
+            heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Consume the immediate first tick so we don't heartbeat before any real event.
+            heartbeat.tick().await;
             loop {
                 tokio::select! {
                     ev = progress_rx.recv(), if progress_open => {
                         match ev {
                             Some(ev) => {
+                                // Real progress resets the idle heartbeat timer.
+                                heartbeat.reset();
                                 if let Ok(mut line) = serde_json::to_string(&ev) {
                                     line.push('\n');
                                     yield Ok::<Bytes, std::io::Error>(Bytes::from(line));
@@ -302,7 +365,17 @@ impl FilesRouter {
                             None => progress_open = false,
                         }
                     }
+                    _ = heartbeat.tick() => {
+                        // Keep the HTTP response alive during SM queue / flood silence.
+                        if let Ok(mut line) = serde_json::to_string(&UploadProgressEvent::heartbeat())
+                        {
+                            line.push('\n');
+                            yield Ok::<Bytes, std::io::Error>(Bytes::from(line));
+                        }
+                    }
                     joined = &mut upload_task => {
+                        // Task finished on its own — don't abort on stream drop.
+                        abort_guard.disarm();
                         while let Ok(ev) = progress_rx.try_recv() {
                             if let Ok(mut line) = serde_json::to_string(&ev) {
                                 line.push('\n');
@@ -324,9 +397,16 @@ impl FilesRouter {
                                 yield Ok(Bytes::from(line));
                             }
                             Err(e) => {
+                                // JoinError from abort is expected on client cancel; prefer a
+                                // clear canceled message over a panic string.
+                                let message = if e.is_cancelled() {
+                                    "Upload canceled".to_owned()
+                                } else {
+                                    e.to_string()
+                                };
                                 let line = serde_json::json!({
                                     "phase": "error",
-                                    "message": e.to_string(),
+                                    "message": message,
                                 })
                                 .to_string()
                                     + "\n";
@@ -339,12 +419,22 @@ impl FilesRouter {
             }
         };
 
-        (
+        let mut response = (
             StatusCode::CREATED,
             [(header::CONTENT_TYPE, "application/x-ndjson")],
             StreamBody::new(stream),
         )
-            .into_response()
+            .into_response();
+        // Discourage reverse proxies / CDNs from buffering NDJSON progress lines.
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static("no-cache, no-transform"),
+        );
+        response.headers_mut().insert(
+            header::HeaderName::from_static("x-accel-buffering"),
+            header::HeaderValue::from_static("no"),
+        );
+        response
     }
 
     /// Basename only — browsers may put `dir/file.ext` into multipart filename

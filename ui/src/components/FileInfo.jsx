@@ -4,7 +4,6 @@ import Dialog from '@suid/material/Dialog'
 import DialogActions from '@suid/material/DialogActions'
 import DialogContent from '@suid/material/DialogContent'
 import IconButton from '@suid/material/IconButton'
-import CloseIcon from '@suid/icons-material/Close'
 import { For, Show, createEffect, createMemo, createSignal } from 'solid-js'
 
 import API from '../api'
@@ -12,6 +11,7 @@ import { fileExtensionLabel } from '../common/fileLabel'
 import { fileKind } from '../common/fileKind'
 import { convertSize } from '../common/size_converter'
 import FileTypeIcon from './FileTypeIcon'
+import FluentIcon from './FluentIcon'
 
 /**
  * @typedef {Object} FileInfoDialogProps
@@ -212,7 +212,7 @@ const FileInfoDialog = (props) => {
 					onClick={props.onClose}
 					class="file-info-dialog__close"
 				>
-					<CloseIcon fontSize="small" />
+					<FluentIcon name="dismiss" size={18} />
 				</IconButton>
 			</div>
 

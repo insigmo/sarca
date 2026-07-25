@@ -9,11 +9,10 @@ import ListItemIcon from '@suid/material/ListItemIcon'
 import ListItemText from '@suid/material/ListItemText'
 import Typography from '@suid/material/Typography'
 import CircularProgress from '@suid/material/CircularProgress'
-import FolderOutlinedIcon from '@suid/icons-material/FolderOutlined'
-import ArrowUpwardIcon from '@suid/icons-material/ArrowUpward'
 import { For, Show, createEffect, createSignal } from 'solid-js'
 
 import API from '../api'
+import FluentIcon from './FluentIcon'
 
 /**
  * @typedef {Object} FolderPickerDialogProps
@@ -163,7 +162,7 @@ const FolderPickerDialog = (props) => {
 						<Show when={browsePath()}>
 							<ListItemButton onClick={goUp} dense>
 								<ListItemIcon sx={{ minWidth: 36 }}>
-									<ArrowUpwardIcon fontSize="small" />
+									<FluentIcon name="arrowUp" size={20} />
 								</ListItemIcon>
 								<ListItemText primary=".." secondary="Parent folder" />
 							</ListItemButton>
@@ -186,7 +185,7 @@ const FolderPickerDialog = (props) => {
 								{(el) => (
 									<ListItemButton onClick={() => enterFolder(el)}>
 										<ListItemIcon sx={{ minWidth: 36 }}>
-											<FolderOutlinedIcon fontSize="small" />
+											<FluentIcon name="folder" size={20} />
 										</ListItemIcon>
 										<ListItemText primary={el.name} />
 									</ListItemButton>

@@ -1,5 +1,6 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::Path,
     sync::Arc,
     time::Duration,
 };
@@ -106,6 +107,13 @@ async fn main() {
         Err(e) => tracing::warn!("stale upload cleanup failed: {e}"),
     }
 
+    // Leftover *.upload spools cannot belong to a live request after restart.
+    match cleanup_upload_spool(&config.work_dir).await {
+        Ok(0) => {},
+        Ok(n) => tracing::info!("removed {n} leftover upload spool file(s) under WORK_DIR"),
+        Err(e) => tracing::warn!("upload spool cleanup failed: {e}"),
+    }
+
     eprintln!("ensuring superuser…");
     create_superuser(&db, &config).await;
     bootstrap_storage_from_env(&db, &config).await;
@@ -163,4 +171,27 @@ async fn main() {
     let app_state = AppState::new(db, config, tx);
     let server = Server::build_server(workers.into(), Arc::new(app_state));
     server.run(&addr).await;
+}
+
+/// Remove leftover `*.upload` spool files under `WORK_DIR/uploads`.
+/// After a process restart no in-flight multipart can own them.
+async fn cleanup_upload_spool(work_dir: &str) -> std::io::Result<usize> {
+    let dir = Path::new(work_dir).join("uploads");
+    let mut rd = match tokio::fs::read_dir(&dir).await {
+        Ok(rd) => rd,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e),
+    };
+    let mut removed = 0usize;
+    while let Some(ent) = rd.next_entry().await? {
+        let name = ent.file_name();
+        let name = name.to_string_lossy();
+        if name.ends_with(".upload") {
+            match tokio::fs::remove_file(ent.path()).await {
+                Ok(()) => removed += 1,
+                Err(e) => tracing::warn!("failed to remove {}: {e}", ent.path().display()),
+            }
+        }
+    }
+    Ok(removed)
 }
