@@ -1,17 +1,26 @@
-import { useBeforeLeave, useParams } from '@solidjs/router'
-import { Show, createMemo, createSignal, mapArray, onCleanup, onMount } from 'solid-js'
+import { useBeforeLeave, useNavigate, useParams } from '@solidjs/router'
+import {
+	For,
+	Show,
+	createEffect,
+	createMemo,
+	createSignal,
+	mapArray,
+	onCleanup,
+	onMount,
+} from 'solid-js'
 import MenuItem from '@suid/material/MenuItem'
-import ListItemIcon from '@suid/material/ListItemIcon'
-import ListItemText from '@suid/material/ListItemText'
-import UploadFileIcon from '@suid/icons-material/UploadFile'
-import DriveFolderUploadIcon from '@suid/icons-material/DriveFolderUpload'
-import CreateNewFolderIcon from '@suid/icons-material/CreateNewFolder'
-import DeleteOutlineIcon from '@suid/icons-material/DeleteOutline'
-import ArrowBackIcon from '@suid/icons-material/ArrowBack'
 import SortIcon from '@suid/icons-material/Sort'
-import StarIcon from '@suid/icons-material/Star'
-import HistoryIcon from '@suid/icons-material/History'
+import MenuIcon from '@suid/icons-material/Menu'
+import ViewListIcon from '@suid/icons-material/ViewList'
+import GridViewIcon from '@suid/icons-material/GridView'
+import ChevronRightIcon from '@suid/icons-material/ChevronRight'
+import ContentCopyIcon from '@suid/icons-material/ContentCopy'
+import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
+import DeleteIcon from '@suid/icons-material/Delete'
+import CloseIcon from '@suid/icons-material/Close'
 import Button from '@suid/material/Button'
+import IconButton from '@suid/material/IconButton'
 import Stack from '@suid/material/Stack'
 import Typography from '@suid/material/Typography'
 import LinearProgress from '@suid/material/LinearProgress'
@@ -22,13 +31,14 @@ import Divider from '@suid/material/Divider'
 import API from '../../api'
 import { formatUploadBytes } from '../../api/request'
 import FSListItem from '../../components/FSListItem'
-import Menu from '../../components/Menu'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
 import FolderPickerDialog from '../../components/FolderPickerDialog'
 import { alertStore } from '../../components/AlertStack'
 import FileViewer from '../../components/FileViewer'
 import RestoreConflictDialog from '../../components/RestoreConflictDialog'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
+import FilesSidebar from '../../components/FilesSidebar'
+import SharedLinksPanel from '../../components/SharedLinksPanel'
 import { filesChromeStore } from '../../common/filesChrome'
 import { sortFsElements, sortLabel } from '../../common/sortFs'
 
@@ -68,6 +78,109 @@ const itemNormalizedPath = (el) => {
 	return el.path.endsWith('/') ? el.path : `${el.path}/`
 }
 
+const SARCA_DRAG_MIME = 'application/x-sarca-paths'
+
+/** Destination folder path for API (no trailing slash). */
+const folderDestPath = (path) => String(path || '').replace(/\/+$/, '')
+
+/**
+ * @param {string} sourcePath Normalized source (folders end with /)
+ * @param {string} dest Destination folder without trailing /
+ */
+const isBlockedDest = (sourcePath, dest) => {
+	if (!sourcePath.endsWith('/')) return false
+	const d = dest.endsWith('/') ? dest : `${dest}/`
+	return d === sourcePath || d.startsWith(sourcePath)
+}
+
+/**
+ * @param {FileSystemDirectoryEntry} dirEntry
+ * @returns {Promise<FileSystemEntry[]>}
+ */
+const readAllDirectoryEntries = (dirEntry) =>
+	new Promise((resolve, reject) => {
+		const reader = dirEntry.createReader()
+		/** @type {FileSystemEntry[]} */
+		const all = []
+		const readBatch = () => {
+			reader.readEntries((batch) => {
+				if (!batch.length) {
+					resolve(all)
+					return
+				}
+				all.push(...batch)
+				readBatch()
+			}, reject)
+		}
+		readBatch()
+	})
+
+/**
+ * @param {FileSystemEntry} entry
+ * @param {string} prefix
+ * @returns {Promise<{ file: File, relativePath: string }[]>}
+ */
+const collectEntryFiles = async (entry, prefix = '') => {
+	if (entry.isFile) {
+		const file = await new Promise((resolve, reject) => {
+			/** @type {FileSystemFileEntry} */
+			const fileEntry = /** @type {any} */ (entry)
+			fileEntry.file(resolve, reject)
+		})
+		const relativePath = prefix ? `${prefix}${file.name}` : file.name
+		if (shouldSkipUploadEntry(relativePath)) return []
+		return [{ file, relativePath }]
+	}
+	if (!entry.isDirectory) return []
+	const dirPrefix = `${prefix}${entry.name}/`
+	const children = await readAllDirectoryEntries(
+		/** @type {FileSystemDirectoryEntry} */ (/** @type {any} */ (entry)),
+	)
+	/** @type {{ file: File, relativePath: string }[]} */
+	const out = []
+	for (const child of children) {
+		out.push(...(await collectEntryFiles(child, dirPrefix)))
+	}
+	return out
+}
+
+/**
+ * @param {DataTransfer} dt
+ * @returns {Promise<{ file: File, relativePath: string }[]>}
+ */
+const filesFromDataTransfer = async (dt) => {
+	const items = dt.items
+	if (items?.length && typeof items[0].webkitGetAsEntry === 'function') {
+		/** @type {{ file: File, relativePath: string }[]} */
+		const out = []
+		for (let i = 0; i < items.length; i++) {
+			const entry = items[i].webkitGetAsEntry?.()
+			if (!entry) continue
+			out.push(...(await collectEntryFiles(entry)))
+		}
+		if (out.length) return out
+	}
+	return Array.from(dt.files || [])
+		.filter((file) => !shouldSkipUploadEntry(file.name))
+		.map((file) => ({
+			file,
+			relativePath: file.webkitRelativePath || file.name,
+		}))
+}
+
+const VIEW_MODE_KEY = 'sarca.filesViewMode'
+
+/** @returns {'tiles' | 'list'} */
+const readStoredViewMode = () => {
+	try {
+		const v = localStorage.getItem(VIEW_MODE_KEY)
+		if (v === 'list' || v === 'tiles') return v
+	} catch {
+		/* ignore */
+	}
+	return 'tiles'
+}
+
 const Files = () => {
 	const { addAlert } = alertStore
 	const chrome = filesChromeStore
@@ -84,8 +197,9 @@ const Files = () => {
 	 * @type {[import("solid-js").Accessor<import("../../api").FSElement | null>, any]}
 	 */
 	const [viewerFile, setViewerFile] = createSignal(null)
-	/** @type {[import('solid-js').Accessor<'browse'|'trash'|'favorites'|'recent'>, any]} */
+	/** @type {[import('solid-js').Accessor<'browse'|'trash'|'favorites'|'recent'|'shared'>, any]} */
 	const [listMode, setListMode] = createSignal('browse')
+	const [mobileNavOpen, setMobileNavOpen] = createSignal(false)
 	const [trashPath, setTrashPath] = createSignal('')
 	const [emptyTrashOpen, setEmptyTrashOpen] = createSignal(false)
 	const [restoreConflictPath, setRestoreConflictPath] = createSignal(null)
@@ -97,18 +211,37 @@ const Files = () => {
 	/** @type {[import('solid-js').Accessor<'asc'|'desc'>, any]} */
 	const [sortDir, setSortDir] = createSignal('asc')
 	const [sortMenuAnchor, setSortMenuAnchor] = createSignal(null)
+	/** @type {[import('solid-js').Accessor<'tiles'|'list'>, any]} */
+	const [viewMode, setViewMode] = createSignal(readStoredViewMode())
+
+	const setAndPersistViewMode = (mode) => {
+		setViewMode(mode)
+		try {
+			localStorage.setItem(VIEW_MODE_KEY, mode)
+		} catch {
+			/* ignore */
+		}
+	}
 
 	/**
-	 * @type {[import('solid-js').Accessor<null | { mode: 'copy'|'move', el: import('../../api').FSElement }>, any]}
+	 * @type {[import('solid-js').Accessor<null | { mode: 'copy'|'move', items: { path: string, name: string }[] }>, any]}
 	 */
 	const [folderPicker, setFolderPicker] = createSignal(null)
 	/**
-	 * Pending copy/move waiting on conflict resolution.
-	 * @type {[import('solid-js').Accessor<null | { mode: 'copy'|'move', path: string, destination: string, name: string }>, any]}
+	 * Pending copy/move waiting on conflict resolution (may include remaining queue).
+	 * @type {[import('solid-js').Accessor<null | { mode: 'copy'|'move', path: string, destination: string, name: string, remaining: { path: string, name: string }[] }>, any]}
 	 */
 	const [pathConflict, setPathConflict] = createSignal(null)
+	/** @type {[import('solid-js').Accessor<Record<string, true>>, any]} */
+	const [selectedPaths, setSelectedPaths] = createSignal({})
+	const [bulkDeleteOpen, setBulkDeleteOpen] = createSignal(false)
+	const [dropTargetPath, setDropTargetPath] = createSignal(null)
+	const [canvasDropActive, setCanvasDropActive] = createSignal(false)
+	/** Breadcrumb drop highlight: destination folder path ('' = root). */
+	const [crumbDropPath, setCrumbDropPath] = createSignal(null)
 
 	const params = useParams()
+	const navigate = useNavigate()
 	const basePath = `/storages/${params.id}/files`
 
 	let uploadFileInputElement
@@ -118,13 +251,75 @@ const Files = () => {
 	const trashMode = () => listMode() === 'trash'
 	const flatMode = () =>
 		listMode() === 'favorites' || listMode() === 'recent'
+	const sharedMode = () => listMode() === 'shared'
 	const browseMode = () => listMode() === 'browse'
+	const selectionModeEnabled = () =>
+		browseMode() || listMode() === 'favorites' || listMode() === 'recent'
+
+	const selectedCount = createMemo(
+		() => Object.keys(selectedPaths()).length,
+	)
+	const selectionActive = () => selectedCount() > 0
+
+	const clearSelection = () => setSelectedPaths({})
+
+	const toggleSelectPath = (path) => {
+		if (!path) return
+		setSelectedPaths((prev) => {
+			const next = { ...prev }
+			if (next[path]) delete next[path]
+			else next[path] = true
+			return next
+		})
+	}
+
+	const selectedItems = () => {
+		const map = selectedPaths()
+		return sortedFsLayer().filter(
+			(el) => el.name !== '..' && map[itemNormalizedPath(el)],
+		)
+	}
+
+	createEffect(() => {
+		listMode()
+		params.path
+		clearSelection()
+	})
 
 	const sortedFsLayer = createMemo(() => {
+		const items = fsLayer().filter((el) => el.name !== '..')
 		// Favorites / Recent keep API order (starred newest / viewed_at desc).
-		if (flatMode()) return fsLayer()
-		return sortFsElements(fsLayer(), sortField(), sortDir())
+		if (flatMode()) return items
+		return sortFsElements(items, sortField(), sortDir())
 	})
+
+	/**
+	 * Breadcrumb segments for browse mode.
+	 * @returns {{ label: string, path: string }[]}
+	 */
+	const pathCrumbs = createMemo(() => {
+		const raw = String(params.path || '')
+			.replace(/^\/+/, '')
+			.replace(/\/+$/, '')
+		/** @type {{ label: string, path: string }[]} */
+		const crumbs = [{ label: 'All files', path: '' }]
+		if (!raw) return crumbs
+		let acc = ''
+		for (const part of raw.split('/').filter(Boolean)) {
+			acc = acc ? `${acc}/${part}` : part
+			crumbs.push({ label: part, path: acc })
+		}
+		return crumbs
+	})
+
+	const goToFolder = (folderPath) => {
+		const dest = folderDestPath(folderPath)
+		if (dest) {
+			navigate(`/storages/${params.id}/files/${dest}`)
+		} else {
+			navigate(`/storages/${params.id}/files`)
+		}
+	}
 
 	const syncFavoritePaths = (items) => {
 		const map = {}
@@ -152,41 +347,14 @@ const Files = () => {
 
 	const fetchFSLayer = async (path = params.path) => {
 		const fsLayerRes = await API.files.getFSLayer(params.id, path)
-
-		if (path.length) {
-			const parentPath = path.split('/').slice(0, -1).join('/')
-			const backToParent = {
-				is_file: false,
-				name: '..',
-				path: parentPath,
-				has_thumb: false,
-				size: 0,
-			}
-
-			fsLayerRes.splice(0, 0, backToParent)
-		}
-
-		setFsLayer(fsLayerRes)
+		setFsLayer((fsLayerRes || []).filter((el) => el.name !== '..'))
 		chrome.setIsSearching(false)
 		chrome.setSearchQuery('')
 	}
 
 	const fetchTrashLayer = async (path = trashPath()) => {
 		const fsLayerRes = await API.files.listTrash(params.id, path)
-
-		if (path.length) {
-			const parentPath = path.split('/').slice(0, -1).join('/')
-			const backToParent = {
-				is_file: false,
-				name: '..',
-				path: parentPath,
-				has_thumb: false,
-				size: 0,
-			}
-			fsLayerRes.splice(0, 0, backToParent)
-		}
-
-		setFsLayer(fsLayerRes)
+		setFsLayer((fsLayerRes || []).filter((el) => el.name !== '..'))
 		chrome.setIsSearching(false)
 		chrome.setSearchQuery('')
 	}
@@ -214,6 +382,8 @@ const Files = () => {
 			await fetchFavorites()
 		} else if (mode === 'recent') {
 			await fetchRecent()
+		} else if (mode === 'shared') {
+			/* SharedLinksPanel reloads when active. */
 		} else {
 			await fetchFSLayer()
 		}
@@ -248,10 +418,29 @@ const Files = () => {
 		}
 	}
 
+	const enterShared = () => {
+		setListMode('shared')
+		setTrashPath('')
+		setViewerFile(null)
+		chrome.setIsSearching(false)
+		chrome.setSearchQuery('')
+	}
+
 	const exitSpecialMode = async () => {
 		setListMode('browse')
 		setTrashPath('')
 		await fetchFSLayer()
+	}
+
+	const onSelectMode = async (mode) => {
+		if (mode === 'browse') {
+			await exitSpecialMode()
+			return
+		}
+		if (mode === 'favorites') return enterFavorites()
+		if (mode === 'recent') return enterRecent()
+		if (mode === 'trash') return enterTrash()
+		if (mode === 'shared') return enterShared()
 	}
 
 	const onTrashNavigate = async (el) => {
@@ -325,8 +514,90 @@ const Files = () => {
 		await fetchTrashLayer('')
 	}
 
-	const openCopyTo = (el) => setFolderPicker({ mode: 'copy', el })
-	const openMoveTo = (el) => setFolderPicker({ mode: 'move', el })
+	const openCopyTo = (el) =>
+		setFolderPicker({
+			mode: 'copy',
+			items: [{ path: itemNormalizedPath(el), name: el.name }],
+		})
+	const openMoveTo = (el) =>
+		setFolderPicker({
+			mode: 'move',
+			items: [{ path: itemNormalizedPath(el), name: el.name }],
+		})
+
+	const openBulkCopy = () => {
+		const items = selectedItems().map((el) => ({
+			path: itemNormalizedPath(el),
+			name: el.name,
+		}))
+		if (!items.length) return
+		setFolderPicker({ mode: 'copy', items })
+	}
+
+	const openBulkMove = () => {
+		const items = selectedItems().map((el) => ({
+			path: itemNormalizedPath(el),
+			name: el.name,
+		}))
+		if (!items.length) return
+		setFolderPicker({ mode: 'move', items })
+	}
+
+	/**
+	 * @param {'copy'|'move'} mode
+	 * @param {{ path: string, name: string }[]} items
+	 * @param {string} destination
+	 * @param {'replace'|'rename'} [onConflict]
+	 */
+	const transferItems = async (mode, items, destination, onConflict) => {
+		if (!items.length) return
+		const apiCall =
+			mode === 'copy' ? API.files.copyFile : API.files.moveFile
+		const dest = folderDestPath(destination)
+
+		for (let i = 0; i < items.length; i++) {
+			const item = items[i]
+			if (mode === 'move' && isBlockedDest(item.path, dest)) {
+				addAlert(
+					`Cannot move "${item.name}" into itself or a subfolder`,
+					'error',
+				)
+				continue
+			}
+			try {
+				await apiCall(
+					params.id,
+					item.path,
+					dest,
+					i === 0 ? onConflict : undefined,
+				)
+				addAlert(
+					mode === 'copy'
+						? `Copied "${item.name}"`
+						: `Moved "${item.name}"`,
+					'success',
+				)
+			} catch (err) {
+				if (err.status === 409 && !onConflict) {
+					setFolderPicker(null)
+					setPathConflict({
+						mode,
+						path: item.path,
+						destination: dest,
+						name: item.name,
+						remaining: items.slice(i + 1),
+					})
+					return
+				}
+				/* alerted by API helper — continue remaining */
+			}
+		}
+
+		setFolderPicker(null)
+		setPathConflict(null)
+		clearSelection()
+		await refreshCurrent()
+	}
 
 	/**
 	 * @param {string} destination
@@ -334,34 +605,52 @@ const Files = () => {
 	 */
 	const runTransfer = async (destination, onConflict) => {
 		const pending = pathConflict()
+		if (pending) {
+			const current = {
+				path: pending.path,
+				name: pending.name,
+			}
+			const rest = pending.remaining || []
+			await transferItems(
+				pending.mode,
+				[current, ...rest],
+				pending.destination,
+				onConflict,
+			)
+			return
+		}
 		const picker = folderPicker()
-		const mode = pending?.mode || picker?.mode
-		const path = pending?.path || (picker ? itemNormalizedPath(picker.el) : null)
-		const name = pending?.name || picker?.el?.name
-		const dest = pending?.destination ?? destination
+		if (!picker?.items?.length) return
+		await transferItems(
+			picker.mode,
+			picker.items,
+			destination,
+			onConflict,
+		)
+	}
 
-		if (!mode || path == null) return
-
-		const apiCall =
-			mode === 'copy' ? API.files.copyFile : API.files.moveFile
-
-		try {
-			await apiCall(params.id, path, dest, onConflict)
+	const confirmBulkDelete = async () => {
+		setBulkDeleteOpen(false)
+		const items = selectedItems()
+		let ok = 0
+		for (const el of items) {
+			try {
+				await API.files.deleteFile(params.id, itemNormalizedPath(el))
+				ok++
+			} catch {
+				/* alerted */
+			}
+		}
+		if (ok) {
 			addAlert(
-				mode === 'copy' ? `Copied "${name}"` : `Moved "${name}"`,
+				ok === 1
+					? `Deleted "${items[0].name}"`
+					: `Deleted ${ok} items`,
 				'success',
 			)
-			setFolderPicker(null)
-			setPathConflict(null)
-			await refreshCurrent()
-		} catch (err) {
-			if (err.status === 409 && !onConflict) {
-				setFolderPicker(null)
-				setPathConflict({ mode, path, destination: dest, name })
-				return
-			}
-			/* alerted by API helper */
 		}
+		clearSelection()
+		await refreshCurrent()
 	}
 
 	/**
@@ -410,6 +699,24 @@ const Files = () => {
 		})
 		Promise.all([fetchStorage(), fetchFSLayer(), loadFavoritePaths()]).then()
 		window.addEventListener('popstate', reload, false)
+
+		const onKeyDown = (e) => {
+			if (e.key === 'Escape' && selectionActive()) {
+				clearSelection()
+			}
+		}
+		window.addEventListener('keydown', onKeyDown)
+
+		const mobileMediaQuery = window.matchMedia('(max-width: 840px)')
+		const closeMobileNavOnDesktop = (event) => {
+			if (!event.matches) setMobileNavOpen(false)
+		}
+		mobileMediaQuery.addEventListener('change', closeMobileNavOnDesktop)
+
+		onCleanup(() => {
+			mobileMediaQuery.removeEventListener('change', closeMobileNavOnDesktop)
+			window.removeEventListener('keydown', onKeyDown)
+		})
 	})
 
 	onCleanup(() => {
@@ -458,6 +765,93 @@ const Files = () => {
 	}
 
 	/**
+	 * @param {{ file: File, relativePath: string }[]} entries
+	 * @param {string} baseParentPath Destination folder without trailing /
+	 */
+	const uploadEntries = async (entries, baseParentPath) => {
+		if (!entries.length) {
+			addAlert('No files to upload', 'error')
+			return
+		}
+		const currentPath = folderDestPath(baseParentPath)
+		let uploaded = 0
+		let failed = 0
+
+		try {
+			setIsUploading(true)
+			setUploadProgress(0)
+
+			for (let i = 0; i < entries.length; i++) {
+				const { file, relativePath } = entries[i]
+				const segments = relativePath.split('/')
+				segments.pop()
+				const parentPath = joinStoragePath(currentPath, ...segments)
+
+				setUploadStatus(
+					`Uploading ${i + 1}/${entries.length}: ${relativePath}`,
+				)
+
+				try {
+					await API.files.uploadFile(
+						params.id,
+						parentPath,
+						file,
+						(ev) => {
+							const fileShare = 1 / entries.length
+							const base = i * fileShare
+							const phaseShare =
+								ev.phase === 'server' ? 0.15 : 0.85
+							const phaseOffset = ev.phase === 'server' ? 0 : 0.15
+							const overall =
+								(base +
+									(phaseOffset +
+										(phaseShare * (ev.percent || 0)) / 100) *
+										fileShare) *
+								100
+							setUploadProgress(overall)
+							setUploadStatus(
+								describeProgress(
+									ev,
+									`${i + 1}/${entries.length} ${relativePath}`,
+								),
+							)
+						},
+						{ silent: true },
+					)
+					uploaded++
+				} catch (error) {
+					console.error(error)
+					failed++
+				}
+			}
+
+			setUploadProgress(100)
+
+			if (failed === 0) {
+				addAlert(
+					uploaded === 1
+						? `Uploaded "${entries[0].relativePath}"`
+						: `Uploaded ${uploaded} files`,
+					'success',
+				)
+			} else if (uploaded === 0) {
+				addAlert('Upload failed', 'error')
+			} else {
+				addAlert(
+					`Uploaded ${uploaded} of ${entries.length} files (${failed} failed)`,
+					'error',
+				)
+			}
+
+			await fetchFSLayer()
+		} finally {
+			setIsUploading(false)
+			setUploadProgress(0)
+			setUploadStatus('')
+		}
+	}
+
+	/**
 	 * @param {Event} event
 	 */
 	const uploadFile = async (event) => {
@@ -471,7 +865,7 @@ const Files = () => {
 		try {
 			setIsUploading(true)
 			setUploadStatus(`Sending ${file.name}`)
-			const parentPath = (params.path || '').replace(/\/+$/, '')
+			const parentPath = folderDestPath(params.path || '')
 			await API.files.uploadFile(params.id, parentPath, file, (ev) => {
 				setUploadProgress(ev.percent || 0)
 				setUploadStatus(describeProgress(ev, file.name))
@@ -505,79 +899,198 @@ const Files = () => {
 			return
 		}
 
-		const currentPath = (params.path || '').replace(/\/+$/, '')
-		const rootName = (files[0].webkitRelativePath || files[0].name).split('/')[0]
-		let uploaded = 0
-		let failed = 0
+		await uploadEntries(
+			files.map((file) => ({
+				file,
+				relativePath: file.webkitRelativePath || file.name,
+			})),
+			params.path || '',
+		)
+	}
 
-		try {
-			setIsUploading(true)
-			setUploadProgress(0)
+	const hasSarcaDrag = (dt) =>
+		Boolean(dt?.types && [...dt.types].includes(SARCA_DRAG_MIME))
 
-			for (let i = 0; i < files.length; i++) {
-				const file = files[i]
-				const relativePath = file.webkitRelativePath || file.name
-				const segments = relativePath.split('/')
-				segments.pop()
-				const parentPath = joinStoragePath(currentPath, ...segments)
+	const hasFileDrag = (dt) =>
+		Boolean(dt?.types && [...dt.types].includes('Files'))
 
-				setUploadStatus(`Uploading ${i + 1}/${files.length}: ${relativePath}`)
+	/**
+	 * @param {import('../../api').FSElement} el
+	 * @param {DragEvent} event
+	 */
+	const onDragStartItem = (el, event) => {
+		const path = itemNormalizedPath(el)
+		const selected = selectedPaths()
+		const paths = selected[path]
+			? Object.keys(selected)
+			: [path]
+		event.dataTransfer?.setData(SARCA_DRAG_MIME, JSON.stringify(paths))
+		if (event.dataTransfer) {
+			event.dataTransfer.effectAllowed = 'move'
+		}
+	}
 
-				try {
-					await API.files.uploadFile(
-						params.id,
-						parentPath,
-						file,
-						(ev) => {
-							const fileShare = 1 / files.length
-							const base = i * fileShare
-							const phaseShare =
-								ev.phase === 'server' ? 0.15 : 0.85
-							const phaseOffset = ev.phase === 'server' ? 0 : 0.15
-							const overall =
-								(base +
-									(phaseOffset +
-										(phaseShare * (ev.percent || 0)) / 100) *
-										fileShare) *
-								100
-							setUploadProgress(overall)
-							setUploadStatus(
-								describeProgress(
-									ev,
-									`${i + 1}/${files.length} ${relativePath}`,
-								),
-							)
-						},
-						{ silent: true },
-					)
-					uploaded++
-				} catch (error) {
-					console.error(error)
-					failed++
+	/**
+	 * @param {string} destFolder
+	 * @param {string[]} paths
+	 */
+	const movePathsToFolder = async (destFolder, paths) => {
+		const dest = folderDestPath(destFolder)
+		const items = paths.map((path) => {
+			const el = fsLayer().find((e) => itemNormalizedPath(e) === path)
+			return {
+				path,
+				name: el?.name || path.split('/').filter(Boolean).pop() || path,
+			}
+		})
+		await transferItems('move', items, dest)
+	}
+
+	/**
+	 * @param {import('../../api').FSElement} folderEl
+	 * @param {DragEvent} event
+	 */
+	const onDragOverFolder = (folderEl, event) => {
+		if (!browseMode()) return
+		const dt = event.dataTransfer
+		if (!dt) return
+		if (hasSarcaDrag(dt) || hasFileDrag(dt)) {
+			event.preventDefault()
+			event.stopPropagation()
+			dt.dropEffect = hasSarcaDrag(dt) ? 'move' : 'copy'
+			setDropTargetPath(itemNormalizedPath(folderEl))
+		}
+	}
+
+	const onDragLeaveFolder = (folderEl, event) => {
+		const related = /** @type {Node|null} */ (event.relatedTarget)
+		const current = /** @type {Node|null} */ (event.currentTarget)
+		if (related && current?.contains?.(related)) return
+		if (dropTargetPath() === itemNormalizedPath(folderEl)) {
+			setDropTargetPath(null)
+		}
+	}
+
+	/**
+	 * @param {import('../../api').FSElement} folderEl
+	 * @param {DragEvent} event
+	 */
+	const onDropOnFolder = async (folderEl, event) => {
+		if (!browseMode()) return
+		event.preventDefault()
+		event.stopPropagation()
+		setDropTargetPath(null)
+		setCanvasDropActive(false)
+		const dest = folderDestPath(folderEl.path)
+		const dt = event.dataTransfer
+		if (!dt) return
+
+		const raw = dt.getData(SARCA_DRAG_MIME)
+		if (raw) {
+			try {
+				const paths = JSON.parse(raw)
+				if (Array.isArray(paths) && paths.length) {
+					await movePathsToFolder(dest, paths)
 				}
+			} catch {
+				/* ignore */
 			}
+			return
+		}
 
-			setUploadProgress(100)
+		if (hasFileDrag(dt)) {
+			const entries = await filesFromDataTransfer(dt)
+			await uploadEntries(entries, dest)
+		}
+	}
 
-			if (failed === 0) {
-				addAlert(
-					`Uploaded folder "${rootName}" (${uploaded} ${uploaded === 1 ? 'file' : 'files'})`,
-					'success',
-				)
-			} else if (uploaded === 0) {
-				addAlert(`Failed to upload folder "${rootName}"`, 'error')
-			} else {
-				addAlert(
-					`Uploaded ${uploaded} of ${files.length} files from "${rootName}" (${failed} failed)`,
-					'error',
-				)
+	const onCanvasDragOver = (event) => {
+		if (!browseMode()) return
+		const dt = event.dataTransfer
+		if (!dt || hasSarcaDrag(dt) || !hasFileDrag(dt)) return
+		event.preventDefault()
+		dt.dropEffect = 'copy'
+		setCanvasDropActive(true)
+	}
+
+	const onCanvasDragLeave = (event) => {
+		const related = /** @type {Node|null} */ (event.relatedTarget)
+		const current = /** @type {Node|null} */ (event.currentTarget)
+		if (related && current?.contains?.(related)) return
+		setCanvasDropActive(false)
+	}
+
+	const onCanvasDrop = async (event) => {
+		if (!browseMode()) return
+		const dt = event.dataTransfer
+		if (!dt || hasSarcaDrag(dt) || !hasFileDrag(dt)) return
+		event.preventDefault()
+		setCanvasDropActive(false)
+		setDropTargetPath(null)
+		const entries = await filesFromDataTransfer(dt)
+		await uploadEntries(entries, params.path || '')
+	}
+
+	/**
+	 * @param {string} destPath
+	 * @param {DragEvent} event
+	 */
+	const onCrumbDragOver = (destPath, event) => {
+		if (!browseMode()) return
+		const dt = event.dataTransfer
+		if (!dt) return
+		if (hasSarcaDrag(dt) || hasFileDrag(dt)) {
+			event.preventDefault()
+			event.stopPropagation()
+			dt.dropEffect = hasSarcaDrag(dt) ? 'move' : 'copy'
+			setCrumbDropPath(folderDestPath(destPath))
+		}
+	}
+
+	/**
+	 * @param {string} destPath
+	 * @param {DragEvent} event
+	 */
+	const onCrumbDragLeave = (destPath, event) => {
+		const related = /** @type {Node|null} */ (event.relatedTarget)
+		const current = /** @type {Node|null} */ (event.currentTarget)
+		if (related && current?.contains?.(related)) return
+		if (crumbDropPath() === folderDestPath(destPath)) {
+			setCrumbDropPath(null)
+		}
+	}
+
+	/**
+	 * @param {string} destPath
+	 * @param {DragEvent} event
+	 */
+	const onCrumbDrop = async (destPath, event) => {
+		if (!browseMode()) return
+		event.preventDefault()
+		event.stopPropagation()
+		const dest = folderDestPath(destPath)
+		setCrumbDropPath(null)
+		setDropTargetPath(null)
+		setCanvasDropActive(false)
+		const dt = event.dataTransfer
+		if (!dt) return
+
+		const raw = dt.getData(SARCA_DRAG_MIME)
+		if (raw) {
+			try {
+				const paths = JSON.parse(raw)
+				if (Array.isArray(paths) && paths.length) {
+					await movePathsToFolder(dest, paths)
+				}
+			} catch {
+				/* ignore */
 			}
+			return
+		}
 
-			await fetchFSLayer()
-		} finally {
-			setIsUploading(false)
-			setUploadProgress(0)
-			setUploadStatus('')
+		if (hasFileDrag(dt)) {
+			const entries = await filesFromDataTransfer(dt)
+			await uploadEntries(entries, dest)
 		}
 	}
 
@@ -614,8 +1127,125 @@ const Files = () => {
 
 	return (
 		<>
-			<Stack class="files-page" spacing={1.5}>
+			<div class="files-shell">
+				<FilesSidebar
+					variant="files"
+					mode={listMode()}
+					onSelectMode={onSelectMode}
+					mobileOpen={mobileNavOpen()}
+					onMobileClose={() => setMobileNavOpen(false)}
+					createDisabled={!browseMode()}
+					onCreateFolder={openCreateFolderDialog}
+					onUploadFile={uploadFileClickHandler}
+					onUploadFolder={uploadFolderClickHandler}
+				/>
+				<div class="files-shell__main">
+					<Stack class="files-page" spacing={1.5}>
 				<div class="files-page__toolbar">
+					<IconButton
+						class="files-page__nav-toggle"
+						aria-label="Open files menu"
+						onClick={() => setMobileNavOpen(true)}
+					>
+						<MenuIcon />
+					</IconButton>
+
+					<Show when={browseMode()}>
+						<nav class="files-breadcrumb" aria-label="Folder path">
+							<For each={pathCrumbs()}>
+								{(crumb, index) => (
+									<>
+										<Show when={index() > 0}>
+											<ChevronRightIcon
+												class="files-breadcrumb__sep"
+												fontSize="small"
+											/>
+										</Show>
+										<button
+											type="button"
+											class="files-breadcrumb__crumb"
+											classList={{
+												'files-breadcrumb__crumb--current':
+													index() === pathCrumbs().length - 1,
+												'files-breadcrumb__crumb--drop':
+													crumbDropPath() === crumb.path,
+											}}
+											title={crumb.path || 'All files'}
+											onClick={() => goToFolder(crumb.path)}
+											onDragOver={(e) =>
+												onCrumbDragOver(crumb.path, e)
+											}
+											onDragLeave={(e) =>
+												onCrumbDragLeave(crumb.path, e)
+											}
+											onDrop={(e) => onCrumbDrop(crumb.path, e)}
+										>
+											{crumb.label}
+										</button>
+									</>
+								)}
+							</For>
+						</nav>
+					</Show>
+
+					<Show when={!browseMode()}>
+						<Typography
+							variant="body2"
+							color="text.secondary"
+							sx={{ mr: 'auto' }}
+						>
+							{listMode() === 'favorites'
+								? 'Favorites'
+								: listMode() === 'recent'
+									? 'Recent'
+									: listMode() === 'shared'
+										? 'Shared links'
+										: 'Trash'}
+						</Typography>
+					</Show>
+
+					<Show when={selectionModeEnabled() && selectionActive()}>
+						<div class="files-bulk-bar">
+							<span class="files-bulk-bar__count">
+								{selectedCount()} selected
+							</span>
+							<Button
+								variant="outlined"
+								color="inherit"
+								size="small"
+								startIcon={<ContentCopyIcon />}
+								onClick={openBulkCopy}
+							>
+								Copy
+							</Button>
+							<Button
+								variant="outlined"
+								color="inherit"
+								size="small"
+								startIcon={<DriveFileMoveIcon />}
+								onClick={openBulkMove}
+							>
+								Move
+							</Button>
+							<Button
+								variant="outlined"
+								color="warning"
+								size="small"
+								startIcon={<DeleteIcon />}
+								onClick={() => setBulkDeleteOpen(true)}
+							>
+								Delete
+							</Button>
+							<IconButton
+								size="small"
+								aria-label="Clear selection"
+								onClick={clearSelection}
+							>
+								<CloseIcon fontSize="small" />
+							</IconButton>
+						</div>
+					</Show>
+
 					<Show when={browseMode()}>
 						<Button
 							variant="outlined"
@@ -623,7 +1253,6 @@ const Files = () => {
 							size="small"
 							startIcon={<SortIcon />}
 							onClick={(e) => setSortMenuAnchor(e.currentTarget)}
-							sx={{ mr: 'auto' }}
 						>
 							{sortLabel(sortField(), sortDir())}
 						</Button>
@@ -678,87 +1307,49 @@ const Files = () => {
 						</MenuMUI>
 					</Show>
 
-					<Show
-						when={!browseMode()}
-						fallback={
-							<>
-								<Button
-									variant="outlined"
-									color="inherit"
-									startIcon={<StarIcon />}
-									onClick={enterFavorites}
-									sx={{ mr: 1 }}
-								>
-									Favorites
-								</Button>
-								<Button
-									variant="outlined"
-									color="inherit"
-									startIcon={<HistoryIcon />}
-									onClick={enterRecent}
-									sx={{ mr: 1 }}
-								>
-									Recent
-								</Button>
-								<Button
-									variant="outlined"
-									color="inherit"
-									startIcon={<DeleteOutlineIcon />}
-									onClick={enterTrash}
-									sx={{ mr: 1 }}
-								>
-									Trash
-								</Button>
-								<Menu button_title="Create">
-									<MenuItem onClick={openCreateFolderDialog}>
-										<ListItemIcon>
-											<CreateNewFolderIcon />
-										</ListItemIcon>
-										<ListItemText>Create folder</ListItemText>
-									</MenuItem>
-									<MenuItem onClick={uploadFileClickHandler}>
-										<ListItemIcon>
-											<UploadFileIcon />
-										</ListItemIcon>
-										<ListItemText>Upload file</ListItemText>
-									</MenuItem>
-									<MenuItem onClick={uploadFolderClickHandler}>
-										<ListItemIcon>
-											<DriveFolderUploadIcon />
-										</ListItemIcon>
-										<ListItemText>Upload folder</ListItemText>
-									</MenuItem>
-								</Menu>
-							</>
-						}
-					>
-						<Show when={listMode() === 'favorites' || listMode() === 'recent'}>
-							<Typography
-								variant="body2"
-								color="text.secondary"
-								sx={{ mr: 'auto' }}
-							>
-								{listMode() === 'favorites' ? 'Favorites' : 'Recent'}
-							</Typography>
-						</Show>
-						<Button
-							variant="outlined"
-							color="inherit"
-							startIcon={<ArrowBackIcon />}
-							onClick={exitSpecialMode}
-							sx={{ mr: 1 }}
+					<Show when={!sharedMode()}>
+						<div
+							class="files-view-toggle"
+							role="group"
+							aria-label="View mode"
 						>
-							Back
-						</Button>
-						<Show when={trashMode()}>
-							<Button
-								variant="contained"
-								color="warning"
-								onClick={() => setEmptyTrashOpen(true)}
+							<IconButton
+								size="small"
+								class="files-view-toggle__btn"
+								classList={{
+									'files-view-toggle__btn--active':
+										viewMode() === 'list',
+								}}
+								aria-label="List view"
+								aria-pressed={viewMode() === 'list'}
+								onClick={() => setAndPersistViewMode('list')}
 							>
-								Empty trash
-							</Button>
-						</Show>
+								<ViewListIcon fontSize="small" />
+							</IconButton>
+							<IconButton
+								size="small"
+								class="files-view-toggle__btn"
+								classList={{
+									'files-view-toggle__btn--active':
+										viewMode() === 'tiles',
+								}}
+								aria-label="Tiles view"
+								aria-pressed={viewMode() === 'tiles'}
+								onClick={() => setAndPersistViewMode('tiles')}
+							>
+								<GridViewIcon fontSize="small" />
+							</IconButton>
+						</div>
+					</Show>
+
+					<Show when={trashMode()}>
+						<Button
+							variant="contained"
+							color="warning"
+							onClick={() => setEmptyTrashOpen(true)}
+						>
+							Empty trash
+						</Button>
 					</Show>
 				</div>
 
@@ -783,7 +1374,19 @@ const Files = () => {
 					</Box>
 				</Show>
 
-				<div class="files-canvas glass-panel">
+				<Show
+					when={sharedMode()}
+					fallback={<div
+						class="files-canvas glass-panel"
+						classList={{
+							'files-canvas--list': viewMode() === 'list',
+							'files-canvas--selecting': selectionActive(),
+							'files-canvas--drop-active': canvasDropActive(),
+						}}
+						onDragOver={onCanvasDragOver}
+						onDragLeave={onCanvasDragLeave}
+						onDrop={onCanvasDrop}
+					>
 					<Show
 						when={sortedFsLayer().length}
 						fallback={
@@ -800,8 +1403,21 @@ const Files = () => {
 							</div>
 						}
 					>
-						<div class="files-grid">
-							{mapArray(sortedFsLayer, (fsElement) => (
+						<div
+							class={
+								viewMode() === 'list' ? 'files-list' : 'files-grid'
+							}
+						>
+							{mapArray(sortedFsLayer, (fsElement) => {
+								const pathKey = itemNormalizedPath(fsElement)
+								const canSelect =
+									selectionModeEnabled() &&
+									fsElement.name !== '..'
+								const isFolderDrop =
+									browseMode() &&
+									!fsElement.is_file &&
+									fsElement.name !== '..'
+								return (
 								<FSListItem
 									fsElement={fsElement}
 									storageId={params.id}
@@ -809,6 +1425,31 @@ const Files = () => {
 									onOpen={(file) => setViewerFile(file)}
 									trashMode={trashMode()}
 									flatMode={flatMode()}
+									layout={viewMode}
+									selectable={canSelect}
+									selected={() =>
+										Boolean(selectedPaths()[pathKey])
+									}
+									selectionActive={selectionActive}
+									onToggleSelect={() =>
+										toggleSelectPath(pathKey)
+									}
+									draggableItem={browseMode() && canSelect}
+									onDragStartItem={onDragStartItem}
+									dropTarget={isFolderDrop}
+									dropActive={() =>
+										isFolderDrop &&
+										dropTargetPath() === pathKey
+									}
+									onDragOverItem={(e) =>
+										onDragOverFolder(fsElement, e)
+									}
+									onDragLeaveItem={(e) =>
+										onDragLeaveFolder(fsElement, e)
+									}
+									onDropItem={(e) =>
+										onDropOnFolder(fsElement, e)
+									}
 									isFavorite={() => isFavorite(fsElement)}
 									onToggleFavorite={toggleFavorite}
 									onRestore={(el) => restoreItem(el)}
@@ -817,10 +1458,16 @@ const Files = () => {
 									onCopyTo={openCopyTo}
 									onMoveTo={openMoveTo}
 								/>
-							))}
+								)
+							})}
 						</div>
 					</Show>
-				</div>
+					</div>}
+				>
+					<div class="files-canvas glass-panel">
+						<SharedLinksPanel storageId={params.id} active={sharedMode()} />
+					</div>
+				</Show>
 
 				<FileViewer
 					open={Boolean(viewerFile()) && !trashMode()}
@@ -842,11 +1489,33 @@ const Files = () => {
 					storageId={params.id}
 					mode={folderPicker()?.mode || 'copy'}
 					sourcePath={
-						folderPicker() ? itemNormalizedPath(folderPicker().el) : ''
+						folderPicker()?.items?.find((i) => i.path.endsWith('/'))
+							?.path || ''
 					}
-					itemName={folderPicker()?.el?.name}
+					itemName={
+						folderPicker()?.items?.length === 1
+							? folderPicker().items[0].name
+							: folderPicker()?.items?.length
+								? `${folderPicker().items.length} items`
+								: undefined
+					}
 					onCancel={() => setFolderPicker(null)}
 					onConfirm={(destination) => runTransfer(destination)}
+				/>
+
+				<ActionConfirmDialog
+					action="Delete"
+					entity={
+						selectedCount() === 1 ? 'item' : `${selectedCount()} items`
+					}
+					actionDescription={
+						selectedCount() === 1
+							? 'move this item to trash'
+							: `move ${selectedCount()} items to trash`
+					}
+					isOpened={bulkDeleteOpen()}
+					onConfirm={confirmBulkDelete}
+					onCancel={() => setBulkDeleteOpen(false)}
 				/>
 
 				<ActionConfirmDialog
@@ -906,7 +1575,9 @@ const Files = () => {
 					style="display: none"
 					onChange={uploadFolder}
 				/>
-			</Stack>
+					</Stack>
+				</div>
+			</div>
 		</>
 	)
 }

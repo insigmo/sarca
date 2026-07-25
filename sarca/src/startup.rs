@@ -144,6 +144,38 @@ pub async fn init_db(db: &PgPool) {
         ALTER TABLE files
         ADD COLUMN IF NOT EXISTS thumb_telegram_message_id BIGINT;
     ",
+        "
+        ALTER TABLE files
+        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ",
+        "
+        ALTER TABLE files
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ",
+        "
+        ALTER TABLE files
+        ADD COLUMN IF NOT EXISTS source_created_at TIMESTAMPTZ;
+    ",
+        "
+        ALTER TABLE files
+        ADD COLUMN IF NOT EXISTS source_mtime TIMESTAMPTZ;
+    ",
+        r#"
+        CREATE OR REPLACE FUNCTION sarca_files_touch_updated_at()
+        RETURNS TRIGGER AS $$
+        BEGIN
+          NEW.updated_at = NOW();
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+    "#,
+        "DROP TRIGGER IF EXISTS files_touch_updated_at ON files;",
+        r#"
+        CREATE TRIGGER files_touch_updated_at
+          BEFORE UPDATE ON files
+          FOR EACH ROW
+          EXECUTE PROCEDURE sarca_files_touch_updated_at();
+    "#,
         r#"
         DO $$
         BEGIN

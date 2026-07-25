@@ -1,6 +1,8 @@
 import ContentCopyIcon from '@suid/icons-material/ContentCopy'
 import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
 import DriveFileRenameOutlineIcon from '@suid/icons-material/DriveFileRenameOutline'
+import CheckBoxIcon from '@suid/icons-material/CheckBox'
+import CheckBoxOutlineBlankIcon from '@suid/icons-material/CheckBoxOutlineBlank'
 import DeleteIcon from '@suid/icons-material/Delete'
 import DeleteForeverIcon from '@suid/icons-material/DeleteForever'
 import DownloadIcon from '@suid/icons-material/Download'
@@ -23,6 +25,7 @@ import { useNavigate, useParams } from '@solidjs/router'
 
 import API from '../api'
 import { fileBaseName, fileExtensionLabel } from '../common/fileLabel'
+import { convertSize } from '../common/size_converter'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
 import FileTypeIcon from './FileTypeIcon'
@@ -37,6 +40,18 @@ import { alertStore } from './AlertStack'
  * @property {(file: import("../api").FSElement) => void} [onOpen]
  * @property {boolean} [trashMode]
  * @property {boolean} [flatMode] Favorites / Recent: open files only, no folder browse
+ * @property {'tiles' | 'list'} [layout]
+ * @property {boolean} [selectable]
+ * @property {boolean} [selected]
+ * @property {boolean} [selectionActive] Any item selected — keep checkboxes visible
+ * @property {() => void} [onToggleSelect]
+ * @property {boolean} [draggableItem] Browse-mode internal drag source
+ * @property {(el: import("../api").FSElement, event: DragEvent) => void} [onDragStartItem]
+ * @property {boolean} [dropTarget] Folder accepting drops
+ * @property {boolean} [dropActive]
+ * @property {(event: DragEvent) => void} [onDragOverItem]
+ * @property {(event: DragEvent) => void} [onDragLeaveItem]
+ * @property {(event: DragEvent) => void} [onDropItem]
  * @property {boolean | (() => boolean)} [isFavorite]
  * @property {(el: import("../api").FSElement) => void | Promise<void>} [onToggleFavorite]
  * @property {(el: import("../api").FSElement) => void} [onRestore]
@@ -248,75 +263,278 @@ const FSListItem = (props) => {
 		fileBaseName(props.fsElement.name, props.fsElement.is_file)
 	const displayExt = () =>
 		fileExtensionLabel(props.fsElement.name, props.fsElement.is_file)
+	const isList = () => {
+		const v = props.layout
+		const layout = typeof v === 'function' ? v() : v
+		return layout === 'list'
+	}
+
+	const sizeLabel = () => {
+		if (!props.fsElement.is_file) return 'Folder'
+		const size = Number(props.fsElement.size)
+		if (!Number.isFinite(size) || size < 0) return '—'
+		return convertSize(size)
+	}
+
+	const mtimeLabel = () => {
+		const raw = props.fsElement.mtime
+		if (raw == null || raw === '') return ''
+		const d = new Date(typeof raw === 'number' && raw < 1e12 ? raw * 1000 : raw)
+		if (Number.isNaN(d.getTime())) return ''
+		return d.toLocaleString(undefined, {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+		})
+	}
+
+	const isSelected = () => {
+		const v = props.selected
+		return typeof v === 'function' ? Boolean(v()) : Boolean(v)
+	}
+
+	const isSelectionActive = () => {
+		const v = props.selectionActive
+		return typeof v === 'function' ? Boolean(v()) : Boolean(v)
+	}
+
+	const isDropActive = () => {
+		const v = props.dropActive
+		return typeof v === 'function' ? Boolean(v()) : Boolean(v)
+	}
+
+	const openMoreMenu = (event) => {
+		event.stopPropagation()
+		setMoreAnchorEl(event.currentTarget)
+	}
+
+	const showSelect = () => Boolean(props.selectable) && !isParentNav()
+
+	const toggleSelect = (event) => {
+		event.stopPropagation()
+		event.preventDefault()
+		props.onToggleSelect?.()
+	}
+
+	const dragEnabled = () => Boolean(props.draggableItem) && !isParentNav()
+
+	const itemClassList = (base) => ({
+		[`${base}--selected`]: isSelected(),
+		[`${base}--drop-target`]: isDropActive(),
+	})
+
+	const selectControl = (variant) => (
+		<Show when={showSelect()}>
+			<div
+				class={
+					variant === 'list' ? 'fs-list-item__check' : 'fs-grid-item__check'
+				}
+				classList={{
+					'fs-item-check--visible': isSelectionActive() || isSelected(),
+				}}
+			>
+				<IconButton
+					size="small"
+					onClick={toggleSelect}
+					aria-label={isSelected() ? 'Deselect' : 'Select'}
+					aria-pressed={isSelected()}
+				>
+					{isSelected() ? (
+						<CheckBoxIcon fontSize="small" color="primary" />
+					) : (
+						<CheckBoxOutlineBlankIcon fontSize="small" />
+					)}
+				</IconButton>
+			</div>
+		</Show>
+	)
+
+	/** Tile star: hidden while selectable (favorite remains in menu). */
+	const showTileStar = () => canFavorite() && !showSelect()
 
 	return (
 		<>
-			<div
-				class="fs-grid-item"
-				role="button"
-				tabIndex={0}
-				onClick={handleNavigate}
-				onKeyDown={(e) => {
-					if (e.key === 'Enter' || e.key === ' ') {
-						e.preventDefault()
-						handleNavigate()
-					}
-				}}
-			>
-				<Show when={canFavorite()}>
+			<Show
+				when={isList()}
+				fallback={
 					<div
-						class="fs-grid-item__star"
-						classList={{ 'fs-grid-item__star--active': favorited() }}
+						class="fs-grid-item"
+						classList={itemClassList('fs-grid-item')}
+						role="button"
+						tabIndex={0}
+						draggable={dragEnabled()}
+						onDragStart={(e) => {
+							if (!dragEnabled()) return
+							props.onDragStartItem?.(props.fsElement, e)
+						}}
+						onDragOver={(e) => {
+							if (!props.dropTarget) return
+							props.onDragOverItem?.(e)
+						}}
+						onDragLeave={(e) => {
+							if (!props.dropTarget) return
+							props.onDragLeaveItem?.(e)
+						}}
+						onDrop={(e) => {
+							if (!props.dropTarget) return
+							props.onDropItem?.(e)
+						}}
+						onClick={handleNavigate}
+						onKeyDown={(e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault()
+								handleNavigate()
+							}
+						}}
 					>
-						<IconButton
-							size="small"
-							onClick={toggleFavorite}
-							aria-label={
-								favorited()
-									? 'Remove from favorites'
-									: 'Add to favorites'
-							}
-							title={
-								favorited()
-									? 'Remove from favorites'
-									: 'Add to favorites'
-							}
-						>
-							{favorited() ? (
-								<StarIcon fontSize="small" color="warning" />
-							) : (
-								<StarBorderIcon fontSize="small" />
-							)}
-						</IconButton>
-					</div>
-				</Show>
-				<Show when={!isParentNav()}>
-					<div class="fs-grid-item__more">
-						<IconButton
-							size="small"
-							onClick={(event) => {
-								event.stopPropagation()
-								setMoreAnchorEl(event.currentTarget)
-							}}
-							aria-label="More actions"
-						>
-							<MoreVertIcon fontSize="small" />
-						</IconButton>
-					</div>
-				</Show>
+						{selectControl('grid')}
+						<Show when={showTileStar()}>
+							<div
+								class="fs-grid-item__star"
+								classList={{ 'fs-grid-item__star--active': favorited() }}
+							>
+								<IconButton
+									size="small"
+									onClick={toggleFavorite}
+									aria-label={
+										favorited()
+											? 'Remove from favorites'
+											: 'Add to favorites'
+									}
+									title={
+										favorited()
+											? 'Remove from favorites'
+											: 'Add to favorites'
+									}
+								>
+									{favorited() ? (
+										<StarIcon fontSize="small" color="warning" />
+									) : (
+										<StarBorderIcon fontSize="small" />
+									)}
+								</IconButton>
+							</div>
+						</Show>
+						<Show when={!isParentNav()}>
+							<div class="fs-grid-item__more">
+								<IconButton
+									size="small"
+									onClick={openMoreMenu}
+									aria-label="More actions"
+								>
+									<MoreVertIcon fontSize="small" />
+								</IconButton>
+							</div>
+						</Show>
 
-				<FileTypeIcon
-					name={props.fsElement.name}
-					isFile={props.fsElement.is_file}
-					thumbUrl={thumbUrl()}
-					size={64}
-				/>
+						<FileTypeIcon
+							name={props.fsElement.name}
+							isFile={props.fsElement.is_file}
+							thumbUrl={thumbUrl()}
+							size={64}
+						/>
 
-				<div class="fs-grid-item__name" title={props.fsElement.name}>
-					{displayName()}
+						<div class="fs-grid-item__name" title={props.fsElement.name}>
+							{displayName()}
+						</div>
+						<div class="fs-grid-item__ext">{displayExt()}</div>
+					</div>
+				}
+			>
+				<div
+					class="fs-list-item"
+					classList={itemClassList('fs-list-item')}
+					role="button"
+					tabIndex={0}
+					draggable={dragEnabled()}
+					onDragStart={(e) => {
+						if (!dragEnabled()) return
+						props.onDragStartItem?.(props.fsElement, e)
+					}}
+					onDragOver={(e) => {
+						if (!props.dropTarget) return
+						props.onDragOverItem?.(e)
+					}}
+					onDragLeave={(e) => {
+						if (!props.dropTarget) return
+						props.onDragLeaveItem?.(e)
+					}}
+					onDrop={(e) => {
+						if (!props.dropTarget) return
+						props.onDropItem?.(e)
+					}}
+					onClick={handleNavigate}
+					onKeyDown={(e) => {
+						if (e.key === 'Enter' || e.key === ' ') {
+							e.preventDefault()
+							handleNavigate()
+						}
+					}}
+				>
+					{selectControl('list')}
+					<FileTypeIcon
+						name={props.fsElement.name}
+						isFile={props.fsElement.is_file}
+						thumbUrl={thumbUrl()}
+						size={40}
+					/>
+					<div class="fs-list-item__body">
+						<div class="fs-list-item__name" title={props.fsElement.name}>
+							{displayName()}
+							<Show when={displayExt()}>
+								<span class="fs-list-item__ext">.{displayExt()}</span>
+							</Show>
+						</div>
+						<div class="fs-list-item__meta">
+							<span>{sizeLabel()}</span>
+							<Show when={mtimeLabel()}>
+								<span class="fs-list-item__dot">·</span>
+								<span>{mtimeLabel()}</span>
+							</Show>
+						</div>
+					</div>
+					<Show when={canFavorite()}>
+						<div
+							class="fs-list-item__star"
+							classList={{ 'fs-list-item__star--active': favorited() }}
+						>
+							<IconButton
+								size="small"
+								onClick={toggleFavorite}
+								aria-label={
+									favorited()
+										? 'Remove from favorites'
+										: 'Add to favorites'
+								}
+								title={
+									favorited()
+										? 'Remove from favorites'
+										: 'Add to favorites'
+								}
+							>
+								{favorited() ? (
+									<StarIcon fontSize="small" color="warning" />
+								) : (
+									<StarBorderIcon fontSize="small" />
+								)}
+							</IconButton>
+						</div>
+					</Show>
+					<Show when={!isParentNav()}>
+						<div class="fs-list-item__more">
+							<IconButton
+								size="small"
+								onClick={openMoreMenu}
+								aria-label="More actions"
+							>
+								<MoreVertIcon fontSize="small" />
+							</IconButton>
+						</div>
+					</Show>
 				</div>
-				<div class="fs-grid-item__ext">{displayExt()}</div>
-			</div>
+			</Show>
 
 			<MenuMUI
 				id="basic-menu"
