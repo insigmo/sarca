@@ -29,6 +29,8 @@ impl StorageManager {
     }
 
     pub async fn run(&mut self) {
+        // One message at a time: Telegram phase for file N fully finishes (all chunks +
+        // optional thumb) before file N+1 starts, even when the UI pipelines spool+telegram.
         while let Some(msg) = self.rx.recv().await {
             tracing::debug!("got msg");
             self.handle_msg(msg).await;

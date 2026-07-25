@@ -10,28 +10,14 @@ import {
 	onMount,
 } from 'solid-js'
 import MenuItem from '@suid/material/MenuItem'
-import SortIcon from '@suid/icons-material/Sort'
-import MenuIcon from '@suid/icons-material/Menu'
-import ViewListIcon from '@suid/icons-material/ViewList'
-import GridViewIcon from '@suid/icons-material/GridView'
-import ChevronRightIcon from '@suid/icons-material/ChevronRight'
-import ContentCopyIcon from '@suid/icons-material/ContentCopy'
-import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
-import DeleteIcon from '@suid/icons-material/Delete'
-import DeleteForeverIcon from '@suid/icons-material/DeleteForever'
-import RestoreFromTrashIcon from '@suid/icons-material/RestoreFromTrash'
-import CloseIcon from '@suid/icons-material/Close'
 import Button from '@suid/material/Button'
 import IconButton from '@suid/material/IconButton'
 import Stack from '@suid/material/Stack'
 import Typography from '@suid/material/Typography'
-import LinearProgress from '@suid/material/LinearProgress'
-import Box from '@suid/material/Box'
 import MenuMUI from '@suid/material/Menu'
 import Divider from '@suid/material/Divider'
 
 import API from '../../api'
-import { formatUploadBytes } from '../../api/request'
 import FSListItem from '../../components/FSListItem'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
 import FolderPickerDialog from '../../components/FolderPickerDialog'
@@ -40,9 +26,14 @@ import FileViewer from '../../components/FileViewer'
 import RestoreConflictDialog from '../../components/RestoreConflictDialog'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import FilesSidebar from '../../components/FilesSidebar'
+import FluentIcon from '../../components/FluentIcon'
 import SharedLinksPanel from '../../components/SharedLinksPanel'
 import { filesChromeStore } from '../../common/filesChrome'
 import { sortFsElements, sortLabel } from '../../common/sortFs'
+import {
+	MAX_FILE_PICKER,
+	uploadQueueStore,
+} from '../../common/uploadQueue'
 
 const joinStoragePath = (...parts) =>
 	parts
@@ -51,28 +42,59 @@ const joinStoragePath = (...parts) =>
 		.filter(Boolean)
 		.join('/')
 
-const shouldSkipUploadEntry = (relativePath) => {
-	const base = relativePath.split('/').pop() || ''
-	return !base || base === '.DS_Store' || base.startsWith('._')
+/**
+ * Decode a single URL path segment for display (and API path use).
+ * Treats `+` as space; peels limited double-encoding until stable.
+ * @param {string} segment
+ */
+const decodePathSegment = (segment) => {
+	let s = String(segment ?? '').replace(/\+/g, ' ')
+	for (let i = 0; i < 3; i++) {
+		if (!/%[0-9A-Fa-f]{2}/.test(s)) break
+		try {
+			const next = decodeURIComponent(s)
+			if (next === s) break
+			s = next
+		} catch {
+			break
+		}
+	}
+	return s
 }
 
 /**
- * @param {import('../../api/request').UploadProgressEvent} ev
- * @param {string} [label]
+ * Decode each segment of a storage path from the router splat.
+ * @param {string} path
  */
-const describeProgress = (ev, label) => {
-	const pct = Math.round(ev.percent || 0)
-	const prefix = label ? `${label} · ` : ''
-	if (ev.phase === 'server') {
-		return `${prefix}Sending to Sarca: ${pct}%`
-	}
-	const size =
-		ev.total != null
-			? ` · ${formatUploadBytes(ev.uploaded || 0)} / ${formatUploadBytes(ev.total)}`
-			: ''
-	const chunk =
-		ev.chunk && ev.chunks ? ` · chunk ${ev.chunk}/${ev.chunks}` : ''
-	return `${prefix}Uploading to Telegram: ${pct}%${size}${chunk}`
+const decodeStoragePath = (path) => {
+	const raw = String(path || '')
+	const trailing = raw.endsWith('/') && raw.replace(/\/+$/, '').length > 0
+	const decoded = raw
+		.split('/')
+		.filter((p) => p.length)
+		.map(decodePathSegment)
+		.join('/')
+	return trailing ? `${decoded}/` : decoded
+}
+
+/**
+ * Encode each path segment for in-app navigation URLs.
+ * @param {string} path
+ */
+const encodeStoragePath = (path) => {
+	const raw = String(path || '')
+	const trailing = raw.endsWith('/')
+	const encoded = raw
+		.split('/')
+		.filter((p) => p.length)
+		.map(encodeURIComponent)
+		.join('/')
+	return trailing && encoded ? `${encoded}/` : encoded
+}
+
+const shouldSkipUploadEntry = (relativePath) => {
+	const base = relativePath.split('/').pop() || ''
+	return !base || base === '.DS_Store' || base.startsWith('._')
 }
 
 const itemNormalizedPath = (el) => {
@@ -192,9 +214,6 @@ const Files = () => {
 	const [fsLayer, setFsLayer] = createSignal([])
 	const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
 		createSignal(false)
-	const [uploadProgress, setUploadProgress] = createSignal(0)
-	const [uploadStatus, setUploadStatus] = createSignal('')
-	const [isUploading, setIsUploading] = createSignal(false)
 	/**
 	 * @type {[import("solid-js").Accessor<import("../../api").FSElement | null>, any]}
 	 */
@@ -522,6 +541,9 @@ const Files = () => {
 		setRestoreRemaining([])
 	})
 
+	/** Decoded current folder from the `*path` splat (router keeps it encoded). */
+	const routerFolderPath = () => decodeStoragePath(params.path || '')
+
 	const sortedFsLayer = createMemo(() => {
 		const items = fsLayer().filter((el) => el.name !== '..')
 		// Favorites / Recent keep API order (starred newest / viewed_at desc).
@@ -531,10 +553,11 @@ const Files = () => {
 
 	/**
 	 * Breadcrumb segments for browse mode.
+	 * Labels are decoded for display; `path` is decoded for API / drag-drop.
 	 * @returns {{ label: string, path: string }[]}
 	 */
 	const pathCrumbs = createMemo(() => {
-		const raw = String(params.path || '')
+		const raw = routerFolderPath()
 			.replace(/^\/+/, '')
 			.replace(/\/+$/, '')
 		/** @type {{ label: string, path: string }[]} */
@@ -551,7 +574,9 @@ const Files = () => {
 	const goToFolder = (folderPath) => {
 		const dest = folderDestPath(folderPath)
 		if (dest) {
-			navigate(`/storages/${params.id}/files/${dest}`)
+			navigate(
+				`/storages/${params.id}/files/${encodeStoragePath(dest)}`,
+			)
 		} else {
 			navigate(`/storages/${params.id}/files`)
 		}
@@ -581,7 +606,7 @@ const Files = () => {
 		chrome.setStorageName(storage.name)
 	}
 
-	const fetchFSLayer = async (path = params.path) => {
+	const fetchFSLayer = async (path = routerFolderPath()) => {
 		const fsLayerRes = await API.files.getFSLayer(params.id, path)
 		setFsLayer((fsLayerRes || []).filter((el) => el.name !== '..'))
 		chrome.setIsSearching(false)
@@ -779,9 +804,18 @@ const Files = () => {
 
 	const confirmEmptyTrash = async () => {
 		setEmptyTrashOpen(false)
-		await API.files.emptyTrash(params.id)
-		addAlert('Trash emptied', 'success')
-		await fetchTrashLayer('')
+		// Clear immediately so the list does not stay stale while the API
+		// finishes DB purge (+ background Telegram GC).
+		setTrashPath('')
+		setFsLayer([])
+		clearSelection()
+		try {
+			await API.files.emptyTrash(params.id)
+			addAlert('Trash emptied', 'success')
+		} catch {
+			/* apiRequest already alerted */
+			await fetchTrashLayer('')
+		}
 	}
 
 	/** Snapshot of selected items for bulk copy/move. */
@@ -849,7 +883,7 @@ const Files = () => {
 		if (!clip?.items?.length) return
 		const mode = clip.mode === 'cut' ? 'move' : 'copy'
 		const items = clip.items.map((item) => ({ ...item }))
-		await transferItems(mode, items, params.path || '')
+		await transferItems(mode, items, routerFolderPath())
 	}
 
 	/**
@@ -1054,7 +1088,7 @@ const Files = () => {
 			return
 		}
 
-		const results = await API.files.search(params.id, params.path || '', q)
+		const results = await API.files.search(params.id, routerFolderPath(), q)
 		const mapped = results.map((el) => ({
 			path: el.path,
 			name: el.path,
@@ -1167,6 +1201,34 @@ const Files = () => {
 
 	onMount(() => {
 		window.addEventListener('keydown', onFilesKeyDown, true)
+
+		/** Debounced so rapid consecutive completes share one list refetch. */
+		let refreshTimer = 0
+		const scheduleListRefreshAfterUpload = () => {
+			window.clearTimeout(refreshTimer)
+			refreshTimer = window.setTimeout(() => {
+				// Keep folder/list-mode context: only refresh views that show uploads.
+				if (browseMode()) {
+					void fetchFSLayer()
+				} else if (listMode() === 'recent') {
+					void fetchRecent()
+				}
+			}, 300)
+		}
+
+		// Per successful upload (while others may still be queued/uploading).
+		const unsubItemDone = uploadQueueStore.onItemDone(() => {
+			scheduleListRefreshAfterUpload()
+		})
+		// Full queue idle — safety net if a done event was missed.
+		const unsubIdle = uploadQueueStore.onIdle(() => {
+			scheduleListRefreshAfterUpload()
+		})
+		onCleanup(() => {
+			window.clearTimeout(refreshTimer)
+			unsubItemDone()
+			unsubIdle()
+		})
 	})
 	onCleanup(() => {
 		window.removeEventListener('keydown', onFilesKeyDown, true)
@@ -1185,7 +1247,7 @@ const Files = () => {
 				newPath = newPath.slice(1)
 			}
 
-			await fetchFSLayer(newPath)
+			await fetchFSLayer(decodeStoragePath(newPath))
 		}
 	})
 
@@ -1200,9 +1262,7 @@ const Files = () => {
 	 * @param {string} folderName
 	 */
 	const createFolder = async (folderName) => {
-		const folderBase = params.path.endsWith('/')
-			? params.path.slice(0, -1)
-			: params.path
+		const folderBase = folderDestPath(routerFolderPath())
 
 		await API.files.createFolder(params.id, folderBase, folderName)
 		addAlert(`Created folder "${folderName}"`, 'success')
@@ -1218,120 +1278,55 @@ const Files = () => {
 	}
 
 	/**
+	 * Enqueue files into the Drive-style upload manager (pipeline: 1 spool + 1 telegram, smaller first).
 	 * @param {{ file: File, relativePath: string }[]} entries
 	 * @param {string} baseParentPath Destination folder without trailing /
 	 */
-	const uploadEntries = async (entries, baseParentPath) => {
+	const uploadEntries = (entries, baseParentPath) => {
 		if (!entries.length) {
 			addAlert('No files to upload', 'error')
 			return
 		}
 		const currentPath = folderDestPath(baseParentPath)
-		let uploaded = 0
-		let failed = 0
-
-		try {
-			setIsUploading(true)
-			setUploadProgress(0)
-
-			for (let i = 0; i < entries.length; i++) {
-				const { file, relativePath } = entries[i]
+		uploadQueueStore.enqueue(
+			entries.map(({ file, relativePath }) => {
 				const segments = relativePath.split('/')
 				segments.pop()
 				const parentPath = joinStoragePath(currentPath, ...segments)
-
-				setUploadStatus(
-					`Uploading ${i + 1}/${entries.length}: ${relativePath}`,
-				)
-
-				try {
-					await API.files.uploadFile(
-						params.id,
-						parentPath,
-						file,
-						(ev) => {
-							const fileShare = 1 / entries.length
-							const base = i * fileShare
-							const phaseShare =
-								ev.phase === 'server' ? 0.15 : 0.85
-							const phaseOffset = ev.phase === 'server' ? 0 : 0.15
-							const overall =
-								(base +
-									(phaseOffset +
-										(phaseShare * (ev.percent || 0)) / 100) *
-										fileShare) *
-								100
-							setUploadProgress(overall)
-							setUploadStatus(
-								describeProgress(
-									ev,
-									`${i + 1}/${entries.length} ${relativePath}`,
-								),
-							)
-						},
-						{ silent: true },
-					)
-					uploaded++
-				} catch (error) {
-					console.error(error)
-					failed++
+				return {
+					storageId: params.id,
+					parentPath,
+					file,
+					name: relativePath,
 				}
-			}
-
-			setUploadProgress(100)
-
-			if (failed === 0) {
-				addAlert(
-					uploaded === 1
-						? `Uploaded "${entries[0].relativePath}"`
-						: `Uploaded ${uploaded} files`,
-					'success',
-				)
-			} else if (uploaded === 0) {
-				addAlert('Upload failed', 'error')
-			} else {
-				addAlert(
-					`Uploaded ${uploaded} of ${entries.length} files (${failed} failed)`,
-					'error',
-				)
-			}
-
-			await fetchFSLayer()
-		} finally {
-			setIsUploading(false)
-			setUploadProgress(0)
-			setUploadStatus('')
-		}
+			}),
+		)
 	}
 
 	/**
 	 * @param {Event} event
 	 */
-	const uploadFile = async (event) => {
-		const file = event.target.files[0]
-		if (file === undefined) {
-			return
-		}
-
+	const uploadFile = (event) => {
+		/** @type {File[]} */
+		let files = Array.from(event.target.files || [])
 		event.target.value = null
+		if (!files.length) return
 
-		try {
-			setIsUploading(true)
-			setUploadStatus(`Sending ${file.name}`)
-			const parentPath = folderDestPath(params.path || '')
-			await API.files.uploadFile(params.id, parentPath, file, (ev) => {
-				setUploadProgress(ev.percent || 0)
-				setUploadStatus(describeProgress(ev, file.name))
-			})
-			addAlert(`Uploaded file "${file.name}"`, 'success')
-			await fetchFSLayer()
-		} catch (error) {
-			console.error(error)
-		} finally {
-			setIsUploading(false)
-			setUploadProgress(0)
-			setUploadStatus('')
+		if (files.length > MAX_FILE_PICKER) {
+			addAlert(
+				`You can upload up to ${MAX_FILE_PICKER} files at a time`,
+				'warning',
+			)
+			files = files.slice(0, MAX_FILE_PICKER)
 		}
+
+		uploadEntries(
+			files.map((file) => ({
+				file,
+				relativePath: file.name,
+			})),
+			routerFolderPath(),
+		)
 	}
 
 	/**
@@ -1352,12 +1347,12 @@ const Files = () => {
 			return
 		}
 
-		await uploadEntries(
+		uploadEntries(
 			files.map((file) => ({
 				file,
 				relativePath: file.webkitRelativePath || file.name,
 			})),
-			params.path || '',
+			routerFolderPath(),
 		)
 	}
 
@@ -1481,7 +1476,7 @@ const Files = () => {
 		setCanvasDropActive(false)
 		setDropTargetPath(null)
 		const entries = await filesFromDataTransfer(dt)
-		await uploadEntries(entries, params.path || '')
+		await uploadEntries(entries, routerFolderPath())
 	}
 
 	/**
@@ -1604,7 +1599,7 @@ const Files = () => {
 						aria-label="Open files menu"
 						onClick={() => setMobileNavOpen(true)}
 					>
-						<MenuIcon />
+						<FluentIcon name="navigation" size={22} />
 					</IconButton>
 
 					<Show when={browseMode()}>
@@ -1613,9 +1608,10 @@ const Files = () => {
 								{(crumb, index) => (
 									<>
 										<Show when={index() > 0}>
-											<ChevronRightIcon
+											<FluentIcon
+												name="chevronRight"
 												class="files-breadcrumb__sep"
-												fontSize="small"
+												size={16}
 											/>
 										</Show>
 										<button
@@ -1674,7 +1670,7 @@ const Files = () => {
 											variant="outlined"
 											color="inherit"
 											size="small"
-											startIcon={<ContentCopyIcon />}
+											startIcon={<FluentIcon name="copy" size={18} />}
 											onClick={openBulkCopy}
 										>
 											Copy
@@ -1683,7 +1679,7 @@ const Files = () => {
 											variant="outlined"
 											color="inherit"
 											size="small"
-											startIcon={<DriveFileMoveIcon />}
+											startIcon={<FluentIcon name="arrowMove" size={18} />}
 											onClick={openBulkMove}
 										>
 											Move
@@ -1692,7 +1688,7 @@ const Files = () => {
 											variant="outlined"
 											color="warning"
 											size="small"
-											startIcon={<DeleteIcon />}
+											startIcon={<FluentIcon name="delete" size={18} />}
 											onClick={() => setBulkDeleteOpen(true)}
 										>
 											Delete
@@ -1704,7 +1700,7 @@ const Files = () => {
 									variant="outlined"
 									color="inherit"
 									size="small"
-									startIcon={<RestoreFromTrashIcon />}
+									startIcon={<FluentIcon name="arrowUndo" size={18} />}
 									onClick={confirmBulkRestore}
 								>
 									Restore
@@ -1713,7 +1709,7 @@ const Files = () => {
 									variant="outlined"
 									color="warning"
 									size="small"
-									startIcon={<DeleteForeverIcon />}
+									startIcon={<FluentIcon name="deleteDismiss" size={18} />}
 									onClick={() => setBulkDeleteOpen(true)}
 								>
 									Delete forever
@@ -1724,7 +1720,7 @@ const Files = () => {
 								aria-label="Clear selection"
 								onClick={clearSelection}
 							>
-								<CloseIcon fontSize="small" />
+								<FluentIcon name="dismiss" size={18} />
 							</IconButton>
 						</div>
 					</Show>
@@ -1734,7 +1730,7 @@ const Files = () => {
 							variant="outlined"
 							color="inherit"
 							size="small"
-							startIcon={<SortIcon />}
+							startIcon={<FluentIcon name="arrowSort" size={18} />}
 							onClick={(e) => setSortMenuAnchor(e.currentTarget)}
 						>
 							{sortLabel(sortField(), sortDir())}
@@ -1807,7 +1803,10 @@ const Files = () => {
 								aria-pressed={viewMode() === 'list'}
 								onClick={() => setAndPersistViewMode('list')}
 							>
-								<ViewListIcon fontSize="small" />
+								<FluentIcon
+									name={viewMode() === 'list' ? 'listFilled' : 'list'}
+									size={18}
+								/>
 							</IconButton>
 							<IconButton
 								size="small"
@@ -1820,7 +1819,10 @@ const Files = () => {
 								aria-pressed={viewMode() === 'tiles'}
 								onClick={() => setAndPersistViewMode('tiles')}
 							>
-								<GridViewIcon fontSize="small" />
+								<FluentIcon
+									name={viewMode() === 'tiles' ? 'gridFilled' : 'grid'}
+									size={18}
+								/>
 							</IconButton>
 						</div>
 					</Show>
@@ -1835,27 +1837,6 @@ const Files = () => {
 						</Button>
 					</Show>
 				</div>
-
-				<Show when={isUploading()}>
-					<Box sx={{ width: '100%', maxWidth: 520 }}>
-						<Typography variant="caption" display="block" gutterBottom>
-							{uploadStatus() || `Uploading: ${Math.round(uploadProgress())}%`}
-						</Typography>
-						<LinearProgress
-							variant="determinate"
-							value={uploadProgress()}
-							sx={{
-								height: 10,
-								borderRadius: 999,
-								background: 'var(--sarca-progress-track)',
-								'& .MuiLinearProgress-bar': {
-									borderRadius: 999,
-									background: 'var(--sarca-progress-fill)',
-								},
-							}}
-						/>
-					</Box>
-				</Show>
 
 				<Show
 					when={sharedMode()}
@@ -2059,6 +2040,7 @@ const Files = () => {
 				<input
 					ref={uploadFileInputElement}
 					type="file"
+					multiple
 					style="display: none"
 					onChange={uploadFile}
 				/>

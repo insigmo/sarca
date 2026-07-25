@@ -151,6 +151,13 @@ impl<'d> StorageManagerService<'d> {
             {
                 tracing::warn!("thumbnail upload failed for {}: {e}", data.file_id);
             }
+            // Mark uploaded here so a client disconnect after Telegram finishes (oneshot
+            // already closed) still leaves a visible file instead of a stale spool row.
+            if let Err(e) = self.files_repo.set_as_uploaded(data.file_id).await {
+                tracing::error!("set_as_uploaded failed for {}: {e}", data.file_id);
+                let _ = tokio::fs::remove_file(&data.file_path).await;
+                return Err(e);
+            }
         }
 
         let _ = tokio::fs::remove_file(&data.file_path).await;
