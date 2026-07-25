@@ -25,15 +25,21 @@ pnpm install
 pnpm tauri dev
 ```
 
-## Build artifacts
+## CI artifacts
 
-```bash
-task client:build          # current host
-task client:build:linux    # explicit linux
-# Cross targets: see Taskfile `client:build:*`
-```
+GitHub Actions workflow [`.github/workflows/client.yml`](../.github/workflows/client.yml) builds in parallel:
 
-Outputs land under `client/src-tauri/target/release/bundle/` (and platform-specific dirs).
+| Job | Runner | Bundles |
+| --- | --- | --- |
+| linux-amd64 | ubuntu-22.04 | deb, AppImage |
+| linux-arm64 | ubuntu-24.04-arm | deb, AppImage |
+| windows-amd64 | windows-latest | NSIS, MSI |
+| windows-arm64 | windows-11-arm | NSIS |
+| macos-arm64 | macos-14 | app, dmg |
+| android-arm64 | ubuntu + NDK | APK (best-effort) |
+| ios-arm64 | macos-14 | simulator / unsigned (best-effort) |
+
+Download from the Actions run → Artifacts (`sarca-client-*`).
 
 ## Mobile
 
