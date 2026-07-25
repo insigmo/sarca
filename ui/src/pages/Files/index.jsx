@@ -6,12 +6,10 @@ import ListItemText from '@suid/material/ListItemText'
 import UploadFileIcon from '@suid/icons-material/UploadFile'
 import DriveFolderUploadIcon from '@suid/icons-material/DriveFolderUpload'
 import CreateNewFolderIcon from '@suid/icons-material/CreateNewFolder'
-import DeleteOutlineIcon from '@suid/icons-material/DeleteOutline'
-import ArrowBackIcon from '@suid/icons-material/ArrowBack'
 import SortIcon from '@suid/icons-material/Sort'
-import StarIcon from '@suid/icons-material/Star'
-import HistoryIcon from '@suid/icons-material/History'
+import MenuIcon from '@suid/icons-material/Menu'
 import Button from '@suid/material/Button'
+import IconButton from '@suid/material/IconButton'
 import Stack from '@suid/material/Stack'
 import Typography from '@suid/material/Typography'
 import LinearProgress from '@suid/material/LinearProgress'
@@ -29,6 +27,7 @@ import { alertStore } from '../../components/AlertStack'
 import FileViewer from '../../components/FileViewer'
 import RestoreConflictDialog from '../../components/RestoreConflictDialog'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
+import FilesSidebar from '../../components/FilesSidebar'
 import { filesChromeStore } from '../../common/filesChrome'
 import { sortFsElements, sortLabel } from '../../common/sortFs'
 
@@ -84,8 +83,9 @@ const Files = () => {
 	 * @type {[import("solid-js").Accessor<import("../../api").FSElement | null>, any]}
 	 */
 	const [viewerFile, setViewerFile] = createSignal(null)
-	/** @type {[import('solid-js').Accessor<'browse'|'trash'|'favorites'|'recent'>, any]} */
+	/** @type {[import('solid-js').Accessor<'browse'|'trash'|'favorites'|'recent'|'shared'>, any]} */
 	const [listMode, setListMode] = createSignal('browse')
+	const [mobileNavOpen, setMobileNavOpen] = createSignal(false)
 	const [trashPath, setTrashPath] = createSignal('')
 	const [emptyTrashOpen, setEmptyTrashOpen] = createSignal(false)
 	const [restoreConflictPath, setRestoreConflictPath] = createSignal(null)
@@ -118,6 +118,7 @@ const Files = () => {
 	const trashMode = () => listMode() === 'trash'
 	const flatMode = () =>
 		listMode() === 'favorites' || listMode() === 'recent'
+	const sharedMode = () => listMode() === 'shared'
 	const browseMode = () => listMode() === 'browse'
 
 	const sortedFsLayer = createMemo(() => {
@@ -214,6 +215,8 @@ const Files = () => {
 			await fetchFavorites()
 		} else if (mode === 'recent') {
 			await fetchRecent()
+		} else if (mode === 'shared') {
+			// Shared links load in Task 3.
 		} else {
 			await fetchFSLayer()
 		}
@@ -248,10 +251,28 @@ const Files = () => {
 		}
 	}
 
+	const enterShared = () => {
+		setListMode('shared')
+		setViewerFile(null)
+		chrome.setIsSearching(false)
+		chrome.setSearchQuery('')
+	}
+
 	const exitSpecialMode = async () => {
 		setListMode('browse')
 		setTrashPath('')
 		await fetchFSLayer()
+	}
+
+	const onSelectMode = async (mode) => {
+		if (mode === 'browse') {
+			await exitSpecialMode()
+			return
+		}
+		if (mode === 'favorites') return enterFavorites()
+		if (mode === 'recent') return enterRecent()
+		if (mode === 'trash') return enterTrash()
+		if (mode === 'shared') return enterShared()
 	}
 
 	const onTrashNavigate = async (el) => {
@@ -614,8 +635,23 @@ const Files = () => {
 
 	return (
 		<>
-			<Stack class="files-page" spacing={1.5}>
+			<div class="files-shell">
+				<FilesSidebar
+					mode={listMode()}
+					onSelectMode={onSelectMode}
+					mobileOpen={mobileNavOpen()}
+					onMobileClose={() => setMobileNavOpen(false)}
+				/>
+				<div class="files-shell__main">
+					<Stack class="files-page" spacing={1.5}>
 				<div class="files-page__toolbar">
+					<IconButton
+						class="files-page__nav-toggle"
+						aria-label="Open files menu"
+						onClick={() => setMobileNavOpen(true)}
+					>
+						<MenuIcon />
+					</IconButton>
 					<Show when={browseMode()}>
 						<Button
 							variant="outlined"
@@ -682,33 +718,6 @@ const Files = () => {
 						when={!browseMode()}
 						fallback={
 							<>
-								<Button
-									variant="outlined"
-									color="inherit"
-									startIcon={<StarIcon />}
-									onClick={enterFavorites}
-									sx={{ mr: 1 }}
-								>
-									Favorites
-								</Button>
-								<Button
-									variant="outlined"
-									color="inherit"
-									startIcon={<HistoryIcon />}
-									onClick={enterRecent}
-									sx={{ mr: 1 }}
-								>
-									Recent
-								</Button>
-								<Button
-									variant="outlined"
-									color="inherit"
-									startIcon={<DeleteOutlineIcon />}
-									onClick={enterTrash}
-									sx={{ mr: 1 }}
-								>
-									Trash
-								</Button>
 								<Menu button_title="Create">
 									<MenuItem onClick={openCreateFolderDialog}>
 										<ListItemIcon>
@@ -732,24 +741,19 @@ const Files = () => {
 							</>
 						}
 					>
-						<Show when={listMode() === 'favorites' || listMode() === 'recent'}>
+						<Show when={!trashMode()}>
 							<Typography
 								variant="body2"
 								color="text.secondary"
 								sx={{ mr: 'auto' }}
 							>
-								{listMode() === 'favorites' ? 'Favorites' : 'Recent'}
+								{listMode() === 'favorites'
+									? 'Favorites'
+									: listMode() === 'recent'
+										? 'Recent'
+										: 'Shared links'}
 							</Typography>
 						</Show>
-						<Button
-							variant="outlined"
-							color="inherit"
-							startIcon={<ArrowBackIcon />}
-							onClick={exitSpecialMode}
-							sx={{ mr: 1 }}
-						>
-							Back
-						</Button>
 						<Show when={trashMode()}>
 							<Button
 								variant="contained"
@@ -783,7 +787,9 @@ const Files = () => {
 					</Box>
 				</Show>
 
-				<div class="files-canvas glass-panel">
+				<Show
+					when={sharedMode()}
+					fallback={<div class="files-canvas glass-panel">
 					<Show
 						when={sortedFsLayer().length}
 						fallback={
@@ -820,7 +826,14 @@ const Files = () => {
 							))}
 						</div>
 					</Show>
-				</div>
+					</div>}
+				>
+					<div class="files-canvas glass-panel">
+						<Typography variant="body2" color="text.secondary">
+							Shared links
+						</Typography>
+					</div>
+				</Show>
 
 				<FileViewer
 					open={Boolean(viewerFile()) && !trashMode()}
@@ -906,7 +919,9 @@ const Files = () => {
 					style="display: none"
 					onChange={uploadFolder}
 				/>
-			</Stack>
+					</Stack>
+				</div>
+			</div>
 		</>
 	)
 }

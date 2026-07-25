@@ -553,6 +553,7 @@ a.default-link:hover {
 	border-radius: var(--sarca-radius-sm);
 	background: var(--sarca-glass);
 	backdrop-filter: blur(16px);
+	-webkit-backdrop-filter: blur(16px);
 	padding: 8px;
 }
 
@@ -663,6 +664,7 @@ a.default-link:hover {
 		border-right: 1px solid var(--sarca-border);
 		background: var(--sarca-modal-bg);
 		backdrop-filter: blur(20px);
+		-webkit-backdrop-filter: blur(20px);
 		animation: sarca-fade 0.2s ease both;
 	}
 }
@@ -678,6 +680,17 @@ a.default-link:hover {
 	flex-wrap: wrap;
 	gap: 8px;
 	margin-bottom: 4px;
+}
+
+.files-page__nav-toggle {
+	display: none !important;
+}
+
+@media (max-width: 840px) {
+	.files-page__nav-toggle {
+		display: inline-flex !important;
+		margin-right: auto;
+	}
 }
 
 .files-canvas {
