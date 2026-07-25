@@ -1,9 +1,14 @@
-use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex as StdMutex},
+    time::Duration,
+};
 
 use anyhow::Result;
 use sarca_sync::{Binding, BindingMode, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Url};
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
@@ -11,11 +16,74 @@ use uuid::Uuid;
 pub struct ServerConfig {
     pub base_url: String,
     pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub email_verified: bool,
+}
+
+impl ServerConfig {
+    pub fn is_connected(&self) -> bool {
+        !self.base_url.trim().is_empty() && !self.access_token.trim().is_empty()
+    }
+
+    pub fn app_url(&self) -> Result<Url> {
+        let base = self.base_url.trim().trim_end_matches('/');
+        Url::parse(&format!("{base}/")).map_err(|e| anyhow::anyhow!(e))
+    }
+}
+
+#[derive(Clone)]
+pub struct SessionInject {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub email: String,
+    pub email_verified: bool,
+}
+
+impl From<&ServerConfig> for SessionInject {
+    fn from(cfg: &ServerConfig) -> Self {
+        Self {
+            access_token: cfg.access_token.clone(),
+            refresh_token: cfg.refresh_token.clone(),
+            email: cfg.email.clone(),
+            email_verified: cfg.email_verified,
+        }
+    }
+}
+
+impl SessionInject {
+    pub fn eval_script(&self) -> String {
+        let access = serde_json::to_string(&self.access_token).unwrap_or_else(|_| "\"\"".into());
+        let refresh = serde_json::to_string(&self.refresh_token).unwrap_or_else(|_| "\"\"".into());
+        let user = serde_json::to_string(&serde_json::json!({
+            "email": self.email,
+            "email_verified": self.email_verified,
+        }))
+        .unwrap_or_else(|_| "{}".into());
+        format!(
+            r#"(function(){{
+  try {{
+    localStorage.setItem('access_token', {access});
+    localStorage.setItem('refresh_token', {refresh});
+    localStorage.setItem('user', {user});
+    if (sessionStorage.getItem('__sarca_native_session') !== '1') {{
+      sessionStorage.setItem('__sarca_native_session', '1');
+      location.replace('/');
+    }}
+  }} catch (e) {{ console.error('sarca session inject', e); }}
+}})();"#
+        )
+    }
 }
 
 pub struct AppSyncState {
     pub engine: Arc<SyncEngine>,
     pub server: Arc<Mutex<ServerConfig>>,
+    pub pending_inject: Arc<StdMutex<Option<SessionInject>>>,
+    pub shell_url: Arc<StdMutex<Option<Url>>>,
     data_dir: PathBuf,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
@@ -44,6 +112,8 @@ impl AppSyncState {
         Ok(Self {
             engine,
             server: Arc::new(Mutex::new(server)),
+            pending_inject: Arc::new(StdMutex::new(None)),
+            shell_url: Arc::new(StdMutex::new(None)),
             data_dir,
             shutdown_tx,
         })
@@ -69,6 +139,39 @@ impl AppSyncState {
             .set_credentials(cfg.base_url.clone(), cfg.access_token.clone())
             .await;
         Ok(())
+    }
+
+    pub fn queue_inject(&self, inject: SessionInject) {
+        if let Ok(mut guard) = self.pending_inject.lock() {
+            *guard = Some(inject);
+        }
+    }
+
+    pub fn take_inject(&self) -> Option<SessionInject> {
+        self.pending_inject.lock().ok().and_then(|mut g| g.take())
+    }
+
+    pub fn remember_shell_url(&self, url: Url) {
+        if is_shell_url(&url) {
+            if let Ok(mut guard) = self.shell_url.lock() {
+                *guard = Some(url);
+            }
+        }
+    }
+
+    pub fn shell_url(&self) -> Option<Url> {
+        self.shell_url.lock().ok().and_then(|g| g.clone())
+    }
+}
+
+pub fn is_shell_url(url: &Url) -> bool {
+    match url.scheme() {
+        "tauri" | "asset" => true,
+        "http" | "https" => matches!(
+            url.host_str(),
+            Some("localhost") | Some("127.0.0.1") | Some("tauri.localhost")
+        ),
+        _ => false,
     }
 }
 
@@ -101,4 +204,25 @@ pub fn new_binding(
         mode: parse_mode(mode),
         enabled: true,
     })
+}
+
+pub fn navigate_to_server(app: &AppHandle, cfg: &ServerConfig) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window missing".to_string())?;
+    let state = app.state::<AppSyncState>();
+    state.queue_inject(SessionInject::from(cfg));
+    let url = cfg.app_url().map_err(|e| e.to_string())?;
+    window.navigate(url).map_err(|e| e.to_string())
+}
+
+pub fn navigate_to_shell(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window missing".to_string())?;
+    let state = app.state::<AppSyncState>();
+    let url = state
+        .shell_url()
+        .unwrap_or_else(|| Url::parse("tauri://localhost").expect("valid shell url"));
+    window.navigate(url).map_err(|e| e.to_string())
 }
