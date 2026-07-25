@@ -42,6 +42,15 @@ pnpm exec tauri icon ../logo.svg
 ## CI artifacts
 
 GitHub Actions workflow [`.github/workflows/client.yml`](../.github/workflows/client.yml) builds in parallel.
+GitHub **Releases** (`.github/workflows/release.yml`) attach desktop installers plus:
+
+| Asset | Notes |
+| --- | --- |
+| `sarca_client_android_arm64.apk` | Android arm64 sideload APK |
+| `sarca_client_ios_arm64.ipa` | Device IPA when Apple signing secrets are set |
+| `sarca_client_ios_arm64-simulator.zip` | Fallback without Apple certs |
+
+Optional secrets for signed mobile builds: `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD`, `APPLE_CERTIFICATE_BASE64`, `APPLE_CERTIFICATE_PASSWORD`.
 
 ## Mobile
 
