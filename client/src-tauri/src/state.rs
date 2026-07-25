@@ -53,10 +53,6 @@ impl AppSyncState {
         })
     }
 
-    pub fn data_dir(&self) -> &PathBuf {
-        &self.data_dir
-    }
-
     pub fn start_background_loop(&self) {
         let engine = self.engine.clone();
         let rx = self.shutdown_tx.subscribe();
