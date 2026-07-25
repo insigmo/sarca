@@ -595,7 +595,7 @@ a.default-link:hover {
 
 .files-sidebar--desktop {
 	display: none;
-	width: 240px;
+	width: 220px;
 	flex-shrink: 0;
 	flex-direction: column;
 	align-self: stretch;
@@ -606,13 +606,13 @@ a.default-link:hover {
 	background: color-mix(in srgb, var(--sarca-glass) 88%, var(--sarca-surface, transparent));
 	backdrop-filter: blur(18px);
 	-webkit-backdrop-filter: blur(18px);
-	padding: 10px 10px 16px;
+	padding: 8px 8px 12px;
 	box-shadow: none;
 }
 
 .files-sidebar--collapsed {
-	width: 72px;
-	padding-inline: 8px;
+	width: 64px;
+	padding-inline: 6px;
 }
 
 .files-sidebar--collapsed .files-sidebar__label {
@@ -622,11 +622,19 @@ a.default-link:hover {
 .files-sidebar__header {
 	display: flex;
 	justify-content: flex-end;
-	padding: 2px;
+	padding: 0 0 4px;
 }
 
 .files-sidebar--collapsed .files-sidebar__header {
 	justify-content: center;
+}
+
+.files-sidebar__header .MuiIconButton-root {
+	padding: 4px;
+}
+
+.files-sidebar__header .MuiSvgIcon-root {
+	font-size: 1.1rem;
 }
 
 .files-sidebar__nav {
@@ -634,36 +642,51 @@ a.default-link:hover {
 	flex: 1;
 	flex-direction: column;
 	justify-content: space-between;
-	min-height: 280px;
-	gap: 8px;
+	min-height: 0;
+	gap: 6px;
 }
 
 .files-sidebar__top,
 .files-sidebar__bottom {
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
+	gap: 2px;
+}
+
+.files-sidebar__divider {
+	height: 1px;
+	margin: 8px 6px 6px;
+	background: color-mix(in srgb, var(--sarca-ink) 12%, transparent);
+	border: none;
+}
+
+.files-sidebar--collapsed .files-sidebar__divider {
+	margin-inline: 4px;
 }
 
 .files-sidebar__new {
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	gap: 10px;
+	gap: 6px;
 	width: 100%;
-	min-height: 48px;
-	margin-bottom: 8px;
-	padding: 10px 16px;
+	min-height: 40px;
+	margin-bottom: 6px;
+	padding: 6px 12px;
 	border: 1px solid var(--sarca-border);
 	border-radius: 999px;
 	background: var(--sarca-surface, #fff);
 	box-shadow: var(--sarca-shadow-soft);
 	color: var(--sarca-ink);
 	font: inherit;
-	font-size: 0.95rem;
+	font-size: 0.82rem;
 	font-weight: 700;
 	cursor: pointer;
 	transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+.files-sidebar__new .MuiSvgIcon-root {
+	font-size: 1.05rem;
 }
 
 [data-theme='dark'] .files-sidebar__new {
@@ -687,8 +710,8 @@ a.default-link:hover {
 }
 
 .files-sidebar--collapsed .files-sidebar__new {
-	width: 44px;
-	min-height: 44px;
+	width: 40px;
+	min-height: 40px;
 	padding: 0;
 	margin-inline: auto;
 	border-radius: 50%;
@@ -711,16 +734,16 @@ a.default-link:hover {
 .files-sidebar__item {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: 8px;
 	width: 100%;
-	min-height: 44px;
-	padding: 8px 10px;
+	min-height: 36px;
+	padding: 6px 8px;
 	border: none;
-	border-radius: 14px;
+	border-radius: 10px;
 	background: transparent;
 	color: var(--sarca-ink-soft);
 	font: inherit;
-	font-size: 0.88rem;
+	font-size: 0.8rem;
 	font-weight: 600;
 	cursor: pointer;
 	text-align: left;
@@ -728,9 +751,14 @@ a.default-link:hover {
 	transition: background 0.18s ease, color 0.18s ease;
 }
 
+.files-sidebar__item .MuiSvgIcon-root {
+	font-size: 1.15rem;
+}
+
 .files-sidebar--collapsed .files-sidebar__item {
 	justify-content: center;
-	padding-inline: 8px;
+	padding-inline: 6px;
+	min-height: 40px;
 }
 
 .files-sidebar__item:hover {

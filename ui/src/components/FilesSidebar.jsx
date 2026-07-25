@@ -144,6 +144,7 @@ const SidebarNav = (props) => {
 				</Show>
 			</div>
 			<div class="files-sidebar__bottom">
+				<div class="files-sidebar__divider" aria-hidden="true" />
 				<button
 					type="button"
 					class="files-sidebar__item"
