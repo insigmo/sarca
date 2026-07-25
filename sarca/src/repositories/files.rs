@@ -38,8 +38,8 @@ impl<'d> FilesRepository<'d> {
             format!(
                 "
                 INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded, \
-                 chunk_size_bytes)
-                VALUES ($1, $2, $3, $4, $5, $6);
+                 chunk_size_bytes, source_created_at, source_mtime)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
             "
             )
             .as_str(),
@@ -50,6 +50,8 @@ impl<'d> FilesRepository<'d> {
         .bind(in_obj.storage_id)
         .bind(is_uploaded)
         .bind(in_obj.chunk_size_bytes)
+        .bind(in_obj.source_created_at)
+        .bind(in_obj.source_mtime)
         .execute(self.db)
         .await
         .map_err(|e| {
@@ -67,14 +69,16 @@ impl<'d> FilesRepository<'d> {
             }
         })?;
 
-        let storage = File::new(
+        let mut storage = File::new(
             id,
             in_obj.path,
             in_obj.size,
             in_obj.storage_id,
-            false,
+            is_uploaded,
             in_obj.chunk_size_bytes,
         );
+        storage.source_created_at = in_obj.source_created_at;
+        storage.source_mtime = in_obj.source_mtime;
         Ok(storage)
     }
 
@@ -101,7 +105,7 @@ impl<'d> FilesRepository<'d> {
         sqlx::query_as(
             format!(
                 r#"
-                INSERT INTO files (path, storage_id, id, size, is_uploaded, chunk_size_bytes)
+                INSERT INTO files (path, storage_id, id, size, is_uploaded, chunk_size_bytes, source_created_at, source_mtime)
                 WITH f AS (
                     SELECT path
                     FROM {FILES_TABLE}
@@ -154,7 +158,9 @@ impl<'d> FilesRepository<'d> {
                     $4,
                     $5,
                     false,
-                    $6
+                    $6,
+                    $7,
+                    $8
                 FROM f
                 RETURNING *;
             "#
@@ -167,6 +173,8 @@ impl<'d> FilesRepository<'d> {
         .bind(id)
         .bind(in_obj.size)
         .bind(in_obj.chunk_size_bytes)
+        .bind(in_obj.source_created_at)
+        .bind(in_obj.source_mtime)
         .fetch_one(self.db)
         .await
         .map_err(|e| match e {
@@ -502,6 +510,7 @@ impl<'d> FilesRepository<'d> {
             .map_err(|e| map_not_found(&e, "file chunks"))
     }
 
+    #[allow(dead_code)]
     pub async fn count_chunks_of_file(&self, file_id: Uuid) -> SarcaResult<i64> {
         let row: (i64,) = sqlx::query_as(
             format!("SELECT COUNT(*)::BigInt FROM {CHUNKS_TABLE} WHERE file_id = $1").as_str(),
@@ -1231,9 +1240,10 @@ impl<'d> FilesRepository<'d> {
                 "
                 INSERT INTO {FILES_TABLE} (
                     id, path, size, storage_id, is_uploaded,
-                    thumb_telegram_file_id, thumb_telegram_message_id, chunk_size_bytes
+                    thumb_telegram_file_id, thumb_telegram_message_id, chunk_size_bytes,
+                    source_created_at, source_mtime
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 RETURNING *
                 "
             )
@@ -1247,6 +1257,8 @@ impl<'d> FilesRepository<'d> {
         .bind(&source.thumb_telegram_file_id)
         .bind(source.thumb_telegram_message_id)
         .bind(source.chunk_size_bytes)
+        .bind(source.source_created_at)
+        .bind(source.source_mtime)
         .fetch_one(self.db)
         .await
         .map_err(|e| {
