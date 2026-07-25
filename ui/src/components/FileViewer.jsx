@@ -28,6 +28,26 @@ const formatTime = (sec) => {
 }
 
 /**
+ * True when a click lands in the letterbox (empty) area of an
+ * object-fit:contain media element, not on the painted content.
+ * @param {HTMLImageElement | HTMLVideoElement} el
+ * @param {number} clientX
+ * @param {number} clientY
+ */
+const isLetterboxClick = (el, clientX, clientY) => {
+	const nw = el instanceof HTMLVideoElement ? el.videoWidth : el.naturalWidth
+	const nh = el instanceof HTMLVideoElement ? el.videoHeight : el.naturalHeight
+	if (!nw || !nh) return false
+	const rect = el.getBoundingClientRect()
+	const scale = Math.min(rect.width / nw, rect.height / nh)
+	const w = nw * scale
+	const h = nh * scale
+	const left = rect.left + (rect.width - w) / 2
+	const top = rect.top + (rect.height - h) / 2
+	return clientX < left || clientX > left + w || clientY < top || clientY > top + h
+}
+
+/**
  * @typedef {Object} FileViewerProps
  * @property {boolean} open
  * @property {import("../api").FSElement | null} file
@@ -703,7 +723,12 @@ const FileViewer = (props) => {
 						</button>
 					</Show>
 
-					<div class="file-viewer__stage">
+					<div
+						class="file-viewer__stage"
+						onClick={(e) => {
+							if (e.target === e.currentTarget) props.onClose()
+						}}
+					>
 						<Show when={loading()}>
 							<div class="file-viewer__loading">
 								<CircularProgress color="secondary" />
@@ -721,6 +746,11 @@ const FileViewer = (props) => {
 									class="file-viewer__image"
 									src={mediaUrl()}
 									alt={props.file.name}
+									onClick={(e) => {
+										if (isLetterboxClick(e.currentTarget, e.clientX, e.clientY)) {
+											props.onClose()
+										}
+									}}
 								/>
 							</Show>
 
@@ -746,7 +776,13 @@ const FileViewer = (props) => {
 											if (!silentBufferKick) setPlaying(true)
 										}}
 										onPause={() => setPlaying(false)}
-										onClick={togglePlay}
+										onClick={(e) => {
+											if (isLetterboxClick(e.currentTarget, e.clientX, e.clientY)) {
+												props.onClose()
+												return
+											}
+											togglePlay()
+										}}
 										class="file-viewer__video"
 									/>
 									<Show when={firstChunkLoading()}>
