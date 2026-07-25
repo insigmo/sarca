@@ -17,6 +17,7 @@ use super::{
     files::FilesRouter,
     recent::RecentRouter,
     shares::SharesRouter,
+    sync::SyncRouter,
     trash::TrashRouter,
 };
 use crate::{
@@ -71,6 +72,7 @@ impl StoragesRouter {
             .nest("/:storage_id/favorites", favorites_router)
             .nest("/:storage_id/recent", recent_router)
             .nest("/:storage_id/shares", shares_router)
+            .nest("/:storage_id/sync", SyncRouter::get_router(state.clone()))
             .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required))
             .with_state(state)
     }

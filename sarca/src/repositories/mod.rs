@@ -10,4 +10,5 @@ pub mod share_links;
 pub mod storage_channels;
 pub mod storage_workers;
 pub mod storages;
+pub mod sync;
 pub mod users;

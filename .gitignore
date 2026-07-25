@@ -26,8 +26,14 @@ runtime/
 # UI
 ui/node_modules/
 ui/dist/
-docs/
 
+# Native client
+client/node_modules/
+client/dist/
+client/src-tauri/gen/
+
+# Local docs override (tracked specs live under docs/superpowers)
+docs/
 
 .idea/
 .tmp/
