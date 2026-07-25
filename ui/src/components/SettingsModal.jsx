@@ -161,7 +161,7 @@ const SettingsModal = () => {
 							<div>
 								<h2 id="settings-modal-title">Settings</h2>
 								<p class="settings-modal__sub">
-									Access, trash, account, and storage
+									General, access, trash, and storage
 								</p>
 							</div>
 							<IconButton
@@ -177,6 +177,20 @@ const SettingsModal = () => {
 						<div class="settings-modal__layout">
 							<nav class="settings-nav" aria-label="Settings sections">
 								<p class="settings-nav__label">Menu</p>
+								<button
+									type="button"
+									class="settings-nav__item"
+									classList={{ 'settings-nav__item--active': tab() === 'general' }}
+									onClick={() => setTab('general')}
+								>
+									<span class="settings-nav__icon" aria-hidden="true">
+										<PersonOutlineIcon fontSize="small" />
+									</span>
+									<span class="settings-nav__text">
+										<span class="settings-nav__title">General</span>
+										<span class="settings-nav__desc">Theme &amp; session</span>
+									</span>
+								</button>
 								<button
 									type="button"
 									class="settings-nav__item"
@@ -203,20 +217,6 @@ const SettingsModal = () => {
 									<span class="settings-nav__text">
 										<span class="settings-nav__title">Trash</span>
 										<span class="settings-nav__desc">Auto-delete</span>
-									</span>
-								</button>
-								<button
-									type="button"
-									class="settings-nav__item"
-									classList={{ 'settings-nav__item--active': tab() === 'account' }}
-									onClick={() => setTab('account')}
-								>
-									<span class="settings-nav__icon" aria-hidden="true">
-										<PersonOutlineIcon fontSize="small" />
-									</span>
-									<span class="settings-nav__text">
-										<span class="settings-nav__title">Account</span>
-										<span class="settings-nav__desc">Theme &amp; session</span>
 									</span>
 								</button>
 								<button
@@ -353,7 +353,7 @@ const SettingsModal = () => {
 									</div>
 								</Show>
 
-								<Show when={tab() === 'account'}>
+								<Show when={tab() === 'general'}>
 									<div class="settings-account">
 										<div class="settings-account__row">
 											<div>

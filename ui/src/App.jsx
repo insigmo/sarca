@@ -22,6 +22,8 @@ const WorkersRedirect = () => {
 	return <Navigate href="/storages" />
 }
 
+const fontFamily = "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
+
 /**
  * Palette colors must stay parseable by SUID's colorManipulator (hex/rgb/rgba).
  * CSS vars / color-mix() throw at runtime (Button/IconButton call alpha() on them).
@@ -32,38 +34,38 @@ const lightTheme = createTheme({
 	palette: {
 		mode: 'light',
 		primary: {
-			main: '#5B6CFF',
-			dark: '#3D4AD6',
-			light: '#8B9BFF',
-			contrastText: '#F7F5FB',
+			main: '#7C5CBF',
+			dark: '#5A3D9E',
+			light: '#9B7FD4',
+			contrastText: '#FAF8F5',
 		},
 		secondary: {
-			main: '#D9A441',
-			dark: '#B8862E',
-			light: '#F0D089',
-			contrastText: '#1A1408',
+			main: '#5C5346',
+			dark: '#3D3A36',
+			light: '#8A8278',
+			contrastText: '#FAF8F5',
 		},
 		background: {
-			default: '#ECE8F4',
-			paper: '#F7F5FB',
+			default: '#EBE8E2',
+			paper: '#F7F5F1',
 		},
 		text: {
-			primary: '#1A1F36',
-			secondary: '#6B7190',
+			primary: '#1C1B19',
+			secondary: '#6B6860',
 		},
-		divider: 'rgba(26, 31, 54, 0.08)',
+		divider: 'rgba(28, 27, 25, 0.1)',
 	},
 	typography: {
-		fontFamily: "'Plus Jakarta Sans', 'Segoe UI', sans-serif",
-		h1: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h2: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h3: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h4: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h5: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h6: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		button: { textTransform: 'none', fontWeight: 700, letterSpacing: 0.2 },
+		fontFamily,
+		h1: { fontFamily, fontWeight: 600 },
+		h2: { fontFamily, fontWeight: 600 },
+		h3: { fontFamily, fontWeight: 600 },
+		h4: { fontFamily, fontWeight: 600 },
+		h5: { fontFamily, fontWeight: 600 },
+		h6: { fontFamily, fontWeight: 600 },
+		button: { textTransform: 'none', fontWeight: 600, letterSpacing: 0.15 },
 	},
-	shape: { borderRadius: 20 },
+	shape: { borderRadius: 10 },
 	components: sharedComponents('light'),
 })
 
@@ -71,38 +73,38 @@ const darkTheme = createTheme({
 	palette: {
 		mode: 'dark',
 		primary: {
-			main: '#8B9BFF',
-			dark: '#5B6CFF',
-			light: '#B0BBFF',
-			contrastText: '#0A0E28',
+			main: '#A78BFA',
+			dark: '#8B7CF7',
+			light: '#C4B5FD',
+			contrastText: '#0A0A0A',
 		},
 		secondary: {
-			main: '#D9A441',
-			dark: '#B8862E',
-			light: '#F0C56A',
-			contrastText: '#1A1408',
+			main: '#C4B8A8',
+			dark: '#A89F92',
+			light: '#DDD4C8',
+			contrastText: '#1C1B19',
 		},
 		background: {
-			default: '#0D1230',
-			paper: '#141A3A',
+			default: '#000000',
+			paper: '#1A1A1A',
 		},
 		text: {
-			primary: '#EEF0FF',
-			secondary: '#9AA0C4',
+			primary: '#F5F5F5',
+			secondary: '#9A9A9A',
 		},
-		divider: 'rgba(255, 255, 255, 0.1)',
+		divider: 'rgba(255, 255, 255, 0.08)',
 	},
 	typography: {
-		fontFamily: "'Plus Jakarta Sans', 'Segoe UI', sans-serif",
-		h1: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h2: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h3: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h4: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h5: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		h6: { fontFamily: "'Fraunces', Georgia, serif", fontWeight: 600 },
-		button: { textTransform: 'none', fontWeight: 700, letterSpacing: 0.2 },
+		fontFamily,
+		h1: { fontFamily, fontWeight: 600 },
+		h2: { fontFamily, fontWeight: 600 },
+		h3: { fontFamily, fontWeight: 600 },
+		h4: { fontFamily, fontWeight: 600 },
+		h5: { fontFamily, fontWeight: 600 },
+		h6: { fontFamily, fontWeight: 600 },
+		button: { textTransform: 'none', fontWeight: 600, letterSpacing: 0.15 },
 	},
-	shape: { borderRadius: 20 },
+	shape: { borderRadius: 10 },
 	components: sharedComponents('dark'),
 })
 
@@ -115,13 +117,13 @@ function sharedComponents(mode) {
 		MuiButton: {
 			styleOverrides: {
 				root: {
-					borderRadius: 16,
-					paddingInline: 18,
+					borderRadius: 10,
+					paddingInline: 16,
 					boxShadow: 'none',
 					'&:hover': {
 						boxShadow: isDark
-							? '0 8px 24px rgba(139, 155, 255, 0.22)'
-							: '0 8px 24px rgba(91, 108, 255, 0.18)',
+							? '0 4px 14px rgba(167, 139, 250, 0.22)'
+							: '0 4px 14px rgba(124, 92, 191, 0.18)',
 					},
 				},
 			},
@@ -140,7 +142,7 @@ function sharedComponents(mode) {
 		MuiFab: {
 			styleOverrides: {
 				root: {
-					borderRadius: 18,
+					borderRadius: 12,
 				},
 				extended: {
 					borderRadius: 999,

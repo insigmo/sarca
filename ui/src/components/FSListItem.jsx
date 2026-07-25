@@ -1,14 +1,11 @@
 import ContentCopyIcon from '@suid/icons-material/ContentCopy'
 import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
 import DriveFileRenameOutlineIcon from '@suid/icons-material/DriveFileRenameOutline'
-import CheckBoxIcon from '@suid/icons-material/CheckBox'
-import CheckBoxOutlineBlankIcon from '@suid/icons-material/CheckBoxOutlineBlank'
 import DeleteIcon from '@suid/icons-material/Delete'
 import DeleteForeverIcon from '@suid/icons-material/DeleteForever'
 import DownloadIcon from '@suid/icons-material/Download'
 import InfoIcon from '@suid/icons-material/Info'
 import LinkIcon from '@suid/icons-material/Link'
-import MoreVertIcon from '@suid/icons-material/MoreVert'
 import RestoreFromTrashIcon from '@suid/icons-material/RestoreFromTrash'
 import StarIcon from '@suid/icons-material/Star'
 import StarBorderIcon from '@suid/icons-material/StarBorder'
@@ -32,6 +29,8 @@ import FileTypeIcon from './FileTypeIcon'
 import ShareLinkDialog from './ShareLinkDialog'
 import { alertStore } from './AlertStack'
 
+const LONG_PRESS_MS = 520
+
 /**
  * @typedef {Object} FSListItemProps
  * @property {import("../api").FSElement} fsElement
@@ -43,10 +42,10 @@ import { alertStore } from './AlertStack'
  * @property {'tiles' | 'list'} [layout]
  * @property {boolean} [selectable]
  * @property {boolean} [selected]
- * @property {boolean} [selectionActive] Any item selected — keep checkboxes visible
- * @property {() => void} [onToggleSelect]
  * @property {(el: import("../api").FSElement, event: MouseEvent) => void} [onSelectItem]
- *   Explorer-style select (click / ctrl / shift). Double-click still opens via onOpen/navigate.
+ *   Single click selects; Ctrl/Shift multi-select. Double-click opens via onOpen/navigate.
+ * @property {(el: import("../api").FSElement) => void} [onContextMenuItem]
+ *   Called before opening the context menu (e.g. select the target).
  * @property {boolean} [draggableItem] Browse-mode internal drag source
  * @property {(el: import("../api").FSElement, event: DragEvent) => void} [onDragStartItem]
  * @property {boolean} [dropTarget] Folder accepting drops
@@ -61,6 +60,7 @@ import { alertStore } from './AlertStack'
  * @property {(el: import("../api").FSElement) => void} [onTrashNavigate]
  * @property {(el: import("../api").FSElement) => void} [onCopyTo]
  * @property {(el: import("../api").FSElement) => void} [onMoveTo]
+ * @property {(el: import("../api").FSElement) => void} [onRename]
  */
 
 /**
@@ -68,7 +68,8 @@ import { alertStore } from './AlertStack'
  * @param {FSListItemProps} props
  */
 const FSListItem = (props) => {
-	const [moreAnchorEl, setMoreAnchorEl] = createSignal(null)
+	/** @type {[import('solid-js').Accessor<{ top: number, left: number } | null>, any]} */
+	const [menuPos, setMenuPos] = createSignal(null)
 	const [isActionConfirmDialogOpened, setIsActionConfirmDialogOpened] =
 		createSignal(false)
 	const [isInfoDialogOpened, setIsInfoDialogOpened] = createSignal(false)
@@ -79,11 +80,66 @@ const FSListItem = (props) => {
 	const navigate = useNavigate()
 	const params = useParams()
 
-	const openMore = () => Boolean(moreAnchorEl())
+	/** @type {ReturnType<typeof setTimeout> | null} */
+	let longPressTimer = null
+	let suppressClickAfterLongPress = false
+
+	const openMore = () => Boolean(menuPos())
 
 	const handleCloseMore = () => {
-		setMoreAnchorEl(null)
+		setMenuPos(null)
 	}
+
+	const clearLongPress = () => {
+		if (longPressTimer != null) {
+			clearTimeout(longPressTimer)
+			longPressTimer = null
+		}
+	}
+
+	/**
+	 * @param {number} clientX
+	 * @param {number} clientY
+	 */
+	const openContextMenuAt = (clientX, clientY) => {
+		if (isParentNav()) return
+		props.onContextMenuItem?.(props.fsElement)
+		setMenuPos({ top: clientY, left: clientX })
+	}
+
+	/**
+	 * @param {MouseEvent} event
+	 */
+	const handleContextMenu = (event) => {
+		event.preventDefault()
+		event.stopPropagation()
+		clearLongPress()
+		openContextMenuAt(event.clientX, event.clientY)
+	}
+
+	/**
+	 * @param {TouchEvent} event
+	 */
+	const handleTouchStart = (event) => {
+		if (isParentNav() || event.touches.length !== 1) return
+		const touch = event.touches[0]
+		clearLongPress()
+		longPressTimer = setTimeout(() => {
+			longPressTimer = null
+			suppressClickAfterLongPress = true
+			openContextMenuAt(touch.clientX, touch.clientY)
+		}, LONG_PRESS_MS)
+	}
+
+	const handleTouchEnd = () => {
+		clearLongPress()
+	}
+
+	const handleTouchMove = () => {
+		clearLongPress()
+	}
+
+	onCleanup(() => clearLongPress())
 
 	const isParentNav = () => props.fsElement.name === '..'
 
@@ -228,20 +284,26 @@ const FSListItem = (props) => {
 		props.onDeleteForever?.(props.fsElement)
 	}
 
-	const rename = async () => {
+	const rename = () => {
 		handleCloseMore()
+		if (typeof props.onRename === 'function') {
+			props.onRename(props.fsElement)
+			return
+		}
 		const currentName = props.fsElement.name
 		const newName = window.prompt('New name', currentName)
 		if (!newName || newName === currentName) {
 			return
 		}
-		try {
-			await API.files.rename(params.id, normalizedPath(), newName)
-			addAlert(`Renamed to "${newName}"`, 'success')
-			props.onDelete()
-		} catch (err) {
-			console.error(err)
-		}
+		API.files
+			.rename(params.id, normalizedPath(), newName)
+			.then(() => {
+				addAlert(`Renamed to "${newName}"`, 'success')
+				props.onDelete()
+			})
+			.catch((err) => {
+				console.error(err)
+			})
 	}
 
 	const copyTo = () => {
@@ -297,38 +359,23 @@ const FSListItem = (props) => {
 		return typeof v === 'function' ? Boolean(v()) : Boolean(v)
 	}
 
-	const isSelectionActive = () => {
-		const v = props.selectionActive
-		return typeof v === 'function' ? Boolean(v()) : Boolean(v)
-	}
-
 	const isDropActive = () => {
 		const v = props.dropActive
 		return typeof v === 'function' ? Boolean(v()) : Boolean(v)
 	}
 
-	const openMoreMenu = (event) => {
-		event.stopPropagation()
-		setMoreAnchorEl(event.currentTarget)
-	}
-
 	const showSelect = () => Boolean(props.selectable) && !isParentNav()
-
-	const toggleSelect = (event) => {
-		event.stopPropagation()
-		event.preventDefault()
-		props.onToggleSelect?.()
-	}
 
 	const dragEnabled = () => Boolean(props.draggableItem) && !isParentNav()
 
 	const handleItemClick = (event) => {
-		// Modifier+click still multi-selects without opening.
-		if (
-			showSelect() &&
-			typeof props.onSelectItem === 'function' &&
-			(event.ctrlKey || event.metaKey || event.shiftKey)
-		) {
+		if (suppressClickAfterLongPress) {
+			suppressClickAfterLongPress = false
+			event.preventDefault()
+			event.stopPropagation()
+			return
+		}
+		if (showSelect() && typeof props.onSelectItem === 'function') {
 			event.preventDefault()
 			event.stopPropagation()
 			props.onSelectItem(props.fsElement, event)
@@ -341,6 +388,13 @@ const FSListItem = (props) => {
 		event.preventDefault()
 		event.stopPropagation()
 		handleNavigate()
+	}
+
+	const handleItemKeyDown = (e) => {
+		if (e.key === 'Enter' || e.key === ' ') {
+			e.preventDefault()
+			handleNavigate()
+		}
 	}
 
 	const itemClassList = (base) => ({
@@ -357,34 +411,7 @@ const FSListItem = (props) => {
 		return p.endsWith('/') ? p : `${p}/`
 	}
 
-	const selectControl = (variant) => (
-		<Show when={showSelect()}>
-			<div
-				class={
-					variant === 'list' ? 'fs-list-item__check' : 'fs-grid-item__check'
-				}
-				classList={{
-					'fs-item-check--visible': isSelectionActive() || isSelected(),
-				}}
-			>
-				<IconButton
-					size="small"
-					onClick={toggleSelect}
-					aria-label={isSelected() ? 'Deselect' : 'Select'}
-					aria-pressed={isSelected()}
-				>
-					{isSelected() ? (
-						<CheckBoxIcon fontSize="small" color="primary" />
-					) : (
-						<CheckBoxOutlineBlankIcon fontSize="small" />
-					)}
-				</IconButton>
-			</div>
-		</Show>
-	)
-
-	/** Tile star: hidden while selectable (favorite remains in menu). */
-	const showTileStar = () => canFavorite() && !showSelect()
+	const showTileStar = () => canFavorite()
 
 	return (
 		<>
@@ -416,14 +443,13 @@ const FSListItem = (props) => {
 						}}
 						onClick={handleItemClick}
 						onDblClick={handleItemDblClick}
-						onKeyDown={(e) => {
-							if (e.key === 'Enter' || e.key === ' ') {
-								e.preventDefault()
-								handleNavigate()
-							}
-						}}
+						onContextMenu={handleContextMenu}
+						onTouchStart={handleTouchStart}
+						onTouchEnd={handleTouchEnd}
+						onTouchMove={handleTouchMove}
+						onTouchCancel={handleTouchEnd}
+						onKeyDown={handleItemKeyDown}
 					>
-						{selectControl('grid')}
 						<Show when={showTileStar()}>
 							<div
 								class="fs-grid-item__star"
@@ -448,17 +474,6 @@ const FSListItem = (props) => {
 									) : (
 										<StarBorderIcon fontSize="small" />
 									)}
-								</IconButton>
-							</div>
-						</Show>
-						<Show when={!isParentNav()}>
-							<div class="fs-grid-item__more">
-								<IconButton
-									size="small"
-									onClick={openMoreMenu}
-									aria-label="More actions"
-								>
-									<MoreVertIcon fontSize="small" />
 								</IconButton>
 							</div>
 						</Show>
@@ -502,14 +517,13 @@ const FSListItem = (props) => {
 					}}
 					onClick={handleItemClick}
 					onDblClick={handleItemDblClick}
-					onKeyDown={(e) => {
-						if (e.key === 'Enter' || e.key === ' ') {
-							e.preventDefault()
-							handleNavigate()
-						}
-					}}
+					onContextMenu={handleContextMenu}
+					onTouchStart={handleTouchStart}
+					onTouchEnd={handleTouchEnd}
+					onTouchMove={handleTouchMove}
+					onTouchCancel={handleTouchEnd}
+					onKeyDown={handleItemKeyDown}
 				>
-					{selectControl('list')}
 					<FileTypeIcon
 						name={props.fsElement.name}
 						isFile={props.fsElement.is_file}
@@ -531,53 +545,68 @@ const FSListItem = (props) => {
 							</Show>
 						</div>
 					</div>
-					<Show when={canFavorite()}>
-						<div
-							class="fs-list-item__star"
-							classList={{ 'fs-list-item__star--active': favorited() }}
-						>
-							<IconButton
-								size="small"
-								onClick={toggleFavorite}
-								aria-label={
-									favorited()
-										? 'Remove from favorites'
-										: 'Add to favorites'
-								}
-								title={
-									favorited()
-										? 'Remove from favorites'
-										: 'Add to favorites'
-								}
+					<div class="fs-list-item__actions">
+						<Show when={canFavorite()}>
+							<div
+								class="fs-list-item__star"
+								classList={{ 'fs-list-item__star--active': favorited() }}
 							>
-								{favorited() ? (
-									<StarIcon fontSize="small" color="warning" />
-								) : (
-									<StarBorderIcon fontSize="small" />
-								)}
-							</IconButton>
-						</div>
-					</Show>
-					<Show when={!isParentNav()}>
-						<div class="fs-list-item__more">
-							<IconButton
-								size="small"
-								onClick={openMoreMenu}
-								aria-label="More actions"
-							>
-								<MoreVertIcon fontSize="small" />
-							</IconButton>
-						</div>
-					</Show>
+								<IconButton
+									size="small"
+									onClick={toggleFavorite}
+									aria-label={
+										favorited()
+											? 'Remove from favorites'
+											: 'Add to favorites'
+									}
+									title={
+										favorited()
+											? 'Remove from favorites'
+											: 'Add to favorites'
+									}
+								>
+									{favorited() ? (
+										<StarIcon fontSize="small" color="warning" />
+									) : (
+										<StarBorderIcon fontSize="small" />
+									)}
+								</IconButton>
+							</div>
+						</Show>
+						<Show when={!isParentNav()}>
+							<div class="fs-list-item__delete">
+								<IconButton
+									size="small"
+									onClick={(e) => {
+										e.stopPropagation()
+										e.preventDefault()
+										openActionConfirmDialog()
+									}}
+									aria-label={
+										props.trashMode ? 'Delete forever' : 'Delete'
+									}
+									title={
+										props.trashMode ? 'Delete forever' : 'Delete'
+									}
+								>
+									{props.trashMode ? (
+										<DeleteForeverIcon fontSize="small" color="warning" />
+									) : (
+										<DeleteIcon fontSize="small" color="warning" />
+									)}
+								</IconButton>
+							</div>
+						</Show>
+					</div>
 				</div>
 			</Show>
 
 			<MenuMUI
-				id="basic-menu"
-				anchorEl={moreAnchorEl()}
 				open={openMore()}
 				onClose={handleCloseMore}
-				MenuListProps={{ 'aria-labelledby': 'basic-button' }}
+				anchorReference="anchorPosition"
+				anchorPosition={menuPos() || { top: 0, left: 0 }}
+				transformOrigin={{ vertical: 'top', horizontal: 'left' }}
 			>
 				<Show
 					when={props.trashMode}

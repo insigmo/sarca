@@ -19,7 +19,7 @@ const NotFound = () => {
 			<Typography
 				variant="h1"
 				sx={{
-					fontFamily: "'Fraunces', Georgia, serif",
+					fontFamily: 'var(--sarca-display)',
 					fontSize: { xs: '4.5rem', sm: '6rem' },
 					color: 'primary.dark',
 					lineHeight: 1,
