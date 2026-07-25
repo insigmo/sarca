@@ -151,6 +151,8 @@ impl FilesRouter {
         let (mut filename_field, mut filename_from_file, mut parent_path, mut file_size) =
             (None::<String>, None::<String>, None::<String>, 0i64);
         let mut file_content_type = None::<String>;
+        let mut source_mtime = None::<chrono::DateTime<chrono::Utc>>;
+        let mut source_created_at = None::<chrono::DateTime<chrono::Utc>>;
 
         while let Some(mut field) = multipart
             .next_field()
@@ -197,6 +199,20 @@ impl FilesRouter {
                     let decoded = percent_decode_str(&raw_path).decode_utf8_lossy();
                     parent_path = Some(decoded.into_owned());
                 },
+                "mtime" => {
+                    let raw = field
+                        .text()
+                        .await
+                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid mtime".to_owned()))?;
+                    source_mtime = Self::parse_epoch_millis(&raw);
+                },
+                "created" => {
+                    let raw = field
+                        .text()
+                        .await
+                        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid created".to_owned()))?;
+                    source_created_at = Self::parse_epoch_millis(&raw);
+                },
                 _ => (),
             }
         }
@@ -217,9 +233,15 @@ impl FilesRouter {
             .await
             .map_err(<(StatusCode, String)>::from)?;
 
+        // Browser File API exposes lastModified; birthtime is usually unavailable, so
+        // fall back to mtime for "created" when the client omitted it.
+        let source_created_at = source_created_at.or(source_mtime);
+
         let chunk_size_bytes =
             state.config.chunk_size_bytes_for_file(&path, file_content_type.as_deref());
-        let in_file = InFile::new(path, file_size, storage_id).with_chunk_size(chunk_size_bytes);
+        let in_file = InFile::new(path, file_size, storage_id)
+            .with_chunk_size(chunk_size_bytes)
+            .with_source_times(source_created_at, source_mtime);
         let (progress_tx, progress_rx) = mpsc::channel(64);
         let db = state.db.clone();
         let client_tx = state.tx.clone();
@@ -345,6 +367,17 @@ impl FilesRouter {
             parts.push(part);
         }
         Ok(parts.join("/"))
+    }
+
+    /// Parse a browser `File.lastModified`-style epoch (ms or seconds) into UTC.
+    fn parse_epoch_millis(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let n: i64 = trimmed.parse().ok()?;
+        let ms = if n.abs() < 1_000_000_000_000 { n.saturating_mul(1000) } else { n };
+        chrono::DateTime::from_timestamp_millis(ms)
     }
 
     /// Join a parent folder path with a file name into a logical FS file path.

@@ -297,6 +297,10 @@ def test_share_folder_create_list_public_tree_revoke(
     )
     assert r.status_code == 204, r.text
 
+    r = client.get(f"/api/storages/{storage_id}/shares", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert all(s["id"] != share_id for s in r.json())
+
     r = client.get(f"/api/public/shares/{token}")
     assert r.status_code == 404, r.text
 
