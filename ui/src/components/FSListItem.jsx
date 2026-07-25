@@ -23,6 +23,7 @@ import { useNavigate, useParams } from '@solidjs/router'
 
 import API from '../api'
 import { fileBaseName, fileExtensionLabel } from '../common/fileLabel'
+import { convertSize } from '../common/size_converter'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
 import FileTypeIcon from './FileTypeIcon'
@@ -37,6 +38,7 @@ import { alertStore } from './AlertStack'
  * @property {(file: import("../api").FSElement) => void} [onOpen]
  * @property {boolean} [trashMode]
  * @property {boolean} [flatMode] Favorites / Recent: open files only, no folder browse
+ * @property {'tiles' | 'list'} [layout]
  * @property {boolean | (() => boolean)} [isFavorite]
  * @property {(el: import("../api").FSElement) => void | Promise<void>} [onToggleFavorite]
  * @property {(el: import("../api").FSElement) => void} [onRestore]
@@ -248,75 +250,177 @@ const FSListItem = (props) => {
 		fileBaseName(props.fsElement.name, props.fsElement.is_file)
 	const displayExt = () =>
 		fileExtensionLabel(props.fsElement.name, props.fsElement.is_file)
+	const isList = () => props.layout === 'list'
+
+	const sizeLabel = () => {
+		if (!props.fsElement.is_file) return 'Folder'
+		const size = Number(props.fsElement.size)
+		if (!Number.isFinite(size) || size < 0) return '—'
+		return convertSize(size)
+	}
+
+	const mtimeLabel = () => {
+		const raw = props.fsElement.mtime
+		if (raw == null || raw === '') return ''
+		const d = new Date(typeof raw === 'number' && raw < 1e12 ? raw * 1000 : raw)
+		if (Number.isNaN(d.getTime())) return ''
+		return d.toLocaleString(undefined, {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+		})
+	}
+
+	const openMoreMenu = (event) => {
+		event.stopPropagation()
+		setMoreAnchorEl(event.currentTarget)
+	}
 
 	return (
 		<>
-			<div
-				class="fs-grid-item"
-				role="button"
-				tabIndex={0}
-				onClick={handleNavigate}
-				onKeyDown={(e) => {
-					if (e.key === 'Enter' || e.key === ' ') {
-						e.preventDefault()
-						handleNavigate()
-					}
-				}}
-			>
-				<Show when={canFavorite()}>
+			<Show
+				when={isList()}
+				fallback={
 					<div
-						class="fs-grid-item__star"
-						classList={{ 'fs-grid-item__star--active': favorited() }}
+						class="fs-grid-item"
+						role="button"
+						tabIndex={0}
+						onClick={handleNavigate}
+						onKeyDown={(e) => {
+							if (e.key === 'Enter' || e.key === ' ') {
+								e.preventDefault()
+								handleNavigate()
+							}
+						}}
 					>
-						<IconButton
-							size="small"
-							onClick={toggleFavorite}
-							aria-label={
-								favorited()
-									? 'Remove from favorites'
-									: 'Add to favorites'
-							}
-							title={
-								favorited()
-									? 'Remove from favorites'
-									: 'Add to favorites'
-							}
-						>
-							{favorited() ? (
-								<StarIcon fontSize="small" color="warning" />
-							) : (
-								<StarBorderIcon fontSize="small" />
-							)}
-						</IconButton>
-					</div>
-				</Show>
-				<Show when={!isParentNav()}>
-					<div class="fs-grid-item__more">
-						<IconButton
-							size="small"
-							onClick={(event) => {
-								event.stopPropagation()
-								setMoreAnchorEl(event.currentTarget)
-							}}
-							aria-label="More actions"
-						>
-							<MoreVertIcon fontSize="small" />
-						</IconButton>
-					</div>
-				</Show>
+						<Show when={canFavorite()}>
+							<div
+								class="fs-grid-item__star"
+								classList={{ 'fs-grid-item__star--active': favorited() }}
+							>
+								<IconButton
+									size="small"
+									onClick={toggleFavorite}
+									aria-label={
+										favorited()
+											? 'Remove from favorites'
+											: 'Add to favorites'
+									}
+									title={
+										favorited()
+											? 'Remove from favorites'
+											: 'Add to favorites'
+									}
+								>
+									{favorited() ? (
+										<StarIcon fontSize="small" color="warning" />
+									) : (
+										<StarBorderIcon fontSize="small" />
+									)}
+								</IconButton>
+							</div>
+						</Show>
+						<Show when={!isParentNav()}>
+							<div class="fs-grid-item__more">
+								<IconButton
+									size="small"
+									onClick={openMoreMenu}
+									aria-label="More actions"
+								>
+									<MoreVertIcon fontSize="small" />
+								</IconButton>
+							</div>
+						</Show>
 
-				<FileTypeIcon
-					name={props.fsElement.name}
-					isFile={props.fsElement.is_file}
-					thumbUrl={thumbUrl()}
-					size={64}
-				/>
+						<FileTypeIcon
+							name={props.fsElement.name}
+							isFile={props.fsElement.is_file}
+							thumbUrl={thumbUrl()}
+							size={64}
+						/>
 
-				<div class="fs-grid-item__name" title={props.fsElement.name}>
-					{displayName()}
+						<div class="fs-grid-item__name" title={props.fsElement.name}>
+							{displayName()}
+						</div>
+						<div class="fs-grid-item__ext">{displayExt()}</div>
+					</div>
+				}
+			>
+				<div
+					class="fs-list-item"
+					role="button"
+					tabIndex={0}
+					onClick={handleNavigate}
+					onKeyDown={(e) => {
+						if (e.key === 'Enter' || e.key === ' ') {
+							e.preventDefault()
+							handleNavigate()
+						}
+					}}
+				>
+					<FileTypeIcon
+						name={props.fsElement.name}
+						isFile={props.fsElement.is_file}
+						thumbUrl={thumbUrl()}
+						size={40}
+					/>
+					<div class="fs-list-item__body">
+						<div class="fs-list-item__name" title={props.fsElement.name}>
+							{displayName()}
+							<Show when={displayExt()}>
+								<span class="fs-list-item__ext">.{displayExt()}</span>
+							</Show>
+						</div>
+						<div class="fs-list-item__meta">
+							<span>{sizeLabel()}</span>
+							<Show when={mtimeLabel()}>
+								<span class="fs-list-item__dot">·</span>
+								<span>{mtimeLabel()}</span>
+							</Show>
+						</div>
+					</div>
+					<Show when={canFavorite()}>
+						<div
+							class="fs-list-item__star"
+							classList={{ 'fs-list-item__star--active': favorited() }}
+						>
+							<IconButton
+								size="small"
+								onClick={toggleFavorite}
+								aria-label={
+									favorited()
+										? 'Remove from favorites'
+										: 'Add to favorites'
+								}
+								title={
+									favorited()
+										? 'Remove from favorites'
+										: 'Add to favorites'
+								}
+							>
+								{favorited() ? (
+									<StarIcon fontSize="small" color="warning" />
+								) : (
+									<StarBorderIcon fontSize="small" />
+								)}
+							</IconButton>
+						</div>
+					</Show>
+					<Show when={!isParentNav()}>
+						<div class="fs-list-item__more">
+							<IconButton
+								size="small"
+								onClick={openMoreMenu}
+								aria-label="More actions"
+							>
+								<MoreVertIcon fontSize="small" />
+							</IconButton>
+						</div>
+					</Show>
 				</div>
-				<div class="fs-grid-item__ext">{displayExt()}</div>
-			</div>
+			</Show>
 
 			<MenuMUI
 				id="basic-menu"

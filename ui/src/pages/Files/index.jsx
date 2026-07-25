@@ -3,6 +3,8 @@ import { Show, createMemo, createSignal, mapArray, onCleanup, onMount } from 'so
 import MenuItem from '@suid/material/MenuItem'
 import SortIcon from '@suid/icons-material/Sort'
 import MenuIcon from '@suid/icons-material/Menu'
+import ViewListIcon from '@suid/icons-material/ViewList'
+import GridViewIcon from '@suid/icons-material/GridView'
 import Button from '@suid/material/Button'
 import IconButton from '@suid/material/IconButton'
 import Stack from '@suid/material/Stack'
@@ -62,6 +64,19 @@ const itemNormalizedPath = (el) => {
 	return el.path.endsWith('/') ? el.path : `${el.path}/`
 }
 
+const VIEW_MODE_KEY = 'sarca.filesViewMode'
+
+/** @returns {'tiles' | 'list'} */
+const readStoredViewMode = () => {
+	try {
+		const v = localStorage.getItem(VIEW_MODE_KEY)
+		if (v === 'list' || v === 'tiles') return v
+	} catch {
+		/* ignore */
+	}
+	return 'tiles'
+}
+
 const Files = () => {
 	const { addAlert } = alertStore
 	const chrome = filesChromeStore
@@ -92,6 +107,17 @@ const Files = () => {
 	/** @type {[import('solid-js').Accessor<'asc'|'desc'>, any]} */
 	const [sortDir, setSortDir] = createSignal('asc')
 	const [sortMenuAnchor, setSortMenuAnchor] = createSignal(null)
+	/** @type {[import('solid-js').Accessor<'tiles'|'list'>, any]} */
+	const [viewMode, setViewMode] = createSignal(readStoredViewMode())
+
+	const setAndPersistViewMode = (mode) => {
+		setViewMode(mode)
+		try {
+			localStorage.setItem(VIEW_MODE_KEY, mode)
+		} catch {
+			/* ignore */
+		}
+	}
 
 	/**
 	 * @type {[import('solid-js').Accessor<null | { mode: 'copy'|'move', el: import('../../api').FSElement }>, any]}
@@ -739,15 +765,51 @@ const Files = () => {
 										? 'Shared links'
 										: 'Trash'}
 						</Typography>
-						<Show when={trashMode()}>
-							<Button
-								variant="contained"
-								color="warning"
-								onClick={() => setEmptyTrashOpen(true)}
+					</Show>
+
+					<Show when={!sharedMode()}>
+						<div
+							class="files-view-toggle"
+							role="group"
+							aria-label="View mode"
+						>
+							<IconButton
+								size="small"
+								class="files-view-toggle__btn"
+								classList={{
+									'files-view-toggle__btn--active':
+										viewMode() === 'list',
+								}}
+								aria-label="List view"
+								aria-pressed={viewMode() === 'list'}
+								onClick={() => setAndPersistViewMode('list')}
 							>
-								Empty trash
-							</Button>
-						</Show>
+								<ViewListIcon fontSize="small" />
+							</IconButton>
+							<IconButton
+								size="small"
+								class="files-view-toggle__btn"
+								classList={{
+									'files-view-toggle__btn--active':
+										viewMode() === 'tiles',
+								}}
+								aria-label="Tiles view"
+								aria-pressed={viewMode() === 'tiles'}
+								onClick={() => setAndPersistViewMode('tiles')}
+							>
+								<GridViewIcon fontSize="small" />
+							</IconButton>
+						</div>
+					</Show>
+
+					<Show when={trashMode()}>
+						<Button
+							variant="contained"
+							color="warning"
+							onClick={() => setEmptyTrashOpen(true)}
+						>
+							Empty trash
+						</Button>
 					</Show>
 				</div>
 
@@ -774,7 +836,10 @@ const Files = () => {
 
 				<Show
 					when={sharedMode()}
-					fallback={<div class="files-canvas glass-panel">
+					fallback={<div
+						class="files-canvas glass-panel"
+						classList={{ 'files-canvas--list': viewMode() === 'list' }}
+					>
 					<Show
 						when={sortedFsLayer().length}
 						fallback={
@@ -791,7 +856,11 @@ const Files = () => {
 							</div>
 						}
 					>
-						<div class="files-grid">
+						<div
+							class={
+								viewMode() === 'list' ? 'files-list' : 'files-grid'
+							}
+						>
 							{mapArray(sortedFsLayer, (fsElement) => (
 								<FSListItem
 									fsElement={fsElement}
@@ -800,6 +869,7 @@ const Files = () => {
 									onOpen={(file) => setViewerFile(file)}
 									trashMode={trashMode()}
 									flatMode={flatMode()}
+									layout={viewMode()}
 									isFavorite={() => isFavorite(fsElement)}
 									onToggleFavorite={toggleFavorite}
 									onRestore={(el) => restoreItem(el)}
