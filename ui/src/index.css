@@ -532,6 +532,141 @@ a.default-link:hover {
 }
 
 /* —— Files page canvas —— */
+.files-shell {
+	display: flex;
+	align-items: stretch;
+	gap: 12px;
+	min-height: 0;
+}
+
+.files-shell__main {
+	flex: 1;
+	min-width: 0;
+}
+
+.files-sidebar--desktop {
+	display: none;
+	width: 240px;
+	flex-shrink: 0;
+	flex-direction: column;
+	border: 1px solid var(--sarca-border);
+	border-radius: var(--sarca-radius-sm);
+	background: var(--sarca-glass);
+	backdrop-filter: blur(16px);
+	padding: 8px;
+}
+
+.files-sidebar--collapsed {
+	width: 64px;
+}
+
+.files-sidebar--collapsed .files-sidebar__label {
+	display: none;
+}
+
+.files-sidebar__header {
+	display: flex;
+	justify-content: flex-end;
+	padding: 2px;
+}
+
+.files-sidebar--collapsed .files-sidebar__header {
+	justify-content: center;
+}
+
+.files-sidebar__nav {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	justify-content: space-between;
+	min-height: 280px;
+	gap: 8px;
+}
+
+.files-sidebar__top,
+.files-sidebar__bottom {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.files-sidebar__item {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	min-height: 44px;
+	padding: 8px 10px;
+	border: none;
+	border-radius: 14px;
+	background: transparent;
+	color: var(--sarca-ink-soft);
+	font: inherit;
+	font-size: 0.88rem;
+	font-weight: 600;
+	cursor: pointer;
+	text-align: left;
+	transition: background 0.18s ease, color 0.18s ease;
+}
+
+.files-sidebar--collapsed .files-sidebar__item {
+	justify-content: center;
+	padding-inline: 8px;
+}
+
+.files-sidebar__item:hover {
+	background: color-mix(in srgb, var(--sarca-teal) 8%, transparent);
+	color: var(--sarca-ink);
+}
+
+.files-sidebar__item:focus-visible {
+	outline: 2px solid var(--sarca-teal);
+	outline-offset: 2px;
+}
+
+.files-sidebar__item--active {
+	background: color-mix(in srgb, var(--sarca-teal) 14%, transparent);
+	color: var(--sarca-teal-deep);
+}
+
+.files-sidebar-backdrop,
+.files-sidebar--drawer {
+	display: none;
+}
+
+@media (min-width: 841px) {
+	.files-sidebar--desktop {
+		display: flex;
+	}
+}
+
+@media (max-width: 840px) {
+	.files-sidebar-backdrop {
+		display: block;
+		position: fixed;
+		inset: 0;
+		z-index: 1250;
+		background: var(--sarca-overlay);
+	}
+
+	.files-sidebar--drawer {
+		display: flex;
+		flex-direction: column;
+		position: fixed;
+		top: 0;
+		bottom: 0;
+		left: 0;
+		z-index: 1260;
+		width: min(300px, 88vw);
+		padding: calc(16px + env(safe-area-inset-top, 0px)) 12px
+			calc(16px + env(safe-area-inset-bottom, 0px));
+		border-right: 1px solid var(--sarca-border);
+		background: var(--sarca-modal-bg);
+		backdrop-filter: blur(20px);
+		animation: sarca-fade 0.2s ease both;
+	}
+}
+
 .files-page {
 	position: relative;
 }
