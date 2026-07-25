@@ -37,9 +37,25 @@ pub struct UploadProgressEvent {
     pub chunk: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chunks: Option<u32>,
+    /// Seconds Telegram asked us to wait (flood control); present when `phase == "waiting"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<u64>,
 }
 
 impl UploadProgressEvent {
+    /// Spool + DB row ready; Telegram upload has not started yet.
+    /// Clients may start the next file's client→Sarca transfer on this event.
+    pub fn spooled(total: u64) -> Self {
+        Self {
+            phase: "spooled",
+            uploaded: 0,
+            total,
+            chunk: None,
+            chunks: None,
+            retry_after: None,
+        }
+    }
+
     pub fn telegram(uploaded: u64, total: u64, chunk: u32, chunks: u32) -> Self {
         Self {
             phase: "telegram",
@@ -47,6 +63,31 @@ impl UploadProgressEvent {
             total,
             chunk: Some(chunk),
             chunks: Some(chunks),
+            retry_after: None,
+        }
+    }
+
+    pub fn waiting(uploaded: u64, total: u64, chunk: u32, chunks: u32, retry_after: u64) -> Self {
+        Self {
+            phase: "waiting",
+            uploaded,
+            total,
+            chunk: Some(chunk),
+            chunks: Some(chunks),
+            retry_after: Some(retry_after),
+        }
+    }
+
+    /// Keep-alive while Telegram is quiet (flood sleep / SM queue). Proxies and
+    /// browsers often idle-timeout the NDJSON response without these.
+    pub fn heartbeat() -> Self {
+        Self {
+            phase: "heartbeat",
+            uploaded: 0,
+            total: 0,
+            chunk: None,
+            chunks: None,
+            retry_after: None,
         }
     }
 }

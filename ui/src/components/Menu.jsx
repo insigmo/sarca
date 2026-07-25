@@ -1,7 +1,8 @@
 import MenuMUI from '@suid/material/Menu'
 import Fab from '@suid/material/Fab'
-import AddIcon from '@suid/icons-material/Add'
 import { children, createSignal } from 'solid-js'
+
+import FluentIcon from './FluentIcon'
 
 /**
  * @typedef {Object} MenuProps
@@ -32,7 +33,7 @@ const Menu = (props) => {
 					setAnchorEl(event.currentTarget)
 				}}
 			>
-				<AddIcon sx={{ mr: 1 }} />
+				<FluentIcon name="add" size={20} class="menu-fab-icon" />
 				{props.button_title}
 			</Fab>
 			<MenuMUI

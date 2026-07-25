@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@fluentui/svg-icons':
+        specifier: ^1.1.334
+        version: 1.1.334
       '@solidjs/router':
         specifier: ^0.9.1
         version: 0.9.1(solid-js@1.8.6)
@@ -26,6 +29,9 @@ importers:
       marked:
         specifier: ^18.0.7
         version: 18.0.7
+      material-icon-theme:
+        specifier: ^5.37.0
+        version: 5.37.0
       solid-js:
         specifier: ^1.8.4
         version: 1.8.6
@@ -331,6 +337,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@fluentui/svg-icons@1.1.334':
+    resolution: {integrity: sha512-VeKTChgi+iyMj4ecbuKRTGlzzTf6x5v5mD25l8+4DVf7f85dydrmEsWmVITRaoKWxGPMDZsiXqWUSCcXPukvEw==}
+
   '@jridgewell/gen-mapping@0.3.3':
     resolution: {integrity: sha512-HLhSWOLRi875zjjMG/r+Nv0oCW8umGb0BgEhyX3dDX3egwZtB8PqLnjz3yedt8R5StBrzcg4aBpnh8UA9D1BoQ==}
     engines: {node: '>=6.0.0'}
@@ -539,6 +548,9 @@ packages:
     resolution: {integrity: sha512-Mti+f9lpJNcwF4tWV8/OrTTtF1gZi+f8FqlyAdouralcFWFQWF2+NgCHShjkCb+IFBLq9buZwE1xckQU4peSuQ==}
     engines: {node: '>=4'}
 
+  chroma-js@3.2.0:
+    resolution: {integrity: sha512-os/OippSlX1RlWWr+QDPcGUZs0uoqr32urfxESG9U93lhUfbnlyckte84Q8P1UQY/qth983AS1JONKmLS4T0nw==}
+
   clsx@2.0.0:
     resolution: {integrity: sha512-rQ1+kcj+ttHG0MKVGBUXwayCCF1oh39BF5COIpRzuCEv8Mwjv0XucrI2ExNTOn9IlLifGClWQcU9BrZORvtw6Q==}
     engines: {node: '>=6'}
@@ -588,6 +600,9 @@ packages:
   escape-string-regexp@1.0.5:
     resolution: {integrity: sha512-vbRorB5FUQWvla16U8R/qgaFIya2qGzwDrNmCZuYKrbdSUMG6I1ZCGQRefkRVhuOkIGVne7BQ35DSfo1qvJqFg==}
     engines: {node: '>=0.8.0'}
+
+  fast-deep-equal@3.1.3:
+    resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
 
   fsevents@2.3.3:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
@@ -656,6 +671,10 @@ packages:
     resolution: {integrity: sha512-iDVQ5ldaiKXn6b2JroX5kgRfmwgqolW7NpaEzTl1k/2Zh1njIEN9yniyLV/mOvWwtsE8OGgkjsCYvijuPk1dtA==}
     engines: {node: '>= 20'}
     hasBin: true
+
+  material-icon-theme@5.37.0:
+    resolution: {integrity: sha512-/F5llOVU0DZ88V+wmPlEbBqi8FochPg5XaJ7zqVzGCTTygeFnpIpdVQQTRElEnHyxSWRMfF0wBbOqwFKnujFLA==}
+    engines: {vscode: ^1.55.0}
 
   merge-anything@5.1.7:
     resolution: {integrity: sha512-eRtbOb1N5iyH0tkQDAoQ4Ipsp/5qSR79Dzrz8hEPxRX10RWWR/iQXdoKmBSRCThY1Fh5EhISDtpSc93fpxUniQ==}
@@ -1090,6 +1109,8 @@ snapshots:
   '@esbuild/win32-x64@0.18.20':
     optional: true
 
+  '@fluentui/svg-icons@1.1.334': {}
+
   '@jridgewell/gen-mapping@0.3.3':
     dependencies:
       '@jridgewell/set-array': 1.1.2
@@ -1356,6 +1377,8 @@ snapshots:
       escape-string-regexp: 1.0.5
       supports-color: 5.5.0
 
+  chroma-js@3.2.0: {}
+
   clsx@2.0.0: {}
 
   color-convert@1.9.3:
@@ -1410,6 +1433,8 @@ snapshots:
   escalade@3.1.1: {}
 
   escape-string-regexp@1.0.5: {}
+
+  fast-deep-equal@3.1.3: {}
 
   fsevents@2.3.3:
     optional: true
@@ -1471,6 +1496,11 @@ snapshots:
       xmlbuilder: 10.1.1
 
   marked@18.0.7: {}
+
+  material-icon-theme@5.37.0:
+    dependencies:
+      chroma-js: 3.2.0
+      fast-deep-equal: 3.1.3
 
   merge-anything@5.1.7:
     dependencies:

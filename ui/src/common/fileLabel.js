@@ -1,17 +1,6 @@
 /**
- * Display basename without extension (for grid captions).
- * @param {string} name
- * @param {boolean} [isFile=true]
- */
-export const fileBaseName = (name, isFile = true) => {
-	if (!isFile || name === '..') return name
-	const i = name.lastIndexOf('.')
-	if (i <= 0) return name
-	return name.slice(0, i)
-}
-
-/**
- * Extension label like `folder`, `jpeg`, `zip`.
+ * Extension / kind label for sorting and metadata (e.g. `jpeg`, `zip`, `folder`).
+ * Not shown as a subtitle under file names in the grid/list.
  * @param {string} name
  * @param {boolean} [isFile=true]
  */

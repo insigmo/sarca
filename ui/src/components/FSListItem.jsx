@@ -1,15 +1,3 @@
-import ContentCopyIcon from '@suid/icons-material/ContentCopy'
-import DriveFileMoveIcon from '@suid/icons-material/DriveFileMove'
-import DriveFileRenameOutlineIcon from '@suid/icons-material/DriveFileRenameOutline'
-import DeleteIcon from '@suid/icons-material/Delete'
-import DeleteForeverIcon from '@suid/icons-material/DeleteForever'
-import DownloadIcon from '@suid/icons-material/Download'
-import InfoIcon from '@suid/icons-material/Info'
-import LinkIcon from '@suid/icons-material/Link'
-import RestoreFromTrashIcon from '@suid/icons-material/RestoreFromTrash'
-import StarIcon from '@suid/icons-material/Star'
-import StarBorderIcon from '@suid/icons-material/StarBorder'
-import VisibilityIcon from '@suid/icons-material/Visibility'
 import CircularProgress from '@suid/material/CircularProgress'
 import IconButton from '@suid/material/IconButton'
 import ListItemIcon from '@suid/material/ListItemIcon'
@@ -21,11 +9,11 @@ import { Portal } from 'solid-js/web'
 import { useNavigate, useParams } from '@solidjs/router'
 
 import API from '../api'
-import { fileBaseName, fileExtensionLabel } from '../common/fileLabel'
 import { convertSize } from '../common/size_converter'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
 import FileTypeIcon from './FileTypeIcon'
+import FluentIcon from './FluentIcon'
 import ShareLinkDialog from './ShareLinkDialog'
 import { alertStore } from './AlertStack'
 
@@ -64,7 +52,7 @@ const LONG_PRESS_MS = 520
  */
 
 /**
- * Grid tile for a file or folder (reference-style 3D icon + name + extension).
+ * Grid tile / list row for a file or folder (icon + full name).
  * @param {FSListItemProps} props
  */
 const FSListItem = (props) => {
@@ -157,7 +145,12 @@ const FSListItem = (props) => {
 			return
 		}
 		if (!props.fsElement.is_file) {
-			navigate(`/storages/${props.storageId}/files/${props.fsElement.path}`)
+			const encoded = String(props.fsElement.path || '')
+				.split('/')
+				.filter(Boolean)
+				.map(encodeURIComponent)
+				.join('/')
+			navigate(`/storages/${props.storageId}/files/${encoded}`)
 		} else {
 			props.onOpen?.(props.fsElement)
 		}
@@ -323,10 +316,8 @@ const FSListItem = (props) => {
 
 	const canShare = () => !props.trashMode && !isParentNav()
 
-	const displayName = () =>
-		fileBaseName(props.fsElement.name, props.fsElement.is_file)
-	const displayExt = () =>
-		fileExtensionLabel(props.fsElement.name, props.fsElement.is_file)
+	/** Full item name as returned by the API (includes extension for files). */
+	const displayName = () => props.fsElement.name
 	const isList = () => {
 		const v = props.layout
 		const layout = typeof v === 'function' ? v() : v
@@ -470,9 +461,13 @@ const FSListItem = (props) => {
 									}
 								>
 									{favorited() ? (
-										<StarIcon fontSize="small" color="warning" />
+										<FluentIcon
+											name="starFilled"
+											size={18}
+											class="fs-star-icon fs-star-icon--active"
+										/>
 									) : (
-										<StarBorderIcon fontSize="small" />
+										<FluentIcon name="star" size={18} class="fs-star-icon" />
 									)}
 								</IconButton>
 							</div>
@@ -485,10 +480,9 @@ const FSListItem = (props) => {
 							size={64}
 						/>
 
-						<div class="fs-grid-item__name" title={props.fsElement.name}>
+						<div class="fs-grid-item__name" title={displayName()}>
 							{displayName()}
 						</div>
-						<div class="fs-grid-item__ext">{displayExt()}</div>
 					</div>
 				}
 			>
@@ -531,11 +525,8 @@ const FSListItem = (props) => {
 						size={40}
 					/>
 					<div class="fs-list-item__body">
-						<div class="fs-list-item__name" title={props.fsElement.name}>
+						<div class="fs-list-item__name" title={displayName()}>
 							{displayName()}
-							<Show when={displayExt()}>
-								<span class="fs-list-item__ext">.{displayExt()}</span>
-							</Show>
 						</div>
 						<div class="fs-list-item__meta">
 							<span>{sizeLabel()}</span>
@@ -566,9 +557,13 @@ const FSListItem = (props) => {
 									}
 								>
 									{favorited() ? (
-										<StarIcon fontSize="small" color="warning" />
+										<FluentIcon
+											name="starFilled"
+											size={18}
+											class="fs-star-icon fs-star-icon--active"
+										/>
 									) : (
-										<StarBorderIcon fontSize="small" />
+										<FluentIcon name="star" size={18} class="fs-star-icon" />
 									)}
 								</IconButton>
 							</div>
@@ -590,9 +585,17 @@ const FSListItem = (props) => {
 									}
 								>
 									{props.trashMode ? (
-										<DeleteForeverIcon fontSize="small" color="warning" />
+										<FluentIcon
+											name="deleteDismiss"
+											size={18}
+											class="fs-delete-icon"
+										/>
 									) : (
-										<DeleteIcon fontSize="small" color="warning" />
+										<FluentIcon
+											name="delete"
+											size={18}
+											class="fs-delete-icon"
+										/>
 									)}
 								</IconButton>
 							</div>
@@ -617,7 +620,7 @@ const FSListItem = (props) => {
 								disabled={!props.fsElement.is_file}
 							>
 								<ListItemIcon>
-									<VisibilityIcon fontSize="small" />
+									<FluentIcon name="eye" size={20} />
 								</ListItemIcon>
 								<ListItemText>Open</ListItemText>
 							</MenuItem>
@@ -626,9 +629,9 @@ const FSListItem = (props) => {
 								<MenuItem onClick={toggleFavorite}>
 									<ListItemIcon>
 										{favorited() ? (
-											<StarIcon fontSize="small" />
+											<FluentIcon name="starFilled" size={20} />
 										) : (
-											<StarBorderIcon fontSize="small" />
+											<FluentIcon name="star" size={20} />
 										)}
 									</ListItemIcon>
 									<ListItemText>
@@ -641,7 +644,7 @@ const FSListItem = (props) => {
 
 							<MenuItem onClick={() => setIsInfoDialogOpened(true)}>
 								<ListItemIcon>
-									<InfoIcon fontSize="small" />
+									<FluentIcon name="info" size={20} />
 								</ListItemIcon>
 								<ListItemText>Info</ListItemText>
 							</MenuItem>
@@ -651,28 +654,28 @@ const FSListItem = (props) => {
 								disabled={isParentNav() || isDownloading()}
 							>
 								<ListItemIcon>
-									<DownloadIcon fontSize="small" />
+									<FluentIcon name="arrowDownload" size={20} />
 								</ListItemIcon>
 								<ListItemText>Download</ListItemText>
 							</MenuItem>
 
 							<MenuItem onClick={rename}>
 								<ListItemIcon>
-									<DriveFileRenameOutlineIcon fontSize="small" />
+									<FluentIcon name="rename" size={20} />
 								</ListItemIcon>
 								<ListItemText>Rename</ListItemText>
 							</MenuItem>
 
 							<MenuItem onClick={copyTo}>
 								<ListItemIcon>
-									<ContentCopyIcon fontSize="small" />
+									<FluentIcon name="copy" size={20} />
 								</ListItemIcon>
 								<ListItemText>Copy to…</ListItemText>
 							</MenuItem>
 
 							<MenuItem onClick={moveTo}>
 								<ListItemIcon>
-									<DriveFileMoveIcon fontSize="small" />
+									<FluentIcon name="arrowMove" size={20} />
 								</ListItemIcon>
 								<ListItemText>Move to…</ListItemText>
 							</MenuItem>
@@ -680,7 +683,7 @@ const FSListItem = (props) => {
 							<Show when={canShare()}>
 								<MenuItem onClick={openShare}>
 									<ListItemIcon>
-										<LinkIcon fontSize="small" />
+										<FluentIcon name="link" size={20} />
 									</ListItemIcon>
 									<ListItemText>Share link…</ListItemText>
 								</MenuItem>
@@ -688,7 +691,7 @@ const FSListItem = (props) => {
 
 							<MenuItem onClick={openActionConfirmDialog}>
 								<ListItemIcon>
-									<DeleteIcon fontSize="small" />
+									<FluentIcon name="delete" size={20} />
 								</ListItemIcon>
 								<ListItemText>Delete</ListItemText>
 							</MenuItem>
@@ -702,13 +705,13 @@ const FSListItem = (props) => {
 						}}
 					>
 						<ListItemIcon>
-							<RestoreFromTrashIcon fontSize="small" />
+							<FluentIcon name="arrowUndo" size={20} />
 						</ListItemIcon>
 						<ListItemText>Restore</ListItemText>
 					</MenuItem>
 					<MenuItem onClick={openActionConfirmDialog}>
 						<ListItemIcon>
-							<DeleteForeverIcon fontSize="small" />
+							<FluentIcon name="deleteDismiss" size={20} />
 						</ListItemIcon>
 						<ListItemText>Delete forever</ListItemText>
 					</MenuItem>

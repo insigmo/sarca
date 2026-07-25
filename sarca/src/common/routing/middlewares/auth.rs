@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     extract::State,
     headers::{Authorization, HeaderMapExt, authorization::Bearer},
-    http::{HeaderMap, HeaderValue, Request},
+    http::Request,
     middleware::Next,
     response::Response,
 };
@@ -52,13 +52,4 @@ fn authenticate_request<B>(req: &Request<B>, secret_key: &str) -> SarcaResult<Au
     }
 
     Err(SarcaError::NotAuthenticated)
-}
-
-#[inline]
-#[allow(dead_code)]
-fn authenticate(headers: &HeaderMap<HeaderValue>, secret_key: &str) -> SarcaResult<AuthUser> {
-    let auth_header =
-        headers.typed_get::<Authorization<Bearer>>().ok_or(SarcaError::NotAuthenticated)?;
-
-    JWTManager::validate(auth_header.token(), secret_key)
 }

@@ -6,24 +6,11 @@ import MenuMUI from '@suid/material/Menu'
 import MenuItem from '@suid/material/MenuItem'
 import ListItemIcon from '@suid/material/ListItemIcon'
 import ListItemText from '@suid/material/ListItemText'
-import ChevronLeftIcon from '@suid/icons-material/ChevronLeft'
-import ChevronRightIcon from '@suid/icons-material/ChevronRight'
-import FolderOutlinedIcon from '@suid/icons-material/FolderOutlined'
-import StarOutlineIcon from '@suid/icons-material/StarOutline'
-import HistoryIcon from '@suid/icons-material/History'
-import LinkIcon from '@suid/icons-material/Link'
-import DeleteOutlineIcon from '@suid/icons-material/DeleteOutline'
-import SettingsOutlinedIcon from '@suid/icons-material/SettingsOutlined'
-import LogoutIcon from '@suid/icons-material/Logout'
-import AddIcon from '@suid/icons-material/Add'
-import CreateNewFolderIcon from '@suid/icons-material/CreateNewFolder'
-import UploadFileIcon from '@suid/icons-material/UploadFile'
-import DriveFolderUploadIcon from '@suid/icons-material/DriveFolderUpload'
-import StorageOutlinedIcon from '@suid/icons-material/StorageOutlined'
 
 import createLocalStore from '../../libs'
 import { clearSession } from '../common/auth'
 import { settingsStore } from '../common/settings'
+import FluentIcon, { fluentIcons } from './FluentIcon'
 
 const STORAGE_KEY = 'sarca.filesSidebarCollapsed'
 
@@ -60,7 +47,7 @@ const SidebarNewButton = (props) => {
 					setAnchorEl(e.currentTarget)
 				}}
 			>
-				<AddIcon fontSize="small" />
+				<FluentIcon name="add" size={18} />
 				<span class="files-sidebar__new-label">New</span>
 			</button>
 			<MenuMUI
@@ -72,19 +59,19 @@ const SidebarNewButton = (props) => {
 			>
 				<MenuItem onClick={() => run(props.onCreateFolder)}>
 					<ListItemIcon>
-						<CreateNewFolderIcon fontSize="small" />
+						<FluentIcon name="folderAdd" size={20} />
 					</ListItemIcon>
 					<ListItemText>Create folder</ListItemText>
 				</MenuItem>
 				<MenuItem onClick={() => run(props.onUploadFile)}>
 					<ListItemIcon>
-						<UploadFileIcon fontSize="small" />
+						<FluentIcon name="documentArrowUp" size={20} />
 					</ListItemIcon>
 					<ListItemText>Upload file</ListItemText>
 				</MenuItem>
 				<MenuItem onClick={() => run(props.onUploadFolder)}>
 					<ListItemIcon>
-						<DriveFolderUploadIcon fontSize="small" />
+						<FluentIcon name="folderArrowUp" size={20} />
 					</ListItemIcon>
 					<ListItemText>Upload folder</ListItemText>
 				</MenuItem>
@@ -94,7 +81,7 @@ const SidebarNewButton = (props) => {
 }
 
 const SidebarNav = (props) => {
-	const item = (mode, label, Icon) => (
+	const item = (mode, label, regular, filled) => (
 		<button
 			type="button"
 			class="files-sidebar__item"
@@ -104,7 +91,10 @@ const SidebarNav = (props) => {
 			title={label}
 			onClick={() => props.onSelect(mode)}
 		>
-			<Icon fontSize="small" />
+			<FluentIcon
+				src={props.mode === mode ? filled : regular}
+				size={20}
+			/>
 			<span class="files-sidebar__label">{label}</span>
 		</button>
 	)
@@ -124,11 +114,11 @@ const SidebarNav = (props) => {
 						onUploadFolder={props.onUploadFolder}
 						onAfterAction={props.onAfterAction}
 					/>
-					{item('browse', 'All files', FolderOutlinedIcon)}
-					{item('favorites', 'Favorites', StarOutlineIcon)}
-					{item('recent', 'Recent', HistoryIcon)}
-					{item('shared', 'Shared', LinkIcon)}
-					{item('trash', 'Trash', DeleteOutlineIcon)}
+					{item('browse', 'All files', fluentIcons.folder, fluentIcons.folderFilled)}
+					{item('favorites', 'Favorites', fluentIcons.star, fluentIcons.starFilled)}
+					{item('recent', 'Recent', fluentIcons.history, fluentIcons.historyFilled)}
+					{item('shared', 'Shared', fluentIcons.link, fluentIcons.linkFilled)}
+					{item('trash', 'Trash', fluentIcons.delete, fluentIcons.deleteFilled)}
 				</Show>
 				<Show when={props.variant === 'storages'}>
 					<A
@@ -138,7 +128,7 @@ const SidebarNav = (props) => {
 						aria-label="Storages"
 						title="Storages"
 					>
-						<StorageOutlinedIcon fontSize="small" />
+						<FluentIcon name="storageFilled" size={20} />
 						<span class="files-sidebar__label">Storages</span>
 					</A>
 				</Show>
@@ -152,7 +142,7 @@ const SidebarNav = (props) => {
 					title="Settings"
 					onClick={props.onOpenSettings}
 				>
-					<SettingsOutlinedIcon fontSize="small" />
+					<FluentIcon name="settings" size={20} />
 					<span class="files-sidebar__label">Settings</span>
 				</button>
 				<button
@@ -162,7 +152,7 @@ const SidebarNav = (props) => {
 					title="Log out"
 					onClick={props.onLogout}
 				>
-					<LogoutIcon fontSize="small" />
+					<FluentIcon name="signOut" size={20} />
 					<span class="files-sidebar__label">Log out</span>
 				</button>
 			</div>
@@ -260,8 +250,11 @@ const FilesSidebar = (props) => {
 						aria-expanded={!collapsed()}
 						onClick={toggleCollapsed}
 					>
-						<Show when={collapsed()} fallback={<ChevronLeftIcon />}>
-							<ChevronRightIcon />
+						<Show
+							when={collapsed()}
+							fallback={<FluentIcon name="chevronLeft" size={20} />}
+						>
+							<FluentIcon name="chevronRight" size={20} />
 						</Show>
 					</IconButton>
 				</div>

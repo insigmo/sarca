@@ -1,6 +1,4 @@
 import IconButton from '@suid/material/IconButton'
-import DeleteIcon from '@suid/icons-material/Delete'
-import EditIcon from '@suid/icons-material/Edit'
 import { For, Show, createSignal, onMount } from 'solid-js'
 import { useParams } from '@solidjs/router'
 
@@ -9,6 +7,7 @@ import AccessTypeChip from './AccessTypeChip'
 import API from '../api'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import { alertStore } from './AlertStack'
+import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
 
 /**
@@ -55,15 +54,23 @@ const Access = (props) => {
 	}
 
 	const onRestrict = async () => {
-		const userID = props.users.find((u) => u.email === selectedUserEmail()).id
+		try {
+			const userID = props.users.find(
+				(u) => u.email === selectedUserEmail(),
+			).id
 
-		await API.access.restrictAccess(storageId(), userID)
-		addAlert(
-			`Restricted access for the user with email ${selectedUserEmail()}`,
-			'success',
-		)
+			await API.access.restrictAccess(storageId(), userID)
+			setIsRestrictConfirmOpened(false)
+			addAlert(
+				`Restricted access for the user with email ${selectedUserEmail()}`,
+				'success',
+			)
 
-		await props.refetchUsers()
+			await props.refetchUsers()
+		} catch (err) {
+			console.error(err)
+			// Keep confirm dialog open; apiRequest already shows the error alert.
+		}
 	}
 
 	return (
@@ -87,7 +94,7 @@ const Access = (props) => {
 										aria-label={`Edit access for ${user.email}`}
 										onClick={() => onEditButtonClicked(user)}
 									>
-										<EditIcon fontSize="small" />
+										<FluentIcon name="edit" size={18} />
 									</IconButton>
 									<IconButton
 										size="small"
@@ -95,7 +102,7 @@ const Access = (props) => {
 										aria-label={`Remove access for ${user.email}`}
 										onClick={() => onDeleteButtonClicked(user.email)}
 									>
-										<DeleteIcon fontSize="small" />
+										<FluentIcon name="delete" size={18} />
 									</IconButton>
 								</div>
 							</div>
