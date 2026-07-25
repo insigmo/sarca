@@ -81,7 +81,10 @@ pub fn add_binding(
 ) -> Result<Binding, String> {
     let binding =
         new_binding(&storage_id, remote_root, local_path, &mode).map_err(|e| e.to_string())?;
-    state.engine.upsert_binding(&binding).map_err(|e| e.to_string())?;
+    state
+        .engine
+        .upsert_binding(&binding)
+        .map_err(|e| e.to_string())?;
     Ok(binding)
 }
 

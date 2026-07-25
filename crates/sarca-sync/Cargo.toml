@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Sarca client sync engine (folder sync + auto-upload)"
 license = "MIT"
+repository = "https://github.com/insigmo/sarca"
+readme = "../../README.md"
+keywords = ["storage", "sync", "telegram"]
+categories = ["filesystem"]
 
 [features]
 default = ["watcher"]
