@@ -80,8 +80,12 @@ pub struct FileInfoSchema {
     pub is_file: bool,
     pub has_thumb: bool,
     pub is_uploaded: bool,
-    pub chunk_size_bytes: Option<i64>,
-    pub chunks_count: i64,
     pub content_type: Option<String>,
     pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// When the file was added to Sarca.
+    pub added_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Original filesystem created time (client metadata), if known.
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Original filesystem modified time (client metadata), if known.
+    pub modified_at: Option<chrono::DateTime<chrono::Utc>>,
 }

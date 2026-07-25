@@ -172,7 +172,9 @@ const ShareLinkDialog = (props) => {
 					setCreatedUrl('')
 				}
 			}
-			await loadLinks()
+			setLinks((prev) =>
+				prev.filter((l) => String(l.id) !== String(id)),
+			)
 		} catch (err) {
 			console.error(err)
 		} finally {
