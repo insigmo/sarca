@@ -58,7 +58,7 @@ tasks:
     dir: "{{.ROOT_DIR}}"
     cmds:
       - cargo +nightly fmt -p sarca -- --check
-      - cargo clippy -p sarca --all-targets --all-features -- -D warnings
+      - cargo +stable clippy -p sarca --all-targets --all-features -- -D warnings
 
   fmt:
     desc: Apply strict rustfmt (nightly unstable options)
