@@ -217,7 +217,7 @@ const Files = () => {
 		} else if (mode === 'recent') {
 			await fetchRecent()
 		} else if (mode === 'shared') {
-			// Shared links load in Task 3.
+			/* SharedLinksPanel reloads when active. */
 		} else {
 			await fetchFSLayer()
 		}
