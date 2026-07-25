@@ -160,6 +160,7 @@ impl FilesRouter {
         let mut file_content_type = None::<String>;
         let mut source_mtime = None::<chrono::DateTime<chrono::Utc>>;
         let mut source_created_at = None::<chrono::DateTime<chrono::Utc>>;
+        let mut content_hash = None::<String>;
 
         while let Some(mut field) = multipart.next_field().await.map_err(|_| {
             cleanup_tmp(&tmp_path);
@@ -233,6 +234,16 @@ impl FilesRouter {
                     })?;
                     source_created_at = Self::parse_epoch_millis(&raw);
                 },
+                "content_hash" => {
+                    let raw = field.text().await.map_err(|_| {
+                        cleanup_tmp(&tmp_path);
+                        (StatusCode::BAD_REQUEST, "Invalid content_hash".to_owned())
+                    })?;
+                    let trimmed = raw.trim().to_owned();
+                    if !trimmed.is_empty() {
+                        content_hash = Some(trimmed);
+                    }
+                },
                 _ => (),
             }
         }
@@ -269,7 +280,8 @@ impl FilesRouter {
             state.config.chunk_size_bytes_for_file(&path, file_content_type.as_deref());
         let in_file = InFile::new(path, file_size, storage_id)
             .with_chunk_size(chunk_size_bytes)
-            .with_source_times(source_created_at, source_mtime);
+            .with_source_times(source_created_at, source_mtime)
+            .with_content_hash(content_hash);
         let (progress_tx, progress_rx) = mpsc::channel(64);
         let db = state.db.clone();
         let client_tx = state.tx.clone();

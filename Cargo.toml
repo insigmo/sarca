@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+  "sarca",
+  "crates/sarca-sync",
+  "client/src-tauri",
+]
+default-members = [
+  "sarca",
+  "crates/sarca-sync",
+]
+
+[profile.release]
+strip = true
+codegen-units = 1
+lto = true
