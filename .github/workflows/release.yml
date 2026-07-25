@@ -208,10 +208,9 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build release binary
-        working-directory: sarca
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release -p sarca --target ${{ matrix.target }}
 
       - name: Package artifact
         env:
@@ -222,7 +221,7 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p "dist/${ASSET}"
-          cp "sarca/target/${TARGET}/release/${BINARY_NAME}" "dist/${ASSET}/"
+          cp "target/${TARGET}/release/${BINARY_NAME}" "dist/${ASSET}/"
           cp -r package/ui "dist/${ASSET}/ui"
           cd dist
           if [ "${ARCHIVE}" = "zip" ]; then
