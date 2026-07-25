@@ -1,7 +1,6 @@
 import { onMount } from 'solid-js'
 import { Outlet, useNavigate } from '@solidjs/router'
 import Header from '../components/Header'
-import BottomNav from '../components/BottomNav'
 import SettingsModal from '../components/SettingsModal'
 import StorageSettingsModal from '../components/StorageSettingsModal'
 import EmailVerifyBanner from '../components/EmailVerifyBanner'
@@ -43,7 +42,6 @@ const BasicLayout = () => {
 				</Box>
 			</Box>
 
-			<BottomNav />
 			<SettingsModal />
 			<StorageSettingsModal
 				storage={storage()}
