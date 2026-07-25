@@ -1,11 +1,6 @@
 import { useBeforeLeave, useParams } from '@solidjs/router'
 import { Show, createMemo, createSignal, mapArray, onCleanup, onMount } from 'solid-js'
 import MenuItem from '@suid/material/MenuItem'
-import ListItemIcon from '@suid/material/ListItemIcon'
-import ListItemText from '@suid/material/ListItemText'
-import UploadFileIcon from '@suid/icons-material/UploadFile'
-import DriveFolderUploadIcon from '@suid/icons-material/DriveFolderUpload'
-import CreateNewFolderIcon from '@suid/icons-material/CreateNewFolder'
 import SortIcon from '@suid/icons-material/Sort'
 import MenuIcon from '@suid/icons-material/Menu'
 import Button from '@suid/material/Button'
@@ -20,7 +15,6 @@ import Divider from '@suid/material/Divider'
 import API from '../../api'
 import { formatUploadBytes } from '../../api/request'
 import FSListItem from '../../components/FSListItem'
-import Menu from '../../components/Menu'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
 import FolderPickerDialog from '../../components/FolderPickerDialog'
 import { alertStore } from '../../components/AlertStack'
@@ -649,10 +643,15 @@ const Files = () => {
 		<>
 			<div class="files-shell">
 				<FilesSidebar
+					variant="files"
 					mode={listMode()}
 					onSelectMode={onSelectMode}
 					mobileOpen={mobileNavOpen()}
 					onMobileClose={() => setMobileNavOpen(false)}
+					createDisabled={!browseMode()}
+					onCreateFolder={openCreateFolderDialog}
+					onUploadFile={uploadFileClickHandler}
+					onUploadFolder={uploadFolderClickHandler}
 				/>
 				<div class="files-shell__main">
 					<Stack class="files-page" spacing={1.5}>
@@ -726,33 +725,7 @@ const Files = () => {
 						</MenuMUI>
 					</Show>
 
-					<Show
-						when={!browseMode()}
-						fallback={
-							<>
-								<Menu button_title="Create">
-									<MenuItem onClick={openCreateFolderDialog}>
-										<ListItemIcon>
-											<CreateNewFolderIcon />
-										</ListItemIcon>
-										<ListItemText>Create folder</ListItemText>
-									</MenuItem>
-									<MenuItem onClick={uploadFileClickHandler}>
-										<ListItemIcon>
-											<UploadFileIcon />
-										</ListItemIcon>
-										<ListItemText>Upload file</ListItemText>
-									</MenuItem>
-									<MenuItem onClick={uploadFolderClickHandler}>
-										<ListItemIcon>
-											<DriveFolderUploadIcon />
-										</ListItemIcon>
-										<ListItemText>Upload folder</ListItemText>
-									</MenuItem>
-								</Menu>
-							</>
-						}
-					>
+					<Show when={!browseMode()}>
 						<Typography
 							variant="body2"
 							color="text.secondary"
