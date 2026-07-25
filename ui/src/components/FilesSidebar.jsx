@@ -65,7 +65,7 @@ const SidebarNav = (props) => {
  * }} props
  */
 const FilesSidebar = (props) => {
-	const { openSettings } = settingsStore
+	const { openSettings, isOpen } = settingsStore
 	const [collapsed, setCollapsed] = createSignal(
 		typeof localStorage !== 'undefined' && localStorage.getItem(STORAGE_KEY) === '1',
 	)
@@ -99,8 +99,10 @@ const FilesSidebar = (props) => {
 
 		window.addEventListener('keydown', closeOnEscape)
 		onCleanup(() => {
-			document.body.style.overflow = ''
 			window.removeEventListener('keydown', closeOnEscape)
+			if (!isOpen()) {
+				document.body.style.overflow = ''
+			}
 		})
 	})
 
