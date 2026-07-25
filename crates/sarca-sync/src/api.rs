@@ -5,11 +5,19 @@ use reqwest::{
     multipart::{Form, Part},
     Client,
 };
+use serde::Deserialize;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::types::{ChangelogResponse, SnapshotResponse};
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoginResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub email_verified: bool,
+}
 
 #[derive(Clone)]
 pub struct SarcaApi {
@@ -33,6 +41,35 @@ impl SarcaApi {
 
     pub fn base_url(&self) -> &str {
         &self.base_url
+    }
+
+    /// Password login against `{base}/api/auth/login` (no prior token required).
+    pub async fn login(
+        base_url: impl AsRef<str>,
+        email: impl AsRef<str>,
+        password: impl AsRef<str>,
+    ) -> Result<LoginResponse> {
+        let base = base_url.as_ref().trim().trim_end_matches('/');
+        if base.is_empty() {
+            bail!("server URL is required");
+        }
+        let client = Client::new();
+        let url = format!("{base}/api/auth/login");
+        let resp = client
+            .post(url)
+            .json(&serde_json::json!({
+                "email": email.as_ref(),
+                "password": password.as_ref(),
+            }))
+            .send()
+            .await
+            .context("login request failed")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("login failed ({status}): {body}");
+        }
+        Ok(resp.json().await.context("invalid login response")?)
     }
 
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
