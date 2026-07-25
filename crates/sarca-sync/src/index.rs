@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -17,8 +20,10 @@ pub struct IndexEntry {
     pub last_cursor: i64,
 }
 
+/// Local SQLite index. `Connection` is wrapped in a mutex so the engine can be
+/// shared across Tauri's async runtime (`Send + Sync`).
 pub struct LocalIndex {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl LocalIndex {
@@ -26,16 +31,21 @@ impl LocalIndex {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(path).with_context(|| format!("open index {}", path.display()))?;
+        let conn =
+            Connection::open(path).with_context(|| format!("open index {}", path.display()))?;
         let idx = Self {
-            conn,
+            conn: Mutex::new(conn),
         };
         idx.migrate()?;
         Ok(idx)
     }
 
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
+        self.conn.lock().map_err(|_| anyhow::anyhow!("sync index mutex poisoned"))
+    }
+
     fn migrate(&self) -> Result<()> {
-        self.conn.execute_batch(
+        self.lock()?.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS meta (
               key TEXT PRIMARY KEY,
@@ -73,7 +83,7 @@ impl LocalIndex {
     }
 
     pub fn upsert_binding(&self, b: &Binding) -> Result<()> {
-        self.conn.execute(
+        self.lock()?.execute(
             r#"
             INSERT INTO bindings (id, storage_id, remote_root, local_path, mode, enabled, cursor)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, COALESCE((SELECT cursor FROM bindings WHERE id = ?1), 0))
@@ -97,7 +107,8 @@ impl LocalIndex {
     }
 
     pub fn list_bindings(&self) -> Result<Vec<Binding>> {
-        let mut stmt = self.conn.prepare(
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
             "SELECT id, storage_id, remote_root, local_path, mode, enabled FROM bindings ORDER BY id",
         )?;
         let rows = stmt.query_map([], |row| {
@@ -119,15 +130,16 @@ impl LocalIndex {
     }
 
     pub fn remove_binding(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM entries WHERE binding_id = ?1", params![id])?;
-        self.conn.execute("DELETE FROM conflicts WHERE binding_id = ?1", params![id])?;
-        self.conn.execute("DELETE FROM bindings WHERE id = ?1", params![id])?;
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM entries WHERE binding_id = ?1", params![id])?;
+        conn.execute("DELETE FROM conflicts WHERE binding_id = ?1", params![id])?;
+        conn.execute("DELETE FROM bindings WHERE id = ?1", params![id])?;
         Ok(())
     }
 
     pub fn get_cursor(&self, binding_id: &str) -> Result<i64> {
         let v: Option<i64> = self
-            .conn
+            .lock()?
             .query_row(
                 "SELECT cursor FROM bindings WHERE id = ?1",
                 params![binding_id],
@@ -138,7 +150,7 @@ impl LocalIndex {
     }
 
     pub fn set_cursor(&self, binding_id: &str, cursor: i64) -> Result<()> {
-        self.conn.execute(
+        self.lock()?.execute(
             "UPDATE bindings SET cursor = ?2 WHERE id = ?1",
             params![binding_id, cursor],
         )?;
@@ -146,7 +158,7 @@ impl LocalIndex {
     }
 
     pub fn get_entry(&self, binding_id: &str, relative_path: &str) -> Result<Option<IndexEntry>> {
-        self.conn
+        self.lock()?
             .query_row(
                 r#"
                 SELECT relative_path, size, mtime_ms, content_hash, remote_file_id, last_cursor
@@ -171,7 +183,7 @@ impl LocalIndex {
     }
 
     pub fn upsert_entry(&self, binding_id: &str, entry: &IndexEntry) -> Result<()> {
-        self.conn.execute(
+        self.lock()?.execute(
             r#"
             INSERT INTO entries (binding_id, relative_path, size, mtime_ms, content_hash, remote_file_id, last_cursor)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -196,7 +208,7 @@ impl LocalIndex {
     }
 
     pub fn delete_entry(&self, binding_id: &str, relative_path: &str) -> Result<()> {
-        self.conn.execute(
+        self.lock()?.execute(
             "DELETE FROM entries WHERE binding_id = ?1 AND relative_path = ?2",
             params![binding_id, relative_path],
         )?;
@@ -204,9 +216,8 @@ impl LocalIndex {
     }
 
     pub fn list_entry_paths(&self, binding_id: &str) -> Result<Vec<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT relative_path FROM entries WHERE binding_id = ?1")?;
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare("SELECT relative_path FROM entries WHERE binding_id = ?1")?;
         let rows = stmt.query_map(params![binding_id], |r| r.get(0))?;
         let mut out = Vec::new();
         for r in rows {
@@ -222,7 +233,7 @@ impl LocalIndex {
         local_hash: Option<&str>,
         remote_hash: Option<&str>,
     ) -> Result<()> {
-        self.conn.execute(
+        self.lock()?.execute(
             r#"
             INSERT INTO conflicts (binding_id, relative_path, local_hash, remote_hash)
             VALUES (?1, ?2, ?3, ?4)
@@ -236,7 +247,7 @@ impl LocalIndex {
     }
 
     pub fn clear_conflict(&self, binding_id: &str, relative_path: &str) -> Result<()> {
-        self.conn.execute(
+        self.lock()?.execute(
             "DELETE FROM conflicts WHERE binding_id = ?1 AND relative_path = ?2",
             params![binding_id, relative_path],
         )?;
@@ -244,7 +255,7 @@ impl LocalIndex {
     }
 
     pub fn conflict_count(&self, binding_id: &str) -> Result<usize> {
-        let n: i64 = self.conn.query_row(
+        let n: i64 = self.lock()?.query_row(
             "SELECT COUNT(*) FROM conflicts WHERE binding_id = ?1",
             params![binding_id],
             |r| r.get(0),
