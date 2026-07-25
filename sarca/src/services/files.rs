@@ -210,7 +210,6 @@ impl<'d> FilesService<'d> {
                     .to_owned();
                 let content_type =
                     mime_guess::from_path(&name).first().map(|m| m.essence_str().to_owned());
-                let chunks_count = self.repo.count_chunks_of_file(file.id).await.unwrap_or(0);
                 return Ok(crate::schemas::files::FileInfoSchema {
                     path: file.path.clone(),
                     name,
@@ -218,10 +217,11 @@ impl<'d> FilesService<'d> {
                     is_file: true,
                     has_thumb: file.thumb_telegram_file_id.is_some(),
                     is_uploaded: file.is_uploaded,
-                    chunk_size_bytes: file.chunk_size_bytes,
-                    chunks_count,
                     content_type,
                     deleted_at: file.deleted_at,
+                    added_at: Some(file.created_at),
+                    created_at: file.source_created_at,
+                    modified_at: file.source_mtime,
                 });
             }
         }
@@ -264,10 +264,11 @@ impl<'d> FilesService<'d> {
             is_file: false,
             has_thumb: false,
             is_uploaded: marker.as_ref().is_none_or(|m| m.is_uploaded),
-            chunk_size_bytes: None,
-            chunks_count: 0,
             content_type: None,
-            deleted_at: marker.and_then(|m| m.deleted_at),
+            deleted_at: marker.as_ref().and_then(|m| m.deleted_at),
+            added_at: marker.as_ref().map(|m| m.created_at),
+            created_at: marker.as_ref().and_then(|m| m.source_created_at),
+            modified_at: marker.and_then(|m| m.source_mtime),
         })
     }
 

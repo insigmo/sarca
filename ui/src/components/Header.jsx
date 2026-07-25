@@ -4,47 +4,24 @@ import Typography from '@suid/material/Typography'
 import IconButton from '@suid/material/IconButton'
 import TextField from '@suid/material/TextField'
 import InputAdornment from '@suid/material/InputAdornment'
-import { A, useNavigate } from '@solidjs/router'
-import LogoutIcon from '@suid/icons-material/Logout'
-import DarkModeOutlinedIcon from '@suid/icons-material/DarkModeOutlined'
-import LightModeOutlinedIcon from '@suid/icons-material/LightModeOutlined'
-import SettingsOutlinedIcon from '@suid/icons-material/SettingsOutlined'
+import { A } from '@solidjs/router'
 import SearchIcon from '@suid/icons-material/Search'
 import ClearIcon from '@suid/icons-material/Clear'
 import Box from '@suid/material/Box'
 import { Show } from 'solid-js'
 
 import AppIcon from './AppIcon'
-import createLocalStore from '../../libs'
-import { toggleThemeMode, useThemeMode } from '../common/theme'
-import { settingsStore } from '../common/settings'
 import { filesChromeStore } from '../common/filesChrome'
-import { storageSettingsStore } from '../common/storageSettings'
-import TuneOutlinedIcon from '@suid/icons-material/TuneOutlined'
 
 const Header = () => {
-	const [_store, setStore] = createLocalStore()
-	const navigate = useNavigate()
-	const mode = useThemeMode()
-	const { openSettings } = settingsStore
 	const chrome = filesChromeStore
-	const { open: openStorageSettings } = storageSettingsStore
-
-	const logout = (_) => {
-		setStore('access_token')
-		setStore('refresh_token')
-		setStore('user')
-		setStore('redirect', '/')
-
-		navigate('/login')
-	}
 
 	return (
 		<AppBar position="fixed" elevation={0} class="sarca-appbar">
 			<Toolbar
 				sx={{
 					justifyContent: 'space-between',
-					minHeight: 64,
+					minHeight: { xs: 56, sm: 64 },
 					gap: 1.5,
 					px: { xs: 1.5, sm: 2 },
 				}}
@@ -52,7 +29,7 @@ const Header = () => {
 				<A href="/" style={{ 'min-width': 0, 'flex-shrink': 1 }}>
 					<Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25, minWidth: 0 }}>
 						<AppIcon size={34} />
-						<Box sx={{ minWidth: 0, display: { xs: 'none', sm: 'block' } }}>
+						<Box class="header-brand-text" sx={{ minWidth: 0 }}>
 							<Typography
 								variant="h5"
 								noWrap
@@ -123,51 +100,6 @@ const Header = () => {
 						/>
 					</Box>
 				</Show>
-
-				<Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
-					<Show when={chrome.active() && chrome.storageId()}>
-						<IconButton
-							aria-label="Storage settings"
-							title="Storage settings (bot & channels)"
-							onClick={() =>
-								openStorageSettings({
-									id: chrome.storageId(),
-									name: chrome.storageName() || 'Storage',
-								})
-							}
-							class="sarca-header-icon"
-						>
-							<TuneOutlinedIcon />
-						</IconButton>
-					</Show>
-					<IconButton
-						aria-label="Settings"
-						title="Settings"
-						onClick={() => openSettings('access')}
-						class="sarca-header-icon"
-					>
-						<SettingsOutlinedIcon />
-					</IconButton>
-					<IconButton
-						aria-label={
-							mode() === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'
-						}
-						title={mode() === 'dark' ? 'Light theme' : 'Dark theme'}
-						onClick={toggleThemeMode}
-						class="sarca-header-icon"
-					>
-						<Show when={mode() === 'dark'} fallback={<DarkModeOutlinedIcon />}>
-							<LightModeOutlinedIcon />
-						</Show>
-					</IconButton>
-					<IconButton
-						aria-label="Log out"
-						onClick={logout}
-						class="sarca-header-icon"
-					>
-						<LogoutIcon />
-					</IconButton>
-				</Box>
 			</Toolbar>
 		</AppBar>
 	)

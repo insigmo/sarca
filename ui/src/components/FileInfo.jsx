@@ -39,24 +39,32 @@ const KIND_LABELS = {
 }
 
 /**
- * @param {string} path
- * @param {boolean} isFile
- */
-const parentLocation = (path, isFile) => {
-	const raw = String(path || '').replace(/\/+$/, '')
-	if (!raw) return '/'
-	const parts = raw.split('/')
-	if (parts.length <= 1) return '/'
-	return parts.slice(0, -1).join('/') || '/'
-}
-
-/**
  * @param {number|null|undefined} n
  */
 const formatBytesExact = (n) => {
 	const v = Number(n)
 	if (!Number.isFinite(v)) return '—'
 	return `${Math.max(0, Math.round(v)).toLocaleString()} bytes`
+}
+
+/**
+ * @param {string|number|null|undefined} raw
+ */
+const formatTimestamp = (raw) => {
+	if (raw == null || raw === '') return ''
+	const d = new Date(typeof raw === 'number' && raw < 1e12 ? raw * 1000 : raw)
+	if (Number.isNaN(d.getTime())) return ''
+	return d.toLocaleString()
+}
+
+/**
+ * @param {string|null|undefined} path
+ */
+const pathFromRoot = (path) => {
+	const p = String(path || '')
+		.replace(/^\/+/, '')
+		.replace(/\/+$/, '')
+	return p ? `/${p}` : '/'
 }
 
 /**
@@ -101,12 +109,10 @@ const FileInfoDialog = (props) => {
 			path: d?.path || base.path,
 			size: d?.size ?? base.size,
 			is_file: d?.is_file ?? base.is_file,
-			has_thumb: d?.has_thumb ?? base.has_thumb,
-			is_uploaded: d?.is_uploaded,
-			chunk_size_bytes: d?.chunk_size_bytes,
-			chunks_count: d?.chunks_count,
-			content_type: d?.content_type,
 			deleted_at: d?.deleted_at,
+			added_at: d?.added_at,
+			created_at: d?.created_at,
+			modified_at: d?.modified_at,
 			is_favorite: base.is_favorite,
 		}
 	})
@@ -120,7 +126,7 @@ const FileInfoDialog = (props) => {
 	const rows = createMemo(() => {
 		const m = merged()
 		if (!m) return []
-		/** @type {{ label: string, value: string }[]} */
+		/** @type {{ label: string, value: import('solid-js').JSX.Element, title?: string }[]} */
 		const out = []
 		out.push({
 			label: 'Type',
@@ -134,43 +140,32 @@ const FileInfoDialog = (props) => {
 		}
 		out.push({
 			label: 'Size',
-			value: `${convertSize(m.size)} (${formatBytesExact(m.size)})`,
-		})
-		out.push({
-			label: 'Location',
-			value: parentLocation(m.path, m.is_file),
+			value: (
+				<>
+					{convertSize(m.size)}
+					<span class="file-info-dialog__bytes">
+						({formatBytesExact(m.size)})
+					</span>
+				</>
+			),
+			title: `${convertSize(m.size)} (${formatBytesExact(m.size)})`,
 		})
 		out.push({
 			label: 'Path',
-			value: m.path || '/',
+			value: pathFromRoot(m.path),
 		})
-		if (m.content_type) {
-			out.push({ label: 'MIME', value: m.content_type })
-		}
-		if (m.is_file) {
-			out.push({
-				label: 'Thumbnail',
-				value: m.has_thumb ? 'Available' : 'None',
-			})
-			if (m.is_uploaded != null) {
-				out.push({
-					label: 'Upload',
-					value: m.is_uploaded ? 'Complete' : 'Pending',
-				})
-			}
-			if (m.chunks_count != null && m.chunks_count > 0) {
-				out.push({
-					label: 'Chunks',
-					value: String(m.chunks_count),
-				})
-			}
-			if (m.chunk_size_bytes) {
-				out.push({
-					label: 'Chunk size',
-					value: convertSize(m.chunk_size_bytes),
-				})
-			}
-		}
+		out.push({
+			label: 'Created',
+			value: formatTimestamp(m.created_at) || '—',
+		})
+		out.push({
+			label: 'Modified',
+			value: formatTimestamp(m.modified_at) || '—',
+		})
+		out.push({
+			label: 'Added',
+			value: formatTimestamp(m.added_at) || '—',
+		})
 		if (m.is_favorite != null) {
 			out.push({
 				label: 'Favorite',
@@ -233,7 +228,16 @@ const FileInfoDialog = (props) => {
 						{(row) => (
 							<div class="file-info-dialog__row">
 								<dt>{row.label}</dt>
-								<dd title={row.value}>{row.value}</dd>
+								<dd
+									title={
+										row.title ??
+										(typeof row.value === 'string'
+											? row.value
+											: undefined)
+									}
+								>
+									{row.value}
+								</dd>
 							</div>
 						)}
 					</For>

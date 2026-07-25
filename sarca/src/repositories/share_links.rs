@@ -62,6 +62,7 @@ impl<'d> ShareLinksRepository<'d> {
                 "
                 SELECT * FROM {TABLE}
                 WHERE storage_id = $1
+                  AND revoked_at IS NULL
                 ORDER BY created_at DESC
                 "
             )
