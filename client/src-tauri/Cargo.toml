@@ -5,6 +5,10 @@ description = "Sarca desktop/mobile sync client"
 authors = ["Sarca"]
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/insigmo/sarca"
+readme = "../../README.md"
+keywords = ["storage", "sync", "telegram"]
+categories = ["gui"]
 
 [lib]
 name = "sarca_client_lib"
