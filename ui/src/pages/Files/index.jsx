@@ -433,6 +433,16 @@ const Files = () => {
 		})
 		Promise.all([fetchStorage(), fetchFSLayer(), loadFavoritePaths()]).then()
 		window.addEventListener('popstate', reload, false)
+
+		const mobileMediaQuery = window.matchMedia('(max-width: 840px)')
+		const closeMobileNavOnDesktop = (event) => {
+			if (!event.matches) setMobileNavOpen(false)
+		}
+		mobileMediaQuery.addEventListener('change', closeMobileNavOnDesktop)
+
+		onCleanup(() => {
+			mobileMediaQuery.removeEventListener('change', closeMobileNavOnDesktop)
+		})
 	})
 
 	onCleanup(() => {
@@ -743,19 +753,19 @@ const Files = () => {
 							</>
 						}
 					>
-						<Show when={!trashMode()}>
-							<Typography
-								variant="body2"
-								color="text.secondary"
-								sx={{ mr: 'auto' }}
-							>
-								{listMode() === 'favorites'
-									? 'Favorites'
-									: listMode() === 'recent'
-										? 'Recent'
-										: 'Shared links'}
-							</Typography>
-						</Show>
+						<Typography
+							variant="body2"
+							color="text.secondary"
+							sx={{ mr: 'auto' }}
+						>
+							{listMode() === 'favorites'
+								? 'Favorites'
+								: listMode() === 'recent'
+									? 'Recent'
+									: listMode() === 'shared'
+										? 'Shared links'
+										: 'Trash'}
+						</Typography>
 						<Show when={trashMode()}>
 							<Button
 								variant="contained"
