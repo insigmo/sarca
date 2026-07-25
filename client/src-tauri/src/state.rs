@@ -1,14 +1,7 @@
-use std::{
-    fs,
-    path::PathBuf,
-    sync::Arc,
-    time::Duration,
-};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
-use sarca_sync::{
-    Binding, BindingMode, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig,
-};
+use sarca_sync::{Binding, BindingMode, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tokio::sync::{Mutex, RwLock};
@@ -36,7 +29,10 @@ impl AppSyncState {
         fs::create_dir_all(&data_dir)?;
 
         let server = load_server_config(&data_dir);
-        let api = Arc::new(RwLock::new(SarcaApi::new(&server.base_url, &server.access_token)));
+        let api = Arc::new(RwLock::new(SarcaApi::new(
+            &server.base_url,
+            &server.access_token,
+        )));
         let config = SyncEngineConfig {
             poll_interval: Duration::from_secs(30),
             api,

@@ -41,7 +41,11 @@ impl SarcaApi {
 
     pub async fn snapshot(&self, storage_id: Uuid) -> Result<SnapshotResponse> {
         let url = format!("{}/api/storages/{storage_id}/sync/snapshot", self.base_url);
-        let resp = self.auth(self.client.get(url)).send().await?.error_for_status()?;
+        let resp = self
+            .auth(self.client.get(url))
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(resp.json().await?)
     }
 
@@ -55,23 +59,41 @@ impl SarcaApi {
             "{}/api/storages/{storage_id}/sync/changelog?cursor={cursor}&limit={limit}",
             self.base_url
         );
-        let resp = self.auth(self.client.get(url)).send().await?.error_for_status()?;
+        let resp = self
+            .auth(self.client.get(url))
+            .send()
+            .await?
+            .error_for_status()?;
         Ok(resp.json().await?)
     }
 
-    pub async fn download_to(&self, storage_id: Uuid, remote_path: &str, dest: &Path) -> Result<()> {
+    pub async fn download_to(
+        &self,
+        storage_id: Uuid,
+        remote_path: &str,
+        dest: &Path,
+    ) -> Result<()> {
         let encoded = remote_path
             .split('/')
             .map(|p| urlencoding_encode(p))
             .collect::<Vec<_>>()
             .join("/");
-        let url = format!("{}/api/storages/{storage_id}/files/download/{encoded}", self.base_url);
-        let resp = self.auth(self.client.get(url)).send().await?.error_for_status()?;
+        let url = format!(
+            "{}/api/storages/{storage_id}/files/download/{encoded}",
+            self.base_url
+        );
+        let resp = self
+            .auth(self.client.get(url))
+            .send()
+            .await?
+            .error_for_status()?;
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
         let bytes = resp.bytes().await?;
-        tokio::fs::write(dest, bytes).await.with_context(|| format!("write {}", dest.display()))?;
+        tokio::fs::write(dest, bytes)
+            .await
+            .with_context(|| format!("write {}", dest.display()))?;
         Ok(())
     }
 
@@ -81,7 +103,10 @@ impl SarcaApi {
             .map(|p| urlencoding_encode(p))
             .collect::<Vec<_>>()
             .join("/");
-        let url = format!("{}/api/storages/{storage_id}/files/{encoded}", self.base_url);
+        let url = format!(
+            "{}/api/storages/{storage_id}/files/{encoded}",
+            self.base_url
+        );
         let resp = self.auth(self.client.delete(url)).send().await?;
         if !resp.status().is_success() && resp.status().as_u16() != 404 {
             bail!("delete failed: {}", resp.status());
@@ -118,7 +143,10 @@ impl SarcaApi {
         }
 
         let url = format!("{}/api/storages/{storage_id}/files/upload", self.base_url);
-        let resp = self.auth(self.client.post(url).multipart(form)).send().await?;
+        let resp = self
+            .auth(self.client.post(url).multipart(form))
+            .send()
+            .await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -129,8 +157,16 @@ impl SarcaApi {
         Ok(())
     }
 
-    pub async fn create_folder(&self, storage_id: Uuid, parent: &str, folder_name: &str) -> Result<()> {
-        let url = format!("{}/api/storages/{storage_id}/files/create_folder", self.base_url);
+    pub async fn create_folder(
+        &self,
+        storage_id: Uuid,
+        parent: &str,
+        folder_name: &str,
+    ) -> Result<()> {
+        let url = format!(
+            "{}/api/storages/{storage_id}/files/create_folder",
+            self.base_url
+        );
         let body = serde_json::json!({
             "path": parent,
             "folder_name": folder_name,
@@ -149,11 +185,11 @@ fn urlencoding_encode(s: &str) -> String {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(b as char);
-            },
+            }
             _ => {
                 out.push('%');
                 out.push_str(&format!("{b:02X}"));
-            },
+            }
         }
     }
     out
