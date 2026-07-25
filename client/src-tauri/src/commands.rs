@@ -1,13 +1,16 @@
-use sarca_sync::{Binding, SyncStatus};
+use sarca_sync::{Binding, SarcaApi, SyncStatus};
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 
-use crate::state::{new_binding, AppSyncState, ServerConfig};
+use crate::state::{
+    navigate_to_server, navigate_to_shell, new_binding, AppSyncState, ServerConfig,
+};
 
 #[derive(Serialize)]
-pub struct ServerConfigDto {
+pub struct SessionDto {
+    pub connected: bool,
     pub base_url: String,
-    pub access_token: String,
+    pub email: String,
 }
 
 #[tauri::command]
@@ -45,25 +48,72 @@ pub fn platform_label() -> String {
 }
 
 #[tauri::command]
-pub async fn get_server_config(state: State<'_, AppSyncState>) -> Result<ServerConfigDto, String> {
+pub async fn get_session(state: State<'_, AppSyncState>) -> Result<SessionDto, String> {
     let cfg = state.server.lock().await.clone();
-    Ok(ServerConfigDto {
+    Ok(SessionDto {
+        connected: cfg.is_connected(),
         base_url: cfg.base_url,
-        access_token: cfg.access_token,
+        email: cfg.email,
     })
 }
 
 #[tauri::command]
-pub async fn set_server_config(
+pub async fn connect(
+    app: AppHandle,
     state: State<'_, AppSyncState>,
-    base_url: String,
-    access_token: String,
-) -> Result<(), String> {
+    server_url: String,
+    email: String,
+    password: String,
+) -> Result<SessionDto, String> {
+    let base = server_url.trim().trim_end_matches('/').to_owned();
+    if base.is_empty() {
+        return Err("Server URL is required".into());
+    }
+    if email.trim().is_empty() {
+        return Err("Email is required".into());
+    }
+    if password.is_empty() {
+        return Err("Password is required".into());
+    }
+
+    let tokens = SarcaApi::login(&base, email.trim(), &password)
+        .await
+        .map_err(|e| e.to_string())?;
+
     let cfg = ServerConfig {
-        base_url,
-        access_token,
+        base_url: base,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        email: email.trim().to_owned(),
+        email_verified: tokens.email_verified,
     };
-    state.save_server(&cfg).await.map_err(|e| e.to_string())
+    state.save_server(&cfg).await.map_err(|e| e.to_string())?;
+    navigate_to_server(&app, &cfg)?;
+
+    Ok(SessionDto {
+        connected: true,
+        base_url: cfg.base_url,
+        email: cfg.email,
+    })
+}
+
+#[tauri::command]
+pub async fn disconnect(app: AppHandle, state: State<'_, AppSyncState>) -> Result<(), String> {
+    let cfg = ServerConfig::default();
+    state.save_server(&cfg).await.map_err(|e| e.to_string())?;
+    if let Ok(mut guard) = state.pending_inject.lock() {
+        *guard = None;
+    }
+    navigate_to_shell(&app)
+}
+
+#[tauri::command]
+pub async fn open_app(app: AppHandle, state: State<'_, AppSyncState>) -> Result<(), String> {
+    let cfg = state.server.lock().await.clone();
+    if !cfg.is_connected() {
+        return Err("Not connected".into());
+    }
+    navigate_to_server(&app, &cfg)
 }
 
 #[tauri::command]

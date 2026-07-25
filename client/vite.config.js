@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Reuse the existing SolidJS UI as the webview frontend when built;
-// for Tauri shell pages we serve a thin sync settings overlay entry.
+// Connect shell for Tauri: server URL + login, then Rust navigates to the
+// server's web UI (same SolidJS app as the browser).
 export default defineConfig({
   clearScreen: false,
   server: {
