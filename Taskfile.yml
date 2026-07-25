@@ -36,8 +36,8 @@ tasks:
     cmds:
       - mkdir -p "{{.ROOT_DIR}}/runtime"
       - |
-        cd "{{.ROOT_DIR}}/sarca"
-        cargo build --release
+        cd "{{.ROOT_DIR}}"
+        cargo build --release -p sarca
         BIN="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
         if [ -z "$BIN" ]; then BIN=target; fi
         SRC="$BIN/release/sarca"
@@ -55,16 +55,16 @@ tasks:
 
   lint:
     desc: Strict rustfmt (nightly) + clippy (deny pedantic/nursery/cargo)
-    dir: sarca
+    dir: "{{.ROOT_DIR}}"
     cmds:
-      - cargo +nightly fmt -- --check
-      - cargo clippy --all-targets --all-features -- -D warnings
+      - cargo +nightly fmt -p sarca -- --check
+      - cargo clippy -p sarca --all-targets --all-features -- -D warnings
 
   fmt:
     desc: Apply strict rustfmt (nightly unstable options)
-    dir: sarca
+    dir: "{{.ROOT_DIR}}"
     cmds:
-      - cargo +nightly fmt
+      - cargo +nightly fmt -p sarca
 
   deploy-ui-native:
     desc: Copy ui/dist into native install prefix
