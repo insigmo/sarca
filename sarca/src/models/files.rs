@@ -25,6 +25,10 @@ pub struct InFile {
     pub storage_id: uuid::Uuid,
     /// Telegram chunk size used for this file; `None` for folders / legacy.
     pub chunk_size_bytes: Option<i64>,
+    /// Original filesystem birth/created time from the client (if known).
+    pub source_created_at: Option<DateTime<Utc>>,
+    /// Original filesystem modification time from the client (if known).
+    pub source_mtime: Option<DateTime<Utc>>,
 }
 
 impl InFile {
@@ -34,11 +38,23 @@ impl InFile {
             size,
             storage_id,
             chunk_size_bytes: None,
+            source_created_at: None,
+            source_mtime: None,
         }
     }
 
     pub fn with_chunk_size(mut self, chunk_size_bytes: i64) -> Self {
         self.chunk_size_bytes = Some(chunk_size_bytes);
+        self
+    }
+
+    pub fn with_source_times(
+        mut self,
+        created_at: Option<DateTime<Utc>>,
+        mtime: Option<DateTime<Utc>>,
+    ) -> Self {
+        self.source_created_at = created_at;
+        self.source_mtime = mtime;
         self
     }
 }
@@ -58,6 +74,10 @@ pub struct File {
     pub chunk_size_bytes: Option<i64>,
     /// When set, the file is in the trash.
     pub deleted_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub source_created_at: Option<DateTime<Utc>>,
+    pub source_mtime: Option<DateTime<Utc>>,
 }
 
 impl File {
@@ -69,6 +89,7 @@ impl File {
         is_uploaded: bool,
         chunk_size_bytes: Option<i64>,
     ) -> Self {
+        let now = Utc::now();
         Self {
             id,
             path,
@@ -79,6 +100,10 @@ impl File {
             thumb_telegram_message_id: None,
             chunk_size_bytes,
             deleted_at: None,
+            created_at: now,
+            updated_at: now,
+            source_created_at: None,
+            source_mtime: None,
         }
     }
 }
