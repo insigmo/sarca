@@ -206,6 +206,43 @@ a.default-link:hover {
 	z-index: 1;
 }
 
+.app-shell-root {
+	display: flex;
+	flex-direction: column;
+	min-height: 100dvh;
+}
+
+.app-shell-stage {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.app-shell-banner:not(:has(*)) {
+	display: none;
+}
+
+.app-shell-banner:has(*) {
+	padding: 12px 20px 0;
+}
+
+.app-shell-outlet {
+	display: flex;
+	flex: 1;
+	flex-direction: column;
+	min-height: 0;
+}
+
+/* Non-shell pages (setup, 404) keep centered content */
+.app-shell-outlet > *:not(.files-shell) {
+	width: 100%;
+	max-width: 1200px;
+	margin-inline: auto;
+	padding: 12px 20px 40px;
+	box-sizing: border-box;
+}
+
 /* —— Header —— */
 .sarca-appbar.MuiAppBar-root {
 	background: var(--sarca-header-bg) !important;
@@ -531,17 +568,29 @@ a.default-link:hover {
 	background: var(--sarca-surface);
 }
 
-/* —— Files page canvas —— */
+/* —— Files / Storages docked shell —— */
 .files-shell {
 	display: flex;
 	align-items: stretch;
-	gap: 12px;
+	flex: 1;
+	width: 100%;
 	min-height: 0;
+	gap: 0;
+	overflow: hidden;
 }
 
 .files-shell__main {
 	flex: 1;
 	min-width: 0;
+	padding: 16px 20px 48px;
+	box-sizing: border-box;
+	overflow: auto;
+}
+
+@media (min-width: 841px) {
+	.files-shell__main {
+		padding: 20px 28px 56px;
+	}
 }
 
 .files-sidebar--desktop {
@@ -549,16 +598,21 @@ a.default-link:hover {
 	width: 240px;
 	flex-shrink: 0;
 	flex-direction: column;
-	border: 1px solid var(--sarca-border);
-	border-radius: var(--sarca-radius-sm);
-	background: var(--sarca-glass);
-	backdrop-filter: blur(16px);
-	-webkit-backdrop-filter: blur(16px);
-	padding: 8px;
+	align-self: stretch;
+	min-height: 100%;
+	border: none;
+	border-right: 1px solid var(--sarca-border);
+	border-radius: 0;
+	background: color-mix(in srgb, var(--sarca-glass) 88%, var(--sarca-surface, transparent));
+	backdrop-filter: blur(18px);
+	-webkit-backdrop-filter: blur(18px);
+	padding: 10px 10px 16px;
+	box-shadow: none;
 }
 
 .files-sidebar--collapsed {
-	width: 64px;
+	width: 72px;
+	padding-inline: 8px;
 }
 
 .files-sidebar--collapsed .files-sidebar__label {
@@ -707,6 +761,16 @@ a.default-link:hover {
 @media (min-width: 841px) {
 	.files-sidebar--desktop {
 		display: flex;
+		min-height: 100%;
+	}
+
+	.app-shell-outlet {
+		min-height: calc(100dvh - 64px - env(safe-area-inset-top, 0px));
+	}
+
+	.app-shell-outlet:has(> .files-shell) {
+		/* Shell pages fill the stage; sidebar docks to the left edge */
+		padding: 0;
 	}
 }
 
