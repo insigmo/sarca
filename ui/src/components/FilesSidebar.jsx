@@ -1,4 +1,5 @@
 import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import { Portal } from 'solid-js/web'
 import IconButton from '@suid/material/IconButton'
 import ChevronLeftIcon from '@suid/icons-material/ChevronLeft'
 import ChevronRightIcon from '@suid/icons-material/ChevronRight'
@@ -116,6 +117,7 @@ const FilesSidebar = (props) => {
 					<IconButton
 						size="small"
 						aria-label={collapsed() ? 'Expand sidebar' : 'Collapse sidebar'}
+						aria-expanded={!collapsed()}
 						onClick={toggleCollapsed}
 					>
 						<Show when={collapsed()} fallback={<ChevronLeftIcon />}>
@@ -131,23 +133,25 @@ const FilesSidebar = (props) => {
 			</aside>
 
 			<Show when={props.mobileOpen}>
-				<div
-					class="files-sidebar-backdrop"
-					onClick={() => props.onMobileClose?.()}
-					role="presentation"
-				/>
-				<aside
-					class="files-sidebar files-sidebar--drawer"
-					role="dialog"
-					aria-modal="true"
-					aria-label="Files navigation"
-				>
-					<SidebarNav
-						mode={props.mode}
-						onSelect={select}
-						onOpenSettings={openSidebarSettings}
+				<Portal mount={document.body}>
+					<div
+						class="files-sidebar-backdrop"
+						onClick={() => props.onMobileClose?.()}
+						role="presentation"
 					/>
-				</aside>
+					<aside
+						class="files-sidebar files-sidebar--drawer"
+						role="dialog"
+						aria-modal="true"
+						aria-label="Files navigation"
+					>
+						<SidebarNav
+							mode={props.mode}
+							onSelect={select}
+							onOpenSettings={openSidebarSettings}
+						/>
+					</aside>
+				</Portal>
 			</Show>
 		</>
 	)
