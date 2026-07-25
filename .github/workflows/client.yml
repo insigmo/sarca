@@ -25,7 +25,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Workspace root target so artifacts land in a predictable place.
   CARGO_TARGET_DIR: ${{ github.workspace }}/target
 
 jobs:
@@ -52,23 +51,24 @@ jobs:
           - name: linux-amd64
             os: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
-            bundles: "deb,appimage"
+            bundles: deb,appimage
           - name: linux-arm64
             os: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
-            bundles: "deb,appimage"
+            bundles: deb,appimage
           - name: windows-amd64
             os: windows-latest
             rust_target: x86_64-pc-windows-msvc
-            bundles: "nsis,msi"
+            # MSI needs WiX; NSIS is enough for CI artifacts.
+            bundles: nsis
           - name: windows-arm64
             os: windows-11-arm
             rust_target: aarch64-pc-windows-msvc
-            bundles: "nsis"
+            bundles: nsis
           - name: macos-arm64
             os: macos-14
             rust_target: aarch64-apple-darwin
-            bundles: "app,dmg"
+            bundles: app,dmg
 
     steps:
       - uses: actions/checkout@v4
@@ -110,14 +110,15 @@ jobs:
 
       - name: Build Tauri client
         working-directory: client
+        shell: bash
         env:
-          # Unsigned macOS builds are fine for CI artifacts.
-          TAURI_SIGNING_PRIVATE_KEY: ""
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: >
-          pnpm tauri build
-          --target ${{ matrix.rust_target }}
-          --bundles ${{ matrix.bundles }}
+          # Unsigned macOS CI builds (signingIdentity "-" in tauri.conf.json).
+          CI: true
+        run: |
+          set -euo pipefail
+          pnpm tauri build \
+            --target "${{ matrix.rust_target }}" \
+            --bundles "${{ matrix.bundles }}"
 
       - name: Upload bundles
         uses: actions/upload-artifact@v4
@@ -134,7 +135,6 @@ jobs:
     name: android-arm64
     needs: sync-crate
     runs-on: ubuntu-22.04
-    # Mobile project is generated in CI until gen/android is checked in.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -150,6 +150,9 @@ jobs:
         run: |
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973"
+          # Point NDK_HOME at the installed NDK for tauri.
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -177,14 +180,17 @@ jobs:
       - name: Init + build Android
         working-directory: client
         env:
-          NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+          CI: true
         run: |
           set -euo pipefail
+          java -version
+          echo "JAVA_HOME=${JAVA_HOME:-}"
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "NDK_HOME=${NDK_HOME:-}"
           if [ ! -d src-tauri/gen/android ]; then
-            pnpm exec tauri android init <<<'y'
+            pnpm tauri android init --ci --skip-targets-install
           fi
-          pnpm tauri android build --apk --target aarch64
+          pnpm tauri android build --apk --target aarch64 --ci
 
       - name: Upload APK
         if: success()
@@ -201,7 +207,6 @@ jobs:
     name: ios-arm64
     needs: sync-crate
     runs-on: macos-14
-    # Needs Apple signing for device IPA; CI builds what Xcode allows unsigned.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -231,14 +236,16 @@ jobs:
 
       - name: Init + build iOS (simulator)
         working-directory: client
+        env:
+          CI: true
         run: |
           set -euo pipefail
+          pnpm tauri ios --help
           if [ ! -d src-tauri/gen/apple ]; then
-            pnpm exec tauri ios init <<<'y'
+            pnpm tauri ios init --ci
           fi
-          # Simulator build avoids App Store signing secrets.
-          pnpm tauri ios build --target aarch64-sim --no-sign || \
-            pnpm tauri ios build --target aarch64 --no-sign
+          # Simulator build — no Apple signing secrets required.
+          pnpm tauri ios build --target aarch64-sim --ci
 
       - name: Upload iOS artifacts
         if: success()
