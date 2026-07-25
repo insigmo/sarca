@@ -8,9 +8,12 @@ import { For, createRoot, createSignal } from 'solid-js'
 
 /**
  * @typedef {Object} AlertType
+ * @property {string} id
  * @property {string} msg
  * @property {AlertSeverity} severity
  */
+
+let alertSeq = 0
 
 export const alertStore = createRoot(() => {
 	/**
@@ -19,22 +22,27 @@ export const alertStore = createRoot(() => {
 	const [alertList, setAlertList] = createSignal([])
 
 	/**
-	 *
-	 * @param {string} msg
-	 * @param {AlertSeverity} severity
-	 * @returns
+	 * @param {string} id
 	 */
-	const addAlert = (msg, severity) => {
-		setAlertList((alertList) => [{ msg, severity }, ...alertList])
-
-		setTimeout(() => setAlertList((alertList) => alertList.slice(0, -1)), 5e3)
+	const dismissAlert = (id) => {
+		setAlertList((list) => list.filter((a) => a.id !== id))
 	}
 
-	return { alertList, addAlert }
+	/**
+	 * @param {string} msg
+	 * @param {AlertSeverity} severity
+	 */
+	const addAlert = (msg, severity) => {
+		const id = `alert-${++alertSeq}`
+		setAlertList((list) => [{ id, msg, severity }, ...list])
+		setTimeout(() => dismissAlert(id), 5e3)
+	}
+
+	return { alertList, addAlert, dismissAlert }
 })
 
 const AlertStack = () => {
-	const { alertList } = alertStore
+	const { alertList, dismissAlert } = alertStore
 
 	return (
 		<Stack
@@ -53,7 +61,14 @@ const AlertStack = () => {
 			spacing={1}
 		>
 			<For each={alertList()}>
-				{(alert) => <Alert severity={alert.severity}>{alert.msg}</Alert>}
+				{(alert) => (
+					<Alert
+						severity={alert.severity}
+						onClose={() => dismissAlert(alert.id)}
+					>
+						{alert.msg}
+					</Alert>
+				)}
 			</For>
 		</Stack>
 	)

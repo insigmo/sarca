@@ -442,16 +442,18 @@ impl<'d> FilesService<'d> {
             return Ok(dest);
         }
 
-        // Replace onto the source itself (same-folder copy/move) → rename instead.
+        // Same path as the source (e.g. Ctrl+V into the same folder): cannot replace
+        // a file with a copy of itself. Always keep both under a free name — same as
+        // OS paste-duplicate — instead of 409 + a misleading "Replace" dialog.
         let self_overlap = dest == source
             || (source.ends_with('/') && dest.starts_with(source))
             || (dest.ends_with('/') && source.starts_with(&dest));
+        if self_overlap {
+            return self.repo.next_available_live_path(&dest, storage_id).await;
+        }
 
         match on_conflict {
             None => Err(SarcaError::TrashPathConflict),
-            Some("replace") if self_overlap => {
-                self.repo.next_available_live_path(&dest, storage_id).await
-            },
             Some("replace") => {
                 let live_ids = self.repo.list_live_ids_at_path(storage_id, &dest).await?;
                 purge_file_ids(self.db, self.base_url, self.rate_limit, &live_ids).await?;
