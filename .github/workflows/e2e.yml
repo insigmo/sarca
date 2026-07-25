@@ -61,15 +61,13 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: sarca -> target
+          workspaces: . -> target
 
       - name: rustfmt (strict / nightly)
-        working-directory: sarca
-        run: cargo +nightly fmt -- --check
+        run: cargo +nightly fmt -p sarca -- --check
 
       - name: clippy (deny pedantic/nursery/cargo)
-        working-directory: sarca
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy -p sarca --all-targets --all-features -- -D warnings
 
       - uses: pnpm/action-setup@v6
         with:
@@ -88,8 +86,7 @@ jobs:
           cache-dependency-path: e2e/requirements.txt
 
       - name: Unit + integration tests
-        working-directory: sarca
-        run: cargo test
+        run: cargo test -p sarca
 
       - name: Build UI
         working-directory: ui
@@ -100,14 +97,13 @@ jobs:
           pnpm run build
 
       - name: Build server
-        working-directory: sarca
-        run: cargo build --release
+        run: cargo build --release -p sarca
 
       - name: Prepare runtime dir
         run: |
           mkdir -p "$WORK_DIR" runtime/ui
           cp -a ui/dist/. runtime/ui/
-          cp sarca/target/release/sarca runtime/sarca
+          cp target/release/sarca runtime/sarca
           chmod +x runtime/sarca
           # Binary self-loads sarca.conf (production-like).
           {
