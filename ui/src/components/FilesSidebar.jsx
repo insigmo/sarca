@@ -91,12 +91,17 @@ const FilesSidebar = (props) => {
 	createEffect(() => {
 		if (!props.mobileOpen) return
 
+		document.body.style.overflow = 'hidden'
+
 		const closeOnEscape = (event) => {
 			if (event.key === 'Escape') props.onMobileClose?.()
 		}
 
-		document.addEventListener('keydown', closeOnEscape)
-		onCleanup(() => document.removeEventListener('keydown', closeOnEscape))
+		window.addEventListener('keydown', closeOnEscape)
+		onCleanup(() => {
+			document.body.style.overflow = ''
+			window.removeEventListener('keydown', closeOnEscape)
+		})
 	})
 
 	return (
