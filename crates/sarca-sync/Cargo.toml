@@ -1,0 +1,33 @@
+[package]
+name = "sarca-sync"
+version = "0.1.0"
+edition = "2021"
+description = "Sarca client sync engine (folder sync + auto-upload)"
+license = "MIT"
+
+[features]
+default = ["watcher"]
+watcher = ["dep:notify"]
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+futures = "0.3"
+hex = "0.4"
+notify = { version = "6", optional = true, default-features = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio-util = { version = "0.7", features = ["io"] }
+tracing = "0.1"
+uuid = { version = "1", features = ["serde", "v4"] }
+walkdir = "2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

@@ -432,6 +432,109 @@ pub async fn init_db(db: &PgPool) {
         CREATE INDEX IF NOT EXISTS oauth_accounts_user_idx
           ON oauth_accounts (user_id);
     ",
+        "
+        ALTER TABLE files
+        ADD COLUMN IF NOT EXISTS content_hash TEXT;
+    ",
+        "
+        CREATE TABLE IF NOT EXISTS file_sync_events (
+            id            BIGSERIAL PRIMARY KEY,
+            storage_id    UUID NOT NULL REFERENCES storages ON DELETE CASCADE,
+            file_id       UUID,
+            path          TEXT NOT NULL,
+            op            TEXT NOT NULL CHECK (op IN ('upsert', 'delete')),
+            size          BIGINT,
+            is_file       BOOLEAN NOT NULL DEFAULT TRUE,
+            content_hash  TEXT,
+            source_mtime  TIMESTAMPTZ,
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+    ",
+        "
+        CREATE INDEX IF NOT EXISTS file_sync_events_storage_id_id_idx
+          ON file_sync_events (storage_id, id);
+    ",
+        r#"
+        CREATE OR REPLACE FUNCTION sarca_files_sync_event()
+        RETURNS TRIGGER AS $$
+        DECLARE
+          is_folder BOOLEAN;
+          should_upsert BOOLEAN;
+        BEGIN
+          IF TG_OP = 'DELETE' THEN
+            INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
+            VALUES (
+              OLD.storage_id, OLD.id, OLD.path, 'delete', OLD.size,
+              RIGHT(OLD.path, 1) <> '/', OLD.content_hash, OLD.source_mtime
+            );
+            RETURN OLD;
+          END IF;
+
+          is_folder := RIGHT(NEW.path, 1) = '/';
+          should_upsert := NEW.deleted_at IS NULL AND (NEW.is_uploaded OR is_folder);
+
+          IF TG_OP = 'INSERT' THEN
+            IF should_upsert THEN
+              INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
+              VALUES (
+                NEW.storage_id, NEW.id, NEW.path, 'upsert', NEW.size,
+                NOT is_folder, NEW.content_hash, NEW.source_mtime
+              );
+            END IF;
+            RETURN NEW;
+          END IF;
+
+          -- UPDATE
+          IF OLD.path IS DISTINCT FROM NEW.path THEN
+            INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
+            VALUES (
+              OLD.storage_id, OLD.id, OLD.path, 'delete', OLD.size,
+              RIGHT(OLD.path, 1) <> '/', OLD.content_hash, OLD.source_mtime
+            );
+            IF should_upsert THEN
+              INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
+              VALUES (
+                NEW.storage_id, NEW.id, NEW.path, 'upsert', NEW.size,
+                NOT is_folder, NEW.content_hash, NEW.source_mtime
+              );
+            END IF;
+            RETURN NEW;
+          END IF;
+
+          IF NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL THEN
+            INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
+            VALUES (
+              NEW.storage_id, NEW.id, NEW.path, 'delete', NEW.size,
+              NOT is_folder, NEW.content_hash, NEW.source_mtime
+            );
+            RETURN NEW;
+          END IF;
+
+          IF should_upsert AND (
+            OLD.deleted_at IS NOT NULL
+            OR OLD.is_uploaded IS DISTINCT FROM NEW.is_uploaded
+            OR OLD.size IS DISTINCT FROM NEW.size
+            OR OLD.content_hash IS DISTINCT FROM NEW.content_hash
+            OR OLD.source_mtime IS DISTINCT FROM NEW.source_mtime
+          ) THEN
+            INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
+            VALUES (
+              NEW.storage_id, NEW.id, NEW.path, 'upsert', NEW.size,
+              NOT is_folder, NEW.content_hash, NEW.source_mtime
+            );
+          END IF;
+
+          RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
+    "#,
+        "DROP TRIGGER IF EXISTS files_sync_event ON files;",
+        r#"
+        CREATE TRIGGER files_sync_event
+          AFTER INSERT OR UPDATE OR DELETE ON files
+          FOR EACH ROW
+          EXECUTE PROCEDURE sarca_files_sync_event();
+    "#,
     ] {
         sqlx::query(statement)
             .execute(&mut *transaction)

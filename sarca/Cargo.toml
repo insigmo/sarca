@@ -9,11 +9,6 @@ readme = "../README.md"
 keywords = ["storage", "telegram", "self-hosted"]
 categories = ["web-programming"]
 
-[profile.release]
-strip = true
-codegen-units = 1
-lto = true
-
 # Strict Clippy: all + pedantic + nursery + cargo as deny.
 # Only allow lints that are impractical for this Axum/SQL architecture.
 [lints.rust]
