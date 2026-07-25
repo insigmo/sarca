@@ -28,6 +28,7 @@ import FileViewer from '../../components/FileViewer'
 import RestoreConflictDialog from '../../components/RestoreConflictDialog'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import FilesSidebar from '../../components/FilesSidebar'
+import SharedLinksPanel from '../../components/SharedLinksPanel'
 import { filesChromeStore } from '../../common/filesChrome'
 import { sortFsElements, sortLabel } from '../../common/sortFs'
 
@@ -253,6 +254,7 @@ const Files = () => {
 
 	const enterShared = () => {
 		setListMode('shared')
+		setTrashPath('')
 		setViewerFile(null)
 		chrome.setIsSearching(false)
 		chrome.setSearchQuery('')
@@ -829,9 +831,7 @@ const Files = () => {
 					</div>}
 				>
 					<div class="files-canvas glass-panel">
-						<Typography variant="body2" color="text.secondary">
-							Shared links
-						</Typography>
+						<SharedLinksPanel storageId={params.id} active={sharedMode()} />
 					</div>
 				</Show>
 
