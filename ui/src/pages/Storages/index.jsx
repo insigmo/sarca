@@ -1,10 +1,6 @@
 import Stack from '@suid/material/Stack'
 import Button from '@suid/material/Button'
 import IconButton from '@suid/material/IconButton'
-import AddIcon from '@suid/icons-material/Add'
-import MenuIcon from '@suid/icons-material/Menu'
-import SettingsOutlinedIcon from '@suid/icons-material/SettingsOutlined'
-import WarningAmberIcon from '@suid/icons-material/WarningAmber'
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 
@@ -13,6 +9,7 @@ import { convertSize } from '../../common/size_converter'
 import { storageSettingsStore } from '../../common/storageSettings'
 import FileTypeIcon from '../../components/FileTypeIcon'
 import FilesSidebar from '../../components/FilesSidebar'
+import FluentIcon from '../../components/FluentIcon'
 import WaveDivider from '../../components/WaveDivider'
 
 const Storages = () => {
@@ -63,13 +60,13 @@ const Storages = () => {
 							onClick={() => setMobileNavOpen(true)}
 							sx={{ mr: 'auto' }}
 						>
-							<MenuIcon />
+							<FluentIcon name="navigation" size={22} />
 						</IconButton>
 						<Button
 							onClick={() => navigate('/storages/register')}
 							variant="contained"
 							color="secondary"
-							startIcon={<AddIcon />}
+							startIcon={<FluentIcon name="add" size={18} />}
 						>
 							New storage
 						</Button>
@@ -105,7 +102,7 @@ const Storages = () => {
 										aria-label={`Open storage ${storage.name}`}
 									>
 										<div class="storage-card__top">
-											<FileTypeIcon name="docs.folder" isFile={false} size={56} />
+											<FileTypeIcon name="storage" isFile={false} storage size={56} />
 											<div style={{ 'min-width': 0, flex: 1 }}>
 												<h2 class="storage-card__title">
 													{storage.name}
@@ -116,7 +113,7 @@ const Storages = () => {
 															aria-label={`${storage.name} has a deleted channel — open settings to fix`}
 															title="A channel was deleted — open settings to fix"
 														>
-															<WarningAmberIcon fontSize="small" />
+															<FluentIcon name="warning" size={18} />
 														</span>
 													</Show>
 												</h2>
@@ -136,7 +133,7 @@ const Storages = () => {
 												onMouseDown={(e) => e.stopPropagation()}
 												onKeyDown={(e) => e.stopPropagation()}
 											>
-												<SettingsOutlinedIcon fontSize="small" />
+												<FluentIcon name="settings" size={18} />
 											</IconButton>
 										</div>
 									</article>

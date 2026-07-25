@@ -1,55 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Sarca">
   <defs>
-    <linearGradient id="sarca-plate" x1="12%" y1="8%" x2="92%" y2="96%">
-      <stop offset="0%" stop-color="#6B7CFF"/>
-      <stop offset="55%" stop-color="#3D4AD6"/>
-      <stop offset="100%" stop-color="#1A2158"/>
+    <linearGradient id="sarca-plate" x1="12%" y1="6%" x2="88%" y2="94%">
+      <stop offset="0%" stop-color="#2B88D8"/>
+      <stop offset="48%" stop-color="#0078D4"/>
+      <stop offset="100%" stop-color="#005A9E"/>
     </linearGradient>
-    <linearGradient id="sarca-glass" x1="20%" y1="0%" x2="80%" y2="100%">
-      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.42"/>
-      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.06"/>
+    <linearGradient id="sarca-sheen" x1="50%" y1="0%" x2="50%" y2="55%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
-    <linearGradient id="sarca-cloud" x1="20%" y1="20%" x2="80%" y2="90%">
-      <stop offset="0%" stop-color="#FFFFFF"/>
-      <stop offset="100%" stop-color="#DCE2FF"/>
-    </linearGradient>
-    <linearGradient id="sarca-accent" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#F0D089"/>
-      <stop offset="100%" stop-color="#D9A441"/>
-    </linearGradient>
-    <filter id="sarca-soft" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#1A2158" flood-opacity="0.35"/>
-    </filter>
-    <filter id="sarca-glow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#D9A441" flood-opacity="0.55"/>
-    </filter>
+    <path id="sarca-wing" fill="#FFFFFF" d="M109.35,81.18 L101.23,82.81 L93.77,87.36 L88.24,94.17 L82.72,104.57 L74.93,93.53 L67.46,85.73 L61.94,82.81 L55.77,81.18 L55.77,76.96 L57.39,76.96 L69.73,83.13 L76.55,89.95 L82.72,98.40 L88.57,88.00 L95.39,81.18 L101.56,78.26 L109.35,76.64 L109.35,80.86 Z"/>
   </defs>
 
-  <!-- Soft rounded plate -->
-  <rect x="6" y="6" width="116" height="116" rx="32" fill="url(#sarca-plate)" filter="url(#sarca-soft)"/>
-  <rect x="6" y="6" width="116" height="116" rx="32" fill="url(#sarca-glass)"/>
-  <rect x="8.5" y="8.5" width="111" height="111" rx="30" fill="none" stroke="#FFFFFF" stroke-opacity="0.28" stroke-width="1.5"/>
+  <!-- Fluent app tile — brand blue holds on light and dark chrome -->
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#sarca-plate)"/>
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#sarca-sheen)"/>
+  <rect
+    x="7.5"
+    y="7.5"
+    width="113"
+    height="113"
+    rx="24.5"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-opacity="0.2"
+    stroke-width="1.5"
+  />
 
-  <!-- Soft cloud (storage / telegram cloud) -->
-  <g filter="url(#sarca-soft)">
-    <path
-      fill="url(#sarca-cloud)"
-      d="M38 78c-8.3 0-15-6.3-15-14 0-6.4 4.3-11.9 10.3-13.6C35.2 40.8 44.6 34 56 34c10.2 0 19 5.5 22.8 13.5 1.5-.4 3.1-.6 4.7-.6 9.4 0 17 7.2 17 16.1S92.9 79 83.5 79H38z"
-    />
-  </g>
-
-  <!-- Mustard accent spark / sync arc -->
-  <g filter="url(#sarca-glow)">
-    <path
-      d="M72 52c6.2 1.8 10.8 7.2 11.2 13.8"
-      fill="none"
-      stroke="url(#sarca-accent)"
-      stroke-width="4.5"
-      stroke-linecap="round"
-    />
-    <circle cx="84.5" cy="66.5" r="4.2" fill="url(#sarca-accent)"/>
-  </g>
-
-  <!-- Tiny highlight -->
-  <circle cx="40" cy="28" r="7" fill="#FFFFFF" fill-opacity="0.18"/>
+  <!-- Five-fold turbine mark (one wing × rotate 72°) -->
+  <use href="#sarca-wing"/>
+  <use href="#sarca-wing" transform="rotate(72 64 64)"/>
+  <use href="#sarca-wing" transform="rotate(144 64 64)"/>
+  <use href="#sarca-wing" transform="rotate(216 64 64)"/>
+  <use href="#sarca-wing" transform="rotate(288 64 64)"/>
 </svg>

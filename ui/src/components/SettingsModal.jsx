@@ -4,26 +4,22 @@ import IconButton from '@suid/material/IconButton'
 import Button from '@suid/material/Button'
 import TextField from '@suid/material/TextField'
 import Typography from '@suid/material/Typography'
-import CloseIcon from '@suid/icons-material/Close'
-import AddIcon from '@suid/icons-material/Add'
-import LockOutlinedIcon from '@suid/icons-material/LockOutlined'
-import DeleteOutlineIcon from '@suid/icons-material/DeleteOutline'
-import DarkModeOutlinedIcon from '@suid/icons-material/DarkModeOutlined'
-import LightModeOutlinedIcon from '@suid/icons-material/LightModeOutlined'
-import LogoutIcon from '@suid/icons-material/Logout'
-import PersonOutlineIcon from '@suid/icons-material/PersonOutline'
-import StorageOutlinedIcon from '@suid/icons-material/StorageOutlined'
-import TuneOutlinedIcon from '@suid/icons-material/TuneOutlined'
-
 import API from '../api'
 import createLocalStore from '../../libs'
 import { clearSession } from '../common/auth'
 import { settingsStore } from '../common/settings'
 import { filesChromeStore } from '../common/filesChrome'
 import { storageSettingsStore } from '../common/storageSettings'
-import { toggleThemeMode, useThemeMode } from '../common/theme'
+import {
+	THEMES,
+	setThemeMode,
+	themeHints,
+	themeLabels,
+	useThemeMode,
+} from '../common/theme'
 import { alertStore } from './AlertStack'
 import Access from './Access'
+import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
 
 const SettingsModal = () => {
@@ -170,7 +166,7 @@ const SettingsModal = () => {
 								class="sarca-header-icon"
 								size="small"
 							>
-								<CloseIcon />
+								<FluentIcon name="dismiss" size={20} />
 							</IconButton>
 						</div>
 
@@ -184,7 +180,10 @@ const SettingsModal = () => {
 									onClick={() => setTab('general')}
 								>
 									<span class="settings-nav__icon" aria-hidden="true">
-										<PersonOutlineIcon fontSize="small" />
+										<FluentIcon
+											name={tab() === 'general' ? 'personFilled' : 'person'}
+											size={20}
+										/>
 									</span>
 									<span class="settings-nav__text">
 										<span class="settings-nav__title">General</span>
@@ -198,7 +197,12 @@ const SettingsModal = () => {
 									onClick={() => setTab('access')}
 								>
 									<span class="settings-nav__icon" aria-hidden="true">
-										<LockOutlinedIcon fontSize="small" />
+										<FluentIcon
+											name={
+												tab() === 'access' ? 'lockClosedFilled' : 'lockClosed'
+											}
+											size={20}
+										/>
 									</span>
 									<span class="settings-nav__text">
 										<span class="settings-nav__title">Access</span>
@@ -212,7 +216,10 @@ const SettingsModal = () => {
 									onClick={() => setTab('trash')}
 								>
 									<span class="settings-nav__icon" aria-hidden="true">
-										<DeleteOutlineIcon fontSize="small" />
+										<FluentIcon
+											name={tab() === 'trash' ? 'deleteFilled' : 'delete'}
+											size={20}
+										/>
 									</span>
 									<span class="settings-nav__text">
 										<span class="settings-nav__title">Trash</span>
@@ -226,7 +233,10 @@ const SettingsModal = () => {
 									onClick={() => setTab('storage')}
 								>
 									<span class="settings-nav__icon" aria-hidden="true">
-										<StorageOutlinedIcon fontSize="small" />
+										<FluentIcon
+											name={tab() === 'storage' ? 'storageFilled' : 'storage'}
+											size={20}
+										/>
 									</span>
 									<span class="settings-nav__text">
 										<span class="settings-nav__title">Storage</span>
@@ -271,7 +281,7 @@ const SettingsModal = () => {
 												<Button
 													variant="contained"
 													color="secondary"
-													startIcon={<AddIcon />}
+													startIcon={<FluentIcon name="add" size={18} />}
 													onClick={() => setIsGrantVisible(true)}
 												>
 													Grant access
@@ -355,26 +365,36 @@ const SettingsModal = () => {
 
 								<Show when={tab() === 'general'}>
 									<div class="settings-account">
-										<div class="settings-account__row">
+										<div class="settings-account__row settings-account__row--theme">
 											<div>
 												<p class="settings-account__label">Theme</p>
 												<p class="settings-account__hint">
-													{mode() === 'dark' ? 'Dark' : 'Light'} mode
+													{themeHints[mode()] ?? themeHints.light}
 												</p>
 											</div>
-											<Button
-												variant="outlined"
-												startIcon={
-													mode() === 'dark' ? (
-														<LightModeOutlinedIcon />
-													) : (
-														<DarkModeOutlinedIcon />
-													)
-												}
-												onClick={toggleThemeMode}
+											<div
+												class="theme-picker"
+												role="radiogroup"
+												aria-label="Theme"
 											>
-												{mode() === 'dark' ? 'Use light' : 'Use dark'}
-											</Button>
+												<For each={[...THEMES]}>
+													{(t) => (
+														<button
+															type="button"
+															role="radio"
+															aria-checked={mode() === t}
+															class="theme-picker__option"
+															classList={{
+																'theme-picker__option--active':
+																	mode() === t,
+															}}
+															onClick={() => setThemeMode(t)}
+														>
+															{themeLabels[t]}
+														</button>
+													)}
+												</For>
+											</div>
 										</div>
 										<div class="settings-account__row">
 											<div>
@@ -386,7 +406,7 @@ const SettingsModal = () => {
 											<Button
 												variant="outlined"
 												color="error"
-												startIcon={<LogoutIcon />}
+												startIcon={<FluentIcon name="signOut" size={18} />}
 												onClick={logout}
 											>
 												Log out
@@ -423,7 +443,7 @@ const SettingsModal = () => {
 											<Button
 												variant="contained"
 												color="secondary"
-												startIcon={<TuneOutlinedIcon />}
+												startIcon={<FluentIcon name="options" size={18} />}
 												onClick={openCurrentStorageSettings}
 											>
 												Open storage settings

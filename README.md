@@ -149,6 +149,8 @@ Open the storage filesystem to:
 
 Official Bot API caps downloads around 20 MB. With Local Bot API (compose service `telegram-bot-api`) you can use much larger chunks (up to ~2 GB per document).
 
+Files larger than the chunk size (including multi‑GB videos) are split automatically. There is no whole-file size cap in Sarca beyond disk space under `WORK_DIR` and Telegram per-document limits (~2 GB with Local Bot API). Videos default to 48 MB chunks (`TELEGRAM_VIDEO_CHUNK_SIZE_MB`).
+
 In `sarca.conf`:
 
 ```env
@@ -157,6 +159,7 @@ TELEGRAM_API_BASE_URL=http://telegram-bot-api:8081
 TELEGRAM_API_ID=...
 TELEGRAM_API_HASH=...
 TELEGRAM_CHUNK_SIZE_MB=1950
+# TELEGRAM_VIDEO_CHUNK_SIZE_MB=48
 WORK_DIR=/work
 ```
 

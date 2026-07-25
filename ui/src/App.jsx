@@ -7,6 +7,7 @@ import BasicLayout from './layouts/Basic'
 import Storages from './pages/Storages'
 import SetupWizard from './pages/Setup'
 import AlertStack from './components/AlertStack'
+import UploadManager from './components/UploadManager'
 import Files from './pages/Files'
 import PublicShare from './pages/PublicShare'
 import Register from './pages/Register'
@@ -30,30 +31,31 @@ const fontFamily = "'Source Sans 3', 'Segoe UI', system-ui, sans-serif"
  * Theme toggle remounts ThemeProvider (keyed Show) because @suid/system styled()
  * caches the first theme object in a local closure.
  */
+/** Windows File Explorer / Fluent — soft gray shell, white panels, #0078D4. */
 const lightTheme = createTheme({
 	palette: {
 		mode: 'light',
 		primary: {
-			main: '#7C5CBF',
-			dark: '#5A3D9E',
-			light: '#9B7FD4',
-			contrastText: '#FAF8F5',
+			main: '#0078D4',
+			dark: '#005A9E',
+			light: '#2B88D8',
+			contrastText: '#FFFFFF',
 		},
 		secondary: {
-			main: '#5C5346',
-			dark: '#3D3A36',
-			light: '#8A8278',
-			contrastText: '#FAF8F5',
+			main: '#0078D4',
+			dark: '#004578',
+			light: '#2B88D8',
+			contrastText: '#FFFFFF',
 		},
 		background: {
-			default: '#EBE8E2',
-			paper: '#F7F5F1',
+			default: '#EEF0F2',
+			paper: '#FFFFFF',
 		},
 		text: {
-			primary: '#1C1B19',
-			secondary: '#6B6860',
+			primary: '#1B1A19',
+			secondary: '#605E5C',
 		},
-		divider: 'rgba(28, 27, 25, 0.1)',
+		divider: 'rgba(0, 0, 0, 0.08)',
 	},
 	typography: {
 		fontFamily,
@@ -65,32 +67,33 @@ const lightTheme = createTheme({
 		h6: { fontFamily, fontWeight: 600 },
 		button: { textTransform: 'none', fontWeight: 600, letterSpacing: 0.15 },
 	},
-	shape: { borderRadius: 10 },
+	shape: { borderRadius: 8 },
 	components: sharedComponents('light'),
 })
 
+/** Windows 11 dark File Explorer / Fluent dark — #202020 shell, #60CDFF accent. */
 const darkTheme = createTheme({
 	palette: {
 		mode: 'dark',
 		primary: {
-			main: '#A78BFA',
-			dark: '#8B7CF7',
-			light: '#C4B5FD',
+			main: '#60CDFF',
+			dark: '#0078D4',
+			light: '#4CC2FF',
 			contrastText: '#0A0A0A',
 		},
 		secondary: {
-			main: '#C4B8A8',
-			dark: '#A89F92',
-			light: '#DDD4C8',
-			contrastText: '#1C1B19',
+			main: '#0078D4',
+			dark: '#005A9E',
+			light: '#60CDFF',
+			contrastText: '#FFFFFF',
 		},
 		background: {
-			default: '#000000',
-			paper: '#1A1A1A',
+			default: '#202020',
+			paper: '#2B2B2B',
 		},
 		text: {
-			primary: '#F5F5F5',
-			secondary: '#9A9A9A',
+			primary: '#FFFFFF',
+			secondary: '#E0E0E0',
 		},
 		divider: 'rgba(255, 255, 255, 0.08)',
 	},
@@ -104,33 +107,45 @@ const darkTheme = createTheme({
 		h6: { fontFamily, fontWeight: 600 },
 		button: { textTransform: 'none', fontWeight: 600, letterSpacing: 0.15 },
 	},
-	shape: { borderRadius: 10 },
+	shape: { borderRadius: 8 },
 	components: sharedComponents('dark'),
 })
+
+const muiThemes = {
+	light: lightTheme,
+	dark: darkTheme,
+}
 
 /**
  * @param {'light' | 'dark'} mode
  */
 function sharedComponents(mode) {
-	const isDark = mode === 'dark'
+	const hoverShadow =
+		mode === 'dark'
+			? '0 4px 14px rgba(96, 205, 255, 0.22)'
+			: '0 4px 14px rgba(0, 120, 212, 0.2)'
 	return {
 		MuiButton: {
 			styleOverrides: {
 				root: {
-					borderRadius: 10,
+					borderRadius: 8,
 					paddingInline: 16,
 					boxShadow: 'none',
 					'&:hover': {
-						boxShadow: isDark
-							? '0 4px 14px rgba(167, 139, 250, 0.22)'
-							: '0 4px 14px rgba(124, 92, 191, 0.18)',
+						boxShadow: hoverShadow,
 					},
 				},
 			},
 		},
 		MuiPaper: {
 			styleOverrides: {
-				root: { backgroundImage: 'none' },
+				root: {
+					backgroundImage: 'none',
+					boxShadow:
+						mode === 'dark'
+							? '0 8px 24px rgba(0, 0, 0, 0.35), 0 1.5px 4px rgba(0, 0, 0, 0.2)'
+							: '0 8px 24px rgba(0, 0, 0, 0.06), 0 1.5px 4px rgba(0, 0, 0, 0.04)',
+				},
 			},
 		},
 		MuiTextField: {
@@ -167,7 +182,7 @@ const App = () => {
 	return (
 		<Show when={mode()} keyed>
 			{(m) => (
-				<ThemeProvider theme={m === 'dark' ? darkTheme : lightTheme}>
+				<ThemeProvider theme={muiThemes[m] ?? lightTheme}>
 					<Routes>
 						<Route path="/login" component={Login} />
 						<Route path="/register" component={Register} />
@@ -190,6 +205,7 @@ const App = () => {
 					</Routes>
 
 					<AlertStack />
+					<UploadManager />
 				</ThemeProvider>
 			)}
 		</Show>

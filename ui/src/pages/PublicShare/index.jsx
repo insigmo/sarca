@@ -22,7 +22,6 @@ import LockOutlinedIcon from '@suid/icons-material/LockOutlined'
 import VisibilityIcon from '@suid/icons-material/Visibility'
 
 import API from '../../api'
-import { fileBaseName, fileExtensionLabel } from '../../common/fileLabel'
 import { convertSize } from '../../common/size_converter'
 import FileTypeIcon from '../../components/FileTypeIcon'
 import FileViewer from '../../components/FileViewer'
@@ -514,10 +513,7 @@ const PublicShare = () => {
 															class="fs-grid-item__name"
 															title={el.name}
 														>
-															{fileBaseName(el.name, el.is_file)}
-														</div>
-														<div class="fs-grid-item__ext">
-															{fileExtensionLabel(el.name, el.is_file)}
+															{el.name}
 														</div>
 													</div>
 												)}

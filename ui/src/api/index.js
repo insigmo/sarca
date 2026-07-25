@@ -501,8 +501,8 @@ const createFolder = async (storage_id, path, folderName) => {
  * @param {string} storage_id
  * @param {string} path
  * @param {File|Blob} file
- * @param {(progress: number) => void} [onProgress]
- * @param {{ silent?: boolean }} [options]
+ * @param {(progress: import('./request').UploadProgressEvent) => void} [onProgress]
+ * @param {{ silent?: boolean, signal?: AbortSignal }} [options]
  * @returns
  */
 const uploadFile = async (storage_id, path, file, onProgress, options = {}) => {

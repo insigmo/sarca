@@ -510,21 +510,6 @@ impl<'d> FilesRepository<'d> {
             .map_err(|e| map_not_found(&e, "file chunks"))
     }
 
-    #[allow(dead_code)]
-    pub async fn count_chunks_of_file(&self, file_id: Uuid) -> SarcaResult<i64> {
-        let row: (i64,) = sqlx::query_as(
-            format!("SELECT COUNT(*)::BigInt FROM {CHUNKS_TABLE} WHERE file_id = $1").as_str(),
-        )
-        .bind(file_id)
-        .fetch_one(self.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("{e}");
-            SarcaError::Unknown
-        })?;
-        Ok(row.0)
-    }
-
     pub async fn set_as_uploaded(&self, file_id: Uuid) -> SarcaResult<()> {
         sqlx::query(format!("UPDATE {FILES_TABLE} SET is_uploaded = true WHERE id = $1").as_str())
             .bind(file_id)
@@ -534,7 +519,9 @@ impl<'d> FilesRepository<'d> {
             .map(|_| ())
     }
 
-    pub async fn delete(&self, path: &str, storage_id: Uuid) -> SarcaResult<()> {
+    /// Soft-delete live file(s) under `path`. Returns the canonical deleted target
+    /// (folders end with `/`) for callers that need to clean up path-keyed metadata.
+    pub async fn delete(&self, path: &str, storage_id: Uuid) -> SarcaResult<String> {
         let mut transaction = self.db.begin().await.map_err(|e| map_not_found(&e, ""))?;
 
         // Folders may arrive without a trailing slash from the UI.
@@ -599,6 +586,9 @@ impl<'d> FilesRepository<'d> {
             return Err(SarcaError::DoesNotExist("file".to_string()));
         }
 
+        let deleted_target =
+            if folder_prefix.is_empty() { path.to_string() } else { folder_prefix.clone() };
+
         // Recreate parent folder marker only for non-root parents that became empty.
         let deleted_path = if folder_prefix.is_empty() {
             path.to_string()
@@ -635,7 +625,7 @@ impl<'d> FilesRepository<'d> {
 
         transaction.commit().await.map_err(|e| map_not_found(&e, ""))?;
 
-        Ok(())
+        Ok(deleted_target)
     }
 
     pub async fn update_path(
@@ -760,26 +750,6 @@ impl<'d> FilesRepository<'d> {
             .collect();
 
         Ok(fs_layer)
-    }
-
-    #[allow(dead_code)]
-    pub async fn get_trashed_file_by_path(
-        &self,
-        path: &str,
-        storage_id: Uuid,
-    ) -> SarcaResult<File> {
-        sqlx::query_as(
-            format!(
-                "SELECT * FROM {FILES_TABLE} WHERE storage_id = $1 AND path = $2 AND deleted_at \
-                 IS NOT NULL"
-            )
-            .as_str(),
-        )
-        .bind(storage_id)
-        .bind(path)
-        .fetch_one(self.db)
-        .await
-        .map_err(|e| map_not_found(&e, "file"))
     }
 
     /// Resolve trashed file ids matching a path or folder prefix.

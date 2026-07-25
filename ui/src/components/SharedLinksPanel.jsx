@@ -3,11 +3,10 @@ import Chip from '@suid/material/Chip'
 import CircularProgress from '@suid/material/CircularProgress'
 import IconButton from '@suid/material/IconButton'
 import Typography from '@suid/material/Typography'
-import ContentCopyIcon from '@suid/icons-material/ContentCopy'
-import DeleteOutlineIcon from '@suid/icons-material/DeleteOutline'
 
 import API from '../api'
 import { alertStore } from './AlertStack'
+import FluentIcon from './FluentIcon'
 
 const formatExpiry = (iso) => {
 	if (!iso) return 'Never expires'
@@ -110,14 +109,14 @@ const SharedLinksPanel = (props) => {
 							</div>
 							<div class="shared-links-panel__actions">
 								<IconButton aria-label="Copy link" onClick={() => copyUrl(link)}>
-									<ContentCopyIcon fontSize="small" />
+									<FluentIcon name="copy" size={18} />
 								</IconButton>
 								<IconButton
 									aria-label="Revoke link"
 									disabled={revokingId() === link.id}
 									onClick={() => revoke(link)}
 								>
-									<DeleteOutlineIcon fontSize="small" />
+									<FluentIcon name="delete" size={18} />
 								</IconButton>
 							</div>
 						</li>
