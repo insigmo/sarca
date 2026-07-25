@@ -10,13 +10,11 @@ import Chip from '@suid/material/Chip'
 import IconButton from '@suid/material/IconButton'
 import CircularProgress from '@suid/material/CircularProgress'
 import Divider from '@suid/material/Divider'
-import ContentCopyIcon from '@suid/icons-material/ContentCopy'
-import LinkIcon from '@suid/icons-material/Link'
-import DeleteOutlineIcon from '@suid/icons-material/DeleteOutline'
 import { For, Show, createEffect, createSignal } from 'solid-js'
 
 import API from '../api'
 import { alertStore } from './AlertStack'
+import FluentIcon from './FluentIcon'
 
 /** @typedef {'1d' | '7d' | '30d' | 'never' | 'custom'} ExpiryPreset */
 
@@ -194,7 +192,7 @@ const ShareLinkDialog = (props) => {
 		<Dialog open={props.isOpened} onClose={onClose} fullWidth maxWidth="sm">
 			<form onSubmit={onCreate}>
 				<DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-					<LinkIcon fontSize="small" color="secondary" />
+					<FluentIcon name="link" size={20} />
 					Share link
 				</DialogTitle>
 				<DialogContent>
@@ -271,7 +269,7 @@ const ShareLinkDialog = (props) => {
 								aria-label="Copy link"
 								onClick={() => copyText(createdUrl())}
 							>
-								<ContentCopyIcon fontSize="small" />
+								<FluentIcon name="copy" size={18} />
 							</IconButton>
 						</Stack>
 					</Show>
@@ -345,7 +343,7 @@ const ShareLinkDialog = (props) => {
 												)
 											}
 										>
-											<ContentCopyIcon fontSize="small" />
+											<FluentIcon name="copy" size={18} />
 										</IconButton>
 										<IconButton
 											size="small"
@@ -354,7 +352,7 @@ const ShareLinkDialog = (props) => {
 											disabled={revokingId() === link.id}
 											onClick={() => onRevoke(link.id)}
 										>
-											<DeleteOutlineIcon fontSize="small" />
+											<FluentIcon name="delete" size={18} />
 										</IconButton>
 									</Stack>
 								)}

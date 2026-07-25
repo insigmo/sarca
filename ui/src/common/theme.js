@@ -5,12 +5,35 @@ import createLocalStore from '../../libs'
  * @typedef {'light' | 'dark'} SarcaThemeMode
  */
 
+/** Order: light → dark (picker + toggleThemeMode cycle). */
+const THEMES = /** @type {const} */ (['light', 'dark'])
+
+/** Legacy ids remapped onto the Fluent themes that now own those names. */
+const LEGACY_THEME_MAP = {
+	explorer: 'light',
+	'explorer-dark': 'dark',
+}
+
 const [store, setStore] = createLocalStore('sarca')
+
+/**
+ * @param {unknown} value
+ * @returns {value is SarcaThemeMode}
+ */
+const isThemeMode = (value) =>
+	typeof value === 'string' && THEMES.includes(/** @type {SarcaThemeMode} */ (value))
 
 /**
  * @returns {SarcaThemeMode}
  */
-export const readThemeMode = () => (store.theme === 'dark' ? 'dark' : 'light')
+export const readThemeMode = () => {
+	const raw = store.theme
+	if (typeof raw === 'string' && raw in LEGACY_THEME_MAP) {
+		return /** @type {SarcaThemeMode} */ (LEGACY_THEME_MAP[raw])
+	}
+	if (isThemeMode(raw)) return raw
+	return 'light'
+}
 
 /**
  * @param {SarcaThemeMode} mode
@@ -24,17 +47,36 @@ export const applyThemeToDocument = (mode) => {
  * @param {SarcaThemeMode} mode
  */
 export const setThemeMode = (mode) => {
+	if (!isThemeMode(mode)) return
 	setStore('theme', mode)
 	applyThemeToDocument(mode)
 }
 
+/** Cycles light → dark → light. */
 export const toggleThemeMode = () => {
-	setThemeMode(readThemeMode() === 'dark' ? 'light' : 'dark')
+	const cur = readThemeMode()
+	const idx = THEMES.indexOf(cur)
+	setThemeMode(THEMES[(idx + 1) % THEMES.length])
 }
 
 /** Call once at app boot (and when Header mounts as safety). */
 export const initTheme = () => {
-	applyThemeToDocument(readThemeMode())
+	const mode = readThemeMode()
+	const raw = store.theme
+	if (typeof raw === 'string' && raw in LEGACY_THEME_MAP) {
+		setStore('theme', mode)
+	}
+	applyThemeToDocument(mode)
+}
+
+export const themeLabels = {
+	light: 'Light',
+	dark: 'Dark',
+}
+
+export const themeHints = {
+	light: 'Fluent light',
+	dark: 'Fluent dark',
 }
 
 /**
@@ -50,10 +92,12 @@ export const useThemeMode = () => {
 
 	createEffect(() => {
 		// Touch store.theme so Solid tracks localStorage proxy updates.
-		const next = store.theme === 'dark' ? 'dark' : 'light'
+		const next = readThemeMode()
 		setMode(next)
 		applyThemeToDocument(next)
 	})
 
 	return mode
 }
+
+export { THEMES }

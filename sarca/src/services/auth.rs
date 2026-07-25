@@ -24,7 +24,6 @@ const RESET_TTL_HOURS: i64 = 1;
 pub struct AuthService<'d> {
     repo: UsersRepository<'d>,
     tokens: EmailTokensRepository<'d>,
-    db: &'d PgPool,
 }
 
 impl<'d> AuthService<'d> {
@@ -32,7 +31,6 @@ impl<'d> AuthService<'d> {
         Self {
             repo: UsersRepository::new(db),
             tokens: EmailTokensRepository::new(db),
-            db,
         }
     }
 
@@ -213,10 +211,5 @@ impl<'d> AuthService<'d> {
 
     fn new_raw_token() -> String {
         Uuid::new_v4().to_string()
-    }
-
-    #[allow(dead_code)]
-    pub fn db(&self) -> &'d PgPool {
-        self.db
     }
 }

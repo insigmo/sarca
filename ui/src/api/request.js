@@ -145,144 +145,236 @@ export const formatUploadBytes = (n) => {
 
 /**
  * @typedef {Object} UploadProgressEvent
- * @property {'server' | 'telegram'} phase
+ * @property {'server' | 'spooled' | 'telegram' | 'waiting' | 'heartbeat'} phase
  * @property {number} percent
  * @property {number} [uploaded]
  * @property {number} [total]
  * @property {number} [chunk]
  * @property {number} [chunks]
+ * @property {number} [retry_after] - Seconds Telegram asked us to wait (flood control).
  */
 
 /**
+ * Parse one NDJSON line from an upload response.
+ * `phase: spooled` = bytes on Sarca + DB row; free the client spool slot.
+ * `phase: waiting` is flood-control; keep progress alive and pass `retry_after`
+ * so the queue can show a waiting status instead of looking stuck.
+ * `phase: heartbeat` keeps the HTTP stream alive during Telegram quiet periods.
+ * @param {string} line
+ * @param {(progress: UploadProgressEvent) => void} [emit]
+ * @returns {{ error?: string, done?: boolean }}
+ */
+const handleUploadNdjsonLine = (line, emit) => {
+	const trimmed = line.trim()
+	if (!trimmed) return {}
+	try {
+		const ev = JSON.parse(trimmed)
+		if (ev.phase === 'heartbeat') {
+			// Keepalive only — do not change UI progress / spool state.
+			return {}
+		}
+		if (ev.phase === 'spooled') {
+			const total = Number(ev.total) || 0
+			emit?.({
+				phase: 'spooled',
+				percent: 0,
+				uploaded: 0,
+				total,
+			})
+		} else if (ev.phase === 'telegram' || ev.phase === 'waiting') {
+			const total = Number(ev.total) || 0
+			const uploaded = Number(ev.uploaded) || 0
+			const percent = total > 0 ? (uploaded / total) * 100 : 0
+			const retryAfter = Number(ev.retry_after)
+			emit?.({
+				phase: ev.phase === 'waiting' ? 'waiting' : 'telegram',
+				percent,
+				uploaded,
+				total,
+				chunk: ev.chunk,
+				chunks: ev.chunks,
+				...(Number.isFinite(retryAfter) && retryAfter > 0
+					? { retry_after: retryAfter }
+					: {}),
+			})
+		} else if (ev.phase === 'error') {
+			return { error: ev.message || 'Upload failed' }
+		} else if (ev.phase === 'done') {
+			emit?.({ phase: 'telegram', percent: 100 })
+			return { done: true }
+		} else if (ev.uploaded != null && ev.total != null) {
+			// Fallback: any progress-shaped line clears phase-1 spinner.
+			const total = Number(ev.total) || 0
+			const uploaded = Number(ev.uploaded) || 0
+			const percent = total > 0 ? (uploaded / total) * 100 : 0
+			emit?.({
+				phase: 'telegram',
+				percent,
+				uploaded,
+				total,
+				chunk: ev.chunk,
+				chunks: ev.chunks,
+			})
+		}
+	} catch {
+		// ignore partial / non-json fragments
+	}
+	return {}
+}
+
+/**
+ * Multipart upload with live Telegram progress.
  *
- * @param {string} path
- * @param {string | null | undefined} auth_token
- * @param {FormData} form
- * @param {(progress: UploadProgressEvent) => void} [onProgress]
- * @param {{ silent?: boolean }} [options]
- * @returns
+ * Uses fetch + ReadableStream (not XHR) so NDJSON progress lines are consumed
+ * as they arrive during Sarca→Telegram. XHR often buffers responseText until
+ * the request completes, which left the UI stuck on the phase-1 spinner.
+ *
+ * Phase 1 (client→Sarca): no upload % is reported — callers keep an
+ * indeterminate spinner. `phase: spooled` frees the spool slot for pipelining.
+ * Phase 2 starts on the first `phase:telegram` line.
  */
 export const apiMultipartRequest = (path, auth_token, form, onProgress, options = {}) => {
 	const { addAlert } = alertStore
 	const fullpath = `${API_BASE}${path}`
 	const silent = Boolean(options.silent)
+	const signal = options.signal
 
-	return new Promise((resolve, reject) => {
-		const xhr = new XMLHttpRequest()
-		let parsedLen = 0
+	const emit = (ev) => {
+		if (onProgress) onProgress(ev)
+	}
+
+	const fail = (message) => {
+		if (!silent) addAlert(message, 'error')
+		return Promise.reject(new Error(message))
+	}
+
+	/**
+	 * @param {string | null | undefined} token
+	 * @param {boolean} retried
+	 */
+	const run = async (token, retried) => {
+		if (signal?.aborted) {
+			throw new DOMException('Aborted', 'AbortError')
+		}
+
+		const headers = new Headers()
+		if (token) {
+			headers.append('Authorization', token)
+		}
+
+		let response
+		try {
+			response = await fetch(fullpath, {
+				method: 'POST',
+				headers,
+				body: form,
+				signal,
+			})
+		} catch (err) {
+			if (err?.name === 'AbortError' || signal?.aborted) {
+				throw err instanceof DOMException
+					? err
+					: new DOMException('Aborted', 'AbortError')
+			}
+			return fail(err?.message || 'Network Error')
+		}
+
+		if (response.status === 401 && token && !retried) {
+			const newToken = await tryRefreshToken()
+			if (newToken) {
+				return run(newToken, true)
+			}
+		}
+
+		if (!response.ok) {
+			const text = await response.text().catch(() => '')
+			return fail(text || 'Upload failed')
+		}
+
 		let streamError = null
 		let streamDone = false
+		let sawPhase = false
+		let sawTerminalPhase = false
+		let rawFallback = ''
 
-		const emit = (ev) => {
-			if (onProgress) onProgress(ev)
+		const applyLine = (line) => {
+			const result = handleUploadNdjsonLine(line, emit)
+			if (line.includes('"phase"') && !line.includes('"heartbeat"')) {
+				sawPhase = true
+			}
+			if (result.error) {
+				streamError = result.error
+				sawTerminalPhase = true
+			}
+			if (result.done) {
+				streamDone = true
+				sawTerminalPhase = true
+			}
 		}
 
-		const consumeNdjson = (text) => {
-			if (!text || text.length <= parsedLen) return
-			const chunk = text.slice(parsedLen)
-			const parts = chunk.split('\n')
-			const incomplete = parts.pop() ?? ''
-			parsedLen = text.length - incomplete.length
-
-			for (const line of parts) {
-				const trimmed = line.trim()
-				if (!trimmed) continue
-				try {
-					const ev = JSON.parse(trimmed)
-					if (ev.phase === 'telegram') {
-						const total = Number(ev.total) || 0
-						const uploaded = Number(ev.uploaded) || 0
-						const percent = total > 0 ? (uploaded / total) * 100 : 0
-						emit({
-							phase: 'telegram',
-							percent,
-							uploaded,
-							total,
-							chunk: ev.chunk,
-							chunks: ev.chunks,
-						})
-					} else if (ev.phase === 'error') {
-						streamError = ev.message || 'Upload failed'
-					} else if (ev.phase === 'done') {
-						streamDone = true
-						emit({ phase: 'telegram', percent: 100 })
+		const reader = response.body?.getReader?.()
+		if (reader) {
+			const decoder = new TextDecoder()
+			let buffer = ''
+			try {
+				while (true) {
+					const { done, value } = await reader.read()
+					if (done) break
+					buffer += decoder.decode(value, { stream: true })
+					const parts = buffer.split('\n')
+					buffer = parts.pop() ?? ''
+					for (const line of parts) {
+						applyLine(line)
 					}
-				} catch {
-					// ignore partial / non-json fragments
 				}
+				buffer += decoder.decode()
+				if (buffer.trim()) {
+					applyLine(buffer)
+				}
+			} catch (err) {
+				if (err?.name === 'AbortError' || signal?.aborted) {
+					throw err instanceof DOMException
+						? err
+						: new DOMException('Aborted', 'AbortError')
+				}
+				// Stream closed mid-flight (proxy idle timeout, navigation, etc.).
+				if (!sawTerminalPhase) {
+					return fail(
+						err?.message ||
+							'Upload connection lost before completion — please retry',
+					)
+				}
+				return fail(err?.message || 'Upload failed')
+			}
+		} else {
+			// Rare: no body stream — parse the whole payload at once.
+			rawFallback = await response.text().catch(() => '')
+			for (const line of rawFallback.split('\n')) {
+				applyLine(line)
 			}
 		}
 
-		xhr.open('POST', fullpath)
-
-		if (auth_token) {
-			xhr.setRequestHeader('Authorization', auth_token)
+		if (streamError) {
+			return fail(streamError)
+		}
+		if (sawPhase && !streamDone) {
+			return fail(
+				'Upload connection closed before Telegram finished — please retry',
+			)
 		}
 
-		xhr.upload.onprogress = (event) => {
-			if (event.lengthComputable) {
-				emit({
-					phase: 'server',
-					percent: (event.loaded / event.total) * 100,
-					uploaded: event.loaded,
-					total: event.total,
-				})
+		// NDJSON uploads resolve with no JSON body; legacy JSON still parses.
+		if (rawFallback) {
+			try {
+				return JSON.parse(rawFallback)
+			} catch {
+				return rawFallback
 			}
 		}
+		return undefined
+	}
 
-		xhr.onprogress = () => {
-			consumeNdjson(xhr.responseText || '')
-		}
-
-		xhr.onload = async () => {
-			if (xhr.status === 401 && auth_token) {
-				const newToken = await tryRefreshToken()
-				if (newToken) {
-					apiMultipartRequest(path, newToken, form, onProgress, options)
-						.then(resolve)
-						.catch(reject)
-					return
-				}
-			}
-
-			consumeNdjson(xhr.responseText || '')
-
-			if (xhr.status >= 200 && xhr.status < 300) {
-				if (streamError) {
-					if (!silent) addAlert(streamError, 'error')
-					reject(new Error(streamError))
-					return
-				}
-				if (
-					xhr.responseText &&
-					xhr.responseText.includes('"phase"') &&
-					!streamDone
-				) {
-					const msg = 'Upload did not complete'
-					if (!silent) addAlert(msg, 'error')
-					reject(new Error(msg))
-					return
-				}
-				try {
-					const json = JSON.parse(xhr.responseText)
-					resolve(json)
-				} catch {
-					resolve(xhr.responseText)
-				}
-			} else {
-				const errorMsg = xhr.responseText || 'Upload failed'
-				if (!silent) addAlert(errorMsg, 'error')
-				reject(new Error(errorMsg))
-			}
-		}
-
-		xhr.onerror = () => {
-			if (!silent) addAlert('Network Error', 'error')
-			reject(new Error('Network Error'))
-		}
-
-		xhr.send(form)
-	})
+	return run(auth_token, false)
 }
 
 /**

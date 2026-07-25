@@ -1,13 +1,18 @@
 use std::{
+    collections::HashMap,
     path::Path,
     pin::Pin,
-    time::{Duration, Instant},
+    sync::{Arc, OnceLock},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use futures::{Stream, StreamExt};
 use reqwest::multipart;
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
+use tokio::{
+    io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore},
+};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -20,13 +25,90 @@ use super::schemas::{
     UploadOutcome,
 };
 use crate::{
-    common::types::ChatId,
+    common::{channels::UploadProgressEvent, types::ChatId},
     errors::{SarcaError, SarcaResult},
     services::storage_workers_scheduler::StorageWorkersScheduler,
 };
 
-const MAX_ATTEMPTS: u32 = 3;
+/// Network / 5xx retries. Flood waits retry indefinitely (honor `retry_after`).
+const MAX_ATTEMPTS: u32 = 5;
 const BASE_BACKOFF_MS: u64 = 200;
+/// Honor Telegram's `retry_after` up to this per wait (don't truncate short).
+const MAX_FLOOD_WAIT_SECS: u64 = 900;
+/// Soft pace between successful sends (~0.45 msg/s). Telegram FAQ is ~1/s; stay
+/// conservative so Local Bot API / multi-chunk uploads don't trip flood control.
+const MIN_SEND_GAP: Duration = Duration::from_millis(2200);
+/// Elevated inter-send gap while a token is in a recent flood window.
+const MIN_SEND_GAP_AFTER_FLOOD: Duration = Duration::from_secs(3);
+/// How long after a flood wait we keep the elevated send gap.
+const FLOOD_PACING_WINDOW: Duration = Duration::from_mins(5);
+/// Extra cooldown after honoring `retry_after`, before the next attempt.
+const POST_FLOOD_EXTRA_COOLDOWN: Duration = Duration::from_secs(7);
+
+struct TokenSendGate {
+    sem: Arc<Semaphore>,
+    last_ok: Mutex<Option<Instant>>,
+    /// While `Instant::now() < *flood_cooldown_until`, use slower send pacing.
+    flood_cooldown_until: Mutex<Option<Instant>>,
+}
+
+/// Holds the per-token send lock for the duration of one mutating Telegram API call
+/// (`sendDocument`, `copyMessage`, `deleteMessage`, including flood-wait sleeps), so
+/// concurrent uploads / replication / purge cannot storm the same bot.
+struct SendPermit {
+    _permit: OwnedSemaphorePermit,
+    gate: Arc<TokenSendGate>,
+}
+
+impl SendPermit {
+    async fn acquire(token: &str) -> Self {
+        let gate = {
+            let mut map = send_gates().lock().await;
+            map.entry(token.to_owned())
+                .or_insert_with(|| {
+                    Arc::new(TokenSendGate {
+                        sem: Arc::new(Semaphore::new(1)),
+                        last_ok: Mutex::new(None),
+                        flood_cooldown_until: Mutex::new(None),
+                    })
+                })
+                .clone()
+        };
+        let permit =
+            gate.sem.clone().acquire_owned().await.expect("Telegram send semaphore closed");
+        let sleep_for = {
+            let last = gate.last_ok.lock().await;
+            let flood_until = *gate.flood_cooldown_until.lock().await;
+            let gap = if flood_until.is_some_and(|t| Instant::now() < t) {
+                MIN_SEND_GAP_AFTER_FLOOD
+            } else {
+                MIN_SEND_GAP
+            };
+            last.and_then(|t| gap.checked_sub(t.elapsed())).unwrap_or(Duration::ZERO)
+        };
+        if !sleep_for.is_zero() {
+            tokio::time::sleep(sleep_for).await;
+        }
+        Self {
+            _permit: permit,
+            gate,
+        }
+    }
+
+    async fn mark_ok(&self) {
+        *self.gate.last_ok.lock().await = Some(Instant::now());
+    }
+
+    /// Record a flood wait so subsequent acquires use a longer send gap.
+    async fn note_flood(&self) {
+        *self.gate.flood_cooldown_until.lock().await = Some(Instant::now() + FLOOD_PACING_WINDOW);
+    }
+}
+
+fn send_gates() -> &'static Mutex<HashMap<String, Arc<TokenSendGate>>> {
+    static GATES: OnceLock<Mutex<HashMap<String, Arc<TokenSendGate>>>> = OnceLock::new();
+    GATES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Parameters for `TelegramBotApi::upload_file_part`.
 pub struct UploadFilePartRequest {
@@ -37,7 +119,7 @@ pub struct UploadFilePartRequest {
     pub file_total: u64,
     pub chunk_no: u32,
     pub total_chunks: u32,
-    pub progress: Option<tokio::sync::mpsc::Sender<crate::common::channels::UploadProgressEvent>>,
+    pub progress: Option<tokio::sync::mpsc::Sender<UploadProgressEvent>>,
 }
 
 pub struct TelegramBotApi<'t> {
@@ -63,49 +145,190 @@ impl<'t> TelegramBotApi<'t> {
         url.to_string()
     }
 
-    /// Retry network errors and HTTP 429/5xx with exponential backoff (3 attempts).
-    async fn send_with_retries<F, Fut>(op: &str, mut send: F) -> SarcaResult<reqwest::Response>
+    /// Seconds to wait for a Telegram flood-control response, if any.
+    ///
+    /// Official API uses HTTP 429; Local Bot API often answers with HTTP 400 and
+    /// `description: "Bad Request: too Many Requests: retry after N"`.
+    fn flood_wait_secs(status: reqwest::StatusCode, body: &str) -> Option<u64> {
+        let code = status.as_u16();
+        let lower = body.to_ascii_lowercase();
+        let looks_flood = code == 429
+            || lower.contains("too many requests")
+            || lower.contains("retry after")
+            || lower.contains("\"retry_after\"");
+        if !looks_flood {
+            return None;
+        }
+
+        // JSON: "retry_after": 8  (top-level or under parameters)
+        if let Some(idx) = lower.find("\"retry_after\"") {
+            let after = &lower[idx + "\"retry_after\"".len()..];
+            if let Ok(num) = after
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse::<u64>()
+            {
+                return Some(num.clamp(1, MAX_FLOOD_WAIT_SECS));
+            }
+        }
+
+        // Text: "retry after 8"
+        if let Some(idx) = lower.find("retry after") {
+            let after = &lower[idx + "retry after".len()..];
+            if let Ok(num) = after
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(char::is_ascii_digit)
+                .collect::<String>()
+                .parse::<u64>()
+            {
+                return Some(num.clamp(1, MAX_FLOOD_WAIT_SECS));
+            }
+        }
+
+        Some(8)
+    }
+
+    /// Sleep duration for a flood wait: `retry_after` plus a little jitter.
+    fn flood_sleep_duration(wait_secs: u64) -> Duration {
+        let jitter_cap_ms = (wait_secs.saturating_mul(100)).clamp(100, 2000);
+        let jitter_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(100, |d| u64::from(d.subsec_nanos()) % jitter_cap_ms);
+        Duration::from_secs(wait_secs) + Duration::from_millis(jitter_ms)
+    }
+
+    /// Honor a flood `retry_after`, then apply post-flood cooldown / adaptive pacing.
+    ///
+    /// Flood waits have no attempt or total-time budget: we keep retrying until the
+    /// call succeeds, the client aborts (task abort / progress channel closed), or the
+    /// process shuts down. Sleep is interruptible every second so cancel is prompt.
+    ///
+    /// While sleeping, re-emit `waiting` every ~15s with remaining `retry_after` so the
+    /// HTTP NDJSON stream stays alive (idle proxies otherwise drop the connection).
+    async fn honor_flood_wait(
+        wait_secs: u64,
+        permit: Option<&SendPermit>,
+        progress: Option<&tokio::sync::mpsc::Sender<UploadProgressEvent>>,
+        uploaded: u64,
+        total: u64,
+        chunk: u32,
+        chunks: u32,
+    ) -> SarcaResult<()> {
+        let sleep_for = Self::flood_sleep_duration(wait_secs);
+        let deadline = Instant::now() + sleep_for;
+        let mut last_emit = Instant::now();
+        while Instant::now() < deadline {
+            if progress.is_some_and(tokio::sync::mpsc::Sender::is_closed) {
+                return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
+            }
+            if let Some(tx) = progress {
+                if last_emit.elapsed() >= Duration::from_secs(15) {
+                    let remaining =
+                        deadline.saturating_duration_since(Instant::now()).as_secs().max(1);
+                    let _ = tx
+                        .send(UploadProgressEvent::waiting(
+                            uploaded, total, chunk, chunks, remaining,
+                        ))
+                        .await;
+                    last_emit = Instant::now();
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            tokio::time::sleep(remaining.min(Duration::from_secs(1))).await;
+        }
+        if let Some(p) = permit {
+            p.note_flood().await;
+        }
+        tokio::time::sleep(POST_FLOOD_EXTRA_COOLDOWN).await;
+        if progress.is_some_and(tokio::sync::mpsc::Sender::is_closed) {
+            return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
+        }
+        Ok(())
+    }
+
+    fn server_backoff_ms(attempt: u32) -> u64 {
+        BASE_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)).min(30_000)
+    }
+
+    /// Retry network errors, HTTP 5xx, and Telegram flood waits (including HTTP 400
+    /// "too Many Requests: retry after N" from Local Bot API).
+    ///
+    /// Flood waits retry indefinitely. Pass `permit` for upload paths so pacing
+    /// adapts after floods.
+    async fn send_with_retries<F, Fut>(
+        op: &str,
+        permit: Option<&SendPermit>,
+        mut send: F,
+    ) -> SarcaResult<reqwest::Response>
     where
         F: FnMut() -> Fut,
         Fut: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
     {
-        let mut last_network_err: Option<reqwest::Error> = None;
+        let mut flood_tries: u32 = 0;
+        let mut flood_waited_secs: u64 = 0;
+        let mut other_tries: u32 = 0;
 
-        for attempt in 0..MAX_ATTEMPTS {
+        loop {
             match send().await {
                 Ok(response) => {
                     let status = response.status();
-                    let retryable = status.as_u16() == 429 || status.is_server_error();
-                    if retryable && attempt + 1 < MAX_ATTEMPTS {
-                        let body = response.text().await.unwrap_or_default();
-                        let backoff = BASE_BACKOFF_MS * 2u64.pow(attempt);
+                    if status.is_success() {
+                        return Ok(response);
+                    }
+
+                    let body = response.text().await.unwrap_or_default();
+                    if let Some(wait_secs) = Self::flood_wait_secs(status, &body) {
+                        flood_tries += 1;
+                        flood_waited_secs = flood_waited_secs.saturating_add(wait_secs);
+                        // Expected path under Local Bot API — warn once, then retry quietly.
+                        if flood_tries == 1 {
+                            tracing::warn!(
+                                "[TELEGRAM API] {op} flood wait {wait_secs}s (will retry \
+                                 indefinitely): {body}"
+                            );
+                        } else {
+                            tracing::debug!(
+                                "[TELEGRAM API] {op} flood wait {wait_secs}s (flood attempt \
+                                 {flood_tries}, waited {flood_waited_secs}s total)"
+                            );
+                        }
+                        Self::honor_flood_wait(wait_secs, permit, None, 0, 0, 0, 0).await?;
+                        continue;
+                    } else if status.is_server_error() {
+                        other_tries += 1;
+                        if other_tries < MAX_ATTEMPTS {
+                            let backoff = Self::server_backoff_ms(other_tries.saturating_sub(1));
+                            tracing::warn!(
+                                "[TELEGRAM API] {op} got {status}, retrying in {backoff}ms \
+                                 (attempt {other_tries}/{MAX_ATTEMPTS}): {body}"
+                            );
+                            tokio::time::sleep(Duration::from_millis(backoff)).await;
+                            continue;
+                        }
+                    }
+
+                    // Rebuild a synthetic failure response path: caller expects Response,
+                    // but we already consumed the body. Return a clear error instead.
+                    return Err(SarcaError::TelegramAPIError(format!("{status}: {body}")));
+                },
+                Err(e) => {
+                    other_tries += 1;
+                    if other_tries < MAX_ATTEMPTS {
+                        let backoff = Self::server_backoff_ms(other_tries.saturating_sub(1));
                         tracing::warn!(
-                            "[TELEGRAM API] {op} got {status}, retrying in {backoff}ms (attempt \
-                             {}/{MAX_ATTEMPTS}): {body}",
-                            attempt + 1
+                            "[TELEGRAM API] {op} network error, retrying in {backoff}ms (attempt \
+                             {other_tries}/{MAX_ATTEMPTS}): {e}"
                         );
                         tokio::time::sleep(Duration::from_millis(backoff)).await;
                         continue;
                     }
-                    return Ok(response);
-                },
-                Err(e) => {
-                    last_network_err = Some(e);
-                    if attempt + 1 < MAX_ATTEMPTS {
-                        let backoff = BASE_BACKOFF_MS * 2u64.pow(attempt);
-                        tracing::warn!(
-                            "[TELEGRAM API] {op} network error, retrying in {backoff}ms (attempt \
-                             {}/{MAX_ATTEMPTS}): {}",
-                            attempt + 1,
-                            last_network_err.as_ref().unwrap()
-                        );
-                        tokio::time::sleep(Duration::from_millis(backoff)).await;
-                    }
+                    return Err(SarcaError::from(e));
                 },
             }
         }
-
-        Err(last_network_err.map_or(SarcaError::Unknown, SarcaError::from))
     }
 
     pub async fn upload(
@@ -123,12 +346,13 @@ impl<'t> TelegramBotApi<'t> {
         }
 
         let token = self.scheduler.get_token(storage_id).await?;
-        let url = self.build_url("", "sendDocument", token);
+        let url = self.build_url("", "sendDocument", &token);
         let masked_url = Self::mask_url(&url);
         let file_len = file.len();
 
         let start = Instant::now();
-        let response = Self::send_with_retries("upload", || {
+        let permit = SendPermit::acquire(&token).await;
+        let response = Self::send_with_retries("upload", Some(&permit), || {
             let file_part = multipart::Part::bytes(file.to_vec()).file_name("sarca_chunk.bin");
             let form = multipart::Form::new()
                 .text("chat_id", chat_id.to_string())
@@ -136,6 +360,8 @@ impl<'t> TelegramBotApi<'t> {
             reqwest::Client::new().post(&url).multipart(form).send()
         })
         .await?;
+        permit.mark_ok().await;
+        drop(permit);
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
         let status = response.status();
@@ -201,8 +427,6 @@ impl<'t> TelegramBotApi<'t> {
 
         use futures::StreamExt;
 
-        use crate::common::channels::UploadProgressEvent;
-
         let mut file = tokio::fs::File::open(file_path).await.map_err(|_| SarcaError::Unknown)?;
         file.seek(SeekFrom::Start(req.offset)).await.map_err(|_| SarcaError::Unknown)?;
         let reader = file.take(req.len);
@@ -239,48 +463,96 @@ impl<'t> TelegramBotApi<'t> {
 
     /// Custom retry loop for `upload_file_part` because the multipart stream must be
     /// rebuilt each attempt (unlike `send_with_retries`, which reuses a closure).
+    ///
+    /// Flood waits retry indefinitely per chunk (no attempt / total-time budget).
     async fn send_upload_part_with_retries(
         url: &str,
         file_path: &Path,
         req: &UploadFilePartRequest,
+        permit: &SendPermit,
     ) -> SarcaResult<reqwest::Response> {
-        let mut last_err: Option<SarcaError> = None;
+        let mut flood_tries: u32 = 0;
+        let mut flood_waited_secs: u64 = 0;
+        let mut other_tries: u32 = 0;
 
-        for attempt in 0..MAX_ATTEMPTS {
+        loop {
             let form = Self::build_upload_part_form(file_path, req).await?;
             match reqwest::Client::new().post(url).multipart(form).send().await {
                 Ok(response) => {
                     let status = response.status();
-                    let retryable = status.as_u16() == 429 || status.is_server_error();
-                    if retryable && attempt + 1 < MAX_ATTEMPTS {
-                        let body = response.text().await.unwrap_or_default();
-                        let backoff = BASE_BACKOFF_MS * 2u64.pow(attempt);
+                    if status.is_success() {
+                        return Ok(response);
+                    }
+
+                    let body = response.text().await.unwrap_or_default();
+                    if let Some(wait_secs) = Self::flood_wait_secs(status, &body) {
+                        flood_tries += 1;
+                        flood_waited_secs = flood_waited_secs.saturating_add(wait_secs);
+                        // Expected path under Local Bot API — warn once, then retry quietly.
+                        if flood_tries == 1 {
+                            tracing::warn!(
+                                "[TELEGRAM API] upload_file_part flood wait {wait_secs}s (will \
+                                 retry indefinitely): {body}"
+                            );
+                        } else {
+                            tracing::debug!(
+                                "[TELEGRAM API] upload_file_part flood wait {wait_secs}s (flood \
+                                 attempt {flood_tries}, waited {flood_waited_secs}s total)"
+                            );
+                        }
+                        if let Some(tx) = req.progress.as_ref() {
+                            // Prefer await so waiting events aren't dropped on a full channel.
+                            let _ = tx
+                                .send(UploadProgressEvent::waiting(
+                                    req.offset,
+                                    req.file_total,
+                                    req.chunk_no,
+                                    req.total_chunks,
+                                    wait_secs,
+                                ))
+                                .await;
+                        }
+                        Self::honor_flood_wait(
+                            wait_secs,
+                            Some(permit),
+                            req.progress.as_ref(),
+                            req.offset,
+                            req.file_total,
+                            req.chunk_no,
+                            req.total_chunks,
+                        )
+                        .await?;
+                        continue;
+                    } else if status.is_server_error() {
+                        other_tries += 1;
+                        if other_tries < MAX_ATTEMPTS {
+                            let backoff = Self::server_backoff_ms(other_tries.saturating_sub(1));
+                            tracing::warn!(
+                                "[TELEGRAM API] upload_file_part got {status}, retrying in \
+                                 {backoff}ms (attempt {other_tries}/{MAX_ATTEMPTS}): {body}"
+                            );
+                            tokio::time::sleep(Duration::from_millis(backoff)).await;
+                            continue;
+                        }
+                    }
+
+                    return Err(SarcaError::TelegramAPIError(format!("{status}: {body}")));
+                },
+                Err(e) => {
+                    other_tries += 1;
+                    if other_tries < MAX_ATTEMPTS {
+                        let backoff = Self::server_backoff_ms(other_tries.saturating_sub(1));
                         tracing::warn!(
-                            "[TELEGRAM API] upload_file_part got {status}, retrying in \
-                             {backoff}ms (attempt {}/{MAX_ATTEMPTS}): {body}",
-                            attempt + 1
+                            "[TELEGRAM API] upload_file_part network error, retrying in \
+                             {backoff}ms (attempt {other_tries}/{MAX_ATTEMPTS})"
                         );
                         tokio::time::sleep(Duration::from_millis(backoff)).await;
                         continue;
                     }
-                    return Ok(response);
-                },
-                Err(e) => {
-                    last_err = Some(e.into());
-                    if attempt + 1 < MAX_ATTEMPTS {
-                        let backoff = BASE_BACKOFF_MS * 2u64.pow(attempt);
-                        tracing::warn!(
-                            "[TELEGRAM API] upload_file_part network error, retrying in \
-                             {backoff}ms (attempt {}/{MAX_ATTEMPTS})",
-                            attempt + 1
-                        );
-                        tokio::time::sleep(Duration::from_millis(backoff)).await;
-                    }
+                    return Err(e.into());
                 },
             }
         }
-
-        Err(last_err.unwrap_or(SarcaError::Unknown))
     }
 
     /// Upload a part of a file from disk without buffering it fully in RAM.
@@ -293,11 +565,14 @@ impl<'t> TelegramBotApi<'t> {
         req: UploadFilePartRequest,
     ) -> SarcaResult<UploadOutcome> {
         let token = self.scheduler.get_token(req.storage_id).await?;
-        let url = self.build_url("", "sendDocument", token);
+        let url = self.build_url("", "sendDocument", &token);
         let masked_url = Self::mask_url(&url);
 
         let start = Instant::now();
-        let response = Self::send_upload_part_with_retries(&url, file_path, &req).await?;
+        let permit = SendPermit::acquire(&token).await;
+        let response = Self::send_upload_part_with_retries(&url, file_path, &req, &permit).await?;
+        permit.mark_ok().await;
+        drop(permit);
         let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         let status = response.status();
@@ -408,11 +683,11 @@ impl<'t> TelegramBotApi<'t> {
 
     pub async fn download(&self, telegram_file_id: &str, storage_id: Uuid) -> SarcaResult<Vec<u8>> {
         let token = self.scheduler.get_token(storage_id).await?;
-        let url = self.build_url("", "getFile", token);
+        let url = self.build_url("", "getFile", &token);
         let masked_url = Self::mask_url(&url);
 
         let start = Instant::now();
-        let response = Self::send_with_retries("download/getFile", || {
+        let response = Self::send_with_retries("download/getFile", None, || {
             reqwest::Client::new().get(&url).query(&[("file_id", telegram_file_id)]).send()
         })
         .await?;
@@ -468,13 +743,14 @@ impl<'t> TelegramBotApi<'t> {
 
         // downloading the file itself
         let token = self.scheduler.get_token(storage_id).await?;
-        let url = self.build_url("file/", &body.result.file_path, token);
+        let url = self.build_url("file/", &body.result.file_path, &token);
         let masked_url = Self::mask_url(&url);
 
         let start = Instant::now();
-        let response =
-            Self::send_with_retries("download/file", || reqwest::Client::new().get(&url).send())
-                .await?;
+        let response = Self::send_with_retries("download/file", None, || {
+            reqwest::Client::new().get(&url).send()
+        })
+        .await?;
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
         let status = response.status();
@@ -524,7 +800,7 @@ impl<'t> TelegramBotApi<'t> {
     {
         // getting file path
         let token = self.scheduler.get_token(storage_id).await?;
-        let url = self.build_url("", "getFile", token);
+        let url = self.build_url("", "getFile", &token);
 
         let body: DownloadBodySchema = reqwest::Client::new()
             .get(url)
@@ -554,7 +830,7 @@ impl<'t> TelegramBotApi<'t> {
 
         // downloading the file itself
         let token = self.scheduler.get_token(storage_id).await?;
-        let url = self.build_url("file/", &body.result.file_path, token);
+        let url = self.build_url("file/", &body.result.file_path, &token);
 
         let response = reqwest::Client::new().get(url).send().await?.error_for_status()?;
 
@@ -566,10 +842,10 @@ impl<'t> TelegramBotApi<'t> {
     /// Resolve a chat's display name (title, else username, else first name, else the id).
     pub async fn get_chat(&self, chat_id: ChatId, storage_id: Uuid) -> SarcaResult<ChatInfo> {
         let token = self.scheduler.get_token(storage_id).await?;
-        let url = self.build_url("", "getChat", token);
+        let url = self.build_url("", "getChat", &token);
         let masked_url = Self::mask_url(&url);
 
-        let response = Self::send_with_retries("getChat", || {
+        let response = Self::send_with_retries("getChat", None, || {
             reqwest::Client::new().get(&url).query(&[("chat_id", chat_id.to_string())]).send()
         })
         .await?;
@@ -609,6 +885,9 @@ impl<'t> TelegramBotApi<'t> {
     /// Telegram's `copyMessage` only returns the new `message_id`; the underlying file
     /// stays the same document, so the caller-supplied `source_file_id` remains valid for
     /// download via `getFile` as long as the bot can still reach any chat holding it.
+    ///
+    /// Uses the same per-token send gate as `sendDocument` so replication cannot race
+    /// uploads and trip flood control.
     pub async fn copy_message(
         &self,
         from_chat_id: ChatId,
@@ -618,10 +897,11 @@ impl<'t> TelegramBotApi<'t> {
         storage_id: Uuid,
     ) -> SarcaResult<UploadOutcome> {
         let token = self.scheduler.get_token(storage_id).await?;
-        let url = self.build_url("", "copyMessage", token);
+        let url = self.build_url("", "copyMessage", &token);
         let masked_url = Self::mask_url(&url);
 
-        let response = Self::send_with_retries("copyMessage", || {
+        let permit = SendPermit::acquire(&token).await;
+        let response = Self::send_with_retries("copyMessage", Some(&permit), || {
             reqwest::Client::new()
                 .post(&url)
                 .form(&[
@@ -632,6 +912,8 @@ impl<'t> TelegramBotApi<'t> {
                 .send()
         })
         .await?;
+        permit.mark_ok().await;
+        drop(permit);
 
         let status = response.status();
         if !status.is_success() {
@@ -663,7 +945,7 @@ impl<'t> TelegramBotApi<'t> {
     }
 
     /// Best-effort Telegram `deleteMessage`. Missing/already-deleted messages are treated as
-    /// success.
+    /// success. Shares the per-token send gate so purge cannot race uploads.
     pub async fn delete_message(
         &self,
         chat_id: ChatId,
@@ -671,16 +953,19 @@ impl<'t> TelegramBotApi<'t> {
         storage_id: Uuid,
     ) -> SarcaResult<()> {
         let token = self.scheduler.get_token(storage_id).await?;
-        let url = self.build_url("", "deleteMessage", token);
+        let url = self.build_url("", "deleteMessage", &token);
         let masked_url = Self::mask_url(&url);
 
-        let response = Self::send_with_retries("deleteMessage", || {
+        let permit = SendPermit::acquire(&token).await;
+        let response = Self::send_with_retries("deleteMessage", Some(&permit), || {
             reqwest::Client::new()
                 .post(&url)
                 .form(&[("chat_id", chat_id.to_string()), ("message_id", message_id.to_string())])
                 .send()
         })
         .await?;
+        permit.mark_ok().await;
+        drop(permit);
 
         let status = response.status();
         if status.is_success() {
@@ -714,10 +999,8 @@ impl<'t> TelegramBotApi<'t> {
         Err(SarcaError::TelegramAPIError(format!("{status}: {error_body}")))
     }
 
-    /// Taking token by a value to force dropping it so it can be used only once
     #[inline]
-    #[allow(clippy::needless_pass_by_value)]
-    fn build_url(&self, pre: &str, relative: &str, token: String) -> String {
+    fn build_url(&self, pre: &str, relative: &str, token: &str) -> String {
         format!("{}/{pre}bot{token}/{relative}", self.base_url)
     }
 }
@@ -744,4 +1027,63 @@ pub fn is_chat_dead_error(err: &SarcaError) -> bool {
         "member list is inaccessible",
     ];
     DEAD_MARKERS.iter().any(|marker| msg.contains(marker))
+}
+
+#[cfg(test)]
+mod flood_wait_tests {
+    use super::{MAX_FLOOD_WAIT_SECS, TelegramBotApi};
+
+    #[test]
+    fn parses_local_bot_api_400_flood() {
+        let body = r#"{"ok":false,"error_code":400,"description":"Bad Request: too Many Requests: retry after 8"}"#;
+        let secs = TelegramBotApi::flood_wait_secs(reqwest::StatusCode::BAD_REQUEST, body);
+        assert_eq!(secs, Some(8));
+    }
+
+    #[test]
+    fn parses_retry_after_json() {
+        let body =
+            r#"{"ok":false,"error_code":429,"description":"Too Many Requests","retry_after":42}"#;
+        let secs = TelegramBotApi::flood_wait_secs(reqwest::StatusCode::TOO_MANY_REQUESTS, body);
+        assert_eq!(secs, Some(42));
+    }
+
+    #[test]
+    fn parses_parameters_retry_after() {
+        let body = r#"{"ok":false,"error_code":429,"description":"Too Many Requests: retry after 35","parameters":{"retry_after":35}}"#;
+        let secs = TelegramBotApi::flood_wait_secs(reqwest::StatusCode::TOO_MANY_REQUESTS, body);
+        assert_eq!(secs, Some(35));
+    }
+
+    #[test]
+    fn ignores_ordinary_bad_request() {
+        let body = r#"{"ok":false,"error_code":400,"description":"Bad Request: chat not found"}"#;
+        assert_eq!(TelegramBotApi::flood_wait_secs(reqwest::StatusCode::BAD_REQUEST, body), None);
+    }
+
+    #[test]
+    fn caps_single_flood_wait_at_max() {
+        let body = format!(
+            r#"{{"ok":false,"error_code":429,"description":"Too Many Requests","retry_after":{}}}"#,
+            MAX_FLOOD_WAIT_SECS + 500
+        );
+        let secs = TelegramBotApi::flood_wait_secs(reqwest::StatusCode::TOO_MANY_REQUESTS, &body);
+        assert_eq!(secs, Some(MAX_FLOOD_WAIT_SECS));
+    }
+
+    #[test]
+    fn flood_sleep_includes_retry_after() {
+        let d = TelegramBotApi::flood_sleep_duration(10);
+        assert!(d.as_secs() >= 10);
+        assert!(d.as_secs() <= 12);
+    }
+
+    #[test]
+    fn pacing_defaults_are_conservative() {
+        // Keep proactive gaps well under Telegram's ~1 msg/s FAQ guideline.
+        assert!(super::MIN_SEND_GAP.as_millis() >= 2000);
+        assert!(super::MIN_SEND_GAP_AFTER_FLOOD.as_millis() >= 3000);
+        assert!(super::POST_FLOOD_EXTRA_COOLDOWN.as_secs() >= 5);
+        assert!(super::FLOOD_PACING_WINDOW.as_secs() >= 180);
+    }
 }

@@ -5,12 +5,11 @@ import IconButton from '@suid/material/IconButton'
 import TextField from '@suid/material/TextField'
 import InputAdornment from '@suid/material/InputAdornment'
 import { A } from '@solidjs/router'
-import SearchIcon from '@suid/icons-material/Search'
-import ClearIcon from '@suid/icons-material/Clear'
 import Box from '@suid/material/Box'
 import { Show } from 'solid-js'
 
 import AppIcon from './AppIcon'
+import FluentIcon from './FluentIcon'
 import { filesChromeStore } from '../common/filesChrome'
 
 const Header = () => {
@@ -84,14 +83,14 @@ const Header = () => {
 							InputProps={{
 								startAdornment: (
 									<InputAdornment position="start">
-										<SearchIcon fontSize="small" />
+										<FluentIcon name="search" size={18} />
 									</InputAdornment>
 								),
 								endAdornment: (
 									<InputAdornment position="end">
 										<Show when={chrome.searchQuery() || chrome.isSearching()}>
 											<IconButton size="small" onClick={chrome.clearSearch}>
-												<ClearIcon fontSize="small" />
+												<FluentIcon name="dismiss" size={18} />
 											</IconButton>
 										</Show>
 									</InputAdornment>

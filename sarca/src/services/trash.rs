@@ -9,6 +9,7 @@ use crate::{
         access::AccessRepository,
         chunk_replicas::ChunkReplicasRepository,
         files::FilesRepository,
+        share_links::ShareLinksRepository,
     },
     services::storage_workers_scheduler::StorageWorkersScheduler,
 };
@@ -144,9 +145,13 @@ async fn live_conflict_at(
     Ok(false)
 }
 
-/// Hard-delete file metadata, then best-effort Telegram `deleteMessage` only for
-/// messages no longer referenced by any remaining chunk replica or file thumb
-/// (including trashed files). Soft-delete must not call this.
+/// Hard-delete file metadata (and path-based share links), then best-effort
+/// Telegram `deleteMessage` only for messages no longer referenced by any
+/// remaining chunk replica or file thumb (including trashed files).
+///
+/// Telegram GC runs in a background task so HTTP handlers (empty trash /
+/// delete forever) return after the DB purge and are not cancelled mid-GC.
+/// Soft-delete must not call this.
 pub async fn purge_file_ids(
     db: &PgPool,
     base_url: &str,
@@ -159,8 +164,15 @@ pub async fn purge_file_ids(
 
     let replicas_repo = ChunkReplicasRepository::new(db);
     let files_repo = FilesRepository::new(db);
+    let shares_repo = ShareLinksRepository::new(db);
+
     let mut messages = replicas_repo.list_telegram_messages_for_files(ids).await?;
     messages.extend(files_repo.list_thumb_messages_for_files(ids).await?);
+
+    // Shares are path-keyed; drop them before file rows disappear.
+    if let Err(e) = shares_repo.delete_for_file_ids(ids).await {
+        tracing::warn!("[TRASH] failed to delete share links for purged files: {e}");
+    }
 
     // Drop DB rows first so remaining-refcount checks exclude these files.
     files_repo.hard_delete_ids(ids).await?;
@@ -178,9 +190,29 @@ pub async fn purge_file_ids(
         }
     }
 
+    let db = db.clone();
+    let base_url = base_url.to_owned();
+    tokio::spawn(async move {
+        if let Err(e) = gc_telegram_messages(&db, &base_url, rate_limit, unique).await {
+            tracing::warn!("[TRASH] background Telegram GC failed: {e}");
+        }
+    });
+
+    Ok(())
+}
+
+async fn gc_telegram_messages(
+    db: &PgPool,
+    base_url: &str,
+    rate_limit: u8,
+    messages: Vec<(i64, i64, Uuid)>,
+) -> SarcaResult<()> {
+    let replicas_repo = ChunkReplicasRepository::new(db);
+    let files_repo = FilesRepository::new(db);
     let scheduler = StorageWorkersScheduler::new(db, rate_limit);
     let api = TelegramBotApi::new(base_url, scheduler);
-    for (chat_id, message_id, storage_id) in unique {
+
+    for (chat_id, message_id, storage_id) in messages {
         let replica_ref = replicas_repo.message_still_referenced(chat_id, message_id).await?;
         let thumb_ref = files_repo.thumb_message_still_referenced(chat_id, message_id).await?;
         if replica_ref || thumb_ref {
