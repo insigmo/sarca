@@ -25,7 +25,10 @@ use super::schemas::{
     UploadOutcome,
 };
 use crate::{
-    common::{channels::UploadProgressEvent, types::ChatId},
+    common::{
+        channels::{UploadProgressEvent, emit_upload_progress},
+        types::ChatId,
+    },
     errors::{SarcaError, SarcaResult},
     services::storage_workers_scheduler::StorageWorkersScheduler,
 };
@@ -203,8 +206,11 @@ impl<'t> TelegramBotApi<'t> {
     /// Honor a flood `retry_after`, then apply post-flood cooldown / adaptive pacing.
     ///
     /// Flood waits have no attempt or total-time budget: we keep retrying until the
-    /// call succeeds, the client aborts (task abort / progress channel closed), or the
-    /// process shuts down. Sleep is interruptible every second so cancel is prompt.
+    /// call succeeds, the client aborts (progress channel closed), or the process
+    /// shuts down. Sleep is interruptible every second so cancel is prompt.
+    ///
+    /// Waiting events use non-blocking `try_send` so a stalled NDJSON client cannot
+    /// deadlock the serial Storage Manager (and the per-token send permit).
     ///
     /// While sleeping, re-emit `waiting` every ~15s with remaining `retry_after` so the
     /// HTTP NDJSON stream stays alive (idle proxies otherwise drop the connection).
@@ -228,11 +234,11 @@ impl<'t> TelegramBotApi<'t> {
                 if last_emit.elapsed() >= Duration::from_secs(15) {
                     let remaining =
                         deadline.saturating_duration_since(Instant::now()).as_secs().max(1);
-                    let _ = tx
-                        .send(UploadProgressEvent::waiting(
-                            uploaded, total, chunk, chunks, remaining,
-                        ))
-                        .await;
+                    // try_send: never block the flood-wait (holds the send permit).
+                    emit_upload_progress(
+                        tx,
+                        UploadProgressEvent::waiting(uploaded, total, chunk, chunks, remaining),
+                    )?;
                     last_emit = Instant::now();
                 }
             }
@@ -476,8 +482,28 @@ impl<'t> TelegramBotApi<'t> {
         let mut other_tries: u32 = 0;
 
         loop {
+            if req.progress.as_ref().is_some_and(tokio::sync::mpsc::Sender::is_closed) {
+                return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
+            }
             let form = Self::build_upload_part_form(file_path, req).await?;
-            match reqwest::Client::new().post(url).multipart(form).send().await {
+            // Bound connect time; large local-API chunks have no total timeout — cancel
+            // via progress.closed() when the NDJSON client disconnects.
+            let client = reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
+            let send_fut = client.post(url).multipart(form).send();
+            let result = if let Some(tx) = req.progress.as_ref() {
+                tokio::select! {
+                    r = send_fut => r,
+                    () = tx.closed() => {
+                        return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
+                    }
+                }
+            } else {
+                send_fut.await
+            };
+            match result {
                 Ok(response) => {
                     let status = response.status();
                     if status.is_success() {
@@ -501,16 +527,17 @@ impl<'t> TelegramBotApi<'t> {
                             );
                         }
                         if let Some(tx) = req.progress.as_ref() {
-                            // Prefer await so waiting events aren't dropped on a full channel.
-                            let _ = tx
-                                .send(UploadProgressEvent::waiting(
+                            // Never await: a full NDJSON buffer must not hold the send permit.
+                            emit_upload_progress(
+                                tx,
+                                UploadProgressEvent::waiting(
                                     req.offset,
                                     req.file_total,
                                     req.chunk_no,
                                     req.total_chunks,
                                     wait_secs,
-                                ))
-                                .await;
+                                ),
+                            )?;
                         }
                         Self::honor_flood_wait(
                             wait_secs,

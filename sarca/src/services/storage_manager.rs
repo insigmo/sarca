@@ -4,7 +4,7 @@ use uuid::Uuid;
 use super::storage_workers_scheduler::StorageWorkersScheduler;
 use crate::{
     common::{
-        channels::{UploadFileData, UploadProgressEvent},
+        channels::{UploadFileData, UploadProgressEvent, emit_upload_progress},
         telegram_api::bot_api::{TelegramBotApi, UploadFilePartRequest},
         types::ChatId,
     },
@@ -98,10 +98,14 @@ impl<'d> StorageManagerService<'d> {
         };
 
         if let Some(tx) = data.progress.as_ref() {
-            let _ = tx.send(UploadProgressEvent::telegram(0, total, 1, total_chunks)).await;
+            // Never await progress: a stuck NDJSON client must not freeze SM.
+            emit_upload_progress(tx, UploadProgressEvent::telegram(0, total, 1, total_chunks))?;
         }
 
         while offset < total {
+            if data.progress.as_ref().is_some_and(tokio::sync::mpsc::Sender::is_closed) {
+                return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
+            }
             let len = std::cmp::min(chunk_size, total - offset);
             let chunk_no = u32::try_from(position).unwrap_or(u32::MAX).saturating_add(1);
             let (chunk, replica) = self
@@ -130,14 +134,15 @@ impl<'d> StorageManagerService<'d> {
             offset += len;
             position += 1;
             if let Some(tx) = data.progress.as_ref() {
-                let _ = tx
-                    .send(UploadProgressEvent::telegram(
+                emit_upload_progress(
+                    tx,
+                    UploadProgressEvent::telegram(
                         offset,
                         total,
                         chunk_no.min(total_chunks),
                         total_chunks,
-                    ))
-                    .await;
+                    ),
+                )?;
             }
         }
 
