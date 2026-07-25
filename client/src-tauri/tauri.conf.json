@@ -14,8 +14,10 @@
       {
         "label": "main",
         "title": "Sarca",
-        "width": 960,
-        "height": 720,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 360,
+        "minHeight": 560,
         "resizable": true
       }
     ],

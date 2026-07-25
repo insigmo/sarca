@@ -4,135 +4,188 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Sarca</title>
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
     <style>
       :root {
         color-scheme: light dark;
-        --bg: #0f1419;
-        --fg: #e7ecf1;
-        --muted: #9aa7b5;
-        --accent: #3d8bfd;
-        --card: #1a222c;
-        --border: #2a3542;
-        font-family: "Segoe UI", system-ui, sans-serif;
+        --sarca-ink: #1b1a19;
+        --sarca-ink-soft: #605e5c;
+        --sarca-paper: #eef0f2;
+        --sarca-surface: #ffffff;
+        --sarca-accent: #0078d4;
+        --sarca-accent-deep: #005a9e;
+        --sarca-border: rgba(0, 0, 0, 0.08);
+        --sarca-shadow: 0 8px 24px rgba(0, 0, 0, 0.06), 0 1.5px 4px rgba(0, 0, 0, 0.04);
+        --sarca-radius: 12px;
+        --sarca-font: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+        --sarca-bg-top: #f5f6f8;
+        --sarca-bg-bottom: #e6e8eb;
       }
-      @media (prefers-color-scheme: light) {
+      @media (prefers-color-scheme: dark) {
         :root {
-          --bg: #f4f7fa;
-          --fg: #142033;
-          --muted: #5b6b7c;
-          --card: #ffffff;
-          --border: #d5dee8;
+          --sarca-ink: #ffffff;
+          --sarca-ink-soft: #e0e0e0;
+          --sarca-paper: #1c1c1c;
+          --sarca-surface: #2b2b2b;
+          --sarca-accent: #0078d4;
+          --sarca-accent-deep: #005a9e;
+          --sarca-border: rgba(255, 255, 255, 0.08);
+          --sarca-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.2);
+          --sarca-bg-top: #202020;
+          --sarca-bg-bottom: #1c1c1c;
         }
       }
       * { box-sizing: border-box; }
-      body {
+      html, body {
         margin: 0;
-        background: var(--bg);
-        color: var(--fg);
+        min-height: 100%;
+        font-family: var(--sarca-font);
+        color: var(--sarca-ink);
+        background:
+          linear-gradient(180deg, var(--sarca-bg-top), var(--sarca-bg-bottom));
+      }
+      body {
         min-height: 100vh;
-        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+        display: grid;
+        place-items: center;
+        padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+          max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
       }
-      header {
+      .auth-card {
+        width: min(420px, 100%);
+        background: var(--sarca-surface);
+        border: 1px solid var(--sarca-border);
+        border-radius: calc(var(--sarca-radius) + 4px);
+        box-shadow: var(--sarca-shadow);
+        padding: 28px 24px 24px;
+      }
+      .auth-brand {
         display: flex;
+        flex-direction: column;
         align-items: center;
-        justify-content: space-between;
-        padding: 16px 20px;
-        border-bottom: 1px solid var(--border);
+        gap: 8px;
+        margin-bottom: 20px;
+        text-align: center;
       }
-      h1 { font-size: 1.15rem; margin: 0; letter-spacing: 0.02em; }
-      main { padding: 20px; max-width: 720px; margin: 0 auto; }
-      .card {
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 12px;
-        padding: 16px;
-        margin-bottom: 16px;
+      .auth-brand img {
+        width: 72px;
+        height: 72px;
+        border-radius: 18px;
       }
-      label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
-      input, select, button {
+      .auth-brand h1 {
+        margin: 0;
+        font-size: 2rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .auth-brand p {
+        margin: 0;
+        color: var(--sarca-ink-soft);
+        font-size: 0.95rem;
+      }
+      label {
+        display: block;
+        font-size: 0.85rem;
+        color: var(--sarca-ink-soft);
+        margin: 0 0 6px;
+      }
+      input {
         width: 100%;
-        padding: 10px 12px;
+        padding: 12px 14px;
         border-radius: 8px;
-        border: 1px solid var(--border);
-        background: var(--bg);
-        color: var(--fg);
-        margin-bottom: 12px;
+        border: 1px solid var(--sarca-border);
+        background: color-mix(in srgb, var(--sarca-paper) 70%, var(--sarca-surface));
+        color: var(--sarca-ink);
+        font: inherit;
+        margin-bottom: 14px;
+      }
+      input:focus {
+        outline: 2px solid color-mix(in srgb, var(--sarca-accent) 45%, transparent);
+        border-color: var(--sarca-accent);
       }
       button {
-        background: var(--accent);
+        width: 100%;
+        margin-top: 4px;
+        padding: 12px 16px;
         border: none;
-        color: white;
+        border-radius: 8px;
+        background: var(--sarca-accent-deep);
+        color: #fff;
+        font: inherit;
         font-weight: 600;
         cursor: pointer;
       }
-      button.secondary { background: transparent; border: 1px solid var(--border); color: var(--fg); }
-      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-      .status { font-size: 0.9rem; color: var(--muted); white-space: pre-wrap; }
-      .binding {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        align-items: center;
-        padding: 10px 0;
-        border-bottom: 1px solid var(--border);
+      button:hover:not(:disabled) {
+        background: var(--sarca-accent);
       }
-      .binding:last-child { border-bottom: none; }
-      .mobile-only { display: none; }
-      @media (max-width: 840px) {
-        .mobile-only { display: block; }
-        .desktop-hint { display: none; }
-        .row { grid-template-columns: 1fr; }
+      button:disabled {
+        opacity: 0.65;
+        cursor: wait;
+      }
+      .error {
+        margin: 0 0 12px;
+        color: #c42b1c;
+        font-size: 0.9rem;
+        min-height: 1.2em;
+      }
+      .hint {
+        margin: 16px 0 0;
+        color: var(--sarca-ink-soft);
+        font-size: 0.82rem;
+        text-align: center;
+        line-height: 1.4;
+      }
+      .platform {
+        margin-top: 10px;
+        text-align: center;
+        font-size: 0.75rem;
+        color: var(--sarca-ink-soft);
+        opacity: 0.8;
       }
     </style>
   </head>
   <body>
-    <header>
-      <h1>Sarca Sync</h1>
-      <span id="platform" class="status"></span>
-    </header>
-    <main>
-      <section class="card">
-        <h2 style="margin-top:0;font-size:1rem">Server</h2>
-        <label for="baseUrl">API base URL</label>
-        <input id="baseUrl" placeholder="https://sarca.example.com" />
-        <label for="token">Access token</label>
-        <input id="token" type="password" placeholder="JWT access token" />
-        <button id="saveServer">Save connection</button>
-        <p class="status desktop-hint">Desktop keeps syncing in the tray after you close this window.</p>
-        <p class="status mobile-only">On mobile, sync/auto-upload runs while the app is open (best-effort background).</p>
-      </section>
-
-      <section class="card">
-        <h2 style="margin-top:0;font-size:1rem">Add binding</h2>
-        <label for="storageId">Storage ID (UUID)</label>
-        <input id="storageId" />
-        <label for="remoteRoot">Remote root (empty = storage root)</label>
-        <input id="remoteRoot" placeholder="" />
-        <label for="localPath">Local folder</label>
-        <div class="row">
-          <input id="localPath" placeholder="/path/to/folder" />
-          <button id="pickFolder" class="secondary" type="button">Choose…</button>
-        </div>
-        <label for="mode">Mode</label>
-        <select id="mode">
-          <option value="sync">Two-way sync</option>
-          <option value="auto_upload">Auto-upload only</option>
-        </select>
-        <button id="addBinding">Add binding</button>
-      </section>
-
-      <section class="card">
-        <h2 style="margin-top:0;font-size:1rem">Bindings</h2>
-        <div id="bindings"></div>
-        <button id="tickNow" class="secondary" type="button">Sync now</button>
-        <pre id="status" class="status"></pre>
-      </section>
-
-      <section class="card mobile-only">
-        <h2 style="margin-top:0;font-size:1rem">Camera / gallery auto-upload</h2>
-        <p class="status">Pick a photos folder (or camera roll export) and use Auto-upload mode above. Full media-library hooks land with platform permissions.</p>
-        <button id="pickCamera" class="secondary" type="button">Pick media folder</button>
-      </section>
+    <main class="auth-card">
+      <div class="auth-brand">
+        <img src="/logo.svg" alt="Sarca" />
+        <h1>Sarca</h1>
+        <p>Sign in to your cloud storage</p>
+      </div>
+      <form id="connectForm">
+        <label for="serverUrl">Server</label>
+        <input
+          id="serverUrl"
+          name="serverUrl"
+          type="url"
+          inputmode="url"
+          autocomplete="url"
+          placeholder="https://sarca.example.com"
+          required
+        />
+        <label for="email">Email</label>
+        <input
+          id="email"
+          name="email"
+          type="email"
+          autocomplete="username"
+          required
+        />
+        <label for="password">Password</label>
+        <input
+          id="password"
+          name="password"
+          type="password"
+          autocomplete="current-password"
+          required
+        />
+        <p id="error" class="error" aria-live="polite"></p>
+        <button id="submit" type="submit">Connect</button>
+      </form>
+      <p class="hint">
+        After connecting you get the same Sarca interface as in the browser —
+        files, buttons, and settings. On phones the mobile layout is used automatically.
+      </p>
+      <p id="platform" class="platform"></p>
     </main>
     <script type="module" src="/src/main.js"></script>
   </body>

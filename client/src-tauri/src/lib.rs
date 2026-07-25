@@ -3,10 +3,15 @@
 mod commands;
 mod state;
 
-use state::AppSyncState;
+use std::time::Duration;
+
+use state::{
+    is_shell_url, navigate_to_server, navigate_to_shell, AppSyncState, ServerConfig,
+};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    webview::PageLoadEvent,
     Manager,
 };
 
@@ -16,7 +21,25 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_shell::init());
+        .plugin(tauri_plugin_shell::init())
+        .on_page_load(|webview, payload| {
+            let Some(state) = webview.try_state::<AppSyncState>() else {
+                return;
+            };
+            state.remember_shell_url(payload.url().clone());
+
+            if payload.event() != PageLoadEvent::Finished {
+                return;
+            }
+
+            if is_shell_url(payload.url()) {
+                return;
+            }
+
+            if let Some(inject) = state.take_inject() {
+                let _ = webview.eval(inject.eval_script());
+            }
+        });
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
@@ -29,14 +52,20 @@ pub fn run() {
     builder
         .setup(|app| {
             let sync_state = AppSyncState::new(app.handle())?;
+            let reconnect = {
+                let cfg = tauri::async_runtime::block_on(sync_state.server.lock()).clone();
+                cfg.is_connected().then_some(cfg)
+            };
             app.manage(sync_state);
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 let show = MenuItem::with_id(app, "show", "Show Sarca", true, None::<&str>)?;
                 let sync_now = MenuItem::with_id(app, "sync_now", "Sync now", true, None::<&str>)?;
+                let disconnect =
+                    MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
                 let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-                let menu = Menu::with_items(app, &[&show, &sync_now, &quit])?;
+                let menu = Menu::with_items(app, &[&show, &sync_now, &disconnect, &quit])?;
 
                 let _tray = TrayIconBuilder::new()
                     .icon(app.default_window_icon().unwrap().clone())
@@ -48,6 +77,18 @@ pub fn run() {
                                 let _ = w.show();
                                 let _ = w.set_focus();
                             }
+                        }
+                        "disconnect" => {
+                            let handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let state = handle.state::<AppSyncState>();
+                                let cfg = ServerConfig::default();
+                                let _ = state.save_server(&cfg).await;
+                                if let Ok(mut guard) = state.pending_inject.lock() {
+                                    *guard = None;
+                                }
+                                let _ = navigate_to_shell(&handle);
+                            });
                         }
                         "sync_now" => {
                             let state = app.state::<AppSyncState>();
@@ -87,12 +128,23 @@ pub fn run() {
 
             let state = app.state::<AppSyncState>();
             state.start_background_loop();
+
+            if let Some(cfg) = reconnect {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    let _ = navigate_to_server(&handle, &cfg);
+                });
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::platform_label,
-            commands::get_server_config,
-            commands::set_server_config,
+            commands::get_session,
+            commands::connect,
+            commands::disconnect,
+            commands::open_app,
             commands::list_bindings,
             commands::add_binding,
             commands::remove_binding,

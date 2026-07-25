@@ -8,7 +8,7 @@ pub mod vfs;
 
 pub mod engine;
 
-pub use api::SarcaApi;
+pub use api::{LoginResponse, SarcaApi};
 pub use engine::{ConflictChoice, ConflictPrompt, KeepBothPrompt, SyncEngine, SyncEngineConfig};
 pub use hash::sha256_file;
 pub use index::LocalIndex;
