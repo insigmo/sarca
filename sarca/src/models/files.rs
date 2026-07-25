@@ -29,6 +29,8 @@ pub struct InFile {
     pub source_created_at: Option<DateTime<Utc>>,
     /// Original filesystem modification time from the client (if known).
     pub source_mtime: Option<DateTime<Utc>>,
+    /// Optional client-provided content hash (`sha256:...`).
+    pub content_hash: Option<String>,
 }
 
 impl InFile {
@@ -40,6 +42,7 @@ impl InFile {
             chunk_size_bytes: None,
             source_created_at: None,
             source_mtime: None,
+            content_hash: None,
         }
     }
 
@@ -55,6 +58,11 @@ impl InFile {
     ) -> Self {
         self.source_created_at = created_at;
         self.source_mtime = mtime;
+        self
+    }
+
+    pub fn with_content_hash(mut self, content_hash: Option<String>) -> Self {
+        self.content_hash = content_hash;
         self
     }
 }
@@ -78,6 +86,7 @@ pub struct File {
     pub updated_at: DateTime<Utc>,
     pub source_created_at: Option<DateTime<Utc>>,
     pub source_mtime: Option<DateTime<Utc>>,
+    pub content_hash: Option<String>,
 }
 
 impl File {
@@ -104,6 +113,7 @@ impl File {
             updated_at: now,
             source_created_at: None,
             source_mtime: None,
+            content_hash: None,
         }
     }
 }

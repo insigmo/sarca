@@ -22,6 +22,7 @@
 - Multi-user access control, multiple storages & workers
 - Setup wizard for bot + channel
 - Optional email verify, password reset, Google / GitHub OAuth
+- Native sync client (Tauri): two-way folder sync + auto-upload — see [`client/`](client/)
 
 ## What it does
 

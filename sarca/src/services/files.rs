@@ -241,6 +241,7 @@ impl<'d> FilesService<'d> {
                     added_at: Some(file.created_at),
                     created_at: file.source_created_at,
                     modified_at: file.source_mtime,
+                    content_hash: file.content_hash,
                 });
             }
         }
@@ -287,7 +288,8 @@ impl<'d> FilesService<'d> {
             deleted_at: marker.as_ref().and_then(|m| m.deleted_at),
             added_at: marker.as_ref().map(|m| m.created_at),
             created_at: marker.as_ref().and_then(|m| m.source_created_at),
-            modified_at: marker.and_then(|m| m.source_mtime),
+            modified_at: marker.as_ref().and_then(|m| m.source_mtime),
+            content_hash: marker.and_then(|m| m.content_hash),
         })
     }
 

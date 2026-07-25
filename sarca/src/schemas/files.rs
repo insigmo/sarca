@@ -88,4 +88,6 @@ pub struct FileInfoSchema {
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Original filesystem modified time (client metadata), if known.
     pub modified_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Client-provided content hash when known (`sha256:...`).
+    pub content_hash: Option<String>,
 }

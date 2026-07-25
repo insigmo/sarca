@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sarca</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #0f1419;
+        --fg: #e7ecf1;
+        --muted: #9aa7b5;
+        --accent: #3d8bfd;
+        --card: #1a222c;
+        --border: #2a3542;
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f4f7fa;
+          --fg: #142033;
+          --muted: #5b6b7c;
+          --card: #ffffff;
+          --border: #d5dee8;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        min-height: 100vh;
+        padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 20px;
+        border-bottom: 1px solid var(--border);
+      }
+      h1 { font-size: 1.15rem; margin: 0; letter-spacing: 0.02em; }
+      main { padding: 20px; max-width: 720px; margin: 0 auto; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+      label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+      input, select, button {
+        width: 100%;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--fg);
+        margin-bottom: 12px;
+      }
+      button {
+        background: var(--accent);
+        border: none;
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.secondary { background: transparent; border: 1px solid var(--border); color: var(--fg); }
+      .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .status { font-size: 0.9rem; color: var(--muted); white-space: pre-wrap; }
+      .binding {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .binding:last-child { border-bottom: none; }
+      .mobile-only { display: none; }
+      @media (max-width: 840px) {
+        .mobile-only { display: block; }
+        .desktop-hint { display: none; }
+        .row { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Sarca Sync</h1>
+      <span id="platform" class="status"></span>
+    </header>
+    <main>
+      <section class="card">
+        <h2 style="margin-top:0;font-size:1rem">Server</h2>
+        <label for="baseUrl">API base URL</label>
+        <input id="baseUrl" placeholder="https://sarca.example.com" />
+        <label for="token">Access token</label>
+        <input id="token" type="password" placeholder="JWT access token" />
+        <button id="saveServer">Save connection</button>
+        <p class="status desktop-hint">Desktop keeps syncing in the tray after you close this window.</p>
+        <p class="status mobile-only">On mobile, sync/auto-upload runs while the app is open (best-effort background).</p>
+      </section>
+
+      <section class="card">
+        <h2 style="margin-top:0;font-size:1rem">Add binding</h2>
+        <label for="storageId">Storage ID (UUID)</label>
+        <input id="storageId" />
+        <label for="remoteRoot">Remote root (empty = storage root)</label>
+        <input id="remoteRoot" placeholder="" />
+        <label for="localPath">Local folder</label>
+        <div class="row">
+          <input id="localPath" placeholder="/path/to/folder" />
+          <button id="pickFolder" class="secondary" type="button">Choose…</button>
+        </div>
+        <label for="mode">Mode</label>
+        <select id="mode">
+          <option value="sync">Two-way sync</option>
+          <option value="auto_upload">Auto-upload only</option>
+        </select>
+        <button id="addBinding">Add binding</button>
+      </section>
+
+      <section class="card">
+        <h2 style="margin-top:0;font-size:1rem">Bindings</h2>
+        <div id="bindings"></div>
+        <button id="tickNow" class="secondary" type="button">Sync now</button>
+        <pre id="status" class="status"></pre>
+      </section>
+
+      <section class="card mobile-only">
+        <h2 style="margin-top:0;font-size:1rem">Camera / gallery auto-upload</h2>
+        <p class="status">Pick a photos folder (or camera roll export) and use Auto-upload mode above. Full media-library hooks land with platform permissions.</p>
+        <button id="pickCamera" class="secondary" type="button">Pick media folder</button>
+      </section>
+    </main>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

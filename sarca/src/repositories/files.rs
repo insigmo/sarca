@@ -38,8 +38,8 @@ impl<'d> FilesRepository<'d> {
             format!(
                 "
                 INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded, \
-                 chunk_size_bytes, source_created_at, source_mtime)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+                 chunk_size_bytes, source_created_at, source_mtime, content_hash)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
             "
             )
             .as_str(),
@@ -52,6 +52,7 @@ impl<'d> FilesRepository<'d> {
         .bind(in_obj.chunk_size_bytes)
         .bind(in_obj.source_created_at)
         .bind(in_obj.source_mtime)
+        .bind(&in_obj.content_hash)
         .execute(self.db)
         .await
         .map_err(|e| {
@@ -79,6 +80,7 @@ impl<'d> FilesRepository<'d> {
         );
         storage.source_created_at = in_obj.source_created_at;
         storage.source_mtime = in_obj.source_mtime;
+        storage.content_hash = in_obj.content_hash;
         Ok(storage)
     }
 
@@ -105,7 +107,7 @@ impl<'d> FilesRepository<'d> {
         sqlx::query_as(
             format!(
                 r#"
-                INSERT INTO files (path, storage_id, id, size, is_uploaded, chunk_size_bytes, source_created_at, source_mtime)
+                INSERT INTO files (path, storage_id, id, size, is_uploaded, chunk_size_bytes, source_created_at, source_mtime, content_hash)
                 WITH f AS (
                     SELECT path
                     FROM {FILES_TABLE}
@@ -160,7 +162,8 @@ impl<'d> FilesRepository<'d> {
                     false,
                     $6,
                     $7,
-                    $8
+                    $8,
+                    $9
                 FROM f
                 RETURNING *;
             "#
@@ -175,6 +178,7 @@ impl<'d> FilesRepository<'d> {
         .bind(in_obj.chunk_size_bytes)
         .bind(in_obj.source_created_at)
         .bind(in_obj.source_mtime)
+        .bind(&in_obj.content_hash)
         .fetch_one(self.db)
         .await
         .map_err(|e| match e {
