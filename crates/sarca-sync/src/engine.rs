@@ -119,7 +119,7 @@ impl SyncEngine {
                         downloading: 0,
                         conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
                     }
-                },
+                }
             };
             statuses.push(status);
         }
@@ -196,11 +196,17 @@ impl SyncEngine {
                         continue;
                     }
                 } else {
-                    self.api().await.download_to(binding.storage_id, &entry.path, &local).await?;
+                    self.api()
+                        .await
+                        .download_to(binding.storage_id, &entry.path, &local)
+                        .await?;
                 }
                 let meta = tokio::fs::metadata(&local).await?;
                 let mtime = meta.modified().ok().map(mtime_ms_from_system).unwrap_or(0);
-                let hash = sha256_file(&local).await.ok().or(entry.content_hash.clone());
+                let hash = sha256_file(&local)
+                    .await
+                    .ok()
+                    .or(entry.content_hash.clone());
                 self.index.upsert_entry(
                     &binding.id,
                     &IndexEntry {
@@ -240,7 +246,9 @@ impl SyncEngine {
             if rel.is_empty() {
                 continue;
             }
-            let meta = file.metadata().with_context(|| format!("meta {}", path.display()))?;
+            let meta = file
+                .metadata()
+                .with_context(|| format!("meta {}", path.display()))?;
             let mtime = meta.modified().ok().map(mtime_ms_from_system).unwrap_or(0);
             let size = meta.len() as i64;
             let existing = self.index.get_entry(&binding.id, &rel)?;
@@ -305,7 +313,10 @@ impl SyncEngine {
                 let local = root.join(&rel);
                 if !local.exists() {
                     let remote = join_remote(&binding.remote_root, &rel);
-                    self.api().await.delete_remote(binding.storage_id, &remote).await?;
+                    self.api()
+                        .await
+                        .delete_remote(binding.storage_id, &remote)
+                        .await?;
                     self.index.delete_entry(&binding.id, &rel)?;
                 }
             }
@@ -317,7 +328,11 @@ impl SyncEngine {
         let mut downloaded = 0usize;
         let root = PathBuf::from(&binding.local_path);
         loop {
-            let page = self.api().await.changelog(binding.storage_id, *cursor, 500).await?;
+            let page = self
+                .api()
+                .await
+                .changelog(binding.storage_id, *cursor, 500)
+                .await?;
             for ev in &page.events {
                 let Some(rel) = strip_remote_root(&ev.path, &binding.remote_root) else {
                     continue;
@@ -334,7 +349,7 @@ impl SyncEngine {
                         }
                         self.index.delete_entry(&binding.id, &rel)?;
                         self.index.clear_conflict(&binding.id, &rel)?;
-                    },
+                    }
                     "upsert" => {
                         if !ev.is_file {
                             tokio::fs::create_dir_all(&local).await.ok();
@@ -344,9 +359,7 @@ impl SyncEngine {
                         if local.exists() {
                             let local_hash = sha256_file(&local).await.ok();
                             if local_hash.as_ref() != ev.content_hash.as_ref()
-                                && existing
-                                    .as_ref()
-                                    .and_then(|e| e.content_hash.as_ref())
+                                && existing.as_ref().and_then(|e| e.content_hash.as_ref())
                                     != local_hash.as_ref()
                                 && ev.content_hash.is_some()
                             {
@@ -364,12 +377,12 @@ impl SyncEngine {
                                         // Re-upload local in next push; skip download.
                                         self.index.clear_conflict(&binding.id, &rel)?;
                                         continue;
-                                    },
+                                    }
                                     ConflictChoice::KeepBoth => {
                                         let conflict_name = conflict_path(&local);
                                         tokio::fs::rename(&local, &conflict_name).await.ok();
-                                    },
-                                    ConflictChoice::KeepRemote => {},
+                                    }
+                                    ConflictChoice::KeepRemote => {}
                                 }
                             } else if local_hash.as_ref() == ev.content_hash.as_ref() {
                                 // Already in sync.
@@ -381,10 +394,16 @@ impl SyncEngine {
                                 continue;
                             }
                         }
-                        self.api().await.download_to(binding.storage_id, &ev.path, &local).await?;
+                        self.api()
+                            .await
+                            .download_to(binding.storage_id, &ev.path, &local)
+                            .await?;
                         let meta = tokio::fs::metadata(&local).await?;
                         let mtime = meta.modified().ok().map(mtime_ms_from_system).unwrap_or(0);
-                        let hash = sha256_file(&local).await.ok().or_else(|| ev.content_hash.clone());
+                        let hash = sha256_file(&local)
+                            .await
+                            .ok()
+                            .or_else(|| ev.content_hash.clone());
                         self.index.upsert_entry(
                             &binding.id,
                             &IndexEntry {
@@ -398,7 +417,7 @@ impl SyncEngine {
                         )?;
                         self.index.clear_conflict(&binding.id, &rel)?;
                         downloaded += 1;
-                    },
+                    }
                     other => warn!(op = other, "unknown changelog op"),
                 }
             }
@@ -448,7 +467,8 @@ fn strip_remote_root(path: &str, remote_root: &str) -> Option<String> {
     if path == root || path == format!("{root}/") {
         return Some(String::new());
     }
-    path.strip_prefix(&prefix).map(|s| s.trim_end_matches('/').to_owned())
+    path.strip_prefix(&prefix)
+        .map(|s| s.trim_end_matches('/').to_owned())
 }
 
 fn join_remote(remote_root: &str, rel: &str) -> String {
@@ -488,7 +508,10 @@ mod tests {
     #[test]
     fn strip_root_works() {
         assert_eq!(strip_remote_root("a/b.txt", ""), Some("a/b.txt".into()));
-        assert_eq!(strip_remote_root("docs/a.txt", "docs"), Some("a.txt".into()));
+        assert_eq!(
+            strip_remote_root("docs/a.txt", "docs"),
+            Some("a.txt".into())
+        );
         assert_eq!(strip_remote_root("other/a.txt", "docs"), None);
     }
 

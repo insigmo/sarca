@@ -1,10 +1,10 @@
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
     errors::{SarcaError, SarcaResult},
     models::file_sync_events::{FileSyncEvent, SyncSnapshotEntry},
 };
-use sqlx::PgPool;
 
 pub struct SyncRepository<'d> {
     db: &'d PgPool,

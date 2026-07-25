@@ -1,16 +1,13 @@
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    common::{
-        access::check_access,
-        jwt_manager::AuthUser,
-    },
+    common::{access::check_access, jwt_manager::AuthUser},
     errors::SarcaResult,
     models::access::AccessType,
     repositories::{access::AccessRepository, sync::SyncRepository},
     schemas::sync::{ChangelogQuery, ChangelogResponse, SnapshotResponse},
 };
-use sqlx::PgPool;
 
 pub struct SyncService<'d> {
     db: &'d PgPool,
@@ -37,7 +34,11 @@ impl<'d> SyncService<'d> {
         Ok(ChangelogResponse::new(events, limit))
     }
 
-    pub async fn snapshot(&self, storage_id: Uuid, user: &AuthUser) -> SarcaResult<SnapshotResponse> {
+    pub async fn snapshot(
+        &self,
+        storage_id: Uuid,
+        user: &AuthUser,
+    ) -> SarcaResult<SnapshotResponse> {
         check_access(&AccessRepository::new(self.db), user.id, storage_id, &AccessType::R).await?;
 
         let repo = SyncRepository::new(self.db);

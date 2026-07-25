@@ -48,15 +48,15 @@ pub fn run() {
                                 let _ = w.show();
                                 let _ = w.set_focus();
                             }
-                        },
+                        }
                         "sync_now" => {
                             let state = app.state::<AppSyncState>();
                             let engine = state.engine.clone();
                             tauri::async_runtime::spawn(async move {
                                 let _ = engine.tick().await;
                             });
-                        },
-                        _ => {},
+                        }
+                        _ => {}
                     })
                     .on_tray_icon_event(|tray, event| {
                         if let TrayIconEvent::Click {
