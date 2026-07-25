@@ -239,6 +239,18 @@ const Files = () => {
 	const [canvasDropActive, setCanvasDropActive] = createSignal(false)
 	/** Breadcrumb drop highlight: destination folder path ('' = root). */
 	const [crumbDropPath, setCrumbDropPath] = createSignal(null)
+	/**
+	 * Marquee rectangle in canvas-local CSS pixels.
+	 * @type {[import('solid-js').Accessor<null | { left: number, top: number, width: number, height: number }>, any]}
+	 */
+	const [marqueeBox, setMarqueeBox] = createSignal(null)
+
+	/** @type {string | null} */
+	let selectionAnchor = null
+	/** @type {HTMLDivElement | undefined} */
+	let filesCanvasEl
+	/** @type {null | { x0: number, y0: number, additive: boolean, moved: boolean }} */
+	let marqueeGesture = null
 
 	const params = useParams()
 	const navigate = useNavigate()
@@ -261,7 +273,15 @@ const Files = () => {
 	)
 	const selectionActive = () => selectedCount() > 0
 
-	const clearSelection = () => setSelectedPaths({})
+	const clearSelection = () => {
+		setSelectedPaths({})
+		selectionAnchor = null
+	}
+
+	const selectablePathList = () =>
+		sortedFsLayer()
+			.filter((el) => el.name !== '..')
+			.map((el) => itemNormalizedPath(el))
 
 	const toggleSelectPath = (path) => {
 		if (!path) return
@@ -271,6 +291,204 @@ const Files = () => {
 			else next[path] = true
 			return next
 		})
+		selectionAnchor = path
+	}
+
+	/**
+	 * @param {string} path
+	 * @param {{ ctrlKey?: boolean, metaKey?: boolean, shiftKey?: boolean }} event
+	 */
+	const selectPathWithModifiers = (path, event) => {
+		if (!path || !selectionModeEnabled()) return
+		const paths = selectablePathList()
+		const idx = paths.indexOf(path)
+		if (idx < 0) return
+
+		const ctrl = Boolean(event.ctrlKey || event.metaKey)
+		const shift = Boolean(event.shiftKey)
+
+		if (shift && selectionAnchor != null) {
+			const anchorIdx = paths.indexOf(selectionAnchor)
+			if (anchorIdx >= 0) {
+				const lo = Math.min(anchorIdx, idx)
+				const hi = Math.max(anchorIdx, idx)
+				const range = paths.slice(lo, hi + 1)
+				if (ctrl) {
+					setSelectedPaths((prev) => {
+						const next = { ...prev }
+						for (const p of range) next[p] = true
+						return next
+					})
+				} else {
+					setSelectedPaths(
+						Object.fromEntries(range.map((p) => [p, true])),
+					)
+				}
+				return
+			}
+		}
+
+		if (ctrl) {
+			toggleSelectPath(path)
+			return
+		}
+
+		setSelectedPaths({ [path]: true })
+		selectionAnchor = path
+	}
+
+	/**
+	 * @param {import('../../api').FSElement} el
+	 * @param {MouseEvent | KeyboardEvent} event
+	 */
+	const onSelectItem = (el, event) => {
+		selectPathWithModifiers(itemNormalizedPath(el), event)
+	}
+
+	const selectAllVisible = () => {
+		if (!selectionModeEnabled()) return
+		const paths = selectablePathList()
+		setSelectedPaths(Object.fromEntries(paths.map((p) => [p, true])))
+		if (paths.length) selectionAnchor = paths[paths.length - 1]
+	}
+
+	/**
+	 * @param {string[]} paths
+	 * @param {boolean} additive
+	 */
+	const applyMarqueeSelection = (paths, additive) => {
+		if (additive) {
+			setSelectedPaths((prev) => {
+				const next = { ...prev }
+				for (const p of paths) next[p] = true
+				return next
+			})
+		} else {
+			setSelectedPaths(
+				Object.fromEntries(paths.map((p) => [p, true])),
+			)
+		}
+		if (paths.length) selectionAnchor = paths[paths.length - 1]
+	}
+
+	const pathsIntersectingClientRect = (rect) => {
+		if (!filesCanvasEl) return []
+		const nodes = filesCanvasEl.querySelectorAll('[data-fs-path]')
+		/** @type {string[]} */
+		const hit = []
+		for (const node of nodes) {
+			const path = node.getAttribute('data-fs-path')
+			if (!path) continue
+			const r = node.getBoundingClientRect()
+			const overlaps =
+				r.left < rect.right &&
+				r.right > rect.left &&
+				r.top < rect.bottom &&
+				r.bottom > rect.top
+			if (overlaps) hit.push(path)
+		}
+		return hit
+	}
+
+	/**
+	 * @param {MouseEvent} event
+	 */
+	const onCanvasMouseDown = (event) => {
+		if (!selectionModeEnabled() || event.button !== 0) return
+		const target = /** @type {HTMLElement} */ (event.target)
+		if (
+			target.closest?.(
+				'.fs-grid-item, .fs-list-item, button, a, input, textarea, .MuiIconButton-root',
+			)
+		) {
+			return
+		}
+		if (!filesCanvasEl) return
+
+		const canvasRect = filesCanvasEl.getBoundingClientRect()
+		const additive = Boolean(event.ctrlKey || event.metaKey)
+		/** Snapshot of selection when starting an additive marquee. */
+		const baseSelection = additive ? { ...selectedPaths() } : {}
+
+		marqueeGesture = {
+			x0: event.clientX,
+			y0: event.clientY,
+			additive,
+			moved: false,
+		}
+		setMarqueeBox({
+			left: event.clientX - canvasRect.left + filesCanvasEl.scrollLeft,
+			top: event.clientY - canvasRect.top + filesCanvasEl.scrollTop,
+			width: 0,
+			height: 0,
+		})
+
+		if (!additive) {
+			clearSelection()
+		}
+
+		const applyLiveHit = (clientX, clientY) => {
+			const clientRect = {
+				left: Math.min(marqueeGesture.x0, clientX),
+				top: Math.min(marqueeGesture.y0, clientY),
+				right: Math.max(marqueeGesture.x0, clientX),
+				bottom: Math.max(marqueeGesture.y0, clientY),
+			}
+			const hit = pathsIntersectingClientRect(clientRect)
+			if (additive) {
+				const next = { ...baseSelection }
+				for (const p of hit) next[p] = true
+				setSelectedPaths(next)
+				if (hit.length) selectionAnchor = hit[hit.length - 1]
+			} else {
+				applyMarqueeSelection(hit, false)
+			}
+		}
+
+		const onMove = (ev) => {
+			if (!marqueeGesture || !filesCanvasEl) return
+			const dx = ev.clientX - marqueeGesture.x0
+			const dy = ev.clientY - marqueeGesture.y0
+			if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+				marqueeGesture.moved = true
+			}
+			const cr = filesCanvasEl.getBoundingClientRect()
+			const left =
+				Math.min(marqueeGesture.x0, ev.clientX) -
+				cr.left +
+				filesCanvasEl.scrollLeft
+			const top =
+				Math.min(marqueeGesture.y0, ev.clientY) -
+				cr.top +
+				filesCanvasEl.scrollTop
+			const width = Math.abs(ev.clientX - marqueeGesture.x0)
+			const height = Math.abs(ev.clientY - marqueeGesture.y0)
+			setMarqueeBox({ left, top, width, height })
+
+			if (marqueeGesture.moved) {
+				applyLiveHit(ev.clientX, ev.clientY)
+			}
+		}
+
+		const onUp = (ev) => {
+			window.removeEventListener('mousemove', onMove)
+			window.removeEventListener('mouseup', onUp)
+			const gesture = marqueeGesture
+			marqueeGesture = null
+			setMarqueeBox(null)
+			if (!gesture) return
+
+			if (!gesture.moved) {
+				// Click on empty canvas — already cleared if non-additive.
+				return
+			}
+
+			// Final pass so release position is included.
+			applyLiveHit(ev.clientX, ev.clientY)
+		}
+
+		window.addEventListener('mousemove', onMove)
+		window.addEventListener('mouseup', onUp)
 	}
 
 	const selectedItems = () => {
@@ -284,6 +502,8 @@ const Files = () => {
 		listMode()
 		params.path
 		clearSelection()
+		setMarqueeBox(null)
+		marqueeGesture = null
 	})
 
 	const sortedFsLayer = createMemo(() => {
@@ -514,31 +734,39 @@ const Files = () => {
 		await fetchTrashLayer('')
 	}
 
-	const openCopyTo = (el) =>
-		setFolderPicker({
-			mode: 'copy',
-			items: [{ path: itemNormalizedPath(el), name: el.name }],
-		})
-	const openMoveTo = (el) =>
-		setFolderPicker({
-			mode: 'move',
-			items: [{ path: itemNormalizedPath(el), name: el.name }],
-		})
-
-	const openBulkCopy = () => {
-		const items = selectedItems().map((el) => ({
+	/** Snapshot of selected items for bulk copy/move. */
+	const selectedTransferItems = () =>
+		selectedItems().map((el) => ({
 			path: itemNormalizedPath(el),
 			name: el.name,
 		}))
+
+	/**
+	 * Prefer the whole selection when the context-menu target is selected.
+	 * @param {import('../../api').FSElement} el
+	 * @param {'copy'|'move'} mode
+	 */
+	const openTransferForItem = (el, mode) => {
+		const path = itemNormalizedPath(el)
+		const selected = selectedTransferItems()
+		const items =
+			selected.length > 1 && selected.some((item) => item.path === path)
+				? selected
+				: [{ path, name: el.name }]
+		setFolderPicker({ mode, items })
+	}
+
+	const openCopyTo = (el) => openTransferForItem(el, 'copy')
+	const openMoveTo = (el) => openTransferForItem(el, 'move')
+
+	const openBulkCopy = () => {
+		const items = selectedTransferItems()
 		if (!items.length) return
 		setFolderPicker({ mode: 'copy', items })
 	}
 
 	const openBulkMove = () => {
-		const items = selectedItems().map((el) => ({
-			path: itemNormalizedPath(el),
-			name: el.name,
-		}))
+		const items = selectedTransferItems()
 		if (!items.length) return
 		setFolderPicker({ mode: 'move', items })
 	}
@@ -554,6 +782,8 @@ const Files = () => {
 		const apiCall =
 			mode === 'copy' ? API.files.copyFile : API.files.moveFile
 		const dest = folderDestPath(destination)
+		/** @type {string[]} */
+		const done = []
 
 		for (let i = 0; i < items.length; i++) {
 			const item = items[i]
@@ -565,18 +795,9 @@ const Files = () => {
 				continue
 			}
 			try {
-				await apiCall(
-					params.id,
-					item.path,
-					dest,
-					i === 0 ? onConflict : undefined,
-				)
-				addAlert(
-					mode === 'copy'
-						? `Copied "${item.name}"`
-						: `Moved "${item.name}"`,
-					'success',
-				)
+				// Apply conflict strategy to every item in the batch — not only the first.
+				await apiCall(params.id, item.path, dest, onConflict)
+				done.push(item.name)
 			} catch (err) {
 				if (err.status === 409 && !onConflict) {
 					setFolderPicker(null)
@@ -596,6 +817,23 @@ const Files = () => {
 		setFolderPicker(null)
 		setPathConflict(null)
 		clearSelection()
+
+		if (done.length === 1) {
+			addAlert(
+				mode === 'copy'
+					? `Copied "${done[0]}"`
+					: `Moved "${done[0]}"`,
+				'success',
+			)
+		} else if (done.length > 1) {
+			addAlert(
+				mode === 'copy'
+					? `Copied ${done.length} items`
+					: `Moved ${done.length} items`,
+				'success',
+			)
+		}
+
 		await refreshCurrent()
 	}
 
@@ -621,12 +859,9 @@ const Files = () => {
 		}
 		const picker = folderPicker()
 		if (!picker?.items?.length) return
-		await transferItems(
-			picker.mode,
-			picker.items,
-			destination,
-			onConflict,
-		)
+		// Snapshot so the async loop is not tied to dialog state.
+		const items = picker.items.map((item) => ({ ...item }))
+		await transferItems(picker.mode, items, destination, onConflict)
 	}
 
 	const confirmBulkDelete = async () => {
@@ -701,8 +936,24 @@ const Files = () => {
 		window.addEventListener('popstate', reload, false)
 
 		const onKeyDown = (e) => {
+			const target = /** @type {HTMLElement} */ (e.target)
+			const typing =
+				target?.closest?.(
+					'input, textarea, [contenteditable="true"]',
+				) != null
+			if (typing) return
+
 			if (e.key === 'Escape' && selectionActive()) {
 				clearSelection()
+				return
+			}
+			if (
+				(e.key === 'a' || e.key === 'A') &&
+				(e.ctrlKey || e.metaKey) &&
+				selectionModeEnabled()
+			) {
+				e.preventDefault()
+				selectAllVisible()
 			}
 		}
 		window.addEventListener('keydown', onKeyDown)
@@ -1377,16 +1628,32 @@ const Files = () => {
 				<Show
 					when={sharedMode()}
 					fallback={<div
+						ref={(el) => {
+							filesCanvasEl = el
+						}}
 						class="files-canvas glass-panel"
 						classList={{
 							'files-canvas--list': viewMode() === 'list',
 							'files-canvas--selecting': selectionActive(),
 							'files-canvas--drop-active': canvasDropActive(),
+							'files-canvas--marquee': Boolean(marqueeBox()),
 						}}
+						onMouseDown={onCanvasMouseDown}
 						onDragOver={onCanvasDragOver}
 						onDragLeave={onCanvasDragLeave}
 						onDrop={onCanvasDrop}
 					>
+					<Show when={marqueeBox()}>
+						<div
+							class="files-marquee"
+							style={{
+								left: `${marqueeBox().left}px`,
+								top: `${marqueeBox().top}px`,
+								width: `${marqueeBox().width}px`,
+								height: `${marqueeBox().height}px`,
+							}}
+						/>
+					</Show>
 					<Show
 						when={sortedFsLayer().length}
 						fallback={
@@ -1434,6 +1701,7 @@ const Files = () => {
 									onToggleSelect={() =>
 										toggleSelectPath(pathKey)
 									}
+									onSelectItem={onSelectItem}
 									draggableItem={browseMode() && canSelect}
 									onDragStartItem={onDragStartItem}
 									dropTarget={isFolderDrop}

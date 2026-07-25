@@ -941,6 +941,22 @@ a.default-link:hover {
 	backdrop-filter: blur(20px);
 	-webkit-backdrop-filter: blur(20px);
 	box-shadow: var(--sarca-shadow-soft) !important;
+	position: relative;
+	user-select: none;
+}
+
+.files-canvas--marquee {
+	cursor: crosshair;
+}
+
+.files-marquee {
+	position: absolute;
+	z-index: 5;
+	pointer-events: none;
+	border: 1px solid color-mix(in srgb, var(--sarca-teal) 70%, white);
+	background: color-mix(in srgb, var(--sarca-teal) 18%, transparent);
+	border-radius: 4px;
+	box-sizing: border-box;
 }
 
 .files-canvas--list {

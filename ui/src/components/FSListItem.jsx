@@ -45,6 +45,8 @@ import { alertStore } from './AlertStack'
  * @property {boolean} [selected]
  * @property {boolean} [selectionActive] Any item selected — keep checkboxes visible
  * @property {() => void} [onToggleSelect]
+ * @property {(el: import("../api").FSElement, event: MouseEvent) => void} [onSelectItem]
+ *   Explorer-style select (click / ctrl / shift). Double-click still opens via onOpen/navigate.
  * @property {boolean} [draggableItem] Browse-mode internal drag source
  * @property {(el: import("../api").FSElement, event: DragEvent) => void} [onDragStartItem]
  * @property {boolean} [dropTarget] Folder accepting drops
@@ -320,10 +322,40 @@ const FSListItem = (props) => {
 
 	const dragEnabled = () => Boolean(props.draggableItem) && !isParentNav()
 
+	const handleItemClick = (event) => {
+		// Modifier+click still multi-selects without opening.
+		if (
+			showSelect() &&
+			typeof props.onSelectItem === 'function' &&
+			(event.ctrlKey || event.metaKey || event.shiftKey)
+		) {
+			event.preventDefault()
+			event.stopPropagation()
+			props.onSelectItem(props.fsElement, event)
+			return
+		}
+		handleNavigate()
+	}
+
+	const handleItemDblClick = (event) => {
+		event.preventDefault()
+		event.stopPropagation()
+		handleNavigate()
+	}
+
 	const itemClassList = (base) => ({
 		[`${base}--selected`]: isSelected(),
 		[`${base}--drop-target`]: isDropActive(),
 	})
+
+	const itemPathAttr = () =>
+		isParentNav() ? undefined : itemNormalizedPathForAttr()
+
+	const itemNormalizedPathForAttr = () => {
+		const p = props.fsElement.path
+		if (props.fsElement.is_file) return p
+		return p.endsWith('/') ? p : `${p}/`
+	}
 
 	const selectControl = (variant) => (
 		<Show when={showSelect()}>
@@ -364,6 +396,7 @@ const FSListItem = (props) => {
 						classList={itemClassList('fs-grid-item')}
 						role="button"
 						tabIndex={0}
+						data-fs-path={itemPathAttr()}
 						draggable={dragEnabled()}
 						onDragStart={(e) => {
 							if (!dragEnabled()) return
@@ -381,7 +414,8 @@ const FSListItem = (props) => {
 							if (!props.dropTarget) return
 							props.onDropItem?.(e)
 						}}
-						onClick={handleNavigate}
+						onClick={handleItemClick}
+						onDblClick={handleItemDblClick}
 						onKeyDown={(e) => {
 							if (e.key === 'Enter' || e.key === ' ') {
 								e.preventDefault()
@@ -448,6 +482,7 @@ const FSListItem = (props) => {
 					classList={itemClassList('fs-list-item')}
 					role="button"
 					tabIndex={0}
+					data-fs-path={itemPathAttr()}
 					draggable={dragEnabled()}
 					onDragStart={(e) => {
 						if (!dragEnabled()) return
@@ -465,7 +500,8 @@ const FSListItem = (props) => {
 						if (!props.dropTarget) return
 						props.onDropItem?.(e)
 					}}
-					onClick={handleNavigate}
+					onClick={handleItemClick}
+					onDblClick={handleItemDblClick}
 					onKeyDown={(e) => {
 						if (e.key === 'Enter' || e.key === ' ') {
 							e.preventDefault()
