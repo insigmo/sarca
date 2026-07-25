@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Sarca">
+  <defs>
+    <linearGradient id="sarca-plate" x1="12%" y1="6%" x2="88%" y2="94%">
+      <stop offset="0%" stop-color="#2B88D8"/>
+      <stop offset="48%" stop-color="#0078D4"/>
+      <stop offset="100%" stop-color="#005A9E"/>
+    </linearGradient>
+    <linearGradient id="sarca-sheen" x1="50%" y1="0%" x2="50%" y2="55%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.26"/>
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <path id="sarca-wing" fill="#FFFFFF" d="M109.35,81.18 L101.23,82.81 L93.77,87.36 L88.24,94.17 L82.72,104.57 L74.93,93.53 L67.46,85.73 L61.94,82.81 L55.77,81.18 L55.77,76.96 L57.39,76.96 L69.73,83.13 L76.55,89.95 L82.72,98.40 L88.57,88.00 L95.39,81.18 L101.56,78.26 L109.35,76.64 L109.35,80.86 Z"/>
+  </defs>
+
+  <!-- Fluent app tile — brand blue holds on light and dark chrome -->
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#sarca-plate)"/>
+  <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#sarca-sheen)"/>
+  <rect
+    x="7.5"
+    y="7.5"
+    width="113"
+    height="113"
+    rx="24.5"
+    fill="none"
+    stroke="#FFFFFF"
+    stroke-opacity="0.2"
+    stroke-width="1.5"
+  />
+
+  <!-- Five-fold turbine mark (one wing × rotate 72°) -->
+  <use href="#sarca-wing"/>
+  <use href="#sarca-wing" transform="rotate(72 64 64)"/>
+  <use href="#sarca-wing" transform="rotate(144 64 64)"/>
+  <use href="#sarca-wing" transform="rotate(216 64 64)"/>
+  <use href="#sarca-wing" transform="rotate(288 64 64)"/>
+</svg>
