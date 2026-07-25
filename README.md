@@ -97,11 +97,11 @@ cd sarca
 cp sarca.conf.example sarca.conf   # edit credentials
 
 cd ui && pnpm install && pnpm run build && cd ..
-cd sarca && cargo build --release && cd ..
+cargo build --release -p sarca
 
 mkdir -p run/ui
 cp -a ui/dist/. run/ui/
-cp sarca/target/release/sarca run/
+cp target/release/sarca run/
 
 cd run
 set -a && . ../sarca.conf && set +a
