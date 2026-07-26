@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod folder_picker;
 mod remote_ipc;
 mod state;
 
@@ -24,6 +25,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(folder_picker::init())
         .plugin(
             PluginBuilder::<tauri::Wry, ()>::new("sarca-nav")
                 // Mark every navigation as native *before* page scripts when the

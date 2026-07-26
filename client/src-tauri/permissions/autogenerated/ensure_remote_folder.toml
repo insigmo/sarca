@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ensure-remote-folder"
+description = "Enables the ensure_remote_folder command without any pre-configured scope."
+commands.allow = ["ensure_remote_folder"]
+
+[[permission]]
+identifier = "deny-ensure-remote-folder"
+description = "Denies the ensure_remote_folder command without any pre-configured scope."
+commands.deny = ["ensure_remote_folder"]
