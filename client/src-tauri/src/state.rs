@@ -97,37 +97,114 @@ pub const NATIVE_MARK_JS: &str = r#"(function(){
   } catch (e) {}
 })();"#;
 
-/// JS bridge for remote-origin pages: invoke Tauri commands + open Settings → Sync.
+/// JS bridge for remote-origin pages: invoke native commands + open Settings → Sync.
+/// Primary: fetch `sarca-ipc` custom protocol (desktop + mobile).
+/// Fallback: cancelled navigation to https://sarca.ipc (when fetch is blocked).
 pub const OPEN_SYNC_JS: &str = r#"
-function __sarcaInvoke(cmd, args){
-  return new Promise(function(resolve, reject){
+(function(){
+  if (!window.__sarcaIpcPending) window.__sarcaIpcPending = {};
+  if (!window.__sarcaIpcSeq) window.__sarcaIpcSeq = 0;
+  window.__sarcaIpcResolve = function(id, ok, value){
+    var pending = window.__sarcaIpcPending && window.__sarcaIpcPending[id];
+    if (!pending) return;
+    delete window.__sarcaIpcPending[id];
+    if (ok) pending.resolve(value);
+    else pending.reject(new Error(typeof value === 'string' ? value : (value && value.message) || 'Native command failed'));
+  };
+  function __sarcaIpcEndpoints(){
+    // Windows/Android map custom schemes to http(s)://<scheme>.localhost/
+    // macOS/iOS/Linux use <scheme>://localhost/
+    var ua = navigator.userAgent || '';
+    var winOrDroid = /Windows/i.test(ua) || /Android/i.test(ua);
+    if (winOrDroid) {
+      return [
+        'http://sarca-ipc.localhost/invoke',
+        'https://sarca-ipc.localhost/invoke',
+        'sarca-ipc://localhost/invoke'
+      ];
+    }
+    return [
+      'sarca-ipc://localhost/invoke',
+      'http://sarca-ipc.localhost/invoke'
+    ];
+  }
+  function __sarcaFetchInvoke(cmd, args){
+    var body = JSON.stringify({ cmd: cmd, args: args || {} });
+    var endpoints = __sarcaIpcEndpoints();
+    var lastErr = null;
+    function tryAt(i){
+      if (i >= endpoints.length) {
+        return Promise.reject(lastErr || new Error('Native bridge unavailable'));
+      }
+      return fetch(endpoints[i], {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body
+      }).then(function(res){
+        return res.json().then(function(data){
+          if (data && data.ok) return data.value;
+          throw new Error((data && data.error) || ('Native command failed (' + res.status + ')'));
+        }, function(){
+          throw new Error('Native bridge bad response');
+        });
+      }).catch(function(err){
+        lastErr = err;
+        return tryAt(i + 1);
+      });
+    }
+    return tryAt(0);
+  }
+  function __sarcaNavInvoke(cmd, args){
+    return new Promise(function(resolve, reject){
+      var id = 'r' + String(++window.__sarcaIpcSeq) + '_' + Date.now().toString(36);
+      window.__sarcaIpcPending[id] = { resolve: resolve, reject: reject };
+      var raw = encodeURIComponent(JSON.stringify({ id: id, cmd: cmd, args: args || {} }));
+      function trySrc(src){
+        var iframe = document.createElement('iframe');
+        iframe.setAttribute('aria-hidden', 'true');
+        iframe.style.cssText = 'display:none;width:0;height:0;border:0;position:absolute;left:-9999px';
+        iframe.src = src;
+        (document.documentElement || document.body).appendChild(iframe);
+        setTimeout(function(){ try { iframe.remove(); } catch (_) {} }, 4000);
+      }
+      try { trySrc('https://sarca.ipc/__invoke__?p=' + raw); } catch (_) {}
+      try { trySrc('sarca-ipc://invoke?p=' + raw); } catch (_) {}
+      setTimeout(function(){
+        if (!window.__sarcaIpcPending[id]) return;
+        delete window.__sarcaIpcPending[id];
+        reject(new Error('Native bridge timeout'));
+      }, 90000);
+    });
+  }
+  function __sarcaInvoke(cmd, args){
     try {
       if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
-        window.__TAURI_INTERNALS__.invoke(cmd, args || {}).then(resolve, reject);
-        return;
+        return window.__TAURI_INTERNALS__.invoke(cmd, args || {});
       }
-    } catch (e) { reject(e); return; }
-    reject(new Error('Native bridge unavailable'));
-  });
-}
-window.__sarcaInvoke = __sarcaInvoke;
-function __sarcaOpenSyncSettings(){
-  try {
-    var u = new URL(location.href);
-    u.searchParams.set('__sarca_open_settings', 'sync');
-    history.replaceState(null, '', u.pathname + u.search + u.hash);
-    window.dispatchEvent(new CustomEvent('sarca-open-settings', { detail: { tab: 'sync' } }));
-    return;
-  } catch (_) {}
-  try {
-    location.assign('sarca-sync://open');
-  } catch (_) {}
-}
-window.__sarcaOpenSyncSettings = __sarcaOpenSyncSettings;
+    } catch (_) {}
+    return __sarcaFetchInvoke(cmd, args).catch(function(fetchErr){
+      return __sarcaNavInvoke(cmd, args).catch(function(navErr){
+        throw fetchErr || navErr || new Error('Native bridge unavailable');
+      });
+    });
+  }
+  window.__sarcaInvoke = __sarcaInvoke;
+  function __sarcaOpenSyncSettings(){
+    try {
+      var u = new URL(location.href);
+      u.searchParams.set('__sarca_open_settings', 'sync');
+      history.replaceState(null, '', u.pathname + u.search + u.hash);
+      window.dispatchEvent(new CustomEvent('sarca-open-settings', { detail: { tab: 'sync' } }));
+      return;
+    } catch (_) {}
+    try { location.assign('sarca-sync://open'); } catch (_) {}
+  }
+  window.__sarcaOpenSyncSettings = __sarcaOpenSyncSettings;
+})();
 "#;
 
 /// Injected on every remote page load when the webview is past the connect shell.
-/// Marks native and installs the invoke / open-settings bridge (no Sync FAB).
+/// Marks native and installs the invoke / open-settings bridge (never creates a Sync FAB).
 pub fn native_chrome_js() -> String {
     format!(
         r#"(function(){{
@@ -136,8 +213,14 @@ pub fn native_chrome_js() -> String {
     window.__SARCA_NATIVE__ = 1;
     try {{ window.dispatchEvent(new Event('sarca-native')); }} catch (_) {{}}
     {open_sync}
-    var fab = document.getElementById('sarca-native-sync-fab');
-    if (fab && fab.parentNode) fab.parentNode.removeChild(fab);
+    // Strip legacy FAB from older client builds if still present in DOM.
+    try {{
+      var fab = document.getElementById('sarca-native-sync-fab');
+      if (fab && fab.parentNode) fab.parentNode.removeChild(fab);
+      document.querySelectorAll('[data-sarca-sync-fab],button.sarca-native-sync-fab').forEach(function(el){{
+        if (el && el.parentNode) el.parentNode.removeChild(el);
+      }});
+    }} catch (_) {{}}
   }} catch (e) {{}}
 }})();"#,
         open_sync = OPEN_SYNC_JS

@@ -7,6 +7,7 @@ use sarca_sync::{normalize_server_url, Binding, BindingMode, SarcaApi, StorageSu
 use serde::Serialize;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tokio::sync::oneshot;
 
 use crate::state::{
@@ -236,17 +237,32 @@ pub fn open_sync_settings(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String> {
-    let (tx, rx) = oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("Choose folder")
-        .pick_folder(move |folder| {
-            let _ = tx.send(folder);
-        });
-    let folder = rx.await.map_err(|e| e.to_string())?;
-    Ok(folder
-        .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned()))
+    // Android/iOS: system folder pickers return content:// trees the sync engine
+    // cannot walk. Tell the UI to fall back to a typed path prompt.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = app;
+        return Err("FOLDER_PICKER_USE_PROMPT".into());
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let (tx, rx) = oneshot::channel();
+        app.dialog()
+            .file()
+            .set_title("Choose folder")
+            .pick_folder(move |folder| {
+                let _ = tx.send(folder);
+            });
+        let folder = match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
+            Ok(Ok(folder)) => folder,
+            Ok(Err(e)) => return Err(e.to_string()),
+            Err(_) => return Err("Folder picker timed out".into()),
+        };
+        Ok(folder
+            .and_then(|p| p.into_path().ok())
+            .map(|p| p.to_string_lossy().into_owned()))
+    }
 }
 
 #[tauri::command]

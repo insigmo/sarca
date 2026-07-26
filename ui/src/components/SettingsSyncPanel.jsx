@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js'
+import { For, Show, createSignal, onCleanup, onMount } from 'solid-js'
 import Button from '@suid/material/Button'
 import TextField from '@suid/material/TextField'
 import Typography from '@suid/material/Typography'
@@ -7,18 +7,20 @@ import {
 	formatBytes,
 	isMobileNativePlatform,
 	nativeInvoke,
+	pickLocalFolder,
 } from '../common/nativeBridge'
+import { filesChromeStore } from '../common/filesChrome'
 import { alertStore } from './AlertStack'
 
 /**
  * Full Sync tab: auto-upload to Camera/, Wi‑Fi-only, folder backup, background, sync now.
- * @param {{ storageId?: string }} props
+ * Storage is locked to the currently open Files storage.
+ * @param {{ storageId?: string, storageName?: string }} props
  */
 const SettingsSyncPanel = (props) => {
 	const { addAlert } = alertStore
+	const chrome = filesChromeStore
 	const [platform, setPlatform] = createSignal('')
-	const [storages, setStorages] = createSignal([])
-	const [storageId, setStorageId] = createSignal(props.storageId || '')
 	const [bindings, setBindings] = createSignal([])
 	const [statuses, setStatuses] = createSignal([])
 	const [prefs, setPrefs] = createSignal({
@@ -35,20 +37,24 @@ const SettingsSyncPanel = (props) => {
 
 	const isMobile = () => isMobileNativePlatform(platform())
 
+	const lockedStorageId = () => props.storageId || chrome.storageId() || ''
+	const lockedStorageName = () =>
+		props.storageName ||
+		chrome.storageName() ||
+		(lockedStorageId() ? 'Current storage' : 'No storage open')
+
 	const autoBinding = () => bindings().find((b) => b.mode === 'auto_upload')
 	const syncBindings = () => bindings().filter((b) => b.mode !== 'auto_upload')
 
 	const refresh = async () => {
 		try {
-			const [label, list, binds, prefsDto, statusList] = await Promise.all([
+			const [label, binds, prefsDto, statusList] = await Promise.all([
 				nativeInvoke('platform_label').catch(() => ''),
-				nativeInvoke('list_storages').catch(() => []),
 				nativeInvoke('list_bindings').catch(() => []),
 				nativeInvoke('get_client_prefs').catch(() => null),
 				nativeInvoke('sync_statuses').catch(() => []),
 			])
 			setPlatform(String(label || ''))
-			setStorages(Array.isArray(list) ? list : [])
 			setBindings(Array.isArray(binds) ? binds : [])
 			setStatuses(Array.isArray(statusList) ? statusList : [])
 			if (prefsDto && typeof prefsDto === 'object') {
@@ -59,12 +65,6 @@ const SettingsSyncPanel = (props) => {
 					app_lock_pin: prefsDto.app_lock_pin ?? null,
 				})
 			}
-			const preferred =
-				props.storageId ||
-				storageId() ||
-				(Array.isArray(list) && list[0]?.id) ||
-				''
-			if (preferred && !storageId()) setStorageId(preferred)
 			const auto = (Array.isArray(binds) ? binds : []).find(
 				(b) => b.mode === 'auto_upload',
 			)
@@ -81,10 +81,6 @@ const SettingsSyncPanel = (props) => {
 			setMsg(String(e))
 		}
 	}
-
-	createEffect(() => {
-		if (props.storageId) setStorageId(props.storageId)
-	})
 
 	onMount(() => {
 		refresh()
@@ -103,12 +99,13 @@ const SettingsSyncPanel = (props) => {
 		setBusy(true)
 		setMsg('')
 		try {
-			const path = await nativeInvoke('pick_local_folder')
+			const path = await pickLocalFolder(localPath())
 			if (path) setLocalPath(String(path))
 			else setMsg('No folder selected')
 		} catch (e) {
-			setMsg(String(e))
-			addAlert('Folder picker failed', 'error')
+			const text = String(e?.message || e)
+			setMsg(text)
+			addAlert(text || 'Folder picker failed', 'error')
 		} finally {
 			setBusy(false)
 		}
@@ -118,8 +115,8 @@ const SettingsSyncPanel = (props) => {
 		setBusy(true)
 		setMsg('')
 		try {
-			const sid = storageId()
-			if (!sid) throw new Error('Select a storage first')
+			const sid = lockedStorageId()
+			if (!sid) throw new Error('Open a storage in Files first')
 			const existing = bindings().filter((b) => b.mode === 'auto_upload')
 			for (const b of existing) {
 				await nativeInvoke('remove_binding', { id: b.id })
@@ -129,7 +126,7 @@ const SettingsSyncPanel = (props) => {
 				if (!path) {
 					path = String((await nativeInvoke('default_gallery_path')) || '')
 					if (!path) {
-						path = String((await nativeInvoke('pick_local_folder')) || '')
+						path = String((await pickLocalFolder('')) || '')
 					}
 					if (path) setLocalPath(path)
 				}
@@ -159,10 +156,10 @@ const SettingsSyncPanel = (props) => {
 		setBusy(true)
 		setMsg('')
 		try {
-			const sid = storageId()
+			const sid = lockedStorageId()
 			let path = localPath().trim()
 			if (!path) {
-				path = String((await nativeInvoke('pick_local_folder')) || '')
+				path = String((await pickLocalFolder('')) || '')
 				if (path) setLocalPath(path)
 			}
 			let remote = remoteRoot().trim().replace(/\/$/, '')
@@ -178,7 +175,7 @@ const SettingsSyncPanel = (props) => {
 				setRemoteRoot(remote)
 				setNewFolderName('')
 			}
-			if (!sid) throw new Error('Select a storage')
+			if (!sid) throw new Error('Open a storage in Files first')
 			if (!path) throw new Error('Set a local folder')
 			if (!remote) throw new Error('Set a remote folder path or create one')
 			await nativeInvoke('add_binding', {
@@ -289,19 +286,15 @@ const SettingsSyncPanel = (props) => {
 				<Typography variant="subtitle2" sx={{ mb: 1 }}>
 					Folder backup
 				</Typography>
-				<label class="settings-select-field">
+				<div class="settings-select-field">
 					<span class="settings-select-field__label">Storage</span>
-					<select
-						class="settings-select"
-						value={storageId()}
-						onChange={(e) => setStorageId(e.currentTarget.value)}
-						disabled={Boolean(props.storageId) || busy()}
+					<p
+						class="settings-sync-panel__storage-locked"
+						title={lockedStorageId()}
 					>
-						<For each={storages()}>
-							{(s) => <option value={s.id}>{s.name}</option>}
-						</For>
-					</select>
-				</label>
+						{lockedStorageName()}
+					</p>
+				</div>
 				<div class="settings-sync-panel__row">
 					<TextField
 						label="Local folder"
@@ -357,7 +350,9 @@ const SettingsSyncPanel = (props) => {
 				</Typography>
 				<Show
 					when={syncBindings().length}
-					fallback={<p class="settings-account__hint">No folder sync bindings yet.</p>}
+					fallback={
+						<p class="settings-account__hint">No folder sync bindings yet.</p>
+					}
 				>
 					<ul class="settings-sync-panel__list">
 						<For each={syncBindings()}>
