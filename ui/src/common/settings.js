@@ -2,7 +2,7 @@ import { createRoot, createSignal } from 'solid-js'
 
 /**
  * Shared open state for the Settings modal / bottom sheet.
- * @typedef {'general' | 'access' | 'trash' | 'storage' | 'sync'} SettingsTab
+ * @typedef {'general' | 'access' | 'sync' | 'trash' | 'storage' | 'security'} SettingsTab
  */
 export const settingsStore = createRoot(() => {
 	const [isOpen, setIsOpen] = createSignal(false)
