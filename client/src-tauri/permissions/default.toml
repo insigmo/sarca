@@ -1,0 +1,25 @@
+[default]
+description = "Allow all Sarca Sync / Security / General native IPC commands"
+permissions = [
+  "allow-platform-label",
+  "allow-get-session",
+  "allow-connect",
+  "allow-disconnect",
+  "allow-open-app",
+  "allow-open-sync-settings",
+  "allow-pick-local-folder",
+  "allow-default-gallery-path",
+  "allow-list-storages",
+  "allow-ensure-remote-folder",
+  "allow-list-bindings",
+  "allow-add-binding",
+  "allow-remove-binding",
+  "allow-sync-now",
+  "allow-sync-statuses",
+  "allow-get-client-prefs",
+  "allow-set-client-prefs",
+  "allow-is-on-wifi",
+  "allow-get-about",
+  "allow-get-cache-size",
+  "allow-clear-local-cache",
+]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-binding"
+description = "Enables the add_binding command without any pre-configured scope."
+commands.allow = ["add_binding"]
+
+[[permission]]
+identifier = "deny-add-binding"
+description = "Denies the add_binding command without any pre-configured scope."
+commands.deny = ["add_binding"]

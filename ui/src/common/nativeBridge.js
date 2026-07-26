@@ -24,7 +24,9 @@ export function isMobileNativePlatform(label) {
 }
 
 /**
- * System folder picker with typed-path fallback (required on mobile; useful on Linux).
+ * System folder picker with typed-path fallback only when the OS cannot provide one.
+ * Desktop: native OS dialog. Android: SAF document-tree picker.
+ * Prompt is last resort (iOS, or Android tree URI that cannot map to a filesystem path).
  * @param {string} [existing]
  * @returns {Promise<string | null>}
  */
@@ -39,18 +41,18 @@ export async function pickLocalFolder(existing = '') {
 
 	try {
 		const path = await nativeInvoke('pick_local_folder')
+		// null/undefined = user cancelled — do not fall through to prompt
 		if (path) return String(path)
+		return null
 	} catch (e) {
 		const msg = String(e?.message || e || '')
-		// Mobile intentionally returns FOLDER_PICKER_USE_PROMPT; desktop may fail too.
-		if (
-			!mobile &&
-			!/FOLDER_PICKER_USE_PROMPT|unavailable|not supported|timed out|cancel/i.test(
-				msg,
-			)
-		) {
-			// Unexpected desktop error — still offer typed path, but keep message.
+		if (/FOLDER_PICKER_USE_PROMPT/i.test(msg)) {
+			// intentional typed-path fallback
+		} else if (/cancel/i.test(msg)) {
+			return null
+		} else {
 			console.warn('pick_local_folder:', msg)
+			throw e instanceof Error ? e : new Error(msg)
 		}
 	}
 

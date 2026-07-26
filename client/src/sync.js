@@ -19,16 +19,22 @@ function isMobilePlatform() {
   return label === "android" || label === "ios";
 }
 
-/** Prefer system folder picker; fall back to typed path (required on mobile). */
+/** Prefer system folder picker; typed path only when native signals FOLDER_PICKER_USE_PROMPT. */
 async function chooseLocalFolder(existing) {
   try {
     const path = await invoke("pick_local_folder");
     if (path) return path;
+    return null;
   } catch (e) {
-    setMsg(String(e));
+    const msg = String(e?.message || e || "");
+    if (!/FOLDER_PICKER_USE_PROMPT/i.test(msg)) {
+      if (/cancel/i.test(msg)) return null;
+      setMsg(msg);
+      throw e instanceof Error ? e : new Error(msg);
+    }
   }
   const hint = isMobilePlatform()
-    ? "Folder picker is unavailable on this device. Enter a local folder path, e.g. /storage/emulated/0/DCIM or /storage/emulated/0/Pictures"
+    ? "Folder picker could not resolve a filesystem path. Enter a local folder path, e.g. /storage/emulated/0/DCIM or /storage/emulated/0/Pictures"
     : "Enter a local folder path";
   const typed = window.prompt(hint, existing || "");
   return typed && typed.trim() ? typed.trim() : null;

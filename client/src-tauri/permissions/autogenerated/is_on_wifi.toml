@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-is-on-wifi"
+description = "Enables the is_on_wifi command without any pre-configured scope."
+commands.allow = ["is_on_wifi"]
+
+[[permission]]
+identifier = "deny-is-on-wifi"
+description = "Denies the is_on_wifi command without any pre-configured scope."
+commands.deny = ["is_on_wifi"]

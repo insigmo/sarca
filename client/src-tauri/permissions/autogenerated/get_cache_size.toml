@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-cache-size"
+description = "Enables the get_cache_size command without any pre-configured scope."
+commands.allow = ["get_cache_size"]
+
+[[permission]]
+identifier = "deny-get-cache-size"
+description = "Denies the get_cache_size command without any pre-configured scope."
+commands.deny = ["get_cache_size"]
