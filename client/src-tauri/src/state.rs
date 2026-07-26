@@ -97,31 +97,37 @@ pub const NATIVE_MARK_JS: &str = r#"(function(){
   } catch (e) {}
 })();"#;
 
-/// JS that opens local Sync settings from a remote-origin page.
-/// Prefer invoke (local shell) or custom scheme (cross-scheme nav Tauri cancels).
-/// Query-param fallback keeps the current path so a missed intercept does not
-/// land on `/sync.html` on the Sarca server (SPA 404).
-pub const OPEN_SYNC_JS: &str = r#"function __sarcaOpenSyncSettings(){
+/// JS bridge for remote-origin pages: invoke Tauri commands + open Settings → Sync.
+pub const OPEN_SYNC_JS: &str = r#"
+function __sarcaInvoke(cmd, args){
+  return new Promise(function(resolve, reject){
+    try {
+      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
+        window.__TAURI_INTERNALS__.invoke(cmd, args || {}).then(resolve, reject);
+        return;
+      }
+    } catch (e) { reject(e); return; }
+    reject(new Error('Native bridge unavailable'));
+  });
+}
+window.__sarcaInvoke = __sarcaInvoke;
+function __sarcaOpenSyncSettings(){
   try {
-    if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
-      window.__TAURI_INTERNALS__.invoke('open_sync_settings');
-      return;
-    }
-  } catch (_) {}
-  try {
-    location.assign('sarca-sync://open');
+    var u = new URL(location.href);
+    u.searchParams.set('__sarca_open_settings', 'sync');
+    history.replaceState(null, '', u.pathname + u.search + u.hash);
+    window.dispatchEvent(new CustomEvent('sarca-open-settings', { detail: { tab: 'sync' } }));
     return;
   } catch (_) {}
   try {
-    var u = new URL(location.href);
-    u.searchParams.set('__sarca_open_sync', '1');
-    location.assign(u.toString());
+    location.assign('sarca-sync://open');
   } catch (_) {}
 }
-window.__sarcaOpenSyncSettings = __sarcaOpenSyncSettings;"#;
+window.__sarcaOpenSyncSettings = __sarcaOpenSyncSettings;
+"#;
 
 /// Injected on every remote page load when the webview is past the connect shell.
-/// Always marks native (do not require a prior flag) and adds a visible Sync FAB.
+/// Marks native and installs the invoke / open-settings bridge (no Sync FAB).
 pub fn native_chrome_js() -> String {
     format!(
         r#"(function(){{
@@ -130,33 +136,39 @@ pub fn native_chrome_js() -> String {
     window.__SARCA_NATIVE__ = 1;
     try {{ window.dispatchEvent(new Event('sarca-native')); }} catch (_) {{}}
     {open_sync}
-    if (document.getElementById('sarca-native-sync-fab')) return;
-    var btn = document.createElement('button');
-    btn.id = 'sarca-native-sync-fab';
-    btn.type = 'button';
-    btn.textContent = 'Sync';
-    btn.title = 'Media auto-upload and folder sync';
-    btn.setAttribute('aria-label', 'Open Sync settings');
-    btn.style.cssText = [
-      'position:fixed',
-      'z-index:2147483000',
-      'right:max(12px,env(safe-area-inset-right))',
-      'bottom:max(12px,env(safe-area-inset-bottom))',
-      'padding:10px 14px',
-      'border:none',
-      'border-radius:10px',
-      'background:#005a9e',
-      'color:#fff',
-      'font:600 14px/1.2 "Segoe UI",system-ui,sans-serif',
-      'box-shadow:0 4px 14px rgba(0,0,0,.25)',
-      'cursor:pointer'
-    ].join(';');
-    btn.onclick = function () {{ __sarcaOpenSyncSettings(); }};
-    (document.body || document.documentElement).appendChild(btn);
+    var fab = document.getElementById('sarca-native-sync-fab');
+    if (fab && fab.parentNode) fab.parentNode.removeChild(fab);
   }} catch (e) {{}}
 }})();"#,
         open_sync = OPEN_SYNC_JS
     )
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientPrefs {
+    #[serde(default = "default_true")]
+    pub wifi_only: bool,
+    #[serde(default = "default_true")]
+    pub background_sync: bool,
+    #[serde(default)]
+    pub app_lock_enabled: bool,
+    #[serde(default)]
+    pub app_lock_pin: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for ClientPrefs {
+    fn default() -> Self {
+        Self {
+            wifi_only: true,
+            background_sync: true,
+            app_lock_enabled: false,
+            app_lock_pin: None,
+        }
+    }
 }
 
 pub struct AppSyncState {
@@ -199,11 +211,43 @@ impl AppSyncState {
         })
     }
 
+    pub fn data_dir(&self) -> &PathBuf {
+        &self.data_dir
+    }
+
     pub fn start_background_loop(&self) {
         let engine = self.engine.clone();
-        let rx = self.shutdown_tx.subscribe();
+        let data_dir = self.data_dir.clone();
+        let mut rx = self.shutdown_tx.subscribe();
         tauri::async_runtime::spawn(async move {
-            engine.run_loop(rx).await;
+            loop {
+                let prefs = fs::read_to_string(data_dir.join("client_prefs.json"))
+                    .ok()
+                    .and_then(|s| serde_json::from_str::<ClientPrefs>(&s).ok())
+                    .unwrap_or_default();
+                if prefs.background_sync {
+                    let allow_auto = crate::commands::allow_auto_upload(&prefs);
+                    if let Err(e) = engine
+                        .tick_filtered(|b| {
+                            if matches!(b.mode, BindingMode::AutoUpload) && !allow_auto {
+                                return false;
+                            }
+                            true
+                        })
+                        .await
+                    {
+                        tracing::warn!(error = %e, "sync tick error");
+                    }
+                }
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(30)) => {},
+                    _ = rx.changed() => {
+                        if *rx.borrow() {
+                            break;
+                        }
+                    }
+                }
+            }
         });
     }
 
@@ -331,12 +375,19 @@ pub fn navigate_to_sync_settings(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "main window missing".to_string())?;
     let state = app.state::<AppSyncState>();
-    let base = state
-        .shell_url()
-        .unwrap_or_else(|| Url::parse("tauri://localhost").expect("valid shell url"));
-    state.remember_shell_url(base.clone());
-    let sync_url = sync_settings_url(&base)?;
-    window.navigate(sync_url).map_err(|e| e.to_string())
+    let cfg = tauri::async_runtime::block_on(state.server.lock()).clone();
+    if cfg.is_connected() {
+        state.queue_inject(SessionInject::from(&cfg));
+        let mut url = cfg.app_url().map_err(|e| e.to_string())?;
+        // Open in-app Settings → Sync (not sync.html as primary UI).
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("__sarca_open_settings", "sync");
+        }
+        window.navigate(url).map_err(|e| e.to_string())
+    } else {
+        navigate_to_shell(app)
+    }
 }
 
 #[cfg(test)]
