@@ -1,4 +1,4 @@
-use sarca_sync::{Binding, SarcaApi, SyncStatus};
+use sarca_sync::{normalize_server_url, Binding, SarcaApi, SyncStatus};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 
@@ -65,10 +65,7 @@ pub async fn connect(
     email: String,
     password: String,
 ) -> Result<SessionDto, String> {
-    let base = server_url.trim().trim_end_matches('/').to_owned();
-    if base.is_empty() {
-        return Err("Server URL is required".into());
-    }
+    let base = normalize_server_url(&server_url).map_err(|e| e.to_string())?;
     if email.trim().is_empty() {
         return Err("Email is required".into());
     }
