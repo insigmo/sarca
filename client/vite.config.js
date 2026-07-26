@@ -19,6 +19,12 @@ export default defineConfig({
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
     outDir: "dist",
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, "index.html"),
+        sync: path.resolve(__dirname, "sync.html"),
+      },
+    },
   },
   resolve: {
     alias: {
