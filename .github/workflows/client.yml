@@ -202,10 +202,16 @@ jobs:
             pnpm tauri android init --ci --skip-targets-install
           fi
           python3 -c "import json,pathlib; p=pathlib.Path('src-tauri/capabilities/default.json'); data=json.loads(p.read_text()); data['permissions']=[x for x in data.get('permissions',[]) if not str(x).startswith('process:')]; p.write_text(json.dumps(data,indent=2)+'\n')"
-          if ! pnpm tauri android build --apk --target aarch64 --ci; then
-            echo "Release APK build failed; retrying debug APK…" >&2
-            pnpm tauri android build --apk --debug --target aarch64 --ci
-          fi
+          mkdir -p src-tauri/gen/android
+          KS_PATH="${GITHUB_WORKSPACE}/client/mobile/sarca-sideload.p12"
+          {
+            echo "storePassword=sarca-sideload"
+            echo "keyPassword=sarca-sideload"
+            echo "keyAlias=sarca"
+            echo "storeFile=${KS_PATH}"
+          } > src-tauri/gen/android/keystore.properties
+          pnpm tauri android build --apk --target aarch64 --ci
+
       - name: Package APK
         if: success()
         run: |
@@ -215,11 +221,24 @@ jobs:
           apk=""
           for f in client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk target/**/*.apk; do
             [[ -f "$f" ]] || continue
+            [[ "$f" == *unsigned* ]] && continue
             apk="$f"
-            [[ "$f" == *release*.apk && "$f" != *unsigned* ]] && break
+            [[ "$f" == *release*.apk ]] && break
           done
+          if [[ -z "$apk" ]]; then
+            for f in client/src-tauri/gen/android/app/build/outputs/apk/**/*.apk target/**/*.apk; do
+              [[ -f "$f" ]] || continue
+              apk="$f"
+              break
+            done
+          fi
           test -n "$apk"
-          cp -a "$apk" dist/sarca_client_android_arm64.apk
+          if ! python3 -c "import sys; sys.exit(0 if b'APK Sig Block 42' in open(sys.argv[1],'rb').read() else 1)" "$apk"; then
+            bash client/scripts/sign-android-apk.sh "$apk" dist/sarca_client_android_arm64.apk
+          else
+            cp -a "$apk" dist/sarca_client_android_arm64.apk
+          fi
+          python3 -c "import sys; assert b'APK Sig Block 42' in open(sys.argv[1],'rb').read()" dist/sarca_client_android_arm64.apk
 
       - name: Upload APK
         if: success()
