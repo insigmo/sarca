@@ -5,7 +5,7 @@ use reqwest::{
     multipart::{Form, Part},
     Client,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
@@ -17,6 +17,17 @@ pub struct LoginResponse {
     pub access_token: String,
     pub refresh_token: String,
     pub email_verified: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StorageSummary {
+    pub id: Uuid,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StoragesResponse {
+    pub storages: Vec<StorageSummary>,
 }
 
 #[derive(Clone)]
@@ -99,6 +110,17 @@ impl SarcaApi {
 
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         req.bearer_auth(&self.access_token)
+    }
+
+    pub async fn list_storages(&self) -> Result<Vec<StorageSummary>> {
+        let url = format!("{}/api/storages", self.base_url);
+        let resp = self
+            .auth(self.client.get(url))
+            .send()
+            .await?
+            .error_for_status()?;
+        let body: StoragesResponse = resp.json().await.context("invalid storages response")?;
+        Ok(body.storages)
     }
 
     pub async fn snapshot(&self, storage_id: Uuid) -> Result<SnapshotResponse> {
