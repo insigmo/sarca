@@ -18,10 +18,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (session?.base_url) {
       $("serverUrl").value = session.base_url;
     }
-    if (session?.email) {
-      $("email").value = session.email;
-    }
-    // Saved session auto-opens the server app from Rust on launch.
+    // Saved session with tokens auto-opens the server app from Rust on launch.
   } catch (e) {
     setError(String(e));
   }
@@ -35,10 +32,8 @@ window.addEventListener("DOMContentLoaded", async () => {
     try {
       await invoke("connect", {
         serverUrl: $("serverUrl").value.trim(),
-        email: $("email").value.trim(),
-        password: $("password").value,
       });
-      // Rust navigates the webview to the server UI.
+      // Rust navigates the webview to the server UI; sign-in is on the website.
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/i, ""));
       button.disabled = false;

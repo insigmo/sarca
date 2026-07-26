@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Connect shell for Tauri: server URL + login, then Rust navigates to the
-// server's web UI (same SolidJS app as the browser).
+// Connect shell for Tauri: server URL only, then Rust navigates to the
+// server's web UI (same SolidJS app as the browser; sign-in is on the site).
 export default defineConfig({
   clearScreen: false,
   server: {
