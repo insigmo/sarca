@@ -402,16 +402,15 @@ const FSListItem = (props) => {
 		<Show when={showSelect()}>
 			<label
 				class="fs-item-check"
-				onClick={handleSelectOnly}
 				onPointerDown={(e) => e.stopPropagation()}
 				onTouchStart={(e) => e.stopPropagation()}
+				onClick={(e) => e.stopPropagation()}
 			>
 				<input
 					type="checkbox"
 					class="fs-item-check__input"
 					checked={isSelected()}
 					onChange={handleSelectOnly}
-					onClick={handleSelectOnly}
 					aria-label={
 						isSelected()
 							? `Deselect ${displayName()}`
