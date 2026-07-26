@@ -9,7 +9,6 @@ import ListItemText from '@suid/material/ListItemText'
 
 import createLocalStore from '../../libs'
 import { clearSession } from '../common/auth'
-import { nativeClientStore, openNativeSyncSettings } from '../common/nativeClient'
 import { settingsStore } from '../common/settings'
 import FluentIcon, { fluentIcons } from './FluentIcon'
 
@@ -136,18 +135,6 @@ const SidebarNav = (props) => {
 			</div>
 			<div class="files-sidebar__bottom">
 				<div class="files-sidebar__divider" aria-hidden="true" />
-				<Show when={props.showSync}>
-					<button
-						type="button"
-						class="files-sidebar__item"
-						aria-label="Sync settings"
-						title="Media auto-upload and folder sync"
-						onClick={props.onOpenSync}
-					>
-						<FluentIcon name="cloud" size={20} />
-						<span class="files-sidebar__label">Sync</span>
-					</button>
-				</Show>
 				<button
 					type="button"
 					class="files-sidebar__item"
@@ -213,11 +200,6 @@ const FilesSidebar = (props) => {
 		props.onMobileClose?.()
 	}
 
-	const openSidebarSync = (event) => {
-		props.onMobileClose?.()
-		openNativeSyncSettings(event)
-	}
-
 	const logout = () => {
 		props.onMobileClose?.()
 		navigate(clearSession(setStore))
@@ -246,10 +228,8 @@ const FilesSidebar = (props) => {
 		mode: props.mode,
 		collapsed: collapsed(),
 		createDisabled: props.createDisabled,
-		showSync: nativeClientStore.isNative(),
 		onSelect: select,
 		onOpenSettings: openSidebarSettings,
-		onOpenSync: openSidebarSync,
 		onLogout: logout,
 		onCreateFolder: props.onCreateFolder,
 		onUploadFile: props.onUploadFile,
