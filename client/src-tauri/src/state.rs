@@ -98,8 +98,11 @@ pub const NATIVE_MARK_JS: &str = r#"(function(){
 })();"#;
 
 /// JS bridge for remote-origin pages: invoke native commands + open Settings → Sync.
-/// Primary: fetch `sarca-ipc` custom protocol (desktop + mobile).
-/// Fallback: cancelled navigation to https://sarca.ipc (when fetch is blocked).
+///
+/// Order (see also `tests::open_sync_js_fallback_order`):
+/// 1. `__TAURI_INTERNALS__.invoke` — reliable once `remote.urls` match (incl. `:port`)
+/// 2. `fetch` `sarca-ipc` custom protocol (bypasses ACL; often blocked on WebKitGTK)
+/// 3. Cancelled navigation / iframe to `https://sarca.ipc` (bypasses ACL)
 pub const OPEN_SYNC_JS: &str = r#"
 (function(){
   if (!window.__sarcaIpcPending) window.__sarcaIpcPending = {};
@@ -113,7 +116,8 @@ pub const OPEN_SYNC_JS: &str = r#"
   };
   function __sarcaIpcEndpoints(){
     // Windows/Android map custom schemes to http(s)://<scheme>.localhost/
-    // macOS/iOS/Linux use <scheme>://localhost/
+    // macOS/iOS/Linux use <scheme>://localhost/ — but http://sarca-ipc.localhost
+    // often works when the raw scheme fetch is blocked (mixed content / WebKit).
     var ua = navigator.userAgent || '';
     var winOrDroid = /Windows/i.test(ua) || /Android/i.test(ua);
     if (winOrDroid) {
@@ -124,8 +128,9 @@ pub const OPEN_SYNC_JS: &str = r#"
       ];
     }
     return [
+      'http://sarca-ipc.localhost/invoke',
       'sarca-ipc://localhost/invoke',
-      'http://sarca-ipc.localhost/invoke'
+      'https://sarca-ipc.localhost/invoke'
     ];
   }
   function __sarcaFetchInvoke(cmd, args){
@@ -139,7 +144,9 @@ pub const OPEN_SYNC_JS: &str = r#"
       return fetch(endpoints[i], {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: body
+        body: body,
+        credentials: 'omit',
+        cache: 'no-store'
       }).then(function(res){
         return res.json().then(function(data){
           if (data && data.ok) return data.value;
@@ -159,7 +166,9 @@ pub const OPEN_SYNC_JS: &str = r#"
       var id = 'r' + String(++window.__sarcaIpcSeq) + '_' + Date.now().toString(36);
       window.__sarcaIpcPending[id] = { resolve: resolve, reject: reject };
       var raw = encodeURIComponent(JSON.stringify({ id: id, cmd: cmd, args: args || {} }));
-      function trySrc(src){
+      var primary = 'https://sarca.ipc/__invoke__?p=' + raw;
+      var secondary = 'sarca-ipc://localhost/__invoke__?p=' + raw;
+      function tryIframe(src){
         var iframe = document.createElement('iframe');
         iframe.setAttribute('aria-hidden', 'true');
         iframe.style.cssText = 'display:none;width:0;height:0;border:0;position:absolute;left:-9999px';
@@ -167,8 +176,14 @@ pub const OPEN_SYNC_JS: &str = r#"
         (document.documentElement || document.body).appendChild(iframe);
         setTimeout(function(){ try { iframe.remove(); } catch (_) {} }, 4000);
       }
-      try { trySrc('https://sarca.ipc/__invoke__?p=' + raw); } catch (_) {}
-      try { trySrc('sarca-ipc://invoke?p=' + raw); } catch (_) {}
+      try { tryIframe(primary); } catch (_) {}
+      try { tryIframe(secondary); } catch (_) {}
+      // Top-level assign is cancelled by Rust on_navigation (more reliable than
+      // iframes on some WebKitGTK builds). Only used if still pending shortly.
+      setTimeout(function(){
+        if (!window.__sarcaIpcPending[id]) return;
+        try { window.location.assign(primary); } catch (_) {}
+      }, 50);
       setTimeout(function(){
         if (!window.__sarcaIpcPending[id]) return;
         delete window.__sarcaIpcPending[id];
@@ -176,10 +191,17 @@ pub const OPEN_SYNC_JS: &str = r#"
       }, 90000);
     });
   }
+  function __sarcaCombineErr(errs){
+    var parts = [];
+    for (var i = 0; i < errs.length; i++) {
+      var e = errs[i];
+      if (!e) continue;
+      var m = (e && e.message) ? e.message : String(e);
+      if (m && parts.indexOf(m) < 0) parts.push(m);
+    }
+    return new Error(parts.join(' | ') || 'Native bridge unavailable');
+  }
   function __sarcaInvoke(cmd, args){
-    // Prefer custom-protocol IPC for remote-origin Settings pages so Sync works
-    // even when Tauri ACL is misconfigured. Fall back to __TAURI_INTERNALS__
-    // (local shell / when ACL allows) and navigation IPC.
     function viaTauri(){
       try {
         if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
@@ -188,10 +210,13 @@ pub const OPEN_SYNC_JS: &str = r#"
       } catch (_) {}
       return Promise.reject(new Error('Tauri invoke unavailable'));
     }
-    return __sarcaFetchInvoke(cmd, args).catch(function(fetchErr){
-      return viaTauri().catch(function(tauriErr){
+    // Prefer Tauri invoke (remote.urls must include host:port patterns).
+    // Custom-protocol fetch often yields TypeError: Load failed on WebKitGTK.
+    // Navigation IPC bypasses ACL when both prior paths fail.
+    return viaTauri().catch(function(tauriErr){
+      return __sarcaFetchInvoke(cmd, args).catch(function(fetchErr){
         return __sarcaNavInvoke(cmd, args).catch(function(navErr){
-          throw fetchErr || tauriErr || navErr || new Error('Native bridge unavailable');
+          throw __sarcaCombineErr([tauriErr, fetchErr, navErr]);
         });
       });
     });
@@ -514,5 +539,30 @@ mod tests {
         assert_eq!(u.as_str(), "tauri://localhost/sync.html");
         let u = sync_settings_url(&Url::parse("https://tauri.localhost/foo").unwrap()).unwrap();
         assert_eq!(u.as_str(), "https://tauri.localhost/sync.html");
+    }
+
+    #[test]
+    fn open_sync_js_fallback_order_prefers_tauri_then_fetch_then_nav() {
+        // Guard against regressing to "fetch first" which surfaces
+        // TypeError: Load failed on WebKitGTK when custom protocol is blocked.
+        let js = OPEN_SYNC_JS;
+        let invoke = js
+            .find("function __sarcaInvoke")
+            .expect("__sarcaInvoke");
+        let body = &js[invoke..];
+        let via_tauri_call = body.find("return viaTauri()").expect("prefer viaTauri");
+        let fetch_call = body
+            .find("__sarcaFetchInvoke")
+            .expect("fetch fallback");
+        let nav_call = body.find("__sarcaNavInvoke").expect("nav fallback");
+        assert!(
+            via_tauri_call < fetch_call && fetch_call < nav_call,
+            "expected viaTauri → fetch → nav order inside __sarcaInvoke"
+        );
+        assert!(
+            js.contains("__sarcaCombineErr"),
+            "must combine errors instead of rethrowing only Load failed"
+        );
+        assert!(js.contains("viaTauri"), "viaTauri helper must exist");
     }
 }
