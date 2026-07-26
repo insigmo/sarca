@@ -26,6 +26,16 @@ pnpm install
 pnpm tauri dev
 ```
 
+## Install local .deb (Linux)
+
+Build the Tauri `.deb` and install it on this machine (`sudo` prompts for a password):
+
+```bash
+task install
+# or from client/: pnpm run install:deb
+# or Cursor/VS Code: Tasks: Run Task → install
+```
+
 On first launch enter your Sarca server URL and Connect. Sign in on the server’s web login page.
 After that, the app shows the server’s web UI. Tray → **Disconnect** returns to the connect screen.
 
