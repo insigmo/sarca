@@ -1,5 +1,7 @@
 import { createRoot, createSignal } from 'solid-js'
 
+import { settingsStore } from './settings'
+
 /**
  * Detect Sarca native shell (Tauri webview loading the server UI).
  * Prefer localStorage.sarca_native (set by client init/inject); also accept
@@ -70,14 +72,19 @@ export const nativeClientStore = createRoot(() => {
 })
 
 /**
- * Open the local Sync settings page from a remote-origin webview.
- * Prefers the injected bridge / custom scheme (cross-scheme nav Tauri cancels).
- * Falls back to same-origin `?__sarca_open_sync=1` without changing the path,
- * so a missed intercept cannot land on the server SPA `/sync.html` 404.
+ * Open in-app Settings → Sync (no separate sync.html as primary UI).
  * @param {Event} [event]
  */
 export const openNativeSyncSettings = (event) => {
 	event?.preventDefault?.()
+	try {
+		if (detectNativeClient()) {
+			settingsStore.openSettings('sync')
+			return
+		}
+	} catch {
+		// ignore
+	}
 	try {
 		if (typeof window.__sarcaOpenSyncSettings === 'function') {
 			window.__sarcaOpenSyncSettings()
@@ -87,25 +94,48 @@ export const openNativeSyncSettings = (event) => {
 		// ignore
 	}
 	try {
-		const inv = window.__TAURI_INTERNALS__?.invoke
-		if (typeof inv === 'function') {
-			inv('open_sync_settings')
-			return
-		}
-	} catch {
-		// ignore
-	}
-	try {
-		window.location.assign('sarca-sync://open')
-		return
-	} catch {
-		// ignore
-	}
-	try {
 		const u = new URL(window.location.href)
-		u.searchParams.set('__sarca_open_sync', '1')
-		window.location.assign(u.toString())
+		u.searchParams.set('__sarca_open_settings', 'sync')
+		window.history.replaceState(null, '', u.pathname + u.search + u.hash)
+		window.dispatchEvent(
+			new CustomEvent('sarca-open-settings', { detail: { tab: 'sync' } }),
+		)
+		settingsStore.openSettings('sync')
 	} catch {
 		// ignore
+	}
+}
+
+/**
+ * Consume `?__sarca_open_settings=` / custom event and open Settings.
+ * @returns {() => void}
+ */
+export const bindOpenSettingsDeepLink = () => {
+	if (typeof window === 'undefined') return () => {}
+
+	const openFromUrl = () => {
+		try {
+			const u = new URL(window.location.href)
+			const tab = u.searchParams.get('__sarca_open_settings')
+			if (!tab) return
+			u.searchParams.delete('__sarca_open_settings')
+			window.history.replaceState(null, '', u.pathname + u.search + u.hash)
+			settingsStore.openSettings(/** @type {any} */ (tab))
+		} catch {
+			// ignore
+		}
+	}
+
+	const onEvent = (event) => {
+		const tab = event?.detail?.tab || 'sync'
+		settingsStore.openSettings(tab)
+	}
+
+	openFromUrl()
+	window.addEventListener('sarca-open-settings', onEvent)
+	window.addEventListener('popstate', openFromUrl)
+	return () => {
+		window.removeEventListener('sarca-open-settings', onEvent)
+		window.removeEventListener('popstate', openFromUrl)
 	}
 }
