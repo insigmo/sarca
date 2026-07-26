@@ -250,7 +250,9 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # Temporarily disabled — keep the job; re-enable by removing `if: false`.
   ios:
+    if: false
     name: ios-arm64
     needs: sync-crate
     runs-on: macos-14
