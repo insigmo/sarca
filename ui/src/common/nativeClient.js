@@ -71,19 +71,41 @@ export const nativeClientStore = createRoot(() => {
 
 /**
  * Open the local Sync settings page from a remote-origin webview.
- * Uses a same-origin `?__sarca_open_sync=1` navigation that Rust intercepts
- * (reliable on Android WebView). Falls back to `sarca-sync://open`.
+ * Prefers the injected bridge / custom scheme (cross-scheme nav Tauri cancels).
+ * Falls back to same-origin `?__sarca_open_sync=1` without changing the path,
+ * so a missed intercept cannot land on the server SPA `/sync.html` 404.
  * @param {Event} [event]
  */
 export const openNativeSyncSettings = (event) => {
 	event?.preventDefault?.()
 	try {
-		const u = new URL(window.location.href)
-		u.searchParams.set('__sarca_open_sync', '1')
-		window.location.assign(u.toString())
+		if (typeof window.__sarcaOpenSyncSettings === 'function') {
+			window.__sarcaOpenSyncSettings()
+			return
+		}
+	} catch {
+		// ignore
+	}
+	try {
+		const inv = window.__TAURI_INTERNALS__?.invoke
+		if (typeof inv === 'function') {
+			inv('open_sync_settings')
+			return
+		}
+	} catch {
+		// ignore
+	}
+	try {
+		window.location.assign('sarca-sync://open')
 		return
 	} catch {
 		// ignore
 	}
-	window.location.assign('sarca-sync://open')
+	try {
+		const u = new URL(window.location.href)
+		u.searchParams.set('__sarca_open_sync', '1')
+		window.location.assign(u.toString())
+	} catch {
+		// ignore
+	}
 }
