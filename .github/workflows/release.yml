@@ -493,29 +493,38 @@ jobs:
           # Mobile ACL: drop desktop-only process permission if regenerated.
           python3 -c "import json,pathlib; p=pathlib.Path('src-tauri/capabilities/default.json'); data=json.loads(p.read_text()); data['permissions']=[x for x in data.get('permissions',[]) if not str(x).startswith('process:')]; p.write_text(json.dumps(data,indent=2)+'\n')"
 
+          # Always configure Gradle signing: secrets if present, else committed sideload keystore.
+          mkdir -p src-tauri/gen/android
           if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
             KS_PATH="${GITHUB_WORKSPACE}/client/src-tauri/release.keystore"
             echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${KS_PATH}"
-            {
-              echo "storePassword=${ANDROID_KEYSTORE_PASSWORD}"
-              echo "keyPassword=${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
-              echo "keyAlias=${ANDROID_KEY_ALIAS:-sarca}"
-              echo "storeFile=${KS_PATH}"
-            } > src-tauri/gen/android/keystore.properties
+            STORE_PASS="${ANDROID_KEYSTORE_PASSWORD}"
+            KEY_PASS="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+            ALIAS="${ANDROID_KEY_ALIAS:-sarca}"
             echo "Using ANDROID_KEYSTORE_* secrets for APK signing."
           else
-            echo "No ANDROID_KEYSTORE_* secrets — default/debug signing."
+            KS_PATH="${GITHUB_WORKSPACE}/client/mobile/sarca-sideload.p12"
+            STORE_PASS="sarca-sideload"
+            KEY_PASS="sarca-sideload"
+            ALIAS="sarca"
+            echo "Using committed sideload keystore for APK signing."
           fi
+          {
+            echo "storePassword=${STORE_PASS}"
+            echo "keyPassword=${KEY_PASS}"
+            echo "keyAlias=${ALIAS}"
+            echo "storeFile=${KS_PATH}"
+          } > src-tauri/gen/android/keystore.properties
 
-          # Prefer release APK; fall back to debug if release signing is unavailable.
-          if ! pnpm tauri android build --apk --target aarch64 --ci; then
-            echo "Release APK build failed; retrying debug APK…" >&2
-            pnpm tauri android build --apk --debug --target aarch64 --ci
-          fi
+          pnpm tauri android build --apk --target aarch64 --ci
 
       - name: Package APK for release
         env:
           ASSET: sarca_client_android_arm64
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           mkdir -p dist
@@ -527,23 +536,47 @@ jobs:
           apk=""
           for f in "${candidates[@]}"; do
             [[ -f "$f" ]] || continue
-            # Prefer release over debug when both exist.
+            [[ "$f" == *unsigned* ]] && continue
             if [[ "$f" == *release* ]] || [[ -z "$apk" ]]; then
               apk="$f"
             fi
-            if [[ "$f" == *release*.apk && "$f" != *unsigned* ]]; then
+            if [[ "$f" == *release*.apk ]]; then
               apk="$f"
               break
             fi
           done
+          # Fall back to unsigned artifact only to sign it ourselves.
+          if [[ -z "$apk" ]]; then
+            for f in "${candidates[@]}"; do
+              [[ -f "$f" ]] || continue
+              apk="$f"
+              break
+            done
+          fi
           if [[ -z "$apk" ]]; then
             echo "No APK produced" >&2
             find client/src-tauri/gen/android -name '*.apk' 2>/dev/null | head -50 || true
             find target -name '*.apk' 2>/dev/null | head -50 || true
             exit 1
           fi
-          cp -a "$apk" "dist/${ASSET}.apk"
-          echo "Packed ${ASSET}.apk from ${apk}"
+
+          echo "Found APK: ${apk}"
+          # Ensure v2/v3 signature (Pixel / modern Android reject unsigned APKs).
+          if ! python3 -c "import sys; sys.exit(0 if b'APK Sig Block 42' in open(sys.argv[1],'rb').read() else 1)" "$apk"; then
+            echo "APK is unsigned — signing with sideload/release keystore…"
+            bash client/scripts/sign-android-apk.sh "$apk" "dist/${ASSET}.apk"
+          else
+            cp -a "$apk" "dist/${ASSET}.apk"
+            # Re-verify with apksigner when available.
+            if command -v apksigner >/dev/null; then
+              apksigner verify --verbose "dist/${ASSET}.apk"
+            elif [[ -x "${ANDROID_HOME:-}/build-tools/34.0.0/apksigner" ]]; then
+              "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify --verbose "dist/${ASSET}.apk"
+            fi
+          fi
+
+          python3 -c "import sys; data=open(sys.argv[1],'rb').read(); assert b'APK Sig Block 42' in data, 'missing v2/v3 signature'" "dist/${ASSET}.apk"
+          echo "Packed ${ASSET}.apk"
           cd dist
           sha256sum "${ASSET}.apk" > "${ASSET}.apk.sha256"
 
@@ -751,7 +784,7 @@ jobs:
 
             Portable binaries are also attached where available (`sarca_client_linux_*`, `sarca_client_windows_*.exe`).
 
-            **Android:** install the APK (allow unknown sources). For Play Store signing, set `ANDROID_KEYSTORE_*` repo secrets.
+            **Android:** install the signed APK (allow unknown sources). The release APK is signed with the repo sideload keystore (or `ANDROID_KEYSTORE_*` secrets). Unsigned APKs will not install on modern Android (e.g. Pixel).
             **iOS device IPA:** requires `APPLE_CERTIFICATE_BASE64` + `APPLE_CERTIFICATE_PASSWORD` (and provisioning / API key as needed). Without them CI attaches a Simulator build only.
 
             **Install server (Linux / macOS)**
