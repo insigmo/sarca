@@ -26,14 +26,14 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
 }
 
 #[cfg(target_os = "android")]
-struct AndroidFolderPicker {
-    handle: tauri::plugin::PluginHandle<tauri::Wry>,
+struct AndroidFolderPicker<R: Runtime> {
+    handle: tauri::plugin::PluginHandle<R>,
 }
 
 /// Open the Android document-tree picker and return a filesystem path when resolvable.
 #[cfg(target_os = "android")]
-pub async fn pick_folder_android(
-    app: &tauri::AppHandle,
+pub async fn pick_folder_android<R: Runtime>(
+    app: &tauri::AppHandle<R>,
 ) -> Result<Option<String>, String> {
     use serde::Deserialize;
     use tauri::Manager;
@@ -47,7 +47,7 @@ pub async fn pick_folder_android(
     }
 
     let state = app
-        .try_state::<AndroidFolderPicker>()
+        .try_state::<AndroidFolderPicker<R>>()
         .ok_or_else(|| "Android folder picker plugin not registered".to_string())?;
     let handle = state.handle.clone();
 
