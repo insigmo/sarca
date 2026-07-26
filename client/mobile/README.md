@@ -41,12 +41,16 @@ Manual resign:
 
 ## Auto-upload (camera / gallery)
 
-1. Add a binding with mode `auto_upload`.
-2. Point `local_path` at a user-picked Photos / Camera / Downloads folder via the system picker.
+1. Open **Sync settings** (any of: blue Sync button, sidebar Sync, Settings → Sync,
+   desktop menu **Sarca → Sync settings**, or tray → Sync settings).
+2. Enable Media auto-upload and pick/type a Photos / Camera / Downloads folder.
 3. Sync loop uploads new/changed files only (no remote→local deletes).
 
+On Android/iOS the system folder picker is unavailable; type a path instead
+(e.g. `/storage/emulated/0/DCIM`). The APK patch script adds media read permissions.
+
 Platform media-library observers (Android MediaStore, iOS Photos) can be layered later as
-Tauri plugins; folder pick + walk is the MVP that works on all targets.
+Tauri plugins; folder path + walk is the MVP that works on all targets.
 
 ## Background
 

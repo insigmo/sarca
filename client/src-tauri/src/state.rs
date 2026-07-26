@@ -80,6 +80,45 @@ impl SessionInject {
     }
 }
 
+/// Injected on every remote page load when the webview is past the connect shell.
+/// Visible Sync entry for all native clients (Linux tray is often hidden; mobile has none).
+pub const NATIVE_CHROME_JS: &str = r#"(function(){
+  try {
+    if (localStorage.getItem('sarca_native') !== '1') return;
+    if (document.getElementById('sarca-native-sync-fab')) return;
+    var btn = document.createElement('button');
+    btn.id = 'sarca-native-sync-fab';
+    btn.type = 'button';
+    btn.textContent = 'Sync';
+    btn.title = 'Media auto-upload and folder sync';
+    btn.setAttribute('aria-label', 'Open Sync settings');
+    btn.style.cssText = [
+      'position:fixed',
+      'z-index:2147483000',
+      'right:max(12px,env(safe-area-inset-right))',
+      'bottom:max(12px,env(safe-area-inset-bottom))',
+      'padding:10px 14px',
+      'border:none',
+      'border-radius:10px',
+      'background:#005a9e',
+      'color:#fff',
+      'font:600 14px/1.2 "Segoe UI",system-ui,sans-serif',
+      'box-shadow:0 4px 14px rgba(0,0,0,.25)',
+      'cursor:pointer'
+    ].join(';');
+    btn.onclick = function () {
+      try {
+        var u = new URL(location.href);
+        u.searchParams.set('__sarca_open_sync', '1');
+        location.assign(u.toString());
+      } catch (e) {
+        location.assign('sarca-sync://open');
+      }
+    };
+    (document.body || document.documentElement).appendChild(btn);
+  } catch (e) {}
+})();"#;
+
 pub struct AppSyncState {
     pub engine: Arc<SyncEngine>,
     pub server: Arc<Mutex<ServerConfig>>,

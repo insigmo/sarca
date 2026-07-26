@@ -167,6 +167,7 @@
       <header class="sync-header">
         <h1>Sync settings</h1>
         <p class="muted">Media auto-upload and folder sync</p>
+        <p id="platformHint" class="muted" hidden></p>
         <div class="sync-header__actions">
           <button type="button" id="backToApp" class="btn secondary">Back to app</button>
           <button type="button" id="syncNow" class="btn">Sync now</button>
@@ -188,7 +189,7 @@
         <select id="storageSelect"></select>
         <label for="localPath">Local folder</label>
         <div class="row">
-          <input id="localPath" type="text" readonly placeholder="Choose a folder…" />
+          <input id="localPath" type="text" placeholder="Choose or type a folder path…" />
           <button type="button" id="pickLocal" class="btn secondary">Browse…</button>
         </div>
         <label for="remoteRoot">Remote folder path</label>
