@@ -1,6 +1,7 @@
 use sarca_sync::{normalize_server_url, Binding, SarcaApi, StorageSummary, SyncStatus};
 use serde::Serialize;
 use tauri::{AppHandle, State};
+#[cfg(desktop)]
 use tauri_plugin_dialog::DialogExt;
 
 use crate::state::{
@@ -128,14 +129,23 @@ pub fn open_sync_settings(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String> {
-    let folder = app
-        .dialog()
-        .file()
-        .set_title("Choose folder")
-        .blocking_pick_folder();
-    Ok(folder
-        .and_then(|p| p.into_path().ok())
-        .map(|p| p.to_string_lossy().into_owned()))
+    // tauri-plugin-dialog only exposes folder pickers on desktop.
+    #[cfg(desktop)]
+    {
+        let folder = app
+            .dialog()
+            .file()
+            .set_title("Choose folder")
+            .blocking_pick_folder();
+        Ok(folder
+            .and_then(|p| p.into_path().ok())
+            .map(|p| p.to_string_lossy().into_owned()))
+    }
+    #[cfg(mobile)]
+    {
+        let _ = app;
+        Err("Folder picker is not available on mobile yet".into())
+    }
 }
 
 #[tauri::command]
