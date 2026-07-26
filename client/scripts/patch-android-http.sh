@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Allow http:// (cleartext) in the generated Tauri Android project.
 # Safe for self-hosted Sarca on LAN; https:// continues to work.
+# Also installs the SAF folder-picker plugin Kotlin sources.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -9,6 +10,8 @@ APP_SRC="$GEN/app/src/main"
 MANIFEST="$APP_SRC/AndroidManifest.xml"
 XML_DIR="$APP_SRC/res/xml"
 SRC_CFG="$ROOT/mobile/android/res/xml/network_security_config.xml"
+FOLDER_PICKER_SRC="$ROOT/mobile/android/java/app/sarca/client/folderpicker/FolderPickerPlugin.kt"
+FOLDER_PICKER_DST="$APP_SRC/java/app/sarca/client/folderpicker/FolderPickerPlugin.kt"
 
 if [[ ! -f "$MANIFEST" ]]; then
   echo "AndroidManifest not found at $MANIFEST (run tauri android init first)" >&2
@@ -17,6 +20,12 @@ fi
 
 mkdir -p "$XML_DIR"
 cp -a "$SRC_CFG" "$XML_DIR/network_security_config.xml"
+
+if [[ -f "$FOLDER_PICKER_SRC" ]]; then
+  mkdir -p "$(dirname "$FOLDER_PICKER_DST")"
+  cp -a "$FOLDER_PICKER_SRC" "$FOLDER_PICKER_DST"
+  echo "Installed FolderPickerPlugin.kt → $FOLDER_PICKER_DST"
+fi
 
 python3 - "$MANIFEST" <<'PY'
 import re
