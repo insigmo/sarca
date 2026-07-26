@@ -162,8 +162,10 @@ jobs:
           path: ui/dist
           retention-days: 1
 
+  # Compile server binaries in parallel with build-ui / build-client.
+  # UI bundling happens in `package` (needs build-ui), not here.
   build:
-    needs: [version, build-ui]
+    needs: [version]
     strategy:
       fail-fast: false
       matrix:
@@ -172,21 +174,17 @@ jobs:
           # Bookworm/older hosts; ubuntu-latest (24.04) would require GLIBC 2.39.
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
-            archive: tar.gz
             asset: sarca_linux_amd64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04
-            archive: tar.gz
             asset: sarca_linux_arm64
             cross: true
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            archive: zip
             asset: sarca_windows_amd64
             binary: sarca.exe
           - target: aarch64-apple-darwin
             os: macos-14
-            archive: tar.gz
             asset: sarca_macos_arm64
 
     runs-on: ${{ matrix.os }}
@@ -198,11 +196,6 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ needs.version.outputs.tag }}
-
-      - uses: actions/download-artifact@v7
-        with:
-          name: ui-dist
-          path: package/ui
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -220,24 +213,59 @@ jobs:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: cargo build --release -p sarca --target ${{ matrix.target }}
 
+      - uses: actions/upload-artifact@v6
+        with:
+          name: server-bin-${{ matrix.asset }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary || 'sarca' }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # Bundle compiled server binaries with the UI dist (after build-ui).
+  package:
+    needs: [version, build, build-ui]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - asset: sarca_linux_amd64
+            archive: tar.gz
+          - asset: sarca_linux_arm64
+            archive: tar.gz
+          - asset: sarca_windows_amd64
+            archive: zip
+            binary: sarca.exe
+          - asset: sarca_macos_arm64
+            archive: tar.gz
+
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: server-bin-${{ matrix.asset }}
+          path: bin
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ui-dist
+          path: package/ui
+
       - name: Package artifact
         env:
-          TARGET: ${{ matrix.target }}
           ASSET: ${{ matrix.asset }}
           ARCHIVE: ${{ matrix.archive }}
           BINARY_NAME: ${{ matrix.binary || 'sarca' }}
         run: |
           set -uo pipefail
           mkdir -p "dist/${ASSET}"
-          cp "target/${TARGET}/release/${BINARY_NAME}" "dist/${ASSET}/"
+          cp "bin/${BINARY_NAME}" "dist/${ASSET}/"
           cp -r package/ui "dist/${ASSET}/ui"
           cd dist
           if [ "${ARCHIVE}" = "zip" ]; then
-            if command -v zip >/dev/null; then
-              zip -r "${ASSET}.zip" "${ASSET}"
-            else
-              powershell.exe -NoProfile -Command "Compress-Archive -Path '${ASSET}' -DestinationPath '${ASSET}.zip'"
-            fi
+            zip -r "${ASSET}.zip" "${ASSET}"
             ARTIFACT="${ASSET}.zip"
           else
             tar -czf "${ASSET}.tar.gz" "${ASSET}"
@@ -252,7 +280,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Native sync clients (Tauri) — parallel with server binaries.
+  # Native sync clients (Tauri) — parallel with server compile (`build`).
   build-client:
     needs: [version]
     strategy:
@@ -693,7 +721,8 @@ jobs:
 
   release:
     # build-client-ios omitted from needs while iOS builds are disabled (`if: false` above).
-    needs: [version, build, build-client, build-client-android]
+    # Waits on `package` (not `build`) so release archives include the UI bundle.
+    needs: [version, package, build-client, build-client-android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v7
