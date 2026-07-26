@@ -14,6 +14,26 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function isMobilePlatform() {
+  const label = ($("platformHint")?.dataset?.platform || "").toLowerCase();
+  return label === "android" || label === "ios";
+}
+
+/** Prefer system folder picker; fall back to typed path (required on mobile). */
+async function chooseLocalFolder(existing) {
+  try {
+    const path = await invoke("pick_local_folder");
+    if (path) return path;
+  } catch (e) {
+    setMsg(String(e));
+  }
+  const hint = isMobilePlatform()
+    ? "Folder picker is unavailable on this device. Enter a local folder path, e.g. /storage/emulated/0/DCIM or /storage/emulated/0/Pictures"
+    : "Enter a local folder path";
+  const typed = window.prompt(hint, existing || "");
+  return typed && typed.trim() ? typed.trim() : null;
+}
+
 async function refreshStorages() {
   const storages = await invoke("list_storages");
   const sel = $("storageSelect");
@@ -71,6 +91,21 @@ async function refreshBindings() {
 
 window.addEventListener("DOMContentLoaded", async () => {
   try {
+    const label = await invoke("platform_label");
+    const hint = $("platformHint");
+    if (hint) {
+      hint.dataset.platform = label || "";
+      if (label === "Android" || label === "iOS") {
+        hint.hidden = false;
+        hint.textContent =
+          "On this device, type a folder path (Browse may be unavailable). Common Android paths: /storage/emulated/0/DCIM, /storage/emulated/0/Pictures, /storage/emulated/0/Download";
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  try {
     await refreshStorages();
     await refreshBindings();
   } catch (e) {
@@ -96,7 +131,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   $("pickLocal").onclick = async () => {
     try {
-      const path = await invoke("pick_local_folder");
+      const path = await chooseLocalFolder($("localPath").value.trim());
       if (path) $("localPath").value = path;
     } catch (e) {
       setMsg(String(e));
@@ -105,8 +140,9 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   $("enableMedia").onclick = async () => {
     try {
-      const path = await invoke("pick_local_folder");
+      const path = await chooseLocalFolder($("localPath").value.trim());
       if (!path) return;
+      $("localPath").value = path;
       const storageId = $("storageSelect").value;
       if (!storageId) throw new Error("Select a storage first");
       const remote = await invoke("ensure_remote_folder", {
@@ -164,10 +200,14 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("addSync").onclick = async () => {
     try {
       const storageId = $("storageSelect").value;
-      const localPath = $("localPath").value.trim();
+      let localPath = $("localPath").value.trim();
+      if (!localPath) {
+        localPath = (await chooseLocalFolder("")) || "";
+        if (localPath) $("localPath").value = localPath;
+      }
       const remoteRoot = $("remoteRoot").value.trim().replace(/\/$/, "");
       if (!storageId) throw new Error("Select a storage");
-      if (!localPath) throw new Error("Pick a local folder");
+      if (!localPath) throw new Error("Set a local folder path");
       if (!remoteRoot) throw new Error("Set a remote folder path or create one");
       await invoke("add_binding", {
         storageId,
