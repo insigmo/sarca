@@ -31,7 +31,8 @@ const LONG_PRESS_MS = 520
  * @property {boolean} [selectable]
  * @property {boolean} [selected]
  * @property {(el: import("../api").FSElement, event: MouseEvent) => void} [onSelectItem]
- *   Single click selects; Ctrl/Shift multi-select. Double-click opens via onOpen/navigate.
+ *   Desktop: row click selects (Ctrl/Shift multi-select). Mobile (≤840px): checkbox only
+ *   selects; row tap opens via onOpen/navigate. Double-click always opens.
  * @property {(el: import("../api").FSElement) => void} [onContextMenuItem]
  *   Called before opening the context menu (e.g. select the target).
  * @property {boolean} [draggableItem] Browse-mode internal drag source
@@ -357,6 +358,22 @@ const FSListItem = (props) => {
 
 	const showSelect = () => Boolean(props.selectable) && !isParentNav()
 
+	const isMobileTapOpen = () => {
+		if (typeof window === 'undefined' || !window.matchMedia) return false
+		return window.matchMedia('(max-width: 840px)').matches
+	}
+
+	const handleSelectOnly = (event) => {
+		event.preventDefault()
+		event.stopPropagation()
+		if (suppressClickAfterLongPress) {
+			suppressClickAfterLongPress = false
+			return
+		}
+		if (!showSelect() || typeof props.onSelectItem !== 'function') return
+		props.onSelectItem(props.fsElement, event)
+	}
+
 	const dragEnabled = () => Boolean(props.draggableItem) && !isParentNav()
 
 	const handleItemClick = (event) => {
@@ -364,6 +381,12 @@ const FSListItem = (props) => {
 			suppressClickAfterLongPress = false
 			event.preventDefault()
 			event.stopPropagation()
+			return
+		}
+		if (isMobileTapOpen()) {
+			event.preventDefault()
+			event.stopPropagation()
+			handleNavigate()
 			return
 		}
 		if (showSelect() && typeof props.onSelectItem === 'function') {
@@ -374,6 +397,31 @@ const FSListItem = (props) => {
 		}
 		handleNavigate()
 	}
+
+	const selectCheckbox = () => (
+		<Show when={showSelect()}>
+			<label
+				class="fs-item-check"
+				onClick={handleSelectOnly}
+				onPointerDown={(e) => e.stopPropagation()}
+				onTouchStart={(e) => e.stopPropagation()}
+			>
+				<input
+					type="checkbox"
+					class="fs-item-check__input"
+					checked={isSelected()}
+					onChange={handleSelectOnly}
+					onClick={handleSelectOnly}
+					aria-label={
+						isSelected()
+							? `Deselect ${displayName()}`
+							: `Select ${displayName()}`
+					}
+				/>
+				<span class="fs-item-check__box" aria-hidden="true" />
+			</label>
+		</Show>
+	)
 
 	const handleItemDblClick = (event) => {
 		event.preventDefault()
@@ -441,6 +489,7 @@ const FSListItem = (props) => {
 						onTouchCancel={handleTouchEnd}
 						onKeyDown={handleItemKeyDown}
 					>
+						{selectCheckbox()}
 						<Show when={showTileStar()}>
 							<div
 								class="fs-grid-item__star"
@@ -518,6 +567,7 @@ const FSListItem = (props) => {
 					onTouchCancel={handleTouchEnd}
 					onKeyDown={handleItemKeyDown}
 				>
+					{selectCheckbox()}
 					<FileTypeIcon
 						name={props.fsElement.name}
 						isFile={props.fsElement.is_file}
