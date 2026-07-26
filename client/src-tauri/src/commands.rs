@@ -1,9 +1,11 @@
-use sarca_sync::{normalize_server_url, Binding, SarcaApi, SyncStatus};
+use sarca_sync::{normalize_server_url, Binding, SarcaApi, StorageSummary, SyncStatus};
 use serde::Serialize;
 use tauri::{AppHandle, State};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::state::{
-    navigate_to_server, navigate_to_shell, new_binding, AppSyncState, ServerConfig,
+    navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding, AppSyncState,
+    ServerConfig,
 };
 
 #[derive(Serialize)]
@@ -11,6 +13,12 @@ pub struct SessionDto {
     pub connected: bool,
     pub base_url: String,
     pub email: String,
+}
+
+#[derive(Serialize)]
+pub struct StorageDto {
+    pub id: String,
+    pub name: String,
 }
 
 #[tauri::command]
@@ -111,6 +119,69 @@ pub async fn open_app(app: AppHandle, state: State<'_, AppSyncState>) -> Result<
         return Err("Not connected".into());
     }
     navigate_to_server(&app, &cfg)
+}
+
+#[tauri::command]
+pub fn open_sync_settings(app: AppHandle) -> Result<(), String> {
+    navigate_to_sync_settings(&app)
+}
+
+#[tauri::command]
+pub fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String> {
+    let folder = app
+        .dialog()
+        .file()
+        .set_title("Choose folder")
+        .blocking_pick_folder();
+    Ok(folder
+        .and_then(|p| p.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[tauri::command]
+pub async fn list_storages(state: State<'_, AppSyncState>) -> Result<Vec<StorageDto>, String> {
+    let cfg = state.server.lock().await.clone();
+    if !cfg.is_connected() {
+        return Err("Not connected".into());
+    }
+    let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
+    let list = api.list_storages().await.map_err(|e| e.to_string())?;
+    Ok(list
+        .into_iter()
+        .map(|s: StorageSummary| StorageDto {
+            id: s.id.to_string(),
+            name: s.name,
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn ensure_remote_folder(
+    state: State<'_, AppSyncState>,
+    storage_id: String,
+    parent: String,
+    name: String,
+) -> Result<String, String> {
+    let cfg = state.server.lock().await.clone();
+    if !cfg.is_connected() {
+        return Err("Not connected".into());
+    }
+    let name = name.trim().to_owned();
+    if name.is_empty() {
+        return Err("Folder name is required".into());
+    }
+    let sid = uuid::Uuid::parse_str(&storage_id).map_err(|e| e.to_string())?;
+    let parent = parent.trim().trim_matches('/').to_owned();
+    let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
+    api.create_folder(sid, &parent, &name)
+        .await
+        .map_err(|e| e.to_string())?;
+    let remote = if parent.is_empty() {
+        name
+    } else {
+        format!("{parent}/{name}")
+    };
+    Ok(remote)
 }
 
 #[tauri::command]
