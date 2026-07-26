@@ -5,6 +5,7 @@ fn main() {
     const COMMANDS: &[&str] = &[
         "platform_label",
         "get_session",
+        "update_session",
         "connect",
         "disconnect",
         "open_app",
