@@ -34,6 +34,20 @@ if "android.permission.INTERNET" not in text:
         count=1,
     )
 
+# Storage access for Media auto-upload / folder sync path walking.
+for perm in (
+    "android.permission.READ_MEDIA_IMAGES",
+    "android.permission.READ_MEDIA_VIDEO",
+    "android.permission.READ_EXTERNAL_STORAGE",
+):
+    if perm not in text:
+        text = re.sub(
+            r"(<manifest\b[^>]*>)",
+            rf'\1\n    <uses-permission android:name="{perm}" />',
+            text,
+            count=1,
+        )
+
 
 def ensure_attr(application_tag: str, name: str, value: str) -> str:
     if re.search(rf"\b{re.escape(name)}\s*=", application_tag):
@@ -54,5 +68,5 @@ app = ensure_attr(app, "android:usesCleartextTraffic", "true")
 app = ensure_attr(app, "android:networkSecurityConfig", "@xml/network_security_config")
 text = text[: match.start()] + app + text[match.end() :]
 path.write_text(text)
-print(f"Patched cleartext HTTP support into {path}")
+print(f"Patched cleartext HTTP + media storage permissions into {path}")
 PY
