@@ -39,6 +39,19 @@ jobs:
           workspaces: . -> target
           shared-key: sync-crate
       - run: cargo test -p sarca-sync
+      - name: Check remote Settings ACL (fast)
+        run: python3 client/scripts/check-remote-acl.py
+      - name: Install Linux WebKit/GTK for client tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libgtk-3-dev
+      - name: sarca-client ACL / IPC unit tests
+        run: cargo test -p sarca-client --lib
 
   desktop:
     name: ${{ matrix.name }}

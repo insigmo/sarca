@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(test)]
+mod acl_check;
 mod commands;
 mod folder_picker;
 mod remote_ipc;

@@ -4,7 +4,10 @@
   "description": "Default Sarca client capabilities (local shell + remote server UI)",
   "windows": ["main"],
   "remote": {
-    "urls": ["http://*", "https://*"]
+    "urls": [
+      "http://*:*/*",
+      "https://*:*/*"
+    ]
   },
   "permissions": [
     "core:default",
