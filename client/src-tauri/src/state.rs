@@ -70,9 +70,16 @@ impl SessionInject {
     localStorage.setItem('refresh_token', {refresh});
     localStorage.setItem('user', {user});
     localStorage.setItem('sarca_native', '1');
+    window.__SARCA_NATIVE__ = 1;
+    try {{ window.dispatchEvent(new Event('sarca-native')); }} catch (_) {{}}
     if (sessionStorage.getItem('__sarca_native_session') !== '1') {{
       sessionStorage.setItem('__sarca_native_session', '1');
-      location.replace('/');
+      var u = new URL(location.href);
+      u.pathname = '/';
+      u.search = '';
+      u.hash = '';
+      u.searchParams.set('__sarca_native', '1');
+      location.replace(u.toString());
     }}
   }} catch (e) {{ console.error('sarca session inject', e); }}
 }})();"#
@@ -80,11 +87,23 @@ impl SessionInject {
     }
 }
 
+/// Runs before page scripts when possible (Tauri plugin init script).
+/// Marks the origin as native so server UI can show Sync without waiting for
+/// post-load eval (which is often too late / racy on Android WebView).
+pub const NATIVE_MARK_JS: &str = r#"(function(){
+  try {
+    localStorage.setItem('sarca_native', '1');
+    window.__SARCA_NATIVE__ = 1;
+  } catch (e) {}
+})();"#;
+
 /// Injected on every remote page load when the webview is past the connect shell.
-/// Visible Sync entry for all native clients (Linux tray is often hidden; mobile has none).
+/// Always marks native (do not require a prior flag) and adds a visible Sync FAB.
 pub const NATIVE_CHROME_JS: &str = r#"(function(){
   try {
-    if (localStorage.getItem('sarca_native') !== '1') return;
+    localStorage.setItem('sarca_native', '1');
+    window.__SARCA_NATIVE__ = 1;
+    try { window.dispatchEvent(new Event('sarca-native')); } catch (_) {}
     if (document.getElementById('sarca-native-sync-fab')) return;
     var btn = document.createElement('button');
     btn.id = 'sarca-native-sync-fab';

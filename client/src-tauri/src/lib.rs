@@ -25,6 +25,10 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(
             PluginBuilder::<tauri::Wry, ()>::new("sarca-nav")
+                // Mark every navigation as native *before* page scripts when the
+                // platform supports document-start JS (desktop). On Android remote
+                // URLs this may run late — NATIVE_CHROME_JS + UI polling cover that.
+                .js_init_script(state::NATIVE_MARK_JS)
                 .on_navigation(|webview, url| {
                     // Custom scheme (tray / older clients) and HTTPS query fallback
                     // (reliable on Android WebView where unknown schemes are flaky).
