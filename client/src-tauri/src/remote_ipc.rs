@@ -23,6 +23,7 @@ pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "is_on_wifi",
     "get_about",
     "get_session",
+    "update_session",
     "get_client_prefs",
     "set_client_prefs",
     "list_storages",
@@ -88,6 +89,23 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
         "get_about" => Ok(serde_json::to_value(commands::get_about()).map_err(|e| e.to_string())?),
         "get_session" => {
             let dto = commands::get_session(state.clone()).await?;
+            serde_json::to_value(dto).map_err(|e| e.to_string())
+        }
+        "update_session" => {
+            let access_token = arg_str(&args, "access_token", "accessToken")
+                .ok_or_else(|| "access_token required".to_string())?;
+            let refresh_token = arg_str(&args, "refresh_token", "refreshToken");
+            let email = arg_str(&args, "email", "email");
+            let email_verified = arg_value(&args, "email_verified", "emailVerified")
+                .and_then(|v| v.as_bool());
+            let dto = commands::update_session(
+                state.clone(),
+                access_token,
+                refresh_token,
+                email,
+                email_verified,
+            )
+            .await?;
             serde_json::to_value(dto).map_err(|e| e.to_string())
         }
         "get_client_prefs" => {
@@ -211,6 +229,7 @@ mod tests {
             "add_binding",
             "remove_binding",
             "ensure_remote_folder",
+            "update_session",
             "list_bindings",
             "sync_now",
             "sync_statuses",

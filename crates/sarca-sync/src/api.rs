@@ -54,6 +54,24 @@ impl SarcaApi {
         &self.base_url
     }
 
+    pub fn access_token(&self) -> &str {
+        &self.access_token
+    }
+
+    /// `Authorization` header value (`Bearer …`) when an access token is present.
+    pub fn authorization_header(&self) -> Option<String> {
+        authorization_header_value(&self.access_token)
+    }
+
+    fn require_access_token(&self) -> Result<()> {
+        if self.access_token.trim().is_empty() {
+            bail!(
+                "Not authenticated — missing access token. Sign in again so Sync can use your session."
+            );
+        }
+        Ok(())
+    }
+
     /// Password login against `{base}/api/auth/login` (no prior token required).
     pub async fn login(
         base_url: impl AsRef<str>,
@@ -108,11 +126,40 @@ impl SarcaApi {
         Ok(resp.json().await.context("invalid login response")?)
     }
 
+    /// Exchange a refresh token for a new access/refresh pair.
+    pub async fn refresh(
+        base_url: impl AsRef<str>,
+        refresh_token: impl AsRef<str>,
+    ) -> Result<LoginResponse> {
+        let base = normalize_server_url(base_url.as_ref())?;
+        let refresh = refresh_token.as_ref().trim();
+        if refresh.is_empty() {
+            bail!("Missing refresh token — sign in again");
+        }
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .context("failed to create HTTP client")?;
+        let url = format!("{base}/api/auth/refresh");
+        let resp = client
+            .post(&url)
+            .json(&serde_json::json!({ "refresh_token": refresh }))
+            .send()
+            .await
+            .context("token refresh request failed")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            bail!("token refresh failed: {status}");
+        }
+        Ok(resp.json().await.context("invalid refresh response")?)
+    }
+
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         req.bearer_auth(&self.access_token)
     }
 
     pub async fn list_storages(&self) -> Result<Vec<StorageSummary>> {
+        self.require_access_token()?;
         let url = format!("{}/api/storages", self.base_url);
         let resp = self
             .auth(self.client.get(url))
@@ -247,6 +294,7 @@ impl SarcaApi {
         parent: &str,
         folder_name: &str,
     ) -> Result<()> {
+        self.require_access_token()?;
         let url = format!(
             "{}/api/storages/{storage_id}/files/create_folder",
             self.base_url
@@ -257,9 +305,24 @@ impl SarcaApi {
         });
         let resp = self.auth(self.client.post(url).json(&body)).send().await?;
         if !resp.status().is_success() && resp.status().as_u16() != 409 {
-            bail!("create_folder failed: {}", resp.status());
+            let status = resp.status();
+            let detail = resp.text().await.unwrap_or_default();
+            if detail.trim().is_empty() {
+                bail!("create_folder failed: {status}");
+            }
+            bail!("create_folder failed: {status} {detail}");
         }
         Ok(())
+    }
+}
+
+/// Build `Authorization: Bearer …` value, or `None` when the token is empty.
+pub fn authorization_header_value(access_token: &str) -> Option<String> {
+    let token = access_token.trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(format!("Bearer {token}"))
     }
 }
 
@@ -316,7 +379,8 @@ pub fn normalize_server_url(raw: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_server_url;
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn normalizes_bare_host_to_http() {
@@ -337,5 +401,73 @@ mod tests {
     #[test]
     fn rejects_bad_scheme() {
         assert!(normalize_server_url("ftp://x").is_err());
+    }
+
+    #[test]
+    fn authorization_header_present_when_token_set() {
+        assert_eq!(
+            authorization_header_value("abc.def.ghi").as_deref(),
+            Some("Bearer abc.def.ghi")
+        );
+        let api = SarcaApi::new("http://127.0.0.1:9", "tok-123");
+        assert_eq!(
+            api.authorization_header().as_deref(),
+            Some("Bearer tok-123")
+        );
+    }
+
+    #[test]
+    fn authorization_header_none_when_token_missing() {
+        assert_eq!(authorization_header_value(""), None);
+        assert_eq!(authorization_header_value("   "), None);
+        let api = SarcaApi::new("http://127.0.0.1:9", "");
+        assert_eq!(api.authorization_header(), None);
+    }
+
+    #[tokio::test]
+    async fn create_folder_fails_clearly_without_access_token() {
+        let api = SarcaApi::new("http://127.0.0.1:9", "  ");
+        let err = api
+            .create_folder(Uuid::nil(), "", "Camera")
+            .await
+            .expect_err("empty token must fail before HTTP");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("access token") || msg.contains("Not authenticated"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_folder_sends_authorization_bearer_header() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = sock.read(&mut buf).await.unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let _ = tx.send(req);
+            let _ = sock
+                .write_all(b"HTTP/1.1 409 Conflict\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await;
+        });
+
+        let api = SarcaApi::new(format!("http://{addr}"), "test-access-token");
+        api.create_folder(Uuid::nil(), "", "Camera")
+            .await
+            .expect("409 Conflict is treated as success (folder exists)");
+
+        let req = rx.await.expect("server must receive request");
+        assert!(
+            req.to_ascii_lowercase()
+                .contains("authorization: bearer test-access-token"),
+            "Authorization header missing in request:\n{req}"
+        );
+        assert!(
+            req.contains("/files/create_folder"),
+            "wrong path in request:\n{req}"
+        );
     }
 }
