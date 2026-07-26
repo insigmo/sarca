@@ -72,6 +72,7 @@ const FSListItem = (props) => {
 	/** @type {ReturnType<typeof setTimeout> | null} */
 	let longPressTimer = null
 	let suppressClickAfterLongPress = false
+	let suppressDragAfterLongPress = false
 
 	const openMore = () => Boolean(menuPos())
 
@@ -92,6 +93,7 @@ const FSListItem = (props) => {
 	 */
 	const openContextMenuAt = (clientX, clientY) => {
 		if (isParentNav()) return
+		suppressDragAfterLongPress = true
 		props.onContextMenuItem?.(props.fsElement)
 		setMenuPos({ top: clientY, left: clientX })
 	}
@@ -122,6 +124,11 @@ const FSListItem = (props) => {
 
 	const handleTouchEnd = () => {
 		clearLongPress()
+		if (suppressDragAfterLongPress) {
+			window.setTimeout(() => {
+				suppressDragAfterLongPress = false
+			}, 400)
+		}
 	}
 
 	const handleTouchMove = () => {
@@ -374,7 +381,11 @@ const FSListItem = (props) => {
 		props.onSelectItem(props.fsElement, event)
 	}
 
-	const dragEnabled = () => Boolean(props.draggableItem) && !isParentNav()
+	const dragEnabled = () =>
+		Boolean(props.draggableItem) &&
+		!isParentNav() &&
+		!suppressDragAfterLongPress &&
+		!isMobileTapOpen()
 
 	const handleItemClick = (event) => {
 		if (suppressClickAfterLongPress) {
@@ -449,7 +460,7 @@ const FSListItem = (props) => {
 		return p.endsWith('/') ? p : `${p}/`
 	}
 
-	const showTileStar = () => canFavorite()
+	const showTileStar = () => canFavorite() && !isMobileTapOpen()
 
 	return (
 		<>
