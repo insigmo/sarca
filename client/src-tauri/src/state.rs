@@ -64,6 +64,10 @@ pub struct WebviewSessionTokens {
 }
 
 impl WebviewSessionTokens {
+    /// Parse raw localStorage strings (createLocalStore JSON encoding).
+    /// Production pulls via `READ_WEBVIEW_SESSION_JS` + `read_webview_session`;
+    /// this mirrors that decoding for unit tests.
+    #[cfg(test)]
     pub fn from_local_storage_raw(
         access_raw: Option<&str>,
         refresh_raw: Option<&str>,
@@ -742,6 +746,9 @@ pub fn is_shell_url(url: &Url) -> bool {
 }
 
 /// Local `sync.html` URL derived from the remembered shell origin.
+/// Kept for tests; production `navigate_to_sync_settings` opens in-app
+/// Settings → Sync (or the connect shell when disconnected).
+#[cfg(test)]
 pub fn sync_settings_url(shell: &Url) -> Result<Url, String> {
     let mut base = shell.clone();
     base.set_path("/");
