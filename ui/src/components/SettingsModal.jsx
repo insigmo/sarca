@@ -668,7 +668,10 @@ const SettingsModal = () => {
 								</Show>
 
 								<Show when={tab() === 'sync' && showSyncTab()}>
-									<SettingsSyncPanel storageId={chrome.storageId()} />
+									<SettingsSyncPanel
+										storageId={chrome.storageId()}
+										storageName={chrome.storageName()}
+									/>
 								</Show>
 
 								<Show when={tab() === 'security'}>
