@@ -21,10 +21,11 @@ import { alertStore } from './AlertStack'
 import Access from './Access'
 import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
-import { isNativeClient, openNativeSyncSettings } from '../common/nativeClient'
+import { nativeClientStore, openNativeSyncSettings } from '../common/nativeClient'
 
 const SettingsModal = () => {
 	const { isOpen, closeSettings, tab, setTab } = settingsStore
+	const { isNative, refresh: refreshNative } = nativeClientStore
 	const chrome = filesChromeStore
 	const { addAlert } = alertStore
 	const [, setStore] = createLocalStore()
@@ -93,6 +94,8 @@ const SettingsModal = () => {
 	createEffect(() => {
 		if (!isOpen()) return
 
+		// Re-check after late native inject (Android remote WebView).
+		refreshNative()
 		refreshStorages()
 		document.body.style.overflow = 'hidden'
 
@@ -158,7 +161,7 @@ const SettingsModal = () => {
 							<div>
 								<h2 id="settings-modal-title">Settings</h2>
 								<p class="settings-modal__sub">
-									{isNativeClient()
+									{isNative()
 										? 'General, access, trash, storage, and sync'
 										: 'General, access, trash, and storage'}
 								</p>
@@ -246,7 +249,7 @@ const SettingsModal = () => {
 										<span class="settings-nav__desc">Bot &amp; channels</span>
 									</span>
 								</button>
-								<Show when={isNativeClient()}>
+								<Show when={isNative()}>
 									<button
 										type="button"
 										class="settings-nav__item"
