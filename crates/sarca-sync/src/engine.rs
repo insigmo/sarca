@@ -108,13 +108,38 @@ impl SyncEngine {
     }
 
     /// Like [`tick`], but only processes bindings for which `allow` returns true.
+    /// Auto-upload bindings run before two-way sync so a huge sync folder cannot
+    /// starve Camera uploads for the whole poll interval.
     pub async fn tick_filtered<F>(&self, allow: F) -> Result<()>
     where
         F: Fn(&Binding) -> bool,
     {
-        let bindings = self.index.list_bindings()?;
+        let mut bindings: Vec<Binding> = self
+            .index
+            .list_bindings()?
+            .into_iter()
+            .filter(|b| b.enabled && allow(b))
+            .collect();
+        bindings.sort_by_key(|b| match b.mode {
+            BindingMode::AutoUpload => 0,
+            BindingMode::Sync => 1,
+        });
         let mut statuses = Vec::new();
-        for binding in bindings.into_iter().filter(|b| b.enabled && allow(b)) {
+        for binding in bindings {
+            // Publish in-progress status so the UI is not blank for long ticks.
+            {
+                let mut guard = self.statuses.write().await;
+                let mut live = statuses.clone();
+                live.push(SyncStatus {
+                    binding_id: binding.id.clone(),
+                    cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
+                    last_error: None,
+                    uploading: 0,
+                    downloading: 0,
+                    conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
+                });
+                *guard = live;
+            }
             let status = match self.sync_binding(&binding).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -130,6 +155,7 @@ impl SyncEngine {
                 }
             };
             statuses.push(status);
+            *self.statuses.write().await = statuses.clone();
         }
         *self.statuses.write().await = statuses;
         Ok(())
@@ -240,12 +266,16 @@ impl SyncEngine {
             tokio::fs::create_dir_all(&root).await?;
             return Ok(0);
         }
+        let media_only = matches!(binding.mode, BindingMode::AutoUpload);
         let mut uploaded = 0usize;
         for file in WalkDir::new(&root).into_iter().filter_map(Result::ok) {
             if !file.file_type().is_file() {
                 continue;
             }
             let path = file.path();
+            if media_only && !is_media_file(path) {
+                continue;
+            }
             let rel = path
                 .strip_prefix(&root)
                 .unwrap_or(path)
@@ -299,7 +329,15 @@ impl SyncEngine {
                     Some(mtime),
                     Some(&hash),
                 )
-                .await?;
+                .await
+                .with_context(|| {
+                    format!(
+                        "upload {} → {}/{}",
+                        path.display(),
+                        remote_parent,
+                        filename
+                    )
+                })?;
             self.index.upsert_entry(
                 &binding.id,
                 &IndexEntry {
@@ -312,6 +350,14 @@ impl SyncEngine {
                 },
             )?;
             uploaded += 1;
+            // Live progress for long Camera uploads (Telegram is slow).
+            if media_only {
+                let mut guard = self.statuses.write().await;
+                if let Some(s) = guard.iter_mut().find(|s| s.binding_id == binding.id) {
+                    s.uploading = uploaded;
+                    s.last_error = None;
+                }
+            }
         }
 
         // Detect local deletes for Sync mode.
@@ -509,6 +555,35 @@ fn conflict_path(path: &Path) -> PathBuf {
     parent.join(name)
 }
 
+/// Photo/video extensions accepted for [`BindingMode::AutoUpload`].
+pub fn is_media_file(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "jpg"
+            | "jpeg"
+            | "png"
+            | "gif"
+            | "webp"
+            | "heic"
+            | "heif"
+            | "tif"
+            | "tiff"
+            | "bmp"
+            | "avif"
+            | "mp4"
+            | "mov"
+            | "m4v"
+            | "mkv"
+            | "webm"
+            | "avi"
+            | "3gp"
+            | "3gpp"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -527,5 +602,16 @@ mod tests {
     fn conflict_name() {
         let p = conflict_path(Path::new("/tmp/foo.txt"));
         assert_eq!(p.file_name().unwrap(), "foo (conflict).txt");
+    }
+
+    #[test]
+    fn media_filter_accepts_photos_and_videos() {
+        assert!(is_media_file(Path::new("/home/beta/Pictures/cat.jpg")));
+        assert!(is_media_file(Path::new("x.PNG")));
+        assert!(is_media_file(Path::new("clip.MP4")));
+        assert!(is_media_file(Path::new("a.webp")));
+        assert!(!is_media_file(Path::new("/home/beta/Pictures/index.html")));
+        assert!(!is_media_file(Path::new("notes.txt")));
+        assert!(!is_media_file(Path::new("noext")));
     }
 }

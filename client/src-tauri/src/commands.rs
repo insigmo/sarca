@@ -124,11 +124,23 @@ pub fn is_wifi_connected() -> bool {
 }
 
 /// Whether auto-upload bindings should run given prefs + connectivity.
+///
+/// `wifi_only` is a mobile (cellular) concern. On desktop there is no cellular
+/// radio, so the preference is a no-op — otherwise a down Wi‑Fi NIC with working
+/// ethernet silently skipped Camera uploads forever.
 pub fn allow_auto_upload(prefs: &ClientPrefs) -> bool {
     if !prefs.wifi_only {
         return true;
     }
-    is_wifi_connected()
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        is_wifi_connected()
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _ = prefs;
+        true
+    }
 }
 
 #[tauri::command]
@@ -504,6 +516,20 @@ pub async fn add_binding(
     let _ = ensure_sync_session(&app, &state).await;
     let binding =
         new_binding(&storage_id, remote_root, local_path, &mode).map_err(|e| e.to_string())?;
+    // Only one Camera auto-upload binding at a time — UI races used to leave duplicates
+    // that re-uploaded the same gallery three times per tick.
+    if matches!(binding.mode, BindingMode::AutoUpload) {
+        let existing = state.engine.list_bindings().map_err(|e| e.to_string())?;
+        for b in existing
+            .into_iter()
+            .filter(|b| matches!(b.mode, BindingMode::AutoUpload) && b.id != binding.id)
+        {
+            state
+                .engine
+                .remove_binding(&b.id)
+                .map_err(|e| e.to_string())?;
+        }
+    }
     state
         .engine
         .upsert_binding(&binding)
@@ -689,5 +715,20 @@ mod tests {
         assert!(SESSION_EXPIRED_MSG.contains("Session expired"));
         assert!(is_unauthorized("create_folder failed: 401 Unauthorized"));
         assert!(!is_unauthorized("create_folder failed: 500"));
+    }
+
+    #[test]
+    fn desktop_wifi_only_does_not_block_auto_upload() {
+        let prefs = ClientPrefs {
+            wifi_only: true,
+            ..Default::default()
+        };
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            assert!(
+                allow_auto_upload(&prefs),
+                "desktop must not silently skip auto-upload when wifi_only=true"
+            );
+        }
     }
 }
