@@ -16,6 +16,7 @@
     "shell:allow-open",
     "allow-platform-label",
     "allow-get-session",
+    "allow-update-session",
     "allow-connect",
     "allow-disconnect",
     "allow-open-app",
