@@ -489,6 +489,7 @@ jobs:
           if [ ! -d src-tauri/gen/android ]; then
             pnpm tauri android init --ci --skip-targets-install
           fi
+          bash scripts/patch-android-http.sh src-tauri/gen/android
 
           # Mobile ACL: drop desktop-only process permission if regenerated.
           python3 -c "import json,pathlib; p=pathlib.Path('src-tauri/capabilities/default.json'); data=json.loads(p.read_text()); data['permissions']=[x for x in data.get('permissions',[]) if not str(x).startswith('process:')]; p.write_text(json.dumps(data,indent=2)+'\n')"
