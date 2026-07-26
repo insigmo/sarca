@@ -541,7 +541,10 @@ const StorageSettingsModal = (props) => {
 									</Show>
 
 									<Show when={tab() === 'sync' && isNative()}>
-										<SettingsSyncPanel storageId={props.storage?.id} />
+										<SettingsSyncPanel
+											storageId={props.storage?.id}
+											storageName={props.storage?.name}
+										/>
 									</Show>
 
 									<Show when={tab() === 'telegram'}>

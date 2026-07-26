@@ -3587,6 +3587,17 @@ a.default-link:hover {
 	border-bottom: 1px solid color-mix(in srgb, var(--sarca-ink, #1b1a19) 8%, transparent);
 }
 
+.settings-sync-panel__storage-locked {
+	margin: 0;
+	padding: 10px 12px;
+	border: 1px solid var(--sarca-border);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--sarca-ink) 4%, transparent);
+	font-size: 0.95rem;
+	line-height: 1.35;
+	color: var(--sarca-ink);
+}
+
 .settings-sync-panel__meta {
 	margin: 0 0 8px;
 	font-size: 0.85rem;
