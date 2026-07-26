@@ -12,8 +12,8 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
 use crate::state::{
-    navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding, AppSyncState,
-    ClientPrefs, ServerConfig,
+    navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding,
+    read_webview_session, session_ready_for_sync, AppSyncState, ClientPrefs, ServerConfig,
 };
 
 #[derive(Serialize)]
@@ -325,12 +325,121 @@ pub fn default_gallery_path() -> String {
     }
 }
 
-#[tauri::command]
-pub async fn list_storages(state: State<'_, AppSyncState>) -> Result<Vec<StorageDto>, String> {
+/// Pull live tokens from the webview into native state, then return the server config.
+/// Shows "sign in again" only when both native and webview lack an access token.
+async fn ensure_sync_session(
+    app: &AppHandle,
+    state: &AppSyncState,
+) -> Result<ServerConfig, String> {
+    let _ = state.sync_session_from_webview(app).await;
     let cfg = state.server.lock().await.clone();
-    if !cfg.is_connected() {
-        return Err("Not connected".into());
+    if cfg.is_connected() {
+        return Ok(cfg);
     }
+    let webview_tokens = read_webview_session(app).await;
+    let webview_has = webview_tokens
+        .as_ref()
+        .map(|t| t.has_access())
+        .unwrap_or(false);
+    if !session_ready_for_sync(false, webview_has) {
+        return Err(
+            "Not connected — sign in again so Sync can use your session".into(),
+        );
+    }
+    // Webview had tokens but first apply failed — retry once with explicit apply.
+    if let Some(tokens) = webview_tokens {
+        state
+            .apply_webview_session(
+                tokens.access_token,
+                tokens.refresh_token,
+                tokens.email,
+                tokens.email_verified,
+            )
+            .await?;
+        return Ok(state.server.lock().await.clone());
+    }
+    Err("Not connected — sign in again so Sync can use your session".into())
+}
+
+const SESSION_EXPIRED_MSG: &str =
+    "Session expired — sign in again so Sync can create remote folders";
+
+fn is_unauthorized(msg: &str) -> bool {
+    msg.contains("401") || msg.to_ascii_lowercase().contains("unauthorized")
+}
+
+/// On 401: re-pull webview tokens silently, retry; then refresh+retry.
+/// Only surface SESSION_EXPIRED_MSG when the webview also has no usable tokens.
+async fn create_folder_with_auth_retry(
+    app: &AppHandle,
+    state: &AppSyncState,
+    mut cfg: ServerConfig,
+    sid: uuid::Uuid,
+    parent: &str,
+    name: &str,
+) -> Result<(), String> {
+    match try_create_folder(&cfg, sid, parent, name).await {
+        Ok(()) => return Ok(()),
+        Err(e) => {
+            let msg = e.to_string();
+            if !is_unauthorized(&msg) {
+                return Err(msg);
+            }
+        }
+    }
+
+    // Silent re-sync from webview (covers missed watch / JSON-quoted tokens fixed in state).
+    if let Some(tokens) = state.sync_session_from_webview(app).await {
+        cfg = state.server.lock().await.clone();
+        if try_create_folder(&cfg, sid, parent, name).await.is_ok() {
+            let _ = tokens;
+            return Ok(());
+        }
+    } else {
+        cfg = state.server.lock().await.clone();
+    }
+
+    if !cfg.refresh_token.trim().is_empty() {
+        match SarcaApi::refresh(&cfg.base_url, &cfg.refresh_token).await {
+            Ok(tokens) => {
+                cfg.access_token = tokens.access_token;
+                cfg.refresh_token = tokens.refresh_token;
+                cfg.email_verified = tokens.email_verified;
+                state
+                    .save_server(&cfg)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return try_create_folder(&cfg, sid, parent, name)
+                    .await
+                    .map_err(|e| e.to_string());
+            }
+            Err(_) => {
+                // Fall through — only expire if webview is also empty.
+            }
+        }
+    }
+
+    let webview_has = read_webview_session(app)
+        .await
+        .map(|t| t.has_access())
+        .unwrap_or(false);
+    if webview_has {
+        // Tokens exist in UI but API still rejects — likely server/permission issue,
+        // not a missing client session. Avoid the misleading "Session expired" copy.
+        return Err(
+            "Could not create remote folder with the current session — try again or re-open Sync"
+                .into(),
+        );
+    }
+    Err(SESSION_EXPIRED_MSG.into())
+}
+
+#[tauri::command]
+pub async fn list_storages(
+    app: AppHandle,
+    state: State<'_, AppSyncState>,
+) -> Result<Vec<StorageDto>, String> {
+    let cfg = ensure_sync_session(&app, &state).await?;
     let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
     let list = api.list_storages().await.map_err(|e| e.to_string())?;
     Ok(list
@@ -344,17 +453,13 @@ pub async fn list_storages(state: State<'_, AppSyncState>) -> Result<Vec<Storage
 
 #[tauri::command]
 pub async fn ensure_remote_folder(
+    app: AppHandle,
     state: State<'_, AppSyncState>,
     storage_id: String,
     parent: String,
     name: String,
 ) -> Result<String, String> {
-    let mut cfg = state.server.lock().await.clone();
-    if !cfg.is_connected() {
-        return Err(
-            "Not connected — sign in again so Sync can use your session".into(),
-        );
-    }
+    let cfg = ensure_sync_session(&app, &state).await?;
     let name = name.trim().to_owned();
     if name.is_empty() {
         return Err("Folder name is required".into());
@@ -362,35 +467,7 @@ pub async fn ensure_remote_folder(
     let sid = uuid::Uuid::parse_str(&storage_id).map_err(|e| e.to_string())?;
     let parent = parent.trim().trim_matches('/').to_owned();
 
-    // If the stored access token is stale but we still have a refresh token,
-    // renew before create_folder (covers background sync / missed update_session).
-    if let Err(e) = try_create_folder(&cfg, sid, &parent, &name).await {
-        let msg = e.to_string();
-        let unauthorized = msg.contains("401") || msg.to_ascii_lowercase().contains("unauthorized");
-        if unauthorized && !cfg.refresh_token.trim().is_empty() {
-            let tokens = SarcaApi::refresh(&cfg.base_url, &cfg.refresh_token)
-                .await
-                .map_err(|_| {
-                    "Session expired — sign in again so Sync can create remote folders".to_string()
-                })?;
-            cfg.access_token = tokens.access_token;
-            cfg.refresh_token = tokens.refresh_token;
-            cfg.email_verified = tokens.email_verified;
-            state
-                .save_server(&cfg)
-                .await
-                .map_err(|e| e.to_string())?;
-            try_create_folder(&cfg, sid, &parent, &name)
-                .await
-                .map_err(|e| e.to_string())?;
-        } else if unauthorized {
-            return Err(
-                "Session expired — sign in again so Sync can create remote folders".into(),
-            );
-        } else {
-            return Err(msg);
-        }
-    }
+    create_folder_with_auth_retry(&app, &state, cfg, sid, &parent, &name).await?;
 
     let remote = if parent.is_empty() {
         name
@@ -416,13 +493,15 @@ pub fn list_bindings(state: State<'_, AppSyncState>) -> Result<Vec<Binding>, Str
 }
 
 #[tauri::command]
-pub fn add_binding(
+pub async fn add_binding(
+    app: AppHandle,
     state: State<'_, AppSyncState>,
     storage_id: String,
     remote_root: String,
     local_path: String,
     mode: String,
 ) -> Result<Binding, String> {
+    let _ = ensure_sync_session(&app, &state).await;
     let binding =
         new_binding(&storage_id, remote_root, local_path, &mode).map_err(|e| e.to_string())?;
     state
@@ -438,7 +517,8 @@ pub fn remove_binding(state: State<'_, AppSyncState>, id: String) -> Result<(), 
 }
 
 #[tauri::command]
-pub async fn sync_now(state: State<'_, AppSyncState>) -> Result<(), String> {
+pub async fn sync_now(app: AppHandle, state: State<'_, AppSyncState>) -> Result<(), String> {
+    let _ = ensure_sync_session(&app, &state).await;
     let prefs = load_prefs(&state);
     let allow_auto = allow_auto_upload(&prefs);
     state
@@ -559,5 +639,55 @@ mod tests {
         assert!(!cfg.is_connected());
         let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
         assert_eq!(api.authorization_header(), None);
+    }
+
+    #[test]
+    fn ensure_path_refuses_only_when_native_and_webview_empty() {
+        use crate::state::{
+            merge_session_tokens, session_ready_for_sync, WebviewSessionTokens,
+        };
+
+        // Both empty → refuse
+        assert!(!session_ready_for_sync(false, false));
+
+        // Webview has JSON-encoded tokens → treat as ready (pull will update native)
+        let webview = WebviewSessionTokens::from_local_storage_raw(
+            Some("\"pulled-access\""),
+            Some("\"pulled-refresh\""),
+            None,
+        )
+        .expect("webview tokens");
+        assert!(session_ready_for_sync(false, webview.has_access()));
+
+        // Pulling into native updates state (simulates ensure_sync_session apply)
+        let mut cfg = ServerConfig {
+            base_url: "http://localhost:8001".into(),
+            ..Default::default()
+        };
+        assert!(!cfg.is_connected());
+        merge_session_tokens(
+            &mut cfg,
+            &webview.access_token,
+            webview.refresh_token.as_deref(),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(cfg.access_token, "pulled-access");
+        assert_eq!(cfg.refresh_token, "pulled-refresh");
+        assert!(cfg.is_connected());
+        let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
+        assert_eq!(
+            api.authorization_header().as_deref(),
+            Some("Bearer pulled-access"),
+            "must not send JSON quotes in Authorization header"
+        );
+    }
+
+    #[test]
+    fn session_expired_message_is_stable() {
+        assert!(SESSION_EXPIRED_MSG.contains("Session expired"));
+        assert!(is_unauthorized("create_folder failed: 401 Unauthorized"));
+        assert!(!is_unauthorized("create_folder failed: 500"));
     }
 }
