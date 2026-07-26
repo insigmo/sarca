@@ -6,6 +6,7 @@ use std::{
 use sarca_sync::{normalize_server_url, Binding, BindingMode, SarcaApi, StorageSummary, SyncStatus};
 use serde::Serialize;
 use tauri::{AppHandle, State};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_dialog::DialogExt;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tokio::sync::oneshot;
@@ -237,14 +238,7 @@ pub fn open_sync_settings(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String> {
-    // Android/iOS: system folder pickers return content:// trees the sync engine
-    // cannot walk. Tell the UI to fall back to a typed path prompt.
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        let _ = app;
-        return Err("FOLDER_PICKER_USE_PROMPT".into());
-    }
-
+    // Desktop: native OS folder dialog (async, non-blocking).
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let (tx, rx) = oneshot::channel();
@@ -259,9 +253,22 @@ pub async fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String>
             Ok(Err(e)) => return Err(e.to_string()),
             Err(_) => return Err("Folder picker timed out".into()),
         };
-        Ok(folder
+        return Ok(folder
             .and_then(|p| p.into_path().ok())
-            .map(|p| p.to_string_lossy().into_owned()))
+            .map(|p| p.to_string_lossy().into_owned()));
+    }
+
+    // Android: SAF document-tree picker → filesystem path when resolvable.
+    #[cfg(target_os = "android")]
+    {
+        return crate::folder_picker::pick_folder_android(&app).await;
+    }
+
+    // iOS: no reliable folder path for walkdir yet — typed path fallback.
+    #[cfg(target_os = "ios")]
+    {
+        let _ = app;
+        Err("FOLDER_PICKER_USE_PROMPT".into())
     }
 }
 

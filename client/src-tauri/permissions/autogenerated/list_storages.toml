@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-storages"
+description = "Enables the list_storages command without any pre-configured scope."
+commands.allow = ["list_storages"]
+
+[[permission]]
+identifier = "deny-list-storages"
+description = "Denies the list_storages command without any pre-configured scope."
+commands.deny = ["list_storages"]

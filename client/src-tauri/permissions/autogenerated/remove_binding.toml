@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-remove-binding"
+description = "Enables the remove_binding command without any pre-configured scope."
+commands.allow = ["remove_binding"]
+
+[[permission]]
+identifier = "deny-remove-binding"
+description = "Denies the remove_binding command without any pre-configured scope."
+commands.deny = ["remove_binding"]
