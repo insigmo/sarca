@@ -363,10 +363,6 @@ jobs:
           for f in "${BUNDLE}/dmg/"*.dmg; do
             cp -a "$f" "${OUT}/${ASSET}.dmg"
           done
-          # Windows portable .exe (alongside the NSIS setup installer).
-          if [ -f "target/${TARGET}/release/sarca-client.exe" ]; then
-            cp "target/${TARGET}/release/sarca-client.exe" "${OUT}/${ASSET}.exe"
-          fi
 
           echo "Release files:"
           find "${OUT}" -maxdepth 1 -type f | sort
@@ -714,12 +710,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-assets
-          # Drop checksums, apksigner sidecars, AppImages, and naked Unix binaries.
+          # Drop checksums, apksigner sidecars, AppImages, naked Unix binaries, and portable Windows client exes.
           while IFS= read -r -d '' f; do
             base="$(basename "$f")"
             case "$base" in
               *.sha256|*.idsig|*.AppImage) continue ;;
               sarca_client_linux_amd64|sarca_client_linux_arm64|sarca_client_macos_arm64) continue ;;
+              # Drop portable Windows client exes; keep *-setup.exe installers only.
+              sarca_client_windows_*.exe)
+                case "$base" in
+                  *-setup.exe) ;;
+                  *) continue ;;
+                esac
+                ;;
             esac
             cp -a "$f" "release-assets/${base}"
           done < <(find artifacts -type f -print0)
@@ -760,9 +763,7 @@ jobs:
               sarca_client_linux_arm64.deb) echo "Client — Linux aarch64 (.deb)" ;;
               sarca_client_macos_arm64.dmg) echo "Client — macOS Apple Silicon (.dmg)" ;;
               sarca_client_windows_amd64-setup.exe) echo "Client — Windows x86_64 (installer)" ;;
-              sarca_client_windows_amd64.exe) echo "Client — Windows x86_64 (portable)" ;;
               sarca_client_windows_arm64-setup.exe) echo "Client — Windows ARM64 (installer)" ;;
-              sarca_client_windows_arm64.exe) echo "Client — Windows ARM64 (portable)" ;;
               *) echo "$1" ;;
             esac
           }
