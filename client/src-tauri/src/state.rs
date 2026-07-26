@@ -69,6 +69,7 @@ impl SessionInject {
     localStorage.setItem('access_token', {access});
     localStorage.setItem('refresh_token', {refresh});
     localStorage.setItem('user', {user});
+    localStorage.setItem('sarca_native', '1');
     if (sessionStorage.getItem('__sarca_native_session') !== '1') {{
       sessionStorage.setItem('__sarca_native_session', '1');
       location.replace('/');
@@ -225,4 +226,17 @@ pub fn navigate_to_shell(app: &AppHandle) -> Result<(), String> {
         .shell_url()
         .unwrap_or_else(|| Url::parse("tauri://localhost").expect("valid shell url"));
     window.navigate(url).map_err(|e| e.to_string())
+}
+
+pub fn navigate_to_sync_settings(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window missing".to_string())?;
+    let state = app.state::<AppSyncState>();
+    let base = state
+        .shell_url()
+        .unwrap_or_else(|| Url::parse("tauri://localhost").expect("valid shell url"));
+    state.remember_shell_url(base.clone());
+    let sync_url = base.join("sync.html").map_err(|e| e.to_string())?;
+    window.navigate(sync_url).map_err(|e| e.to_string())
 }
