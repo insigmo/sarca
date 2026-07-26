@@ -56,7 +56,7 @@ async function refreshBindings() {
 
   const media = bindings.find((b) => b.mode === "auto_upload");
   $("mediaStatus").textContent = media
-    ? `On → ${media.local_path} (remote ${media.remote_root || "Media"})`
+    ? `On → ${media.local_path} (remote ${media.remote_root || "Camera"})`
     : "Off";
 
   if (!bindings.length) {
@@ -148,7 +148,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       const remote = await invoke("ensure_remote_folder", {
         storageId,
         parent: "",
-        name: "Media",
+        name: "Camera",
       });
       const bindings = await invoke("list_bindings");
       for (const b of bindings.filter((x) => x.mode === "auto_upload")) {
@@ -156,7 +156,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       }
       await invoke("add_binding", {
         storageId,
-        remoteRoot: String(remote).replace(/\/$/, "") || "Media",
+        remoteRoot: String(remote).replace(/\/$/, "") || "Camera",
         localPath: path,
         mode: "auto_upload",
       });
