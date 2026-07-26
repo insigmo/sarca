@@ -146,6 +146,13 @@ tasks:
     cmds:
       - pnpm tauri build
 
+  install:
+    desc: Build Linux .deb client and install locally (sudo apt-get; prompts for password)
+    deps: [client:install]
+    dir: client
+    cmds:
+      - pnpm run install:deb
+
   client:build:linux-amd64:
     desc: Build Linux amd64 client bundle
     deps: [client:install]
