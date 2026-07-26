@@ -21,6 +21,7 @@ import { alertStore } from './AlertStack'
 import Access from './Access'
 import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
+import { isNativeClient, openNativeSyncSettings } from '../common/nativeClient'
 
 const SettingsModal = () => {
 	const { isOpen, closeSettings, tab, setTab } = settingsStore
@@ -30,20 +31,6 @@ const SettingsModal = () => {
 	const navigate = useNavigate()
 	const mode = useThemeMode()
 	const { open: openStorageSettings } = storageSettingsStore
-
-	const isNativeClient = () => {
-		try {
-			return localStorage.getItem('sarca_native') === '1'
-		} catch {
-			return false
-		}
-	}
-
-	const openNativeSyncSettings = (event) => {
-		event?.preventDefault?.()
-		// Cross-origin webview cannot invoke; Rust intercepts this scheme.
-		window.location.assign('sarca-sync://open')
-	}
 
 	/** @type {[import("solid-js").Accessor<import("../api").StorageWithInfo[]>, any]} */
 	const [storages, setStorages] = createSignal([])
@@ -497,11 +484,16 @@ const SettingsModal = () => {
 										</p>
 										<ul class="settings-sync__status">
 											<li>
-												Media auto-upload and folder sync are managed in the app.
+												Open the full Sync page to enable Media auto-upload or
+												folder sync.
 											</li>
 											<li>
-												On desktop, you can also open Sync from the tray menu
-												(Sync settings).
+												Everywhere: blue <strong>Sync</strong> button
+												(bottom-right) or sidebar <strong>Sync</strong>.
+											</li>
+											<li>
+												Desktop: menu bar <strong>Sarca → Sync settings</strong>,
+												or tray → Sync settings.
 											</li>
 										</ul>
 										<Button

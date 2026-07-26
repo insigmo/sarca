@@ -142,6 +142,31 @@
         color: var(--sarca-ink-soft);
         opacity: 0.8;
       }
+      .secondary-actions {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .secondary-actions button {
+        width: 100%;
+        margin-top: 0;
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: 1px solid var(--sarca-border);
+        background: transparent;
+        color: var(--sarca-ink);
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .secondary-actions button:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--sarca-paper) 55%, transparent);
+      }
+      .secondary-actions button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
     </style>
   </head>
   <body>
@@ -181,9 +206,15 @@
         <p id="error" class="error" aria-live="polite"></p>
         <button id="submit" type="submit">Connect</button>
       </form>
+      <div class="secondary-actions">
+        <button type="button" id="openSync" disabled title="Connect first">
+          Sync settings
+        </button>
+      </div>
       <p class="hint">
         After connecting you get the same Sarca interface as in the browser —
-        files, buttons, and settings. On phones the mobile layout is used automatically.
+        files, buttons, and settings. Use <strong>Sync settings</strong> for
+        Media auto-upload and folder sync (also in the app menu / Sync button).
       </p>
       <p id="platform" class="platform"></p>
     </main>

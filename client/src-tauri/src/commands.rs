@@ -130,6 +130,7 @@ pub fn open_sync_settings(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String> {
     // tauri-plugin-dialog only exposes folder pickers on desktop.
+    // On mobile, return Ok(None) so the Sync UI can fall back to a typed path.
     #[cfg(desktop)]
     {
         let folder = app
@@ -144,7 +145,7 @@ pub fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String> {
     #[cfg(mobile)]
     {
         let _ = app;
-        Err("Folder picker is not available on mobile yet".into())
+        Ok(None)
     }
 }
 
