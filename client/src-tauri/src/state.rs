@@ -177,14 +177,22 @@ pub const OPEN_SYNC_JS: &str = r#"
     });
   }
   function __sarcaInvoke(cmd, args){
-    try {
-      if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
-        return window.__TAURI_INTERNALS__.invoke(cmd, args || {});
-      }
-    } catch (_) {}
+    // Prefer custom-protocol IPC for remote-origin Settings pages so Sync works
+    // even when Tauri ACL is misconfigured. Fall back to __TAURI_INTERNALS__
+    // (local shell / when ACL allows) and navigation IPC.
+    function viaTauri(){
+      try {
+        if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
+          return window.__TAURI_INTERNALS__.invoke(cmd, args || {});
+        }
+      } catch (_) {}
+      return Promise.reject(new Error('Tauri invoke unavailable'));
+    }
     return __sarcaFetchInvoke(cmd, args).catch(function(fetchErr){
-      return __sarcaNavInvoke(cmd, args).catch(function(navErr){
-        throw fetchErr || navErr || new Error('Native bridge unavailable');
+      return viaTauri().catch(function(tauriErr){
+        return __sarcaNavInvoke(cmd, args).catch(function(navErr){
+          throw fetchErr || tauriErr || navErr || new Error('Native bridge unavailable');
+        });
       });
     });
   }
