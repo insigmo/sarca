@@ -27,8 +27,12 @@ pub fn run() {
             PluginBuilder::<tauri::Wry, ()>::new("sarca-nav")
                 // Mark every navigation as native *before* page scripts when the
                 // platform supports document-start JS (desktop). On Android remote
-                // URLs this may run late — NATIVE_CHROME_JS + UI polling cover that.
-                .js_init_script(state::NATIVE_MARK_JS)
+                // URLs this may run late — native_chrome_js + UI polling cover that.
+                .js_init_script(format!(
+                    "{}\n{}",
+                    state::NATIVE_MARK_JS,
+                    state::OPEN_SYNC_JS
+                ))
                 .on_navigation(|webview, url| {
                     // Custom scheme (tray / older clients) and HTTPS query fallback
                     // (reliable on Android WebView where unknown schemes are flaky).
@@ -55,6 +59,18 @@ pub fn run() {
                 return;
             }
 
+            // Backup if `on_navigation` missed a same-document query change:
+            // never leave the user on a remote URL that requested Sync.
+            let wants_sync = payload
+                .url()
+                .query_pairs()
+                .any(|(k, v)| k == "__sarca_open_sync" && v == "1");
+            if wants_sync {
+                let app = webview.app_handle().clone();
+                let _ = navigate_to_sync_settings(&app);
+                return;
+            }
+
             if is_shell_url(payload.url()) {
                 return;
             }
@@ -64,7 +80,7 @@ pub fn run() {
             }
             // After the one-shot session inject (and on every later remote load),
             // keep a visible Sync FAB — Linux trays are often hidden; mobile has none.
-            let _ = webview.eval(state::NATIVE_CHROME_JS);
+            let _ = webview.eval(state::native_chrome_js());
         });
 
     // process + autostart are desktop-oriented.
