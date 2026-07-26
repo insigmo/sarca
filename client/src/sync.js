@@ -166,6 +166,11 @@ window.addEventListener("DOMContentLoaded", async () => {
         localPath: path,
         mode: "auto_upload",
       });
+      try {
+        await invoke("sync_now");
+      } catch (syncErr) {
+        setMsg(String(syncErr));
+      }
       await refreshBindings();
     } catch (e) {
       setMsg(String(e));
