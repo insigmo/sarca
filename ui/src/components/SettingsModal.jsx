@@ -10,6 +10,7 @@ import { clearSession } from '../common/auth'
 import { settingsStore } from '../common/settings'
 import { filesChromeStore } from '../common/filesChrome'
 import { storageSettingsStore } from '../common/storageSettings'
+import { formatBytes, nativeInvoke } from '../common/nativeBridge'
 import {
 	THEMES,
 	setThemeMode,
@@ -21,14 +22,15 @@ import { alertStore } from './AlertStack'
 import Access from './Access'
 import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
-import { nativeClientStore, openNativeSyncSettings } from '../common/nativeClient'
+import SettingsSyncPanel from './SettingsSyncPanel'
+import { nativeClientStore } from '../common/nativeClient'
 
 const SettingsModal = () => {
 	const { isOpen, closeSettings, tab, setTab } = settingsStore
 	const { isNative, refresh: refreshNative } = nativeClientStore
 	const chrome = filesChromeStore
 	const { addAlert } = alertStore
-	const [, setStore] = createLocalStore()
+	const [store, setStore] = createLocalStore()
 	const navigate = useNavigate()
 	const mode = useThemeMode()
 	const { open: openStorageSettings } = storageSettingsStore
@@ -42,6 +44,15 @@ const SettingsModal = () => {
 	const [isGrantVisible, setIsGrantVisible] = createSignal(false)
 	const [trashRetentionDays, setTrashRetentionDays] = createSignal(30)
 	const [trashSettingsSaving, setTrashSettingsSaving] = createSignal(false)
+	const [about, setAbout] = createSignal({ version: '', platform: '' })
+	const [cacheBytes, setCacheBytes] = createSignal(0)
+	const [sessionInfo, setSessionInfo] = createSignal({ base_url: '', email: '' })
+	const [lockEnabled, setLockEnabled] = createSignal(false)
+	const [pinDraft, setPinDraft] = createSignal('')
+	const [pinConfirm, setPinConfirm] = createSignal('')
+	const [securityMsg, setSecurityMsg] = createSignal('')
+
+	const showSyncTab = () => isNative() && Boolean(chrome.storageId())
 
 	const logout = () => {
 		closeSettings()
@@ -124,6 +135,105 @@ const SettingsModal = () => {
 			.catch(() => {})
 	})
 
+	createEffect(() => {
+		if (!isOpen() || tab() !== 'general') return
+		const openId = chrome.storageId()
+		if (openId) refreshStorages()
+		if (isNative()) {
+			nativeInvoke('get_about')
+				.then((a) => setAbout(a || { version: '', platform: '' }))
+				.catch(() => {})
+			nativeInvoke('get_cache_size')
+				.then((c) => setCacheBytes(Number(c?.bytes) || 0))
+				.catch(() => setCacheBytes(0))
+			nativeInvoke('get_session')
+				.then((s) =>
+					setSessionInfo({
+						base_url: s?.base_url || '',
+						email: s?.email || '',
+					}),
+				)
+				.catch(() => {})
+		}
+	})
+
+	createEffect(() => {
+		if (!isOpen() || tab() !== 'security' || !isNative()) return
+		nativeInvoke('get_client_prefs')
+			.then((p) => setLockEnabled(Boolean(p?.app_lock_enabled)))
+			.catch(() => {})
+	})
+
+	createEffect(() => {
+		if (!showSyncTab() && tab() === 'sync') setTab('general')
+	})
+
+	const occupiedGb = () => {
+		const id = chrome.storageId()
+		const s = storages().find((x) => x.id === id)
+		const bytes = Number(s?.size) || 0
+		return (bytes / 1024 ** 3).toFixed(2)
+	}
+
+	const clearCache = async () => {
+		try {
+			await nativeInvoke('clear_local_cache')
+			setCacheBytes(0)
+			addAlert('Cache cleared', 'success')
+		} catch (e) {
+			addAlert(String(e), 'error')
+		}
+	}
+
+	const saveAppLock = async (enabled) => {
+		setSecurityMsg('')
+		try {
+			const prefs = (await nativeInvoke('get_client_prefs')) || {}
+			if (enabled) {
+				const pin = pinDraft().trim()
+				const confirm = pinConfirm().trim()
+				if (!/^\d{4,8}$/.test(pin)) {
+					setSecurityMsg('PIN must be 4–8 digits')
+					return
+				}
+				if (pin !== confirm) {
+					setSecurityMsg('PIN confirmation does not match')
+					return
+				}
+				await nativeInvoke('set_client_prefs', {
+					prefs: {
+						...prefs,
+						app_lock_enabled: true,
+						app_lock_pin: pin,
+					},
+				})
+				setLockEnabled(true)
+				setPinDraft('')
+				setPinConfirm('')
+				addAlert('App lock enabled', 'success')
+			} else {
+				const pin = pinDraft().trim()
+				if (!pin || pin !== prefs.app_lock_pin) {
+					setSecurityMsg('Enter current PIN to disable')
+					return
+				}
+				await nativeInvoke('set_client_prefs', {
+					prefs: {
+						...prefs,
+						app_lock_enabled: false,
+						app_lock_pin: null,
+					},
+				})
+				setLockEnabled(false)
+				setPinDraft('')
+				setPinConfirm('')
+				addAlert('App lock disabled', 'success')
+			}
+		} catch (e) {
+			setSecurityMsg(String(e))
+		}
+	}
+
 	const saveTrashSettings = async () => {
 		const days = Number(trashRetentionDays())
 		if (!Number.isFinite(days) || days < 1 || days > 30) {
@@ -162,8 +272,8 @@ const SettingsModal = () => {
 								<h2 id="settings-modal-title">Settings</h2>
 								<p class="settings-modal__sub">
 									{isNative()
-										? 'General, access, trash, storage, and sync'
-										: 'General, access, trash, and storage'}
+										? 'General, access, sync, trash, storage, and security'
+										: 'General, access, trash, storage, and security'}
 								</p>
 							</div>
 							<IconButton
@@ -215,6 +325,27 @@ const SettingsModal = () => {
 										<span class="settings-nav__desc">Who can open</span>
 									</span>
 								</button>
+								<Show when={showSyncTab()}>
+									<button
+										type="button"
+										class="settings-nav__item"
+										classList={{ 'settings-nav__item--active': tab() === 'sync' }}
+										onClick={() => setTab('sync')}
+									>
+										<span class="settings-nav__icon" aria-hidden="true">
+											<FluentIcon
+												name={tab() === 'sync' ? 'cloudFilled' : 'cloud'}
+												size={20}
+											/>
+										</span>
+										<span class="settings-nav__text">
+											<span class="settings-nav__title">Sync</span>
+											<span class="settings-nav__desc">
+												Auto-upload &amp; folders
+											</span>
+										</span>
+									</button>
+								</Show>
 								<button
 									type="button"
 									class="settings-nav__item"
@@ -249,27 +380,29 @@ const SettingsModal = () => {
 										<span class="settings-nav__desc">Bot &amp; channels</span>
 									</span>
 								</button>
-								<Show when={isNative()}>
-									<button
-										type="button"
-										class="settings-nav__item"
-										classList={{ 'settings-nav__item--active': tab() === 'sync' }}
-										onClick={() => setTab('sync')}
-									>
-										<span class="settings-nav__icon" aria-hidden="true">
-											<FluentIcon
-												name={tab() === 'sync' ? 'cloudFilled' : 'cloud'}
-												size={20}
-											/>
-										</span>
-										<span class="settings-nav__text">
-											<span class="settings-nav__title">Sync</span>
-											<span class="settings-nav__desc">
-												Auto-upload &amp; folders
-											</span>
-										</span>
-									</button>
-								</Show>
+								<button
+									type="button"
+									class="settings-nav__item"
+									classList={{
+										'settings-nav__item--active': tab() === 'security',
+									}}
+									onClick={() => setTab('security')}
+								>
+									<span class="settings-nav__icon" aria-hidden="true">
+										<FluentIcon
+											name={
+												tab() === 'security'
+													? 'lockClosedFilled'
+													: 'lockClosed'
+											}
+											size={20}
+										/>
+									</span>
+									<span class="settings-nav__text">
+										<span class="settings-nav__title">Security</span>
+										<span class="settings-nav__desc">App lock</span>
+									</span>
+								</button>
 							</nav>
 
 							<div class="settings-modal__body">
@@ -392,6 +525,36 @@ const SettingsModal = () => {
 
 								<Show when={tab() === 'general'}>
 									<div class="settings-account">
+										<div class="settings-account__row">
+											<div>
+												<p class="settings-account__label">Account</p>
+												<p class="settings-account__hint">
+													{store.user?.email ||
+														sessionInfo().email ||
+														'Signed in'}
+												</p>
+											</div>
+										</div>
+										<Show when={isNative() && sessionInfo().base_url}>
+											<div class="settings-account__row">
+												<div>
+													<p class="settings-account__label">Server</p>
+													<p class="settings-account__hint">
+														{sessionInfo().base_url}
+													</p>
+												</div>
+											</div>
+										</Show>
+										<Show when={chrome.storageId()}>
+											<div class="settings-account__row">
+												<div>
+													<p class="settings-account__label">Occupied space</p>
+													<p class="settings-account__hint">
+														{occupiedGb()} GB used
+													</p>
+												</div>
+											</div>
+										</Show>
 										<div class="settings-account__row settings-account__row--theme">
 											<div>
 												<p class="settings-account__label">Theme</p>
@@ -423,6 +586,31 @@ const SettingsModal = () => {
 												</For>
 											</div>
 										</div>
+										<Show when={isNative()}>
+											<div class="settings-account__row">
+												<div>
+													<p class="settings-account__label">Cache</p>
+													<p class="settings-account__hint">
+														{formatBytes(cacheBytes())} on this device
+													</p>
+												</div>
+												<Button variant="outlined" onClick={clearCache}>
+													Clear cache
+												</Button>
+											</div>
+											<div class="settings-account__row">
+												<div>
+													<p class="settings-account__label">About</p>
+													<p class="settings-account__hint">
+														Sarca client {about().version || '—'} ·{' '}
+														{about().platform || 'native'}
+													</p>
+													<p class="settings-account__hint">
+														Logs: use the system log for sarca-client
+													</p>
+												</div>
+											</div>
+										</Show>
 										<div class="settings-account__row">
 											<div>
 												<p class="settings-account__label">Session</p>
@@ -479,33 +667,87 @@ const SettingsModal = () => {
 									</div>
 								</Show>
 
-								<Show when={tab() === 'sync'}>
-									<div class="settings-sync">
+								<Show when={tab() === 'sync' && showSyncTab()}>
+									<SettingsSyncPanel storageId={chrome.storageId()} />
+								</Show>
+
+								<Show when={tab() === 'security'}>
+									<div class="settings-account">
 										<p class="settings-bot-hint">
-											Configure Media auto-upload and folder sync in the Sarca
-											app. Bindings run in the background while you are connected.
+											Require a PIN when opening the native app on this device.
 										</p>
-										<ul class="settings-sync__status">
-											<li>
-												Open the full Sync page to enable Media auto-upload or
-												folder sync.
-											</li>
-											<li>
-												Everywhere: blue <strong>Sync</strong> button
-												(bottom-right) or sidebar <strong>Sync</strong>.
-											</li>
-											<li>
-												Desktop: menu bar <strong>Sarca → Sync settings</strong>,
-												or tray → Sync settings.
-											</li>
-										</ul>
-										<Button
-											variant="contained"
-											color="secondary"
-											onClick={openNativeSyncSettings}
+										<Show
+											when={isNative()}
+											fallback={
+												<p class="settings-account__hint">
+													App lock is available in the Sarca native client.
+												</p>
+											}
 										>
-											Open Sync settings
-										</Button>
+											<label class="settings-toggle">
+												<span>App lock</span>
+												<input
+													type="checkbox"
+													checked={lockEnabled()}
+													onChange={(e) => {
+														const on = e.currentTarget.checked
+														if (on) {
+															setLockEnabled(true)
+															setSecurityMsg('Enter a new PIN below, then save')
+														} else {
+															saveAppLock(false)
+														}
+													}}
+												/>
+											</label>
+											<TextField
+												label={
+													lockEnabled()
+														? 'PIN (new or current)'
+														: 'PIN (4–8 digits)'
+												}
+												type="password"
+												size="small"
+												fullWidth
+												sx={{ mt: 1 }}
+												value={pinDraft()}
+												onChange={(_, v) => setPinDraft(v)}
+												inputProps={{ inputMode: 'numeric', maxLength: 8 }}
+											/>
+											<TextField
+												label="Confirm new PIN"
+												type="password"
+												size="small"
+												fullWidth
+												sx={{ mt: 1 }}
+												value={pinConfirm()}
+												onChange={(_, v) => setPinConfirm(v)}
+												inputProps={{ inputMode: 'numeric', maxLength: 8 }}
+											/>
+											<div class="settings-sync-panel__row" style={{ 'margin-top': '8px' }}>
+												<Button
+													variant="contained"
+													color="secondary"
+													onClick={() => saveAppLock(true)}
+												>
+													{lockEnabled() ? 'Save PIN' : 'Enable lock'}
+												</Button>
+												<Show when={lockEnabled()}>
+													<Button
+														variant="outlined"
+														color="error"
+														onClick={() => saveAppLock(false)}
+													>
+														Disable
+													</Button>
+												</Show>
+											</div>
+											<Show when={securityMsg()}>
+												<p class="settings-bot-hint" role="status">
+													{securityMsg()}
+												</p>
+											</Show>
+										</Show>
 									</div>
 								</Show>
 							</div>

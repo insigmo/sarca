@@ -17,6 +17,8 @@ import Verify from './pages/Verify'
 import OAuthCallback from './pages/OAuthCallback'
 import NotFound from './pages/404'
 import { initTheme, useThemeMode } from './common/theme'
+import { bindOpenSettingsDeepLink } from './common/nativeClient'
+import AppLockGate from './components/AppLockGate'
 
 /** Legacy workers routes → storages (bot is in storage settings). */
 const WorkersRedirect = () => {
@@ -177,35 +179,40 @@ function sharedComponents(mode) {
 
 const App = () => {
 	const mode = useThemeMode()
-	onMount(initTheme)
+	onMount(() => {
+		initTheme()
+		return bindOpenSettingsDeepLink()
+	})
 
 	return (
 		<Show when={mode()} keyed>
 			{(m) => (
 				<ThemeProvider theme={muiThemes[m] ?? lightTheme}>
-					<Routes>
-						<Route path="/login" component={Login} />
-						<Route path="/register" component={Register} />
-						<Route path="/forgot-password" component={ForgotPassword} />
-						<Route path="/reset-password" component={ResetPassword} />
-						<Route path="/verify" component={Verify} />
-						<Route path="/oauth/callback" component={OAuthCallback} />
-						<Route path="/s/:token" component={PublicShare} />
+					<AppLockGate>
+						<Routes>
+							<Route path="/login" component={Login} />
+							<Route path="/register" component={Register} />
+							<Route path="/forgot-password" component={ForgotPassword} />
+							<Route path="/reset-password" component={ResetPassword} />
+							<Route path="/verify" component={Verify} />
+							<Route path="/oauth/callback" component={OAuthCallback} />
+							<Route path="/s/:token" component={PublicShare} />
 
-						<Route path="/" component={BasicLayout}>
-							<Route path="/" element={<Navigate href="/storages" />} />
-							<Route path="/storages" component={Storages} />
-							<Route path="/storages/register" component={SetupWizard} />
-							<Route path="/setup" component={SetupWizard} />
-							<Route path="/storages/:id/files/*path" component={Files} />
-							<Route path="/storage_workers" component={WorkersRedirect} />
-							<Route path="/storage_workers/register" component={WorkersRedirect} />
-							<Route path="*404" component={NotFound} />
-						</Route>
-					</Routes>
+							<Route path="/" component={BasicLayout}>
+								<Route path="/" element={<Navigate href="/storages" />} />
+								<Route path="/storages" component={Storages} />
+								<Route path="/storages/register" component={SetupWizard} />
+								<Route path="/setup" component={SetupWizard} />
+								<Route path="/storages/:id/files/*path" component={Files} />
+								<Route path="/storage_workers" component={WorkersRedirect} />
+								<Route path="/storage_workers/register" component={WorkersRedirect} />
+								<Route path="*404" component={NotFound} />
+							</Route>
+						</Routes>
 
-					<AlertStack />
-					<UploadManager />
+						<AlertStack />
+						<UploadManager />
+					</AppLockGate>
 				</ThemeProvider>
 			)}
 		</Show>
