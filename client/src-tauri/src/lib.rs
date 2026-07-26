@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod remote_ipc;
 mod state;
 
 use std::time::Duration;
@@ -34,6 +35,10 @@ pub fn run() {
                     state::OPEN_SYNC_JS
                 ))
                 .on_navigation(|webview, url| {
+                    // Remote Settings UI → Rust command channel (cancel navigation).
+                    if remote_ipc::handle_navigation(&webview, url) {
+                        return false;
+                    }
                     // Custom scheme and legacy query: open in-app Settings → Sync.
                     let open_sync = url.scheme() == "sarca-sync"
                         || url
@@ -95,6 +100,9 @@ pub fn run() {
     }
 
     builder
+        .register_asynchronous_uri_scheme_protocol("sarca-ipc", |ctx, request, responder| {
+            remote_ipc::handle_protocol(ctx, request, responder);
+        })
         .setup(|app| {
             let sync_state = AppSyncState::new(app.handle())?;
             let reconnect = {

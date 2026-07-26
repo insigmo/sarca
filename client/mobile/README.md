@@ -41,8 +41,7 @@ Manual resign:
 
 ## Auto-upload (camera / gallery)
 
-1. Open **Sync settings** (any of: blue Sync button, sidebar Sync, Settings → Sync,
-   desktop menu **Sarca → Sync settings**, or tray → Sync settings).
+1. Open **Settings → Sync** (desktop: also **Sarca → Sync settings** or tray → Sync settings).
 2. Enable Media auto-upload and pick/type a Photos / Camera / Downloads folder.
 3. Sync loop uploads new/changed files only (no remote→local deletes).
 
