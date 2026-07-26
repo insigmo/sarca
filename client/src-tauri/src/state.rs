@@ -97,13 +97,39 @@ pub const NATIVE_MARK_JS: &str = r#"(function(){
   } catch (e) {}
 })();"#;
 
+/// JS that opens local Sync settings from a remote-origin page.
+/// Prefer invoke (local shell) or custom scheme (cross-scheme nav Tauri cancels).
+/// Query-param fallback keeps the current path so a missed intercept does not
+/// land on `/sync.html` on the Sarca server (SPA 404).
+pub const OPEN_SYNC_JS: &str = r#"function __sarcaOpenSyncSettings(){
+  try {
+    if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
+      window.__TAURI_INTERNALS__.invoke('open_sync_settings');
+      return;
+    }
+  } catch (_) {}
+  try {
+    location.assign('sarca-sync://open');
+    return;
+  } catch (_) {}
+  try {
+    var u = new URL(location.href);
+    u.searchParams.set('__sarca_open_sync', '1');
+    location.assign(u.toString());
+  } catch (_) {}
+}
+window.__sarcaOpenSyncSettings = __sarcaOpenSyncSettings;"#;
+
 /// Injected on every remote page load when the webview is past the connect shell.
 /// Always marks native (do not require a prior flag) and adds a visible Sync FAB.
-pub const NATIVE_CHROME_JS: &str = r#"(function(){
-  try {
+pub fn native_chrome_js() -> String {
+    format!(
+        r#"(function(){{
+  try {{
     localStorage.setItem('sarca_native', '1');
     window.__SARCA_NATIVE__ = 1;
-    try { window.dispatchEvent(new Event('sarca-native')); } catch (_) {}
+    try {{ window.dispatchEvent(new Event('sarca-native')); }} catch (_) {{}}
+    {open_sync}
     if (document.getElementById('sarca-native-sync-fab')) return;
     var btn = document.createElement('button');
     btn.id = 'sarca-native-sync-fab';
@@ -125,18 +151,13 @@ pub const NATIVE_CHROME_JS: &str = r#"(function(){
       'box-shadow:0 4px 14px rgba(0,0,0,.25)',
       'cursor:pointer'
     ].join(';');
-    btn.onclick = function () {
-      try {
-        var u = new URL(location.href);
-        u.searchParams.set('__sarca_open_sync', '1');
-        location.assign(u.toString());
-      } catch (e) {
-        location.assign('sarca-sync://open');
-      }
-    };
+    btn.onclick = function () {{ __sarcaOpenSyncSettings(); }};
     (document.body || document.documentElement).appendChild(btn);
-  } catch (e) {}
-})();"#;
+  }} catch (e) {{}}
+}})();"#,
+        open_sync = OPEN_SYNC_JS
+    )
+}
 
 pub struct AppSyncState {
     pub engine: Arc<SyncEngine>,
@@ -210,9 +231,14 @@ impl AppSyncState {
         self.pending_inject.lock().ok().and_then(|mut g| g.take())
     }
 
+    /// Remember the local connect-shell origin once. Never overwrite with a later
+    /// URL — a Sarca server on localhost must not replace the Tauri asset origin.
     pub fn remember_shell_url(&self, url: Url) {
-        if is_shell_url(&url) {
-            if let Ok(mut guard) = self.shell_url.lock() {
+        if !is_shell_url(&url) {
+            return;
+        }
+        if let Ok(mut guard) = self.shell_url.lock() {
+            if guard.is_none() {
                 *guard = Some(url);
             }
         }
@@ -223,15 +249,29 @@ impl AppSyncState {
     }
 }
 
+/// True only for the Tauri-bundled connect shell / assets — not for a Sarca
+/// server that happens to run on localhost (that used to make Sync open
+/// `{server}/sync.html` and hit the SPA 404 page).
 pub fn is_shell_url(url: &Url) -> bool {
     match url.scheme() {
         "tauri" | "asset" => true,
-        "http" | "https" => matches!(
-            url.host_str(),
-            Some("localhost") | Some("127.0.0.1") | Some("tauri.localhost")
-        ),
+        "http" | "https" => match url.host_str() {
+            Some("tauri.localhost") | Some("asset.localhost") => true,
+            // Vite `devUrl` in tauri.conf.json (port 1420) only.
+            Some("localhost") | Some("127.0.0.1") => url.port() == Some(1420),
+            _ => false,
+        },
         _ => false,
     }
+}
+
+/// Local `sync.html` URL derived from the remembered shell origin.
+pub fn sync_settings_url(shell: &Url) -> Result<Url, String> {
+    let mut base = shell.clone();
+    base.set_path("/");
+    base.set_query(None);
+    base.set_fragment(None);
+    base.join("sync.html").map_err(|e| e.to_string())
 }
 
 pub fn load_server_config(data_dir: &PathBuf) -> ServerConfig {
@@ -295,6 +335,42 @@ pub fn navigate_to_sync_settings(app: &AppHandle) -> Result<(), String> {
         .shell_url()
         .unwrap_or_else(|| Url::parse("tauri://localhost").expect("valid shell url"));
     state.remember_shell_url(base.clone());
-    let sync_url = base.join("sync.html").map_err(|e| e.to_string())?;
+    let sync_url = sync_settings_url(&base)?;
     window.navigate(sync_url).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_url_accepts_tauri_origins_only() {
+        assert!(is_shell_url(
+            &Url::parse("tauri://localhost/index.html").unwrap()
+        ));
+        assert!(is_shell_url(
+            &Url::parse("https://tauri.localhost/").unwrap()
+        ));
+        assert!(is_shell_url(
+            &Url::parse("http://localhost:1420/").unwrap()
+        ));
+        // Sarca server on localhost must NOT be treated as the client shell.
+        assert!(!is_shell_url(
+            &Url::parse("http://127.0.0.1:8080/storages").unwrap()
+        ));
+        assert!(!is_shell_url(
+            &Url::parse("https://localhost/sync.html").unwrap()
+        ));
+        assert!(!is_shell_url(
+            &Url::parse("https://example.com/").unwrap()
+        ));
+    }
+
+    #[test]
+    fn sync_settings_url_is_local_sync_html() {
+        let u = sync_settings_url(&Url::parse("tauri://localhost/index.html").unwrap()).unwrap();
+        assert_eq!(u.as_str(), "tauri://localhost/sync.html");
+        let u = sync_settings_url(&Url::parse("https://tauri.localhost/foo").unwrap()).unwrap();
+        assert_eq!(u.as_str(), "https://tauri.localhost/sync.html");
+    }
 }
