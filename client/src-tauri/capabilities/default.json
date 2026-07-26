@@ -3,6 +3,9 @@
   "identifier": "default",
   "description": "Default Sarca client capabilities",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://*", "https://*"]
+  },
   "permissions": [
     "core:default",
     "dialog:default",

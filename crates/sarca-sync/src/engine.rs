@@ -104,9 +104,17 @@ impl SyncEngine {
 
     /// Run one sync/auto-upload pass for all enabled bindings.
     pub async fn tick(&self) -> Result<()> {
+        self.tick_filtered(|_| true).await
+    }
+
+    /// Like [`tick`], but only processes bindings for which `allow` returns true.
+    pub async fn tick_filtered<F>(&self, allow: F) -> Result<()>
+    where
+        F: Fn(&Binding) -> bool,
+    {
         let bindings = self.index.list_bindings()?;
         let mut statuses = Vec::new();
-        for binding in bindings.into_iter().filter(|b| b.enabled) {
+        for binding in bindings.into_iter().filter(|b| b.enabled && allow(b)) {
             let status = match self.sync_binding(&binding).await {
                 Ok(s) => s,
                 Err(e) => {
