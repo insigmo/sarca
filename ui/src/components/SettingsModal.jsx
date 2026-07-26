@@ -31,6 +31,20 @@ const SettingsModal = () => {
 	const mode = useThemeMode()
 	const { open: openStorageSettings } = storageSettingsStore
 
+	const isNativeClient = () => {
+		try {
+			return localStorage.getItem('sarca_native') === '1'
+		} catch {
+			return false
+		}
+	}
+
+	const openNativeSyncSettings = (event) => {
+		event?.preventDefault?.()
+		// Cross-origin webview cannot invoke; Rust intercepts this scheme.
+		window.location.assign('sarca-sync://open')
+	}
+
 	/** @type {[import("solid-js").Accessor<import("../api").StorageWithInfo[]>, any]} */
 	const [storages, setStorages] = createSignal([])
 	/** Access tab */
@@ -157,7 +171,9 @@ const SettingsModal = () => {
 							<div>
 								<h2 id="settings-modal-title">Settings</h2>
 								<p class="settings-modal__sub">
-									General, access, trash, and storage
+									{isNativeClient()
+										? 'General, access, trash, storage, and sync'
+										: 'General, access, trash, and storage'}
 								</p>
 							</div>
 							<IconButton
@@ -243,6 +259,27 @@ const SettingsModal = () => {
 										<span class="settings-nav__desc">Bot &amp; channels</span>
 									</span>
 								</button>
+								<Show when={isNativeClient()}>
+									<button
+										type="button"
+										class="settings-nav__item"
+										classList={{ 'settings-nav__item--active': tab() === 'sync' }}
+										onClick={() => setTab('sync')}
+									>
+										<span class="settings-nav__icon" aria-hidden="true">
+											<FluentIcon
+												name={tab() === 'sync' ? 'cloudFilled' : 'cloud'}
+												size={20}
+											/>
+										</span>
+										<span class="settings-nav__text">
+											<span class="settings-nav__title">Sync</span>
+											<span class="settings-nav__desc">
+												Auto-upload &amp; folders
+											</span>
+										</span>
+									</button>
+								</Show>
 							</nav>
 
 							<div class="settings-modal__body">
@@ -449,6 +486,31 @@ const SettingsModal = () => {
 												Open storage settings
 											</Button>
 										</Show>
+									</div>
+								</Show>
+
+								<Show when={tab() === 'sync'}>
+									<div class="settings-sync">
+										<p class="settings-bot-hint">
+											Configure Media auto-upload and folder sync in the Sarca
+											app. Bindings run in the background while you are connected.
+										</p>
+										<ul class="settings-sync__status">
+											<li>
+												Media auto-upload and folder sync are managed in the app.
+											</li>
+											<li>
+												On desktop, you can also open Sync from the tray menu
+												(Sync settings).
+											</li>
+										</ul>
+										<Button
+											variant="contained"
+											color="secondary"
+											onClick={openNativeSyncSettings}
+										>
+											Open Sync settings
+										</Button>
 									</div>
 								</Show>
 							</div>
