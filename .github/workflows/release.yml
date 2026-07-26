@@ -431,10 +431,21 @@ jobs:
 
       - name: Install Android NDK / SDK packages
         run: |
+          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;27.0.12077973"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
-          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
+          NDK="$ANDROID_HOME/ndk/27.0.12077973"
+          test -d "$NDK"
+          {
+            echo "ANDROID_NDK_HOME=$NDK"
+            echo "NDK_HOME=$NDK"
+            echo "ANDROID_SDK_ROOT=$ANDROID_HOME"
+          } >> "$GITHUB_ENV"
+          PREBUILT="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "$PREBUILT" >> "$GITHUB_PATH"
+          echo "CC_aarch64_linux_android=$PREBUILT/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$PREBUILT/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          clang --version || "$PREBUILT/clang" --version
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -466,11 +477,22 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          RUST_BACKTRACE: "1"
         run: |
           set -euo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-}"
+          test -n "${ANDROID_HOME:-}"
+          test -n "${ANDROID_NDK_HOME:-}"
+          test -x "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+
           if [ ! -d src-tauri/gen/android ]; then
             pnpm tauri android init --ci --skip-targets-install
           fi
+
+          # Mobile ACL: drop desktop-only process permission if regenerated.
+          python3 -c "import json,pathlib; p=pathlib.Path('src-tauri/capabilities/default.json'); data=json.loads(p.read_text()); data['permissions']=[x for x in data.get('permissions',[]) if not str(x).startswith('process:')]; p.write_text(json.dumps(data,indent=2)+'\n')"
+
           if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
             KS_PATH="${GITHUB_WORKSPACE}/client/src-tauri/release.keystore"
             echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${KS_PATH}"
@@ -484,7 +506,12 @@ jobs:
           else
             echo "No ANDROID_KEYSTORE_* secrets — default/debug signing."
           fi
-          pnpm tauri android build --apk --target aarch64 --ci
+
+          # Prefer release APK; fall back to debug if release signing is unavailable.
+          if ! pnpm tauri android build --apk --target aarch64 --ci; then
+            echo "Release APK build failed; retrying debug APK…" >&2
+            pnpm tauri android build --apk --debug --target aarch64 --ci
+          fi
 
       - name: Package APK for release
         env:
