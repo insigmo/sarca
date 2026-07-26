@@ -49,25 +49,50 @@ impl SarcaApi {
         email: impl AsRef<str>,
         password: impl AsRef<str>,
     ) -> Result<LoginResponse> {
-        let base = base_url.as_ref().trim().trim_end_matches('/');
-        if base.is_empty() {
-            bail!("server URL is required");
-        }
-        let client = Client::new();
+        let base = normalize_server_url(base_url.as_ref())?;
+        let client = Client::builder()
+            .timeout(std::time::Duration::from_secs(20))
+            .build()
+            .context("failed to create HTTP client")?;
         let url = format!("{base}/api/auth/login");
-        let resp = client
-            .post(url)
+        let resp = match client
+            .post(&url)
             .json(&serde_json::json!({
                 "email": email.as_ref(),
                 "password": password.as_ref(),
             }))
             .send()
             .await
-            .context("login request failed")?;
+        {
+            Ok(resp) => resp,
+            Err(err) => {
+                if err.is_timeout() {
+                    bail!("Cannot reach server — connection timed out. Check the URL and network.");
+                }
+                if err.is_connect()
+                    || err.is_request()
+                    || err
+                        .to_string()
+                        .to_ascii_lowercase()
+                        .contains("dns")
+                {
+                    bail!(
+                        "Cannot reach server — no connection. Check the URL and that the server is running."
+                    );
+                }
+                bail!("Cannot reach server: {err}");
+            }
+        };
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("login failed ({status}): {body}");
+            if status.as_u16() == 401 || status.as_u16() == 403 {
+                bail!("Invalid email or password");
+            }
+            if status.is_server_error() {
+                bail!("Server error ({status}). Try again later.");
+            }
+            bail!("Login failed ({status}): {body}");
         }
         Ok(resp.json().await.context("invalid login response")?)
     }
@@ -230,4 +255,65 @@ fn urlencoding_encode(s: &str) -> String {
         }
     }
     out
+}
+
+/// Normalize a Sarca server base URL.
+/// Accepts `http://…`, `https://…`, or a host/IP without scheme (defaults to `http://`).
+pub fn normalize_server_url(raw: &str) -> Result<String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        bail!("Server URL is required");
+    }
+    let with_scheme = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        format!("http://{trimmed}")
+    };
+    let parsed = reqwest::Url::parse(&with_scheme).map_err(|_| {
+        anyhow::anyhow!("Invalid server URL. Use http:// or https:// and a valid host.")
+    })?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => bail!("Unsupported URL scheme '{other}'. Use http:// or https://."),
+    }
+    if parsed.host_str().is_none() {
+        bail!("Invalid server URL — missing host.");
+    }
+    // Drop path/query; API client always appends `/api/...`.
+    let mut out = format!(
+        "{}://{}",
+        parsed.scheme(),
+        parsed.host_str().unwrap_or_default()
+    );
+    if let Some(port) = parsed.port() {
+        out.push(':');
+        out.push_str(&port.to_string());
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_server_url;
+
+    #[test]
+    fn normalizes_bare_host_to_http() {
+        assert_eq!(
+            normalize_server_url("192.168.1.40:8001").unwrap(),
+            "http://192.168.1.40:8001"
+        );
+    }
+
+    #[test]
+    fn keeps_https() {
+        assert_eq!(
+            normalize_server_url("https://sarca.example.com/").unwrap(),
+            "https://sarca.example.com"
+        );
+    }
+
+    #[test]
+    fn rejects_bad_scheme() {
+        assert!(normalize_server_url("ftp://x").is_err());
+    }
 }
