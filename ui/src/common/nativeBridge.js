@@ -37,7 +37,11 @@ export async function pickLocalFolder(existing = '') {
 	} catch {
 		// ignore
 	}
-	const mobile = isMobileNativePlatform(platform)
+	// UA fallback when platform_label is blocked (misconfigured ACL) so Android
+	// still gets the mobile hint instead of the desktop prompt wording.
+	const mobile =
+		isMobileNativePlatform(platform) ||
+		/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')
 
 	try {
 		const path = await nativeInvoke('pick_local_folder')
@@ -47,17 +51,18 @@ export async function pickLocalFolder(existing = '') {
 	} catch (e) {
 		const msg = String(e?.message || e || '')
 		if (/FOLDER_PICKER_USE_PROMPT/i.test(msg)) {
-			// intentional typed-path fallback
+			// intentional typed-path fallback (unresolvable SAF tree URI, iOS)
 		} else if (/cancel/i.test(msg)) {
 			return null
 		} else {
+			// ACL / bridge / plugin errors must surface — never hide behind prompt
 			console.warn('pick_local_folder:', msg)
 			throw e instanceof Error ? e : new Error(msg)
 		}
 	}
 
 	const hint = mobile
-		? 'Enter a local folder path, e.g. /storage/emulated/0/DCIM or /storage/emulated/0/Pictures'
+		? 'Folder picker could not resolve a filesystem path. Enter a local folder path, e.g. /storage/emulated/0/DCIM or /storage/emulated/0/Pictures'
 		: 'Enter a local folder path'
 	const fallback = existing || (mobile ? '/storage/emulated/0/DCIM' : '')
 	const typed = window.prompt(hint, fallback)

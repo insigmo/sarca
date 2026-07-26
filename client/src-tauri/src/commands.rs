@@ -236,6 +236,12 @@ pub fn open_sync_settings(app: AppHandle) -> Result<(), String> {
     navigate_to_sync_settings(&app)
 }
 
+/// Map a successful desktop folder-dialog path to the string the UI expects.
+/// Kept separate so tests can prove we never return the prompt sentinel on success.
+pub fn folder_path_from_picked_path(path: Option<std::path::PathBuf>) -> Option<String> {
+    path.map(|p| p.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub async fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String> {
     // Desktop: native OS folder dialog (async, non-blocking).
@@ -253,9 +259,9 @@ pub async fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String>
             Ok(Err(e)) => return Err(e.to_string()),
             Err(_) => return Err("Folder picker timed out".into()),
         };
-        return Ok(folder
-            .and_then(|p| p.into_path().ok())
-            .map(|p| p.to_string_lossy().into_owned()));
+        return Ok(folder_path_from_picked_path(
+            folder.and_then(|p| p.into_path().ok()),
+        ));
     }
 
     // Android: SAF document-tree picker → filesystem path when resolvable.
@@ -425,4 +431,34 @@ pub fn clear_local_cache(state: State<'_, AppSyncState>) -> Result<CacheDto, Str
     fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     remove_dir_contents(&cache)?;
     Ok(CacheDto { bytes: 0 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn desktop_dialog_success_returns_path_not_prompt_sentinel() {
+        let path = folder_path_from_picked_path(Some(PathBuf::from("/home/beta/Pictures")));
+        assert_eq!(path.as_deref(), Some("/home/beta/Pictures"));
+        assert!(
+            !path.unwrap().contains("FOLDER_PICKER_USE_PROMPT"),
+            "successful dialog must never return the typed-path sentinel"
+        );
+        assert_eq!(folder_path_from_picked_path(None), None);
+    }
+
+    #[test]
+    fn default_gallery_path_non_empty_on_desktop() {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        {
+            let p = default_gallery_path();
+            assert!(!p.is_empty());
+            assert!(
+                p.contains("Pictures") || p == "Pictures",
+                "unexpected gallery path {p}"
+            );
+        }
+    }
 }

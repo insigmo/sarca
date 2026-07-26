@@ -2,8 +2,9 @@
 //!
 //! Tauri does not inject `__TAURI_INTERNALS__` into arbitrary http(s) pages, so
 //! Settings (Sync / Security / General) call `window.__sarcaInvoke`, which:
-//! 1. `fetch`es the `sarca-ipc` custom protocol (all platforms), or
-//! 2. falls back to a cancelled navigation to `https://sarca.ipc/...`.
+//! 1. Uses `__TAURI_INTERNALS__.invoke` when remote ACL allows,
+//! 2. `fetch`es the `sarca-ipc` custom protocol, or
+//! 3. falls back to a cancelled navigation to `https://sarca.ipc/...`.
 
 use serde_json::{json, Value};
 use tauri::{
@@ -13,6 +14,36 @@ use tauri::{
 
 use crate::commands;
 use crate::state::AppSyncState;
+
+/// Every command the remote Settings Sync / Security / General UI may call.
+/// Keep in sync with `build.rs` AppManifest commands and `capabilities/default.json`.
+pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
+    "platform_label",
+    "default_gallery_path",
+    "is_on_wifi",
+    "get_about",
+    "get_session",
+    "get_client_prefs",
+    "set_client_prefs",
+    "list_storages",
+    "list_bindings",
+    "sync_statuses",
+    "sync_now",
+    "add_binding",
+    "remove_binding",
+    "ensure_remote_folder",
+    "pick_local_folder",
+    "get_cache_size",
+    "clear_local_cache",
+    "open_sync_settings",
+    "open_app",
+    "disconnect",
+];
+
+/// True when `cmd` is handled by [`dispatch`] (snake_case, exact match).
+pub fn is_dispatched_command(cmd: &str) -> bool {
+    REMOTE_SETTINGS_COMMANDS.contains(&cmd)
+}
 
 fn arg_str(args: &Value, snake: &str, camel: &str) -> Option<String> {
     args.get(snake)
@@ -138,7 +169,81 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             commands::disconnect(app.clone(), state.clone()).await?;
             Ok(json!(null))
         }
-        other => Err(format!("Unknown native command: {other}")),
+        other => {
+            if is_dispatched_command(other) {
+                // Listed but missing match arm — programming error.
+                Err(format!("Unimplemented native command: {other}"))
+            } else {
+                Err(format!("Unknown native command: {other}"))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_command_names_are_snake_case_exact() {
+        for cmd in REMOTE_SETTINGS_COMMANDS {
+            assert!(
+                cmd.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "command must be snake_case: {cmd}"
+            );
+            assert!(
+                is_dispatched_command(cmd),
+                "is_dispatched_command missed {cmd}"
+            );
+        }
+        assert!(!is_dispatched_command("defaultGalleryPath"));
+        assert!(!is_dispatched_command("DefaultGalleryPath"));
+        assert!(!is_dispatched_command("pickLocalFolder"));
+    }
+
+    #[test]
+    fn sync_security_commands_are_dispatched() {
+        for cmd in [
+            "default_gallery_path",
+            "pick_local_folder",
+            "set_client_prefs",
+            "get_client_prefs",
+            "add_binding",
+            "remove_binding",
+            "ensure_remote_folder",
+            "list_bindings",
+            "sync_now",
+            "sync_statuses",
+            "is_on_wifi",
+            "get_about",
+            "get_cache_size",
+            "clear_local_cache",
+            "platform_label",
+        ] {
+            assert!(
+                is_dispatched_command(cmd),
+                "Settings Sync/Security command missing from dispatch: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn ipc_url_detects_navigation_and_scheme() {
+        assert!(is_ipc_url(
+            &tauri::Url::parse("https://sarca.ipc/__invoke__?p=%7B%7D").unwrap()
+        ));
+        assert!(is_ipc_url(
+            &tauri::Url::parse("http://sarca.ipc/__invoke__?p=1").unwrap()
+        ));
+        assert!(is_ipc_url(
+            &tauri::Url::parse("sarca-ipc://localhost/__invoke__?p=1").unwrap()
+        ));
+        assert!(is_ipc_url(
+            &tauri::Url::parse("sarca-ipc://localhost/invoke").unwrap()
+        ));
+        assert!(!is_ipc_url(
+            &tauri::Url::parse("https://example.com/__invoke__").unwrap()
+        ));
     }
 }
 
