@@ -243,19 +243,12 @@ jobs:
             tar -czf "${ASSET}.tar.gz" "${ASSET}"
             ARTIFACT="${ASSET}.tar.gz"
           fi
-          if command -v sha256sum >/dev/null; then
-            sha256sum "${ARTIFACT}" > "${ARTIFACT}.sha256"
-          else
-            shasum -a 256 "${ARTIFACT}" > "${ARTIFACT}.sha256"
-          fi
           echo "Packed ${ARTIFACT}"
 
       - uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.asset }}
-          path: |
-            dist/${{ matrix.asset }}.${{ matrix.archive }}
-            dist/${{ matrix.asset }}.${{ matrix.archive }}.sha256
+          path: dist/${{ matrix.asset }}.${{ matrix.archive }}
           if-no-files-found: error
           retention-days: 1
 
@@ -269,12 +262,12 @@ jobs:
           - name: linux-amd64
             os: ubuntu-22.04
             rust_target: x86_64-unknown-linux-gnu
-            bundles: deb,appimage
+            bundles: deb
             asset: sarca_client_linux_amd64
           - name: linux-arm64
             os: ubuntu-24.04-arm
             rust_target: aarch64-unknown-linux-gnu
-            bundles: deb,appimage
+            bundles: deb
             asset: sarca_client_linux_arm64
           - name: windows-amd64
             os: windows-latest
@@ -289,7 +282,7 @@ jobs:
           - name: macos-arm64
             os: macos-14
             rust_target: aarch64-apple-darwin
-            bundles: app,dmg
+            bundles: dmg
             asset: sarca_client_macos_arm64
 
     runs-on: ${{ matrix.os }}
@@ -358,16 +351,11 @@ jobs:
           BUNDLE="target/${TARGET}/release/bundle"
           OUT="dist"
           mkdir -p "${OUT}"
-
-          # Publish flat installer/binary files with stable names (no tar.gz wrappers).
           shopt -s nullglob
 
+          # Only ship installers (no AppImage, no naked Linux/macOS binaries, no checksums).
           for f in "${BUNDLE}/deb/"*.deb; do
             cp -a "$f" "${OUT}/${ASSET}.deb"
-          done
-          for f in "${BUNDLE}/appimage/"*.AppImage; do
-            cp -a "$f" "${OUT}/${ASSET}.AppImage"
-            chmod +x "${OUT}/${ASSET}.AppImage"
           done
           for f in "${BUNDLE}/nsis/"*.exe; do
             cp -a "$f" "${OUT}/${ASSET}-setup.exe"
@@ -375,11 +363,7 @@ jobs:
           for f in "${BUNDLE}/dmg/"*.dmg; do
             cp -a "$f" "${OUT}/${ASSET}.dmg"
           done
-
-          if [ -f "target/${TARGET}/release/sarca-client" ]; then
-            cp "target/${TARGET}/release/sarca-client" "${OUT}/${ASSET}"
-            chmod +x "${OUT}/${ASSET}"
-          fi
+          # Windows portable .exe (alongside the NSIS setup installer).
           if [ -f "target/${TARGET}/release/sarca-client.exe" ]; then
             cp "target/${TARGET}/release/sarca-client.exe" "${OUT}/${ASSET}.exe"
           fi
@@ -387,16 +371,6 @@ jobs:
           echo "Release files:"
           find "${OUT}" -maxdepth 1 -type f | sort
           test "$(find "${OUT}" -maxdepth 1 -type f | wc -l)" -ge 1
-
-          cd "${OUT}"
-          for f in *; do
-            [ -f "$f" ] || continue
-            if command -v sha256sum >/dev/null; then
-              sha256sum "$f" > "${f}.sha256"
-            else
-              shasum -a 256 "$f" > "${f}.sha256"
-            fi
-          done
 
       - uses: actions/upload-artifact@v6
         with:
@@ -577,14 +551,13 @@ jobs:
           fi
 
           python3 -c "import sys; data=open(sys.argv[1],'rb').read(); assert b'APK Sig Block 42' in data, 'missing v2/v3 signature'" "dist/${ASSET}.apk"
+          rm -f "dist/${ASSET}.apk.idsig" "dist/${ASSET}.apk.sha256"
           echo "Packed ${ASSET}.apk"
-          cd dist
-          sha256sum "${ASSET}.apk" > "${ASSET}.apk.sha256"
 
       - uses: actions/upload-artifact@v6
         with:
           name: sarca_client_android_arm64
-          path: dist/*
+          path: dist/sarca_client_android_arm64.apk
           if-no-files-found: error
           retention-days: 1
 
@@ -733,27 +706,105 @@ jobs:
           pattern: sarca_*
           merge-multiple: true
 
-      - name: Assert release files present
+      - name: Prepare sorted release assets + notes
+        id: notes
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          REPO: ${{ github.repository }}
         run: |
-          set -uo pipefail
-          find artifacts -type f | sort
-          server="$(find artifacts -type f \( -name 'sarca_linux_*.tar.gz' -o -name 'sarca_windows_*.zip' -o -name 'sarca_macos_*.tar.gz' \) ! -name 'sarca_client_*' | wc -l)"
+          set -euo pipefail
+          mkdir -p release-assets
+          # Drop checksums, apksigner sidecars, AppImages, and naked Unix binaries.
+          while IFS= read -r -d '' f; do
+            base="$(basename "$f")"
+            case "$base" in
+              *.sha256|*.idsig|*.AppImage) continue ;;
+              sarca_client_linux_amd64|sarca_client_linux_arm64|sarca_client_macos_arm64) continue ;;
+            esac
+            cp -a "$f" "release-assets/${base}"
+          done < <(find artifacts -type f -print0)
+
+          # Alphabetical order for upload / listing.
+          mapfile -t FILES < <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort)
+          test "${#FILES[@]}" -ge 1
+          printf '%s\n' "${FILES[@]}"
+
+          server=0
           clients=0
-          for p in linux_amd64 linux_arm64 windows_amd64 windows_arm64 macos_arm64; do
-            if find artifacts -type f -name "sarca_client_${p}*" ! -name '*.sha256' | grep -q .; then
-              clients=$((clients + 1))
-            else
-              echo "missing client files for ${p}" >&2
-            fi
+          for f in "${FILES[@]}"; do
+            case "$f" in
+              sarca_linux_*.tar.gz|sarca_windows_*.zip|sarca_macos_*.tar.gz) server=$((server + 1)) ;;
+              sarca_client_*) clients=$((clients + 1)) ;;
+            esac
           done
           echo "server_archives=${server}"
-          echo "client_platforms=${clients}"
+          echo "client_files=${clients}"
           test "${server}" -ge 4
-          test "${clients}" -ge 5
-          test -f artifacts/sarca_client_android_arm64.apk
-          if ! find artifacts -type f \( -name 'sarca_client_ios_arm64.ipa' -o -name 'sarca_client_ios_arm64-simulator.zip' -o -name 'sarca_client_ios_arm64-app.zip' \) | grep -q .; then
-            echo "warning: no iOS client artifact (build may have failed without Apple secrets)" >&2
-          fi
+          test -f release-assets/sarca_client_android_arm64.apk
+          test -f release-assets/sarca_client_linux_amd64.deb
+          test -f release-assets/sarca_client_linux_arm64.deb
+          test -f release-assets/sarca_client_macos_arm64.dmg
+          test -f release-assets/sarca_client_windows_amd64-setup.exe
+          test -f release-assets/sarca_client_windows_arm64-setup.exe
+
+          BASE="https://github.com/${REPO}/releases/download/${TAG}"
+
+          label_for() {
+            case "$1" in
+              sarca_linux_amd64.tar.gz) echo "Server — Linux x86_64" ;;
+              sarca_linux_arm64.tar.gz) echo "Server — Linux aarch64" ;;
+              sarca_macos_arm64.tar.gz) echo "Server — macOS Apple Silicon" ;;
+              sarca_windows_amd64.zip) echo "Server — Windows x86_64" ;;
+              sarca_client_android_arm64.apk) echo "Client — Android arm64 (sideload APK)" ;;
+              sarca_client_linux_amd64.deb) echo "Client — Linux x86_64 (.deb)" ;;
+              sarca_client_linux_arm64.deb) echo "Client — Linux aarch64 (.deb)" ;;
+              sarca_client_macos_arm64.dmg) echo "Client — macOS Apple Silicon (.dmg)" ;;
+              sarca_client_windows_amd64-setup.exe) echo "Client — Windows x86_64 (installer)" ;;
+              sarca_client_windows_amd64.exe) echo "Client — Windows x86_64 (portable)" ;;
+              sarca_client_windows_arm64-setup.exe) echo "Client — Windows ARM64 (installer)" ;;
+              sarca_client_windows_arm64.exe) echo "Client — Windows ARM64 (portable)" ;;
+              *) echo "$1" ;;
+            esac
+          }
+
+          {
+            echo "Multi-platform binaries for \`${TAG}\`."
+            echo
+            echo "### Downloads"
+            echo
+            echo "| File | Description |"
+            echo "| --- | --- |"
+            for f in "${FILES[@]}"; do
+              echo "| [\`${f}\`](${BASE}/${f}) | $(label_for "$f") |"
+            done
+            echo
+            echo "**Android:** allow unknown sources / sideload the APK. Signed with the repo sideload keystore (or \`ANDROID_KEYSTORE_*\` secrets)."
+            echo
+            echo "**Install server (Linux / macOS)**"
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${REPO}/refs/heads/master/install.sh | bash"
+            echo '```'
+            echo
+            echo "**Install server (Windows PowerShell)**"
+            echo '```powershell'
+            echo "irm https://raw.githubusercontent.com/${REPO}/refs/heads/master/install.ps1 | iex"
+            echo '```'
+            echo
+            echo "**Docker**"
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/${REPO}/refs/heads/master/install.sh | bash -s -- --docker"
+            echo "cd sarca && docker compose --env-file sarca.conf up -d"
+            echo '```'
+            echo
+            echo "Image: \`ghcr.io/${REPO}:${TAG}\` (also \`:latest\`)."
+            echo "Postgres is required — see README."
+          } > release-body.md
+
+          # Explicit sorted file list for softprops (stable order).
+          : > release-files.txt
+          for f in "${FILES[@]}"; do
+            echo "release-assets/${f}" >> release-files.txt
+          done
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -763,53 +814,8 @@ jobs:
           prerelease: false
           generate_release_notes: true
           fail_on_unmatched_files: true
-          body: |
-            Multi-platform binaries for `${{ needs.version.outputs.tag }}`.
-
-            ### Server (`sarca` + `ui/` inside archive)
-            | Asset | Platform |
-            | --- | --- |
-            | `sarca_linux_amd64.tar.gz` | Linux x86_64 |
-            | `sarca_linux_arm64.tar.gz` | Linux aarch64 |
-            | `sarca_windows_amd64.zip` | Windows x86_64 |
-            | `sarca_macos_arm64.tar.gz` | macOS Apple Silicon |
-
-            ### Sync client (installers / binaries)
-            | Asset | Platform |
-            | --- | --- |
-            | `sarca_client_linux_amd64.AppImage` / `.deb` | Linux x86_64 |
-            | `sarca_client_linux_arm64.AppImage` / `.deb` | Linux aarch64 |
-            | `sarca_client_windows_amd64-setup.exe` | Windows x86_64 |
-            | `sarca_client_windows_arm64-setup.exe` | Windows ARM64 |
-            | `sarca_client_macos_arm64.dmg` | macOS Apple Silicon |
-            | `sarca_client_android_arm64.apk` | Android arm64 (sideload) |
-            | `sarca_client_ios_arm64.ipa` | iOS device (when Apple signing secrets are set) |
-            | `sarca_client_ios_arm64-simulator.zip` | iOS Simulator fallback |
-
-            Portable binaries are also attached where available (`sarca_client_linux_*`, `sarca_client_windows_*.exe`).
-
-            **Android:** install the signed APK (allow unknown sources). The release APK is signed with the repo sideload keystore (or `ANDROID_KEYSTORE_*` secrets). Unsigned APKs will not install on modern Android (e.g. Pixel).
-            **iOS device IPA:** requires `APPLE_CERTIFICATE_BASE64` + `APPLE_CERTIFICATE_PASSWORD` (and provisioning / API key as needed). Without them CI attaches a Simulator build only.
-
-            **Install server (Linux / macOS)**
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash
-            ```
-
-            **Install server (Windows PowerShell)**
-            ```powershell
-            irm https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.ps1 | iex
-            ```
-
-            **Docker**
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
-            cd sarca && docker compose --env-file sarca.conf up -d
-            ```
-
-            Image: `ghcr.io/insigmo/sarca:${{ needs.version.outputs.tag }}` (also `:latest`).
-            Postgres is required — see README.
-          files: artifacts/*
+          body_path: release-body.md
+          files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
