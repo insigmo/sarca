@@ -34,8 +34,7 @@ pub fn run() {
                     state::OPEN_SYNC_JS
                 ))
                 .on_navigation(|webview, url| {
-                    // Custom scheme (tray / older clients) and HTTPS query fallback
-                    // (reliable on Android WebView where unknown schemes are flaky).
+                    // Custom scheme and legacy query: open in-app Settings → Sync.
                     let open_sync = url.scheme() == "sarca-sync"
                         || url
                             .query_pairs()
@@ -60,16 +59,17 @@ pub fn run() {
             }
 
             // Backup if `on_navigation` missed a same-document query change:
-            // never leave the user on a remote URL that requested Sync.
-            let wants_sync = payload
+            // never leave the user on a remote URL that requested legacy Sync open.
+            let wants_legacy_sync = payload
                 .url()
                 .query_pairs()
                 .any(|(k, v)| k == "__sarca_open_sync" && v == "1");
-            if wants_sync {
+            if wants_legacy_sync {
                 let app = webview.app_handle().clone();
                 let _ = navigate_to_sync_settings(&app);
                 return;
             }
+            // `__sarca_open_settings=sync` stays on the remote page; UI opens Settings.
 
             if is_shell_url(payload.url()) {
                 return;
@@ -79,7 +79,7 @@ pub fn run() {
                 let _ = webview.eval(inject.eval_script());
             }
             // After the one-shot session inject (and on every later remote load),
-            // keep a visible Sync FAB — Linux trays are often hidden; mobile has none.
+            // mark native + install the invoke / Settings bridge.
             let _ = webview.eval(state::native_chrome_js());
         });
 
@@ -240,6 +240,7 @@ pub fn run() {
             commands::open_app,
             commands::open_sync_settings,
             commands::pick_local_folder,
+            commands::default_gallery_path,
             commands::list_storages,
             commands::ensure_remote_folder,
             commands::list_bindings,
@@ -247,6 +248,12 @@ pub fn run() {
             commands::remove_binding,
             commands::sync_now,
             commands::sync_statuses,
+            commands::get_client_prefs,
+            commands::set_client_prefs,
+            commands::is_on_wifi,
+            commands::get_about,
+            commands::get_cache_size,
+            commands::clear_local_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Sarca client");
