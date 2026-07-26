@@ -1,9 +1,9 @@
 # Sarca native client (Tauri 2)
 
-Thin native shell around your Sarca server: connect with **server URL + email + password**,
-then the webview loads the **same web UI** hosted by that server (all buttons and features).
-Phone screens use the site’s existing mobile layout (≤840px). Desktop keeps tray sync in the
-background via [`sarca-sync`](../crates/sarca-sync).
+Thin native shell around your Sarca server: enter the **server URL**, then the webview loads the
+**same web UI** hosted by that server (sign in on the website). All buttons and features match
+the browser. Phone screens use the site’s existing mobile layout (≤840px). Desktop keeps tray
+sync in the background via [`sarca-sync`](../crates/sarca-sync).
 
 ## Platforms
 
@@ -26,8 +26,8 @@ pnpm install
 pnpm tauri dev
 ```
 
-On first launch enter your Sarca server URL and account. After connect, the app shows the
-server’s web UI. Tray → **Disconnect** returns to the connect screen.
+On first launch enter your Sarca server URL and Connect. Sign in on the server’s web login page.
+After that, the app shows the server’s web UI. Tray → **Disconnect** returns to the connect screen.
 
 ## Icons
 

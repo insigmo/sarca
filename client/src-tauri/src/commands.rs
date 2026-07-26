@@ -12,8 +12,8 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
 use crate::state::{
-    load_server_config, merge_session_tokens, navigate_to_server, navigate_to_shell,
-    navigate_to_sync_settings, new_binding, AppSyncState, ClientPrefs, ServerConfig,
+    navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding, AppSyncState,
+    ClientPrefs, ServerConfig,
 };
 
 #[derive(Serialize)]
@@ -201,33 +201,41 @@ pub async fn connect(
     app: AppHandle,
     state: State<'_, AppSyncState>,
     server_url: String,
-    email: String,
-    password: String,
 ) -> Result<SessionDto, String> {
     let base = normalize_server_url(&server_url).map_err(|e| e.to_string())?;
-    if email.trim().is_empty() {
-        return Err("Email is required".into());
-    }
-    if password.is_empty() {
-        return Err("Password is required".into());
-    }
 
-    let tokens = SarcaApi::login(&base, email.trim(), &password)
-        .await
-        .map_err(|e| e.to_string())?;
-
+    // Remember the server origin; authentication happens on the website login page.
+    // Keep any existing tokens only when reconnecting to the same base URL.
+    let previous = state.server.lock().await.clone();
+    let same_server = previous.base_url.trim_end_matches('/') == base.trim_end_matches('/');
     let cfg = ServerConfig {
         base_url: base,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        email: email.trim().to_owned(),
-        email_verified: tokens.email_verified,
+        access_token: if same_server {
+            previous.access_token
+        } else {
+            String::new()
+        },
+        refresh_token: if same_server {
+            previous.refresh_token
+        } else {
+            String::new()
+        },
+        email: if same_server {
+            previous.email
+        } else {
+            String::new()
+        },
+        email_verified: if same_server {
+            previous.email_verified
+        } else {
+            false
+        },
     };
     state.save_server(&cfg).await.map_err(|e| e.to_string())?;
     navigate_to_server(&app, &cfg)?;
 
     Ok(SessionDto {
-        connected: true,
+        connected: cfg.is_connected(),
         base_url: cfg.base_url,
         email: cfg.email,
     })
