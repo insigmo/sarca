@@ -16,6 +16,9 @@ import HubOutlinedIcon from '@suid/icons-material/HubOutlined'
 import API from '../api'
 import { alertStore } from './AlertStack'
 import ActionConfirmDialog from './ActionConfirmDialog'
+import SettingsSyncPanel from './SettingsSyncPanel'
+import { nativeClientStore } from '../common/nativeClient'
+import FluentIcon from './FluentIcon'
 
 const MAX_CHANNELS = 3
 
@@ -47,7 +50,10 @@ const validateChatId = (value) => {
  */
 const StorageSettingsModal = (props) => {
 	const { addAlert } = alertStore
-	const [tab, setTab] = createSignal(/** @type {'general' | 'telegram'} */ ('general'))
+	const { isNative } = nativeClientStore
+	const [tab, setTab] = createSignal(
+		/** @type {'general' | 'sync' | 'telegram'} */ ('general'),
+	)
 	const [name, setName] = createSignal('')
 	const [saving, setSaving] = createSignal(false)
 	const [confirmDelete, setConfirmDelete] = createSignal(false)
@@ -446,6 +452,29 @@ const StorageSettingsModal = (props) => {
 											<span class="settings-nav__desc">Name & delete</span>
 										</span>
 									</button>
+									<Show when={isNative()}>
+										<button
+											type="button"
+											class="settings-nav__item"
+											classList={{
+												'settings-nav__item--active': tab() === 'sync',
+											}}
+											onClick={() => setTab('sync')}
+										>
+											<span class="settings-nav__icon" aria-hidden="true">
+												<FluentIcon
+													name={tab() === 'sync' ? 'cloudFilled' : 'cloud'}
+													size={20}
+												/>
+											</span>
+											<span class="settings-nav__text">
+												<span class="settings-nav__title">Sync</span>
+												<span class="settings-nav__desc">
+													Auto-upload &amp; folders
+												</span>
+											</span>
+										</button>
+									</Show>
 									<button
 										type="button"
 										class="settings-nav__item"
@@ -509,6 +538,10 @@ const StorageSettingsModal = (props) => {
 												Delete storage and files
 											</Button>
 										</div>
+									</Show>
+
+									<Show when={tab() === 'sync' && isNative()}>
+										<SettingsSyncPanel storageId={props.storage?.id} />
 									</Show>
 
 									<Show when={tab() === 'telegram'}>
