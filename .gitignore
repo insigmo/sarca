@@ -12,7 +12,8 @@ target/
 .env
 sarca.conf
 
-.vscode
+.vscode/*
+!.vscode/tasks.json
 
 # Python e2e
 __pycache__/
