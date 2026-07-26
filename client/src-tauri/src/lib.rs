@@ -5,22 +5,23 @@ mod state;
 
 use std::time::Duration;
 
-use state::{
-    is_shell_url, navigate_to_server, navigate_to_shell, AppSyncState, ServerConfig,
-};
+use state::{is_shell_url, navigate_to_server, AppSyncState};
+use tauri::{webview::PageLoadEvent, Manager};
+
+#[cfg(desktop)]
+use state::{navigate_to_shell, ServerConfig};
+#[cfg(desktop)]
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    webview::PageLoadEvent,
-    Manager,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .on_page_load(|webview, payload| {
             let Some(state) = webview.try_state::<AppSyncState>() else {
@@ -41,12 +42,15 @@ pub fn run() {
             }
         });
 
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    // process + autostart are desktop-oriented.
+    #[cfg(desktop)]
     {
-        builder = builder.plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            Some(vec!["--minimized"]),
-        ));
+        builder = builder
+            .plugin(tauri_plugin_process::init())
+            .plugin(tauri_plugin_autostart::init(
+                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                Some(vec!["--minimized"]),
+            ));
     }
 
     builder
@@ -58,7 +62,7 @@ pub fn run() {
             };
             app.manage(sync_state);
 
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            #[cfg(desktop)]
             {
                 let show = MenuItem::with_id(app, "show", "Show Sarca", true, None::<&str>)?;
                 let sync_now = MenuItem::with_id(app, "sync_now", "Sync now", true, None::<&str>)?;
