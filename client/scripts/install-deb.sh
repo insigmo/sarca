@@ -4,10 +4,14 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$ROOT/.." && pwd)"
+# shellcheck source=../../scripts/ensure-pnpm-env.sh
+. "$REPO_ROOT/scripts/ensure-pnpm-env.sh"
 cd "$ROOT"
 
 echo "Building Linux .deb (pnpm tauri build --bundles deb)…"
-pnpm tauri build --bundles deb
+# shellcheck disable=SC2086 # PNPM may be "corepack pnpm"
+$PNPM tauri build --bundles deb
 
 search_dirs=()
 [[ -d "$ROOT/src-tauri/target" ]] && search_dirs+=("$ROOT/src-tauri/target")
