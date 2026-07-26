@@ -247,6 +247,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::platform_label,
             commands::get_session,
+            commands::update_session,
             commands::connect,
             commands::disconnect,
             commands::open_app,

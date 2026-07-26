@@ -10,6 +10,7 @@ use crate::remote_ipc::REMOTE_SETTINGS_COMMANDS;
 pub const REQUIRED_ALLOW_PERMISSIONS: &[&str] = &[
     "allow-platform-label",
     "allow-get-session",
+    "allow-update-session",
     "allow-connect",
     "allow-disconnect",
     "allow-open-app",

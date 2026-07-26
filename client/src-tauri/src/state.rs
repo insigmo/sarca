@@ -35,6 +35,44 @@ impl ServerConfig {
     }
 }
 
+/// Merge tokens from the logged-in webview into native `ServerConfig`.
+/// Used so Sync API calls (create_folder, etc.) share the same session as the UI.
+pub fn merge_session_tokens(
+    cfg: &mut ServerConfig,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    email: Option<&str>,
+    email_verified: Option<bool>,
+) -> Result<(), String> {
+    let access = access_token.trim();
+    if access.is_empty() {
+        return Err(
+            "Not authenticated — missing access token. Sign in again so Sync can use your session."
+                .into(),
+        );
+    }
+    if cfg.base_url.trim().is_empty() {
+        return Err("Not connected".into());
+    }
+    cfg.access_token = access.to_owned();
+    if let Some(r) = refresh_token {
+        let r = r.trim();
+        if !r.is_empty() {
+            cfg.refresh_token = r.to_owned();
+        }
+    }
+    if let Some(e) = email {
+        let e = e.trim();
+        if !e.is_empty() {
+            cfg.email = e.to_owned();
+        }
+    }
+    if let Some(v) = email_verified {
+        cfg.email_verified = v;
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct SessionInject {
     pub access_token: String,
@@ -192,34 +230,97 @@ pub const OPEN_SYNC_JS: &str = r#"
     });
   }
   function __sarcaCombineErr(errs){
-    var parts = [];
+    var command = [];
+    var bridge = [];
     for (var i = 0; i < errs.length; i++) {
       var e = errs[i];
       if (!e) continue;
       var m = (e && e.message) ? e.message : String(e);
-      if (m && parts.indexOf(m) < 0) parts.push(m);
+      if (!m) continue;
+      if (__sarcaIsBridgeError(e)) {
+        if (bridge.indexOf(m) < 0) bridge.push(m);
+      } else {
+        if (command.indexOf(m) < 0) command.push(m);
+      }
     }
-    return new Error(parts.join(' | ') || 'Native bridge unavailable');
+    // Prefer real command/API errors over transport noise ("Load failed").
+    if (command.length) return new Error(command.join(' | '));
+    return new Error(bridge.join(' | ') || 'Native bridge unavailable');
+  }
+  function __sarcaIsBridgeError(err){
+    var m = ((err && err.message) ? err.message : String(err || '')).toLowerCase();
+    if (!m) return true;
+    return (
+      m.indexOf('not allowed') >= 0 ||
+      m.indexOf('denied by acl') >= 0 ||
+      m.indexOf('command') >= 0 && m.indexOf('not allowed') >= 0 ||
+      m.indexOf('unavailable') >= 0 ||
+      m.indexOf('tauri invoke unavailable') >= 0 ||
+      m.indexOf('native bridge') >= 0 ||
+      m.indexOf('load failed') >= 0 ||
+      m.indexOf('failed to fetch') >= 0 ||
+      m.indexOf('networkerror') >= 0 ||
+      m.indexOf('network error') >= 0 ||
+      m.indexOf('bridge timeout') >= 0 ||
+      m.indexOf('unknown native command') >= 0
+    );
+  }
+  function __sarcaReadSession(){
+    try {
+      var at = localStorage.getItem('access_token');
+      if (!at || !String(at).trim()) return null;
+      var out = { accessToken: String(at) };
+      var rt = localStorage.getItem('refresh_token');
+      if (rt && String(rt).trim()) out.refreshToken = String(rt);
+      try {
+        var user = JSON.parse(localStorage.getItem('user') || 'null');
+        if (user && user.email) out.email = String(user.email);
+        if (user && typeof user.email_verified === 'boolean') out.emailVerified = user.email_verified;
+      } catch (_) {}
+      return out;
+    } catch (_) {
+      return null;
+    }
   }
   function __sarcaInvoke(cmd, args){
-    function viaTauri(){
-      try {
-        if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
-          return window.__TAURI_INTERNALS__.invoke(cmd, args || {});
-        }
-      } catch (_) {}
-      return Promise.reject(new Error('Tauri invoke unavailable'));
-    }
-    // Prefer Tauri invoke (remote.urls must include host:port patterns).
-    // Custom-protocol fetch often yields TypeError: Load failed on WebKitGTK.
-    // Navigation IPC bypasses ACL when both prior paths fail.
-    return viaTauri().catch(function(tauriErr){
-      return __sarcaFetchInvoke(cmd, args).catch(function(fetchErr){
-        return __sarcaNavInvoke(cmd, args).catch(function(navErr){
-          throw __sarcaCombineErr([tauriErr, fetchErr, navErr]);
+    function invokeOnce(c, a){
+      function viaTauri(){
+        try {
+          if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
+            return window.__TAURI_INTERNALS__.invoke(c, a || {});
+          }
+        } catch (_) {}
+        return Promise.reject(new Error('Tauri invoke unavailable'));
+      }
+      // Prefer Tauri invoke (remote.urls must include host:port patterns).
+      // Custom-protocol fetch often yields TypeError: Load failed on WebKitGTK.
+      // Navigation IPC bypasses ACL when both prior paths fail.
+      // Do NOT fall through when Tauri already returned a command/API error
+      // (e.g. create_folder 401) — that only appends "| Load failed" noise.
+      return viaTauri().catch(function(tauriErr){
+        if (!__sarcaIsBridgeError(tauriErr)) throw tauriErr;
+        return __sarcaFetchInvoke(c, a).catch(function(fetchErr){
+          if (!__sarcaIsBridgeError(fetchErr)) throw fetchErr;
+          return __sarcaNavInvoke(c, a).catch(function(navErr){
+            throw __sarcaCombineErr([tauriErr, fetchErr, navErr]);
+          });
         });
       });
-    });
+    }
+    var payload = args || {};
+    // Push the webview's live tokens into native state before Sync API commands
+    // so create_folder / list_storages use the same session as the logged-in UI.
+    if (cmd !== 'update_session' && cmd !== 'connect' && cmd !== 'disconnect') {
+      var session = __sarcaReadSession();
+      if (session) {
+        return invokeOnce('update_session', session).catch(function(){
+          // Best-effort; still attempt the original command.
+        }).then(function(){
+          return invokeOnce(cmd, payload);
+        });
+      }
+    }
+    return invokeOnce(cmd, payload);
   }
   window.__sarcaInvoke = __sarcaInvoke;
   function __sarcaOpenSyncSettings(){
@@ -379,6 +480,25 @@ impl AppSyncState {
             .set_credentials(cfg.base_url.clone(), cfg.access_token.clone())
             .await;
         Ok(())
+    }
+
+    /// Apply tokens from the remote webview (localStorage) into native sync state.
+    pub async fn apply_webview_session(
+        &self,
+        access_token: String,
+        refresh_token: Option<String>,
+        email: Option<String>,
+        email_verified: Option<bool>,
+    ) -> Result<(), String> {
+        let mut cfg = self.server.lock().await.clone();
+        merge_session_tokens(
+            &mut cfg,
+            &access_token,
+            refresh_token.as_deref(),
+            email.as_deref(),
+            email_verified,
+        )?;
+        self.save_server(&cfg).await.map_err(|e| e.to_string())
     }
 
     pub fn queue_inject(&self, inject: SessionInject) {
@@ -564,5 +684,56 @@ mod tests {
             "must combine errors instead of rethrowing only Load failed"
         );
         assert!(js.contains("viaTauri"), "viaTauri helper must exist");
+        assert!(
+            js.contains("__sarcaIsBridgeError"),
+            "must distinguish bridge failures from command/API errors"
+        );
+        assert!(
+            js.contains("__sarcaReadSession") && js.contains("update_session"),
+            "must push webview tokens via update_session before Sync commands"
+        );
+    }
+
+    #[test]
+    fn merge_session_tokens_updates_access_and_refresh() {
+        let mut cfg = ServerConfig {
+            base_url: "http://localhost:8001".into(),
+            access_token: "old".into(),
+            refresh_token: String::new(),
+            email: String::new(),
+            email_verified: false,
+        };
+        merge_session_tokens(
+            &mut cfg,
+            "new-access",
+            Some("new-refresh"),
+            Some("user@example.com"),
+            Some(true),
+        )
+        .unwrap();
+        assert_eq!(cfg.access_token, "new-access");
+        assert_eq!(cfg.refresh_token, "new-refresh");
+        assert_eq!(cfg.email, "user@example.com");
+        assert!(cfg.email_verified);
+        assert!(cfg.is_connected());
+    }
+
+    #[test]
+    fn merge_session_tokens_rejects_empty_access() {
+        let mut cfg = ServerConfig {
+            base_url: "http://localhost:8001".into(),
+            access_token: "old".into(),
+            ..Default::default()
+        };
+        let err = merge_session_tokens(&mut cfg, "  ", None, None, None).unwrap_err();
+        assert!(err.to_lowercase().contains("access token"));
+        assert_eq!(cfg.access_token, "old");
+    }
+
+    #[test]
+    fn merge_session_tokens_requires_base_url() {
+        let mut cfg = ServerConfig::default();
+        let err = merge_session_tokens(&mut cfg, "tok", None, None, None).unwrap_err();
+        assert!(err.to_lowercase().contains("not connected"));
     }
 }
