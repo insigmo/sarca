@@ -12,7 +12,7 @@ use tauri::{plugin::Builder as PluginBuilder, webview::PageLoadEvent, Manager};
 use state::{navigate_to_shell, ServerConfig};
 #[cfg(desktop)]
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
@@ -26,7 +26,13 @@ pub fn run() {
         .plugin(
             PluginBuilder::<tauri::Wry, ()>::new("sarca-nav")
                 .on_navigation(|webview, url| {
-                    if url.scheme() == "sarca-sync" {
+                    // Custom scheme (tray / older clients) and HTTPS query fallback
+                    // (reliable on Android WebView where unknown schemes are flaky).
+                    let open_sync = url.scheme() == "sarca-sync"
+                        || url
+                            .query_pairs()
+                            .any(|(k, v)| k == "__sarca_open_sync" && v == "1");
+                    if open_sync {
                         let app = webview.app_handle().clone();
                         let _ = navigate_to_sync_settings(&app);
                         return false;
@@ -52,6 +58,9 @@ pub fn run() {
             if let Some(inject) = state.take_inject() {
                 let _ = webview.eval(inject.eval_script());
             }
+            // After the one-shot session inject (and on every later remote load),
+            // keep a visible Sync FAB — Linux trays are often hidden; mobile has none.
+            let _ = webview.eval(state::NATIVE_CHROME_JS);
         });
 
     // process + autostart are desktop-oriented.
@@ -76,6 +85,8 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
+                // Separate menu items for window vs tray (items cannot belong to two menus).
+                // Same ids so one on_menu_event handler covers both.
                 let show = MenuItem::with_id(app, "show", "Show Sarca", true, None::<&str>)?;
                 let sync_now = MenuItem::with_id(app, "sync_now", "Sync now", true, None::<&str>)?;
                 let sync_settings =
@@ -83,49 +94,87 @@ pub fn run() {
                 let disconnect =
                     MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
                 let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-                let menu = Menu::with_items(
+                let sep = PredefinedMenuItem::separator(app)?;
+
+                let tray_show =
+                    MenuItem::with_id(app, "show", "Show Sarca", true, None::<&str>)?;
+                let tray_sync_now =
+                    MenuItem::with_id(app, "sync_now", "Sync now", true, None::<&str>)?;
+                let tray_sync_settings =
+                    MenuItem::with_id(app, "sync_settings", "Sync settings", true, None::<&str>)?;
+                let tray_disconnect =
+                    MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
+                let tray_quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+
+                app.on_menu_event(|app, event| match event.id().as_ref() {
+                    "quit" => app.exit(0),
+                    "show" => {
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                        }
+                    }
+                    "disconnect" => {
+                        let handle = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let state = handle.state::<AppSyncState>();
+                            let cfg = ServerConfig::default();
+                            let _ = state.save_server(&cfg).await;
+                            if let Ok(mut guard) = state.pending_inject.lock() {
+                                *guard = None;
+                            }
+                            let _ = navigate_to_shell(&handle);
+                        });
+                    }
+                    "sync_now" => {
+                        let state = app.state::<AppSyncState>();
+                        let engine = state.engine.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = engine.tick().await;
+                        });
+                    }
+                    "sync_settings" => {
+                        let _ = navigate_to_sync_settings(app);
+                    }
+                    _ => {}
+                });
+
+                // Window menu bar — Sync reachable when the system tray is hidden (Linux/GNOME).
+                let app_submenu = Submenu::with_items(
                     app,
-                    &[&show, &sync_now, &sync_settings, &disconnect, &quit],
+                    "Sarca",
+                    true,
+                    &[
+                        &show,
+                        &sync_settings,
+                        &sync_now,
+                        &sep,
+                        &disconnect,
+                        &quit,
+                    ],
+                )?;
+                let app_menu = Menu::with_items(app, &[&app_submenu])?;
+                let _ = app.set_menu(app_menu);
+
+                let tray_menu = Menu::with_items(
+                    app,
+                    &[
+                        &tray_show,
+                        &tray_sync_settings,
+                        &tray_sync_now,
+                        &tray_disconnect,
+                        &tray_quit,
+                    ],
                 )?;
 
                 let _tray = TrayIconBuilder::new()
                     .icon(app.default_window_icon().unwrap().clone())
-                    .menu(&menu)
-                    .on_menu_event(|app, event| match event.id.as_ref() {
-                        "quit" => app.exit(0),
-                        "show" => {
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
-                        }
-                        "disconnect" => {
-                            let handle = app.clone();
-                            tauri::async_runtime::spawn(async move {
-                                let state = handle.state::<AppSyncState>();
-                                let cfg = ServerConfig::default();
-                                let _ = state.save_server(&cfg).await;
-                                if let Ok(mut guard) = state.pending_inject.lock() {
-                                    *guard = None;
-                                }
-                                let _ = navigate_to_shell(&handle);
-                            });
-                        }
-                        "sync_now" => {
-                            let state = app.state::<AppSyncState>();
-                            let engine = state.engine.clone();
-                            tauri::async_runtime::spawn(async move {
-                                let _ = engine.tick().await;
-                            });
-                        }
-                        "sync_settings" => {
-                            let _ = navigate_to_sync_settings(app);
-                        }
-                        _ => {}
-                    })
+                    .menu(&tray_menu)
+                    .tooltip("Sarca — Sync settings in menu")
+                    .show_menu_on_left_click(true)
                     .on_tray_icon_event(|tray, event| {
                         if let TrayIconEvent::Click {
-                            button: MouseButton::Left,
+                            button: MouseButton::Right,
                             button_state: MouseButtonState::Up,
                             ..
                         } = event
