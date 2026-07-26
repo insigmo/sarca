@@ -4267,7 +4267,7 @@ dependencies = [
 
 [[package]]
 name = "sarca"
-version = "0.0.47"
+version = "0.0.48"
 dependencies = [
  "async-stream",
  "axum",
@@ -4298,7 +4298,7 @@ dependencies = [
 
 [[package]]
 name = "sarca-client"
-version = "0.0.47"
+version = "0.0.48"
 dependencies = [
  "anyhow",
  "network-interface",
@@ -4312,8 +4312,10 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-process",
  "tauri-plugin-shell",
+ "tauri-utils",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 

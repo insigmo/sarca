@@ -74,7 +74,11 @@ pub async fn pick_folder_android<R: Runtime>(
                 || lower.contains("classnotfound")
                 || lower.contains("failed to find class")
             {
-                Err("FOLDER_PICKER_USE_PROMPT".into())
+                // Do NOT map to FOLDER_PICKER_USE_PROMPT — that hides a packaging
+                // bug behind window.prompt. Rebuild with patch-android-http.sh.
+                Err(format!(
+                    "Android SAF folder picker unavailable ({msg}). Rebuild the APK after running scripts/patch-android-http.sh."
+                ))
             } else {
                 Err(msg)
             }
