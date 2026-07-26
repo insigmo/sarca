@@ -9,7 +9,7 @@ import ListItemText from '@suid/material/ListItemText'
 
 import createLocalStore from '../../libs'
 import { clearSession } from '../common/auth'
-import { isNativeClient, openNativeSyncSettings } from '../common/nativeClient'
+import { nativeClientStore, openNativeSyncSettings } from '../common/nativeClient'
 import { settingsStore } from '../common/settings'
 import FluentIcon, { fluentIcons } from './FluentIcon'
 
@@ -246,7 +246,7 @@ const FilesSidebar = (props) => {
 		mode: props.mode,
 		collapsed: collapsed(),
 		createDisabled: props.createDisabled,
-		showSync: isNativeClient(),
+		showSync: nativeClientStore.isNative(),
 		onSelect: select,
 		onOpenSettings: openSidebarSettings,
 		onOpenSync: openSidebarSync,
