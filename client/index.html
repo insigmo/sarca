@@ -128,13 +128,6 @@
         font-size: 0.9rem;
         min-height: 1.2em;
       }
-      .hint {
-        margin: 16px 0 0;
-        color: var(--sarca-ink-soft);
-        font-size: 0.82rem;
-        text-align: center;
-        line-height: 1.4;
-      }
       .platform {
         margin-top: 10px;
         text-align: center;
@@ -184,33 +177,12 @@
           type="text"
           inputmode="url"
           autocomplete="url"
-          placeholder="http://192.168.1.10:8000 or https://sarca.example.com"
-          required
-        />
-        <label for="email">Email</label>
-        <input
-          id="email"
-          name="email"
-          type="email"
-          autocomplete="username"
-          required
-        />
-        <label for="password">Password</label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autocomplete="current-password"
+          placeholder="https://sarca.example.com"
           required
         />
         <p id="error" class="error" aria-live="polite"></p>
         <button id="submit" type="submit">Connect</button>
       </form>
-      <p class="hint">
-        After connecting you get the same Sarca interface as in the browser —
-        files, buttons, and settings. Configure Sync under
-        <strong>Settings → Sync</strong> (photo/video auto-upload and folder backup).
-      </p>
       <p id="platform" class="platform"></p>
     </main>
     <script type="module" src="/src/main.js"></script>

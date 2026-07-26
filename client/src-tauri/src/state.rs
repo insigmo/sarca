@@ -323,6 +323,32 @@ pub const OPEN_SYNC_JS: &str = r#"
     return invokeOnce(cmd, payload);
   }
   window.__sarcaInvoke = __sarcaInvoke;
+  // After website login, push tokens into native Sync state (and keep them fresh).
+  // Shell Connect no longer POSTs /api/auth/login — tokens appear in localStorage.
+  (function __sarcaWatchSession(){
+    var last = '';
+    function push(){
+      try {
+        var session = __sarcaReadSession();
+        if (!session) { last = ''; return; }
+        var key = session.accessToken + '|' + (session.refreshToken || '') + '|' + (session.email || '');
+        if (key === last) return;
+        last = key;
+        __sarcaInvoke('update_session', session).catch(function(){});
+      } catch (_) {}
+    }
+    push();
+    setInterval(push, 1500);
+    try {
+      var _setItem = localStorage.setItem.bind(localStorage);
+      localStorage.setItem = function(k, v){
+        _setItem(k, v);
+        if (k === 'access_token' || k === 'refresh_token' || k === 'user') {
+          setTimeout(push, 0);
+        }
+      };
+    } catch (_) {}
+  })();
   function __sarcaOpenSyncSettings(){
     try {
       var u = new URL(location.href);
@@ -590,7 +616,11 @@ pub fn navigate_to_server(app: &AppHandle, cfg: &ServerConfig) -> Result<(), Str
         .get_webview_window("main")
         .ok_or_else(|| "main window missing".to_string())?;
     let state = app.state::<AppSyncState>();
-    state.queue_inject(SessionInject::from(cfg));
+    // Only inject stored tokens when we have them. After URL-only Connect the
+    // user signs in on the website; empty inject would wipe webview localStorage.
+    if cfg.is_connected() {
+        state.queue_inject(SessionInject::from(cfg));
+    }
     let url = cfg.app_url().map_err(|e| e.to_string())?;
     window.navigate(url).map_err(|e| e.to_string())
 }
@@ -691,6 +721,10 @@ mod tests {
         assert!(
             js.contains("__sarcaReadSession") && js.contains("update_session"),
             "must push webview tokens via update_session before Sync commands"
+        );
+        assert!(
+            js.contains("__sarcaWatchSession"),
+            "must watch localStorage so website login syncs tokens into native state"
         );
     }
 
