@@ -619,6 +619,14 @@ impl AppSyncState {
         let mut rx = self.shutdown_tx.subscribe();
         tauri::async_runtime::spawn(async move {
             loop {
+                // Pick up tokens written by the webview / sync_now without waiting
+                // for another invoke.
+                let server = load_server_config(&data_dir);
+                if server.is_connected() {
+                    engine
+                        .set_credentials(server.base_url.clone(), server.access_token.clone())
+                        .await;
+                }
                 let prefs = fs::read_to_string(data_dir.join("client_prefs.json"))
                     .ok()
                     .and_then(|s| serde_json::from_str::<ClientPrefs>(&s).ok())

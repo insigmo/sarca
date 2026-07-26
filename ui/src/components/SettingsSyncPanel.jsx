@@ -142,6 +142,13 @@ const SettingsSyncPanel = (props) => {
 					localPath: path,
 					mode: 'auto_upload',
 				})
+				// Kick the engine immediately — waiting for the 30s background tick
+				// looks like "nothing uploaded" after enabling.
+				try {
+					await nativeInvoke('sync_now')
+				} catch (syncErr) {
+					addAlert(String(syncErr), 'error')
+				}
 			}
 			await refresh()
 		} catch (e) {
@@ -396,6 +403,14 @@ const SettingsSyncPanel = (props) => {
 				<pre class="settings-sync-panel__status">
 					{JSON.stringify(statuses(), null, 2)}
 				</pre>
+			</Show>
+			<Show when={statuses().some((s) => s.last_error)}>
+				<p class="settings-bot-hint" role="alert">
+					{statuses()
+						.filter((s) => s.last_error)
+						.map((s) => s.last_error)
+						.join(' · ')}
+				</p>
 			</Show>
 			<Show when={msg()}>
 				<p class="settings-bot-hint" role="status">
