@@ -12,8 +12,8 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
 use crate::state::{
-    navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding, AppSyncState,
-    ClientPrefs, ServerConfig,
+    load_server_config, merge_session_tokens, navigate_to_server, navigate_to_shell,
+    navigate_to_sync_settings, new_binding, AppSyncState, ClientPrefs, ServerConfig,
 };
 
 #[derive(Serialize)]
@@ -175,6 +175,27 @@ pub async fn get_session(state: State<'_, AppSyncState>) -> Result<SessionDto, S
     })
 }
 
+/// Push the webview's live access/refresh tokens into native Sync state.
+/// Called automatically by `__sarcaInvoke` before Sync API commands.
+#[tauri::command]
+pub async fn update_session(
+    state: State<'_, AppSyncState>,
+    access_token: String,
+    refresh_token: Option<String>,
+    email: Option<String>,
+    email_verified: Option<bool>,
+) -> Result<SessionDto, String> {
+    state
+        .apply_webview_session(access_token, refresh_token, email, email_verified)
+        .await?;
+    let cfg = state.server.lock().await.clone();
+    Ok(SessionDto {
+        connected: cfg.is_connected(),
+        base_url: cfg.base_url,
+        email: cfg.email,
+    })
+}
+
 #[tauri::command]
 pub async fn connect(
     app: AppHandle,
@@ -320,9 +341,11 @@ pub async fn ensure_remote_folder(
     parent: String,
     name: String,
 ) -> Result<String, String> {
-    let cfg = state.server.lock().await.clone();
+    let mut cfg = state.server.lock().await.clone();
     if !cfg.is_connected() {
-        return Err("Not connected".into());
+        return Err(
+            "Not connected — sign in again so Sync can use your session".into(),
+        );
     }
     let name = name.trim().to_owned();
     if name.is_empty() {
@@ -330,16 +353,53 @@ pub async fn ensure_remote_folder(
     }
     let sid = uuid::Uuid::parse_str(&storage_id).map_err(|e| e.to_string())?;
     let parent = parent.trim().trim_matches('/').to_owned();
-    let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
-    api.create_folder(sid, &parent, &name)
-        .await
-        .map_err(|e| e.to_string())?;
+
+    // If the stored access token is stale but we still have a refresh token,
+    // renew before create_folder (covers background sync / missed update_session).
+    if let Err(e) = try_create_folder(&cfg, sid, &parent, &name).await {
+        let msg = e.to_string();
+        let unauthorized = msg.contains("401") || msg.to_ascii_lowercase().contains("unauthorized");
+        if unauthorized && !cfg.refresh_token.trim().is_empty() {
+            let tokens = SarcaApi::refresh(&cfg.base_url, &cfg.refresh_token)
+                .await
+                .map_err(|_| {
+                    "Session expired — sign in again so Sync can create remote folders".to_string()
+                })?;
+            cfg.access_token = tokens.access_token;
+            cfg.refresh_token = tokens.refresh_token;
+            cfg.email_verified = tokens.email_verified;
+            state
+                .save_server(&cfg)
+                .await
+                .map_err(|e| e.to_string())?;
+            try_create_folder(&cfg, sid, &parent, &name)
+                .await
+                .map_err(|e| e.to_string())?;
+        } else if unauthorized {
+            return Err(
+                "Session expired — sign in again so Sync can create remote folders".into(),
+            );
+        } else {
+            return Err(msg);
+        }
+    }
+
     let remote = if parent.is_empty() {
         name
     } else {
         format!("{parent}/{name}")
     };
     Ok(remote)
+}
+
+async fn try_create_folder(
+    cfg: &ServerConfig,
+    storage_id: uuid::Uuid,
+    parent: &str,
+    name: &str,
+) -> Result<(), anyhow::Error> {
+    let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
+    api.create_folder(storage_id, parent, name).await
 }
 
 #[tauri::command]
@@ -460,5 +520,36 @@ mod tests {
                 "unexpected gallery path {p}"
             );
         }
+    }
+
+    #[test]
+    fn ensure_remote_folder_path_uses_connected_session_tokens() {
+        // Regression: create Camera/ must use ServerConfig.access_token (the same
+        // session update_session writes from the logged-in webview).
+        let cfg = ServerConfig {
+            base_url: "http://localhost:8001".into(),
+            access_token: "webview-live-token".into(),
+            refresh_token: "webview-refresh".into(),
+            email: "user@example.com".into(),
+            email_verified: true,
+        };
+        assert!(cfg.is_connected());
+        let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
+        assert_eq!(
+            api.authorization_header().as_deref(),
+            Some("Bearer webview-live-token")
+        );
+    }
+
+    #[test]
+    fn ensure_remote_folder_rejects_disconnected_session() {
+        let cfg = ServerConfig {
+            base_url: "http://localhost:8001".into(),
+            access_token: String::new(),
+            ..Default::default()
+        };
+        assert!(!cfg.is_connected());
+        let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
+        assert_eq!(api.authorization_header(), None);
     }
 }
