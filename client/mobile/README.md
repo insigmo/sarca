@@ -10,6 +10,17 @@ pnpm tauri android init
 pnpm tauri ios init   # requires macOS + Xcode
 ```
 
+## Android HTTP (cleartext)
+
+Self-hosted servers often use `http://` on LAN. After `tauri android init`, run:
+
+```bash
+./scripts/patch-android-http.sh
+```
+
+CI runs this automatically before building the APK. It enables cleartext traffic so both
+`http://` and `https://` work in the WebView.
+
 ## Android sideload signing
 
 Release APKs **must** be signed (Pixel / modern Android reject unsigned packages).
