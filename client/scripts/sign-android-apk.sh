@@ -62,8 +62,11 @@ echo "Using apksigner: $APKSIGNER"
   --v1-signing-enabled true \
   --v2-signing-enabled true \
   --v3-signing-enabled true \
+  --v4-signing-enabled false \
   --out "$OUT" \
   "$IN"
+
+rm -f "${OUT}.idsig"
 
 "$APKSIGNER" verify --verbose "$OUT"
 python3 - "$OUT" <<'PY'
