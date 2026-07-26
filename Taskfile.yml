@@ -5,6 +5,8 @@ vars:
     sh: 'echo "${HOME}/.local/share/sarca"'
   # Compose interpolates ${PORT} from sarca.conf (host publish + container listen).
   COMPOSE: docker compose --env-file sarca.conf
+  # Source before any pnpm invocation — Task often has a minimal non-login PATH.
+  ENSURE_PNPM: '. "{{.ROOT_DIR}}/scripts/ensure-pnpm-env.sh"'
 
 tasks:
   default:
@@ -17,18 +19,9 @@ tasks:
     desc: Build web UI into ui/dist
     cmds:
       - |
+        {{.ENSURE_PNPM}}
         UI_DIR="{{.ROOT_DIR}}/ui"
-        build() {
-          (cd "$UI_DIR" && VITE_API_BASE=/api pnpm install && VITE_API_BASE=/api pnpm run build)
-        }
-        if command -v pnpm >/dev/null 2>&1; then
-          build
-        elif bash -lc 'command -v pnpm' >/dev/null 2>&1; then
-          bash -lc "cd \"$UI_DIR\" && VITE_API_BASE=/api pnpm install && VITE_API_BASE=/api pnpm run build"
-        else
-          echo "error: pnpm not found" >&2
-          exit 1
-        fi
+        (cd "$UI_DIR" && VITE_API_BASE=/api $PNPM install && VITE_API_BASE=/api $PNPM run build)
 
   binary:
     desc: Lint (fmt+clippy) then build release binary into runtime/sarca
@@ -125,14 +118,18 @@ tasks:
     desc: Install client frontend deps (pnpm)
     dir: client
     cmds:
-      - pnpm install
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM install
 
   client:ui:
     desc: Build Tauri webview UI (client/dist)
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm build
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM build
 
   client:check-sync:
     desc: Test sarca-sync crate
@@ -144,60 +141,78 @@ tasks:
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm tauri build
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri build
 
   install:
     desc: Build Linux .deb client and install locally (sudo apt-get; prompts for password)
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm run install:deb
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM run install:deb
 
   client:build:linux-amd64:
     desc: Build Linux amd64 client bundle
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm tauri build --target x86_64-unknown-linux-gnu
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri build --target x86_64-unknown-linux-gnu
 
   client:build:linux-arm64:
     desc: Build Linux arm64 client bundle (cross)
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm tauri build --target aarch64-unknown-linux-gnu
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri build --target aarch64-unknown-linux-gnu
 
   client:build:windows-amd64:
     desc: Build Windows amd64 client (cross / on Windows)
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm tauri build --target x86_64-pc-windows-msvc
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri build --target x86_64-pc-windows-msvc
 
   client:build:windows-arm64:
     desc: Build Windows arm64 client
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm tauri build --target aarch64-pc-windows-msvc
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri build --target aarch64-pc-windows-msvc
 
   client:build:macos-arm64:
     desc: Build macOS Apple Silicon client (run on macOS)
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm tauri build --target aarch64-apple-darwin
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri build --target aarch64-apple-darwin
 
   client:android:
     desc: Build Android APK (requires Android SDK + tauri android init)
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm tauri android build
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri android build
 
   client:ios:
     desc: Build iOS app (requires macOS + Xcode + tauri ios init)
     deps: [client:install]
     dir: client
     cmds:
-      - pnpm tauri ios build
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri ios build
