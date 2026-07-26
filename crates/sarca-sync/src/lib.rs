@@ -11,7 +11,9 @@ pub mod engine;
 pub use api::{
     authorization_header_value, normalize_server_url, LoginResponse, SarcaApi, StorageSummary,
 };
-pub use engine::{ConflictChoice, ConflictPrompt, KeepBothPrompt, SyncEngine, SyncEngineConfig};
+pub use engine::{
+    is_media_file, ConflictChoice, ConflictPrompt, KeepBothPrompt, SyncEngine, SyncEngineConfig,
+};
 pub use hash::sha256_file;
 pub use index::LocalIndex;
 pub use types::{
