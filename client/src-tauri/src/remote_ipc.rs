@@ -122,7 +122,7 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             serde_json::to_value(saved).map_err(|e| e.to_string())
         }
         "list_storages" => {
-            let list = commands::list_storages(state.clone()).await?;
+            let list = commands::list_storages(app.clone(), state.clone()).await?;
             serde_json::to_value(list).map_err(|e| e.to_string())
         }
         "list_bindings" => {
@@ -134,7 +134,7 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             serde_json::to_value(list).map_err(|e| e.to_string())
         }
         "sync_now" => {
-            commands::sync_now(state.clone()).await?;
+            commands::sync_now(app.clone(), state.clone()).await?;
             Ok(json!(null))
         }
         "add_binding" => {
@@ -144,8 +144,15 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let local_path = arg_str(&args, "local_path", "localPath")
                 .ok_or_else(|| "local_path required".to_string())?;
             let mode = arg_str(&args, "mode", "mode").unwrap_or_else(|| "sync".into());
-            let binding =
-                commands::add_binding(state.clone(), storage_id, remote_root, local_path, mode)?;
+            let binding = commands::add_binding(
+                app.clone(),
+                state.clone(),
+                storage_id,
+                remote_root,
+                local_path,
+                mode,
+            )
+            .await?;
             serde_json::to_value(binding).map_err(|e| e.to_string())
         }
         "remove_binding" => {
@@ -159,8 +166,14 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let parent = arg_str(&args, "parent", "parent").unwrap_or_default();
             let name =
                 arg_str(&args, "name", "name").ok_or_else(|| "name required".to_string())?;
-            let path =
-                commands::ensure_remote_folder(state.clone(), storage_id, parent, name).await?;
+            let path = commands::ensure_remote_folder(
+                app.clone(),
+                state.clone(),
+                storage_id,
+                parent,
+                name,
+            )
+            .await?;
             Ok(json!(path))
         }
         "pick_local_folder" => {

@@ -35,6 +35,83 @@ impl ServerConfig {
     }
 }
 
+/// Decode a value written by the UI's `createLocalStore` (`JSON.stringify`) or by
+/// a raw `localStorage.setItem`. Website login stores `"\"jwt...\""` (with quotes);
+/// reading that without parse was sending quoted JWTs to Sync → 401 / "Session expired".
+pub fn normalize_stored_token(raw: &str) -> String {
+    let t = raw.trim();
+    if t.is_empty() {
+        return String::new();
+    }
+    if t.starts_with('"') {
+        if let Ok(s) = serde_json::from_str::<String>(t) {
+            return s.trim().to_owned();
+        }
+    }
+    t.to_owned()
+}
+
+/// Tokens read from the remote webview's localStorage (after JSON decode).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WebviewSessionTokens {
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default)]
+    pub email_verified: Option<bool>,
+}
+
+impl WebviewSessionTokens {
+    pub fn from_local_storage_raw(
+        access_raw: Option<&str>,
+        refresh_raw: Option<&str>,
+        user_raw: Option<&str>,
+    ) -> Option<Self> {
+        let access = normalize_stored_token(access_raw.unwrap_or(""));
+        if access.is_empty() {
+            return None;
+        }
+        let refresh = refresh_raw
+            .map(normalize_stored_token)
+            .filter(|s| !s.is_empty());
+        let mut email = None;
+        let mut email_verified = None;
+        if let Some(raw) = user_raw {
+            let parsed: Option<serde_json::Value> = serde_json::from_str(raw.trim())
+                .ok()
+                .or_else(|| {
+                    // Already an object string without outer quotes — try as-is via Value.
+                    None
+                });
+            if let Some(user) = parsed {
+                email = user
+                    .get("email")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_owned());
+                email_verified = user.get("email_verified").and_then(|v| v.as_bool());
+            }
+        }
+        Some(Self {
+            access_token: access,
+            refresh_token: refresh,
+            email,
+            email_verified,
+        })
+    }
+
+    pub fn has_access(&self) -> bool {
+        !self.access_token.trim().is_empty()
+    }
+}
+
+/// True when Sync may proceed: native has tokens, or the webview still has them
+/// (caller should pull/apply webview tokens before treating as logged out).
+pub fn session_ready_for_sync(native_connected: bool, webview_has_access: bool) -> bool {
+    native_connected || webview_has_access
+}
+
 /// Merge tokens from the logged-in webview into native `ServerConfig`.
 /// Used so Sync API calls (create_folder, etc.) share the same session as the UI.
 pub fn merge_session_tokens(
@@ -44,7 +121,7 @@ pub fn merge_session_tokens(
     email: Option<&str>,
     email_verified: Option<bool>,
 ) -> Result<(), String> {
-    let access = access_token.trim();
+    let access = normalize_stored_token(access_token);
     if access.is_empty() {
         return Err(
             "Not authenticated — missing access token. Sign in again so Sync can use your session."
@@ -54,11 +131,11 @@ pub fn merge_session_tokens(
     if cfg.base_url.trim().is_empty() {
         return Err("Not connected".into());
     }
-    cfg.access_token = access.to_owned();
+    cfg.access_token = access;
     if let Some(r) = refresh_token {
-        let r = r.trim();
+        let r = normalize_stored_token(r);
         if !r.is_empty() {
-            cfg.refresh_token = r.to_owned();
+            cfg.refresh_token = r;
         }
     }
     if let Some(e) = email {
@@ -71,6 +148,71 @@ pub fn merge_session_tokens(
         cfg.email_verified = v;
     }
     Ok(())
+}
+
+/// JS snippet: return `{access_token, refresh_token?, email?, email_verified?}` from
+/// localStorage, matching `createLocalStore` JSON encoding. Used by Rust `eval_with_callback`.
+pub const READ_WEBVIEW_SESSION_JS: &str = r#"(function(){
+  function parseLs(key){
+    try {
+      var raw = localStorage.getItem(key);
+      if (raw == null || raw === '') return null;
+      try { return JSON.parse(raw); } catch (_) { return raw; }
+    } catch (_) { return null; }
+  }
+  try {
+    var at = parseLs('access_token');
+    if (at == null || !String(at).trim()) return null;
+    var out = { access_token: String(at).trim() };
+    var rt = parseLs('refresh_token');
+    if (rt != null && String(rt).trim()) out.refresh_token = String(rt).trim();
+    var user = parseLs('user');
+    if (user && typeof user === 'object') {
+      if (user.email) out.email = String(user.email);
+      if (typeof user.email_verified === 'boolean') out.email_verified = user.email_verified;
+    }
+    return out;
+  } catch (_) { return null; }
+})()"#;
+
+/// Actively read session tokens from the main webview localStorage.
+/// Returns `None` when the webview is missing, eval fails, or no access token is stored.
+pub async fn read_webview_session(app: &AppHandle) -> Option<WebviewSessionTokens> {
+    let window = app.get_webview_window("main")?;
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    // eval_with_callback requires `Fn` (not FnOnce), so wrap the oneshot sender.
+    let tx = StdMutex::new(Some(tx));
+    window
+        .eval_with_callback(READ_WEBVIEW_SESSION_JS, move |result| {
+            if let Ok(mut guard) = tx.lock() {
+                if let Some(sender) = guard.take() {
+                    let _ = sender.send(result);
+                }
+            }
+        })
+        .ok()?;
+    let raw = tokio::time::timeout(Duration::from_secs(2), rx)
+        .await
+        .ok()?
+        .ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "null" || trimmed == "undefined" {
+        return None;
+    }
+    // Callback receives a JSON-serialized evaluation result (string of an object or null).
+    let parsed: WebviewSessionTokens = serde_json::from_str(trimmed).ok()?;
+    if !parsed.has_access() {
+        return None;
+    }
+    Some(WebviewSessionTokens {
+        access_token: normalize_stored_token(&parsed.access_token),
+        refresh_token: parsed
+            .refresh_token
+            .map(|r| normalize_stored_token(&r))
+            .filter(|s| !s.is_empty()),
+        email: parsed.email,
+        email_verified: parsed.email_verified,
+    })
 }
 
 #[derive(Clone)]
@@ -101,12 +243,13 @@ impl SessionInject {
             "email_verified": self.email_verified,
         }))
         .unwrap_or_else(|_| "{}".into());
+        // JSON.stringify so values match createLocalStore (website login).
         format!(
             r#"(function(){{
   try {{
-    localStorage.setItem('access_token', {access});
-    localStorage.setItem('refresh_token', {refresh});
-    localStorage.setItem('user', {user});
+    localStorage.setItem('access_token', JSON.stringify({access}));
+    localStorage.setItem('refresh_token', JSON.stringify({refresh}));
+    localStorage.setItem('user', JSON.stringify({user}));
     localStorage.setItem('sarca_native', '1');
     window.__SARCA_NATIVE__ = 1;
     try {{ window.dispatchEvent(new Event('sarca-native')); }} catch (_) {{}}
@@ -265,18 +408,26 @@ pub const OPEN_SYNC_JS: &str = r#"
       m.indexOf('unknown native command') >= 0
     );
   }
+  function __sarcaParseLs(key){
+    try {
+      var raw = localStorage.getItem(key);
+      if (raw == null || raw === '') return null;
+      // createLocalStore writes JSON.stringify(value); also accept raw inject.
+      try { return JSON.parse(raw); } catch (_) { return raw; }
+    } catch (_) { return null; }
+  }
   function __sarcaReadSession(){
     try {
-      var at = localStorage.getItem('access_token');
-      if (!at || !String(at).trim()) return null;
-      var out = { accessToken: String(at) };
-      var rt = localStorage.getItem('refresh_token');
-      if (rt && String(rt).trim()) out.refreshToken = String(rt);
-      try {
-        var user = JSON.parse(localStorage.getItem('user') || 'null');
-        if (user && user.email) out.email = String(user.email);
-        if (user && typeof user.email_verified === 'boolean') out.emailVerified = user.email_verified;
-      } catch (_) {}
+      var at = __sarcaParseLs('access_token');
+      if (at == null || !String(at).trim()) return null;
+      var out = { accessToken: String(at).trim() };
+      var rt = __sarcaParseLs('refresh_token');
+      if (rt != null && String(rt).trim()) out.refreshToken = String(rt).trim();
+      var user = __sarcaParseLs('user');
+      if (user && typeof user === 'object') {
+        if (user.email) out.email = String(user.email);
+        if (typeof user.email_verified === 'boolean') out.emailVerified = user.email_verified;
+      }
       return out;
     } catch (_) {
       return null;
@@ -527,6 +678,25 @@ impl AppSyncState {
         self.save_server(&cfg).await.map_err(|e| e.to_string())
     }
 
+    /// Best-effort: pull live tokens from the webview and merge into native state.
+    /// Silent when webview has no tokens or eval is unavailable.
+    pub async fn sync_session_from_webview(&self, app: &AppHandle) -> Option<WebviewSessionTokens> {
+        let tokens = read_webview_session(app).await?;
+        if let Err(e) = self
+            .apply_webview_session(
+                tokens.access_token.clone(),
+                tokens.refresh_token.clone(),
+                tokens.email.clone(),
+                tokens.email_verified,
+            )
+            .await
+        {
+            tracing::debug!(error = %e, "webview session apply skipped");
+            return None;
+        }
+        Some(tokens)
+    }
+
     pub fn queue_inject(&self, inject: SessionInject) {
         if let Ok(mut guard) = self.pending_inject.lock() {
             *guard = Some(inject);
@@ -723,9 +893,79 @@ mod tests {
             "must push webview tokens via update_session before Sync commands"
         );
         assert!(
+            js.contains("__sarcaParseLs") && js.contains("JSON.parse"),
+            "must JSON.parse localStorage (createLocalStore encoding) before Sync"
+        );
+        assert!(
             js.contains("__sarcaWatchSession"),
             "must watch localStorage so website login syncs tokens into native state"
         );
+    }
+
+    #[test]
+    fn normalize_stored_token_strips_json_string_quotes() {
+        // Website login: createLocalStore → localStorage value is `"jwt"` (with quotes).
+        assert_eq!(
+            normalize_stored_token("\"eyJhbGciOiJIUzI1NiJ9\""),
+            "eyJhbGciOiJIUzI1NiJ9"
+        );
+        assert_eq!(normalize_stored_token("plain-token"), "plain-token");
+        assert_eq!(normalize_stored_token("  "), "");
+    }
+
+    #[test]
+    fn webview_session_from_json_encoded_local_storage() {
+        let tokens = WebviewSessionTokens::from_local_storage_raw(
+            Some("\"access-live\""),
+            Some("\"refresh-live\""),
+            Some("{\"email\":\"u@example.com\",\"email_verified\":true}"),
+        )
+        .expect("tokens");
+        assert_eq!(tokens.access_token, "access-live");
+        assert_eq!(tokens.refresh_token.as_deref(), Some("refresh-live"));
+        assert_eq!(tokens.email.as_deref(), Some("u@example.com"));
+        assert_eq!(tokens.email_verified, Some(true));
+        assert!(tokens.has_access());
+    }
+
+    #[test]
+    fn webview_session_empty_when_no_access_token() {
+        assert!(WebviewSessionTokens::from_local_storage_raw(
+            Some("\"\""),
+            Some("\"refresh\""),
+            None
+        )
+        .is_none());
+        assert!(WebviewSessionTokens::from_local_storage_raw(None, None, None).is_none());
+    }
+
+    #[test]
+    fn session_ready_only_when_native_or_webview_has_tokens() {
+        assert!(!session_ready_for_sync(false, false));
+        assert!(session_ready_for_sync(true, false));
+        assert!(session_ready_for_sync(false, true));
+        assert!(session_ready_for_sync(true, true));
+    }
+
+    #[test]
+    fn merge_session_tokens_accepts_json_quoted_access() {
+        let mut cfg = ServerConfig {
+            base_url: "http://localhost:8001".into(),
+            access_token: String::new(),
+            ..Default::default()
+        };
+        merge_session_tokens(&mut cfg, "\"webview-token\"", Some("\"refresh\""), None, None)
+            .unwrap();
+        assert_eq!(cfg.access_token, "webview-token");
+        assert_eq!(cfg.refresh_token, "refresh");
+        assert!(cfg.is_connected());
+    }
+
+    #[test]
+    fn read_webview_session_js_parses_create_local_store_encoding() {
+        assert!(READ_WEBVIEW_SESSION_JS.contains("JSON.parse"));
+        assert!(READ_WEBVIEW_SESSION_JS.contains("access_token"));
+        assert!(READ_WEBVIEW_SESSION_JS.contains("refresh_token"));
     }
 
     #[test]
