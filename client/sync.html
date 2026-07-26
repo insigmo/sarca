@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sarca Sync</title>
+    <link rel="icon" href="/logo.svg" type="image/svg+xml" />
+    <style>
+      :root {
+        color-scheme: light dark;
+        --sarca-ink: #1b1a19;
+        --sarca-ink-soft: #605e5c;
+        --sarca-paper: #eef0f2;
+        --sarca-surface: #ffffff;
+        --sarca-accent: #0078d4;
+        --sarca-accent-deep: #005a9e;
+        --sarca-border: rgba(0, 0, 0, 0.08);
+        --sarca-shadow: 0 8px 24px rgba(0, 0, 0, 0.06), 0 1.5px 4px rgba(0, 0, 0, 0.04);
+        --sarca-radius: 12px;
+        --sarca-font: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+        --sarca-bg-top: #f5f6f8;
+        --sarca-bg-bottom: #e6e8eb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --sarca-ink: #ffffff;
+          --sarca-ink-soft: #e0e0e0;
+          --sarca-paper: #1c1c1c;
+          --sarca-surface: #2b2b2b;
+          --sarca-accent: #0078d4;
+          --sarca-accent-deep: #005a9e;
+          --sarca-border: rgba(255, 255, 255, 0.08);
+          --sarca-shadow: 0 8px 24px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.2);
+          --sarca-bg-top: #202020;
+          --sarca-bg-bottom: #1c1c1c;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body {
+        margin: 0;
+        min-height: 100%;
+        font-family: var(--sarca-font);
+        color: var(--sarca-ink);
+        background: linear-gradient(180deg, var(--sarca-bg-top), var(--sarca-bg-bottom));
+      }
+      body {
+        min-height: 100vh;
+        padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+          max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+      }
+      .sync-page {
+        width: min(640px, 100%);
+        margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .sync-header h1 {
+        margin: 0;
+        font-size: 1.75rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+      }
+      .muted {
+        color: var(--sarca-ink-soft);
+        font-size: 0.92rem;
+        line-height: 1.4;
+      }
+      .sync-header__actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+      .sync-card {
+        background: var(--sarca-surface);
+        border: 1px solid var(--sarca-border);
+        border-radius: calc(var(--sarca-radius) + 2px);
+        box-shadow: var(--sarca-shadow);
+        padding: 20px 18px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .sync-card h2 {
+        margin: 0;
+        font-size: 1.15rem;
+        font-weight: 600;
+      }
+      label {
+        display: block;
+        font-size: 0.85rem;
+        color: var(--sarca-ink-soft);
+        margin: 4px 0 4px;
+      }
+      input, select {
+        width: 100%;
+        padding: 11px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--sarca-border);
+        background: color-mix(in srgb, var(--sarca-paper) 70%, var(--sarca-surface));
+        color: var(--sarca-ink);
+        font: inherit;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: stretch;
+      }
+      .row input { flex: 1; min-width: 0; }
+      .row .btn { width: auto; white-space: nowrap; margin: 0; }
+      .btn {
+        width: 100%;
+        margin-top: 4px;
+        padding: 11px 14px;
+        border: none;
+        border-radius: 8px;
+        background: var(--sarca-accent-deep);
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn:hover:not(:disabled) { background: var(--sarca-accent); }
+      .btn:disabled { opacity: 0.65; cursor: wait; }
+      .btn.secondary {
+        background: transparent;
+        color: var(--sarca-ink);
+        border: 1px solid var(--sarca-border);
+      }
+      .btn.secondary:hover:not(:disabled) {
+        background: color-mix(in srgb, var(--sarca-paper) 55%, transparent);
+      }
+      .btn.danger { color: #c42b1c; }
+      .status { margin: 0; font-size: 0.9rem; }
+      .status-pre {
+        margin: 0;
+        padding: 10px;
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--sarca-paper) 70%, var(--sarca-surface));
+        font-size: 0.75rem;
+        overflow: auto;
+        max-height: 160px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .binding {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 10px 0;
+        border-top: 1px solid var(--sarca-border);
+      }
+      .binding:first-child { border-top: none; padding-top: 0; }
+      .binding .btn { width: auto; margin: 0; }
+      code {
+        font-size: 0.9em;
+        padding: 0 4px;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--sarca-paper) 80%, transparent);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="sync-page">
+      <header class="sync-header">
+        <h1>Sync settings</h1>
+        <p class="muted">Media auto-upload and folder sync</p>
+        <div class="sync-header__actions">
+          <button type="button" id="backToApp" class="btn secondary">Back to app</button>
+          <button type="button" id="syncNow" class="btn">Sync now</button>
+        </div>
+      </header>
+
+      <section class="sync-card">
+        <h2>Media auto-upload</h2>
+        <p class="muted">Photos/videos from a local gallery folder → remote <code>Media/</code>.</p>
+        <p id="mediaStatus" class="status">Off</p>
+        <button type="button" id="enableMedia" class="btn">Enable / change folder…</button>
+        <button type="button" id="disableMedia" class="btn secondary">Disable</button>
+      </section>
+
+      <section class="sync-card">
+        <h2>Folder sync</h2>
+        <p class="muted">Two-way sync between a local folder and a remote folder.</p>
+        <label for="storageSelect">Storage</label>
+        <select id="storageSelect"></select>
+        <label for="localPath">Local folder</label>
+        <div class="row">
+          <input id="localPath" type="text" readonly placeholder="Choose a folder…" />
+          <button type="button" id="pickLocal" class="btn secondary">Browse…</button>
+        </div>
+        <label for="remoteRoot">Remote folder path</label>
+        <input id="remoteRoot" type="text" placeholder="e.g. Projects/Notes" />
+        <label for="newFolderName">Or create remote folder</label>
+        <div class="row">
+          <input id="newFolderName" type="text" placeholder="New folder name" />
+          <button type="button" id="createRemote" class="btn secondary">Create</button>
+        </div>
+        <button type="button" id="addSync" class="btn">Add folder sync</button>
+      </section>
+
+      <section class="sync-card">
+        <h2>Bindings</h2>
+        <div id="bindings"></div>
+        <pre id="status" class="status-pre"></pre>
+      </section>
+    </main>
+    <script type="module" src="/src/sync.js"></script>
+  </body>
+</html>
