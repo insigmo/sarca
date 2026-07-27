@@ -32,6 +32,8 @@ pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "sync_now",
     "add_binding",
     "remove_binding",
+    "set_binding_enabled",
+    "update_binding_local_path",
     "ensure_remote_folder",
     "pick_local_folder",
     "get_cache_size",
@@ -134,7 +136,8 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             serde_json::to_value(list).map_err(|e| e.to_string())
         }
         "sync_now" => {
-            commands::sync_now(app.clone(), state.clone()).await?;
+            let binding_id = arg_str(&args, "binding_id", "bindingId");
+            commands::sync_now(app.clone(), state.clone(), binding_id).await?;
             Ok(json!(null))
         }
         "add_binding" => {
@@ -159,6 +162,21 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let id = arg_str(&args, "id", "id").ok_or_else(|| "id required".to_string())?;
             commands::remove_binding(state.clone(), id)?;
             Ok(json!(null))
+        }
+        "set_binding_enabled" => {
+            let id = arg_str(&args, "id", "id").ok_or_else(|| "id required".to_string())?;
+            let enabled = arg_value(&args, "enabled", "enabled")
+                .and_then(|v| v.as_bool())
+                .ok_or_else(|| "enabled required".to_string())?;
+            commands::set_binding_enabled(state.clone(), id, enabled)?;
+            Ok(json!(null))
+        }
+        "update_binding_local_path" => {
+            let id = arg_str(&args, "id", "id").ok_or_else(|| "id required".to_string())?;
+            let local_path = arg_str(&args, "local_path", "localPath")
+                .ok_or_else(|| "local_path required".to_string())?;
+            let binding = commands::update_binding_local_path(state.clone(), id, local_path)?;
+            serde_json::to_value(binding).map_err(|e| e.to_string())
         }
         "ensure_remote_folder" => {
             let storage_id = arg_str(&args, "storage_id", "storageId")
@@ -251,12 +269,20 @@ mod tests {
             "get_cache_size",
             "clear_local_cache",
             "platform_label",
+            "set_binding_enabled",
+            "update_binding_local_path",
         ] {
             assert!(
                 is_dispatched_command(cmd),
                 "Settings Sync/Security command missing from dispatch: {cmd}"
             );
         }
+    }
+
+    #[test]
+    fn soft_disable_commands_are_dispatched() {
+        assert!(is_dispatched_command("set_binding_enabled"));
+        assert!(is_dispatched_command("update_binding_local_path"));
     }
 
     #[test]
