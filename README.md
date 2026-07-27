@@ -125,14 +125,6 @@ On first login (no storages yet), or via **Storages → New storage**, Sarca ope
 3. **Channel:** create a private channel, add the bot as admin, then use **Check channel**.
 4. Optionally detect up to 3 channels for replication, then finish — storage + worker are created together.
 
-**Optional auto-setup:** set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHANNEL_ID` (channel id **without** the `-100` prefix), and `STORAGE_NAME` in `sarca.conf`. On startup Sarca creates the storage and attaches the bot for the superuser.
-
-`chat_id` rules (bootstrap):
-
-- Supergroups / channels: usually `-100…`
-- Regular groups: negative id without the `-100` prefix
-- Private chats (positive ids) are not supported
-
 ### 3. Add more workers (optional)
 
 In **Settings → Workers**, add more bot tokens bound to a storage to raise throughput (Telegram rate-limits each bot).
@@ -182,8 +174,7 @@ See [`sarca.conf.example`](sarca.conf.example) for the full list. Important keys
 | `SUPERUSER_EMAIL` / `SUPERUSER_PASS` | Bootstrap admin |
 | `SECRET_KEY` | JWT + encryption material |
 | `DATABASE_*` | Postgres connection |
-| `TELEGRAM_*` | Bot API endpoint, rate limit, chunk size; optional `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHANNEL_ID` (+ `STORAGE_NAME`) for startup bootstrap |
-| `STORAGE_NAME` | Optional storage name used with bootstrap vars above |
+| `TELEGRAM_*` | Bot API endpoint, rate limit, chunk size; `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` for Local Bot API |
 | `WORK_DIR` | Spool directory for uploads |
 
 ## Logo

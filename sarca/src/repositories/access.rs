@@ -10,6 +10,17 @@ use crate::{
 
 pub const TABLE: &str = "access";
 
+/// Map FK violations on `access` inserts.
+///
+/// `access_user_id_fkey` means the caller's id is gone (stale token after a db-reset),
+/// which must surface as "log in again" rather than as a missing storage.
+fn map_access_fk_violation(storage_id: Uuid, constraint: Option<&str>) -> SarcaError {
+    match constraint {
+        Some("access_user_id_fkey") => SarcaError::NotAuthenticated,
+        _ => SarcaError::DoesNotExist(format!("storage with id \"{storage_id}\"")),
+    }
+}
+
 pub struct AccessRepository<'d> {
     db: &'d PgPool,
 }
@@ -19,6 +30,55 @@ impl<'d> AccessRepository<'d> {
         Self {
             db,
         }
+    }
+
+    /// Grant access to the caller by id (owner path).
+    ///
+    /// Prefer this over [`Self::create_or_update`] when the grantee is the authenticated
+    /// user: an email lookup can attach a different `users.id` than the one carried by
+    /// the token, and every later `check_access(user.id, …)` would then deny access.
+    pub async fn grant_for_user_id(
+        &self,
+        storage_id: Uuid,
+        user_id: Uuid,
+        access_type: AccessType,
+    ) -> SarcaResult<()> {
+        let id = Uuid::new_v4();
+
+        sqlx::query(
+            format!(
+                "
+                INSERT INTO {TABLE} (id, user_id, storage_id, access_type)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT ON CONSTRAINT access_user_id_storage_id_key
+                DO
+                    UPDATE SET access_type = $4;
+            "
+            )
+            .as_str(),
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(storage_id)
+        .bind(access_type)
+        .execute(self.db)
+        .await
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(ref dbe) if dbe.is_foreign_key_violation() => {
+                    map_access_fk_violation(storage_id, dbe.constraint())
+                },
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
+            }
+        })?;
+
+        tracing::debug!(
+            "[ACCESS REPO] granted access to user_id={user_id} on storage {storage_id}"
+        );
+        Ok(())
     }
 
     pub async fn create_or_update(
@@ -59,7 +119,7 @@ impl<'d> AccessRepository<'d> {
         .map_err(|e| {
             match e {
                 sqlx::Error::Database(ref dbe) if dbe.is_foreign_key_violation() => {
-                    SarcaError::DoesNotExist(format!("storage with id \"{storage_id}\""))
+                    map_access_fk_violation(storage_id, dbe.constraint())
                 },
                 _ => {
                     tracing::error!("{e}");
@@ -160,5 +220,27 @@ impl<'d> AccessRepository<'d> {
         .map_err(|e| map_not_found(&e, "access"))?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_user_id_asks_to_reauthenticate() {
+        assert!(matches!(
+            map_access_fk_violation(Uuid::nil(), Some("access_user_id_fkey")),
+            SarcaError::NotAuthenticated
+        ));
+    }
+
+    #[test]
+    fn missing_storage_reports_storage_id() {
+        let storage_id = Uuid::nil();
+        match map_access_fk_violation(storage_id, Some("access_storage_id_fkey")) {
+            SarcaError::DoesNotExist(msg) => assert!(msg.contains(&storage_id.to_string())),
+            other => panic!("unexpected {other:?}"),
+        }
     }
 }
