@@ -101,6 +101,10 @@ impl SyncEngine {
         self.index.remove_binding(id)
     }
 
+    pub fn set_binding_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        self.index.set_binding_enabled(id, enabled)
+    }
+
     pub async fn statuses(&self) -> Vec<SyncStatus> {
         self.statuses.read().await.clone()
     }
@@ -626,5 +630,41 @@ mod tests {
         assert!(BindingMode::AutoUpload.is_upload_only());
         assert!(BindingMode::FolderUpload.is_upload_only());
         assert!(!BindingMode::Sync.is_upload_only());
+    }
+
+    #[test]
+    fn engine_set_binding_enabled_updates_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
+                    "http://127.0.0.1",
+                    "",
+                ))),
+                data_dir: dir.path().to_path_buf(),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap();
+        let id = "cam".to_string();
+        engine
+            .upsert_binding(&Binding {
+                id: id.clone(),
+                storage_id: uuid::Uuid::new_v4(),
+                remote_root: "Camera".into(),
+                local_path: dir.path().join("pics").to_string_lossy().into(),
+                mode: BindingMode::AutoUpload,
+                enabled: true,
+            })
+            .unwrap();
+        engine.set_binding_enabled(&id, false).unwrap();
+        let b = engine
+            .list_bindings()
+            .unwrap()
+            .into_iter()
+            .find(|b| b.id == id)
+            .unwrap();
+        assert!(!b.enabled);
     }
 }
