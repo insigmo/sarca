@@ -5,6 +5,7 @@ import IconButton from '@suid/material/IconButton'
 import Typography from '@suid/material/Typography'
 
 import API from '../api'
+import { copyToClipboard } from '../utils/clipboard'
 import { alertStore } from './AlertStack'
 import FluentIcon from './FluentIcon'
 
@@ -53,13 +54,10 @@ const SharedLinksPanel = (props) => {
 	})
 
 	const copyUrl = async (link) => {
-		try {
-			const url = API.shares.shareAbsoluteUrl(link.token, link.url_path)
-			await navigator.clipboard.writeText(url)
-			addAlert('Link copied', 'success')
-		} catch {
-			addAlert('Failed to copy link', 'error')
-		}
+		const url = API.shares.shareAbsoluteUrl(link.token, link.url_path)
+		const ok = await copyToClipboard(url)
+		if (ok) addAlert('Link copied', 'success')
+		else addAlert('Failed to copy link', 'error')
 	}
 
 	const revoke = async (link) => {

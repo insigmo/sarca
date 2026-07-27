@@ -13,6 +13,7 @@ import Divider from '@suid/material/Divider'
 import { For, Show, createEffect, createSignal } from 'solid-js'
 
 import API from '../api'
+import { copyToClipboard } from '../utils/clipboard'
 import { alertStore } from './AlertStack'
 import FluentIcon from './FluentIcon'
 
@@ -114,17 +115,13 @@ const ShareLinkDialog = (props) => {
 	})
 
 	const onClose = () => {
-		if (creating() || revokingId()) return
 		props.onClose()
 	}
 
 	const copyText = async (text) => {
-		try {
-			await navigator.clipboard.writeText(text)
-			addAlert('Link copied', 'success')
-		} catch {
-			addAlert('Could not copy — select the URL manually', 'error')
-		}
+		const ok = await copyToClipboard(text)
+		if (ok) addAlert('Link copied', 'success')
+		else addAlert('Could not copy — select the URL manually', 'error')
 	}
 
 	const onCreate = async (event) => {
@@ -146,7 +143,8 @@ const ShareLinkDialog = (props) => {
 			setCreatedUrl(url)
 			setPassword('')
 			addAlert('Share link created', 'success')
-			await copyText(url)
+			// Fire-and-forget: never block Create/Close on clipboard (WebKitGTK hang).
+			void copyText(url)
 			await loadLinks()
 		} catch (err) {
 			console.error(err)
@@ -368,7 +366,7 @@ const ShareLinkDialog = (props) => {
 					>
 						{creating() ? 'Creating…' : 'Create'}
 					</Button>
-					<Button onClick={onClose} color="info" disabled={creating()}>
+					<Button onClick={onClose} color="info">
 						Close
 					</Button>
 				</DialogActions>
