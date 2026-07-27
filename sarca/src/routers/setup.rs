@@ -95,7 +95,7 @@ impl SetupRouter {
         Json(body): Json<ChannelPollSchema>,
     ) -> Result<Json<crate::schemas::setup::ChannelPollResultSchema>, (StatusCode, String)> {
         Self::service(&state)
-            .poll_channel(&body.token, &body.exclude_chat_ids)
+            .poll_channel(&body.token, &body.exclude_chat_ids, &body.probe_chat_ids)
             .await
             .map(Json)
             .map_err(Into::into)

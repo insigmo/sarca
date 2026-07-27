@@ -274,7 +274,7 @@ impl<'d> StoragesService<'d> {
         let exclude: Vec<ChatId> = channels.iter().map(|c| c.chat_id).collect();
 
         let client = TelegramTokenClient::new(self.telegram_baseurl, &worker.token);
-        let (discovered, hint) = client.discover_admin_chats(&exclude).await?;
+        let (discovered, hint) = client.discover_admin_chats(&exclude, &[]).await?;
 
         let mut added = Vec::new();
         let mut skipped_in_use = Vec::new();

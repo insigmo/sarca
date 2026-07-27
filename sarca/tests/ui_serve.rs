@@ -5,10 +5,13 @@ use std::fs;
 use axum::{
     Router,
     body::Body,
-    http::{Request, StatusCode},
+    http::{HeaderValue, Request, StatusCode, header::CACHE_CONTROL},
 };
-use tower::ServiceExt;
-use tower_http::services::{ServeDir, ServeFile};
+use tower::{ServiceBuilder, ServiceExt};
+use tower_http::{
+    services::{ServeDir, ServeFile},
+    set_header::SetResponseHeaderLayer,
+};
 
 fn temp_ui() -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!("sarca-it-ui-{}", uuid::Uuid::new_v4()));
@@ -24,9 +27,19 @@ fn temp_ui() -> std::path::PathBuf {
 }
 
 fn ui_router(ui: &std::path::Path) -> Router {
-    Router::new()
-        .nest_service("/assets", ServeDir::new(ui.join("assets")))
-        .fallback_service(ServeFile::new(ui.join("index.html")))
+    let serve_assets = ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::overriding(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        ))
+        .service(ServeDir::new(ui.join("assets")));
+    let serve_ui = ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::overriding(
+            CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ))
+        .service(ServeFile::new(ui.join("index.html")));
+    Router::new().nest_service("/assets", serve_assets).fallback_service(serve_ui)
 }
 
 #[tokio::test]
@@ -35,6 +48,10 @@ async fn root_returns_index_html() {
     let app = ui_router(&ui);
     let res = app.oneshot(Request::builder().uri("/").body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(CACHE_CONTROL).map(HeaderValue::as_bytes),
+        Some(b"no-cache".as_slice())
+    );
     let body = hyper::body::to_bytes(res.into_body()).await.unwrap();
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("<!doctype html>") || text.contains("<html"));
@@ -50,6 +67,10 @@ async fn spa_fallback_serves_index() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(CACHE_CONTROL).map(HeaderValue::as_bytes),
+        Some(b"no-cache".as_slice())
+    );
     let body = hyper::body::to_bytes(res.into_body()).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("app.js"));
     let _ = fs::remove_dir_all(ui.parent().unwrap());
@@ -64,6 +85,10 @@ async fn assets_are_served() {
         .await
         .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers().get(CACHE_CONTROL).map(HeaderValue::as_bytes),
+        Some(b"public, max-age=31536000, immutable".as_slice())
+    );
     let body = hyper::body::to_bytes(res.into_body()).await.unwrap();
     assert_eq!(&body[..], b"console.log('ok')");
     let _ = fs::remove_dir_all(ui.parent().unwrap());
