@@ -16,5 +16,9 @@ export default defineConfig({
 	},
 	build: {
 		target: 'esnext',
+		// Do not use manualChunks for solid/@suid — it creates circular chunks
+		// ("Cannot access '$' before initialization") and a blank white page.
+		// Size is kept under the warning via slim icon maps + dynamic imports
+		// for marked/mammoth in FileViewer.
 	},
 })

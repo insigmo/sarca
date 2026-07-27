@@ -416,10 +416,12 @@ impl<'t> TelegramBotApi<'t> {
             })
         );
 
-        Ok(UploadOutcome {
+        let outcome = UploadOutcome {
             file_id: result.result.document.file_id,
             message_id: result.result.message_id,
-        })
+        };
+        self.cleanup_local_bot_api_copy(&outcome.file_id, storage_id).await;
+        Ok(outcome)
     }
 
     /// Build the streaming multipart form for one upload attempt of `upload_file_part`.
@@ -650,10 +652,43 @@ impl<'t> TelegramBotApi<'t> {
             })
         );
 
-        Ok(UploadOutcome {
+        let outcome = UploadOutcome {
             file_id: result.result.document.file_id,
             message_id: result.result.message_id,
-        })
+        };
+        self.cleanup_local_bot_api_copy(&outcome.file_id, req.storage_id).await;
+        Ok(outcome)
+    }
+
+    /// After Local Bot API accepts an upload it keeps a disk copy under `documents/`.
+    /// Resolve that path via `getFile` and delete it — durable bytes already live in Telegram.
+    async fn cleanup_local_bot_api_copy(&self, telegram_file_id: &str, storage_id: Uuid) {
+        let Ok(token) = self.scheduler.get_token(storage_id).await else {
+            return;
+        };
+        let url = self.build_url("", "getFile", &token);
+        let body = match reqwest::Client::new()
+            .get(&url)
+            .query(&[("file_id", telegram_file_id)])
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                match resp.error_for_status() {
+                    Ok(ok) => {
+                        match ok.json::<DownloadBodySchema>().await {
+                            Ok(body) => body,
+                            Err(_) => return,
+                        }
+                    },
+                    Err(_) => return,
+                }
+            },
+            Err(_) => return,
+        };
+        if body.result.file_path.starts_with('/') {
+            maybe_remove_local_bot_api_file(&body.result.file_path).await;
+        }
     }
 
     /// Local Bot API writes files as owner-only briefly; our entrypoint chmod loop
@@ -759,13 +794,16 @@ impl<'t> TelegramBotApi<'t> {
         // Local Bot API (`--local`) returns an absolute filesystem path. That path
         // lives on the telegram-bot-api data volume (must be mounted into Sarca).
         if body.result.file_path.starts_with('/') {
-            if !body.result.file_path.starts_with("/var/lib/telegram-bot-api/") {
+            if !body.result.file_path.starts_with(LOCAL_BOT_API_DATA_PREFIX) {
                 return Err(SarcaError::TelegramAPIError(
                     "Unexpected local file_path from telegram-bot-api".to_string(),
                 ));
             }
 
-            return Self::read_local_bot_api_file(&body.result.file_path).await;
+            let path = body.result.file_path;
+            let bytes = Self::read_local_bot_api_file(&path).await?;
+            maybe_remove_local_bot_api_file(&path).await;
+            return Ok(bytes);
         }
 
         // downloading the file itself
@@ -840,19 +878,23 @@ impl<'t> TelegramBotApi<'t> {
 
         // Local Bot API (`--local`) returns an absolute filesystem path.
         if body.result.file_path.starts_with('/') {
-            if !body.result.file_path.starts_with("/var/lib/telegram-bot-api/") {
+            if !body.result.file_path.starts_with(LOCAL_BOT_API_DATA_PREFIX) {
                 return Err(SarcaError::TelegramAPIError(
                     "Unexpected local file_path from telegram-bot-api".to_string(),
                 ));
             }
 
-            let file = Self::open_local_bot_api_file(&body.result.file_path).await?;
+            let path = body.result.file_path;
+            let file = Self::open_local_bot_api_file(&path).await?;
             let stream = ReaderStream::new(file).map(|res| {
                 res.map_err(|e| {
                     SarcaError::TelegramAPIError(format!("Failed to read local bot api file: {e}"))
                 })
             });
-            return Ok(Box::pin(stream));
+            return Ok(Box::pin(CleanupLocalFileStream {
+                inner: stream,
+                path: Some(path),
+            }));
         }
 
         // downloading the file itself
@@ -1054,6 +1096,144 @@ pub fn is_chat_dead_error(err: &SarcaError) -> bool {
         "member list is inaccessible",
     ];
     DEAD_MARKERS.iter().any(|marker| msg.contains(marker))
+}
+
+const LOCAL_BOT_API_DATA_PREFIX: &str = "/var/lib/telegram-bot-api/";
+
+/// Absolute path under Local Bot API `documents/` that is safe for Sarca to delete
+/// after upload/download. Rejects `/temp/`, path traversal, and anything outside the
+/// standard data dir (see tdlib/telegram-bot-api#303).
+fn is_deletable_local_bot_api_file(path: &str) -> bool {
+    use std::path::{Component, Path};
+
+    let path = Path::new(path);
+    if !path.is_absolute() {
+        return false;
+    }
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return false;
+    }
+
+    // Prefer `components()` over `iter()`: on Unix, `iter()` yields a leading empty
+    // OsStr for absolute paths which shifts every index.
+    let parts: Vec<&str> = path
+        .components()
+        .filter_map(|c| {
+            match c {
+                Component::Normal(s) => s.to_str(),
+                _ => None,
+            }
+        })
+        .collect();
+    // var, lib, telegram-bot-api, <bot>, documents, <file>
+    if parts.len() < 6 {
+        return false;
+    }
+    if parts[0] != "var" || parts[1] != "lib" || parts[2] != "telegram-bot-api" {
+        return false;
+    }
+    if parts[3].is_empty() || parts[4] != "documents" {
+        return false;
+    }
+    // Require at least one filename under documents/ (not the directory itself).
+    parts[5..].iter().any(|p| !p.is_empty())
+}
+
+/// Best-effort delete of a Local Bot API `documents/` file after Sarca is done with it.
+async fn maybe_remove_local_bot_api_file(path: &str) {
+    if !is_deletable_local_bot_api_file(path) {
+        return;
+    }
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {
+            tracing::debug!("[TELEGRAM API] removed local bot-api document {path}");
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+        Err(e) => {
+            tracing::warn!("[TELEGRAM API] failed to remove local bot-api document {path}: {e}");
+        },
+    }
+}
+
+/// Stream wrapper that unlinks a Local Bot API documents file when dropped (after the
+/// reader finishes or the client cancels).
+struct CleanupLocalFileStream<S> {
+    inner: S,
+    path: Option<String>,
+}
+
+impl<S: Stream + Unpin> Stream for CleanupLocalFileStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+impl<S> Drop for CleanupLocalFileStream<S> {
+    fn drop(&mut self) {
+        let Some(path) = self.path.take() else {
+            return;
+        };
+        if !is_deletable_local_bot_api_file(&path) {
+            return;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                tracing::debug!("[TELEGRAM API] removed local bot-api document {path}");
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
+            Err(e) => {
+                tracing::warn!(
+                    "[TELEGRAM API] failed to remove local bot-api document {path}: {e}"
+                );
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod local_bot_api_cleanup_tests {
+    use super::is_deletable_local_bot_api_file;
+
+    #[test]
+    fn accepts_documents_file() {
+        assert!(is_deletable_local_bot_api_file(
+            "/var/lib/telegram-bot-api/123:AAtoken/documents/file_23"
+        ));
+    }
+
+    #[test]
+    fn rejects_temp_file() {
+        assert!(!is_deletable_local_bot_api_file("/var/lib/telegram-bot-api/123:AAtoken/temp/38"));
+    }
+
+    #[test]
+    fn rejects_path_traversal() {
+        assert!(!is_deletable_local_bot_api_file(
+            "/var/lib/telegram-bot-api/123:AAtoken/documents/../../temp/x"
+        ));
+        assert!(!is_deletable_local_bot_api_file("/var/lib/telegram-bot-api/../etc/passwd"));
+    }
+
+    #[test]
+    fn rejects_outside_prefix() {
+        assert!(!is_deletable_local_bot_api_file("/tmp/file_23"));
+        assert!(!is_deletable_local_bot_api_file("documents/file_23"));
+    }
+
+    #[test]
+    fn rejects_documents_directory_itself() {
+        assert!(!is_deletable_local_bot_api_file(
+            "/var/lib/telegram-bot-api/123:AAtoken/documents"
+        ));
+        assert!(!is_deletable_local_bot_api_file(
+            "/var/lib/telegram-bot-api/123:AAtoken/documents/"
+        ));
+    }
 }
 
 #[cfg(test)]

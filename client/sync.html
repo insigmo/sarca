@@ -166,7 +166,7 @@
     <main class="sync-page">
       <header class="sync-header">
         <h1>Sync settings</h1>
-        <p class="muted">Photo/video auto-upload and folder sync (fallback page)</p>
+        <p class="muted">Photo/video auto-upload and folder auto-upload (fallback page)</p>
         <p id="platformHint" class="muted" hidden></p>
         <div class="sync-header__actions">
           <button type="button" id="backToApp" class="btn secondary">Back to app</button>
@@ -183,8 +183,8 @@
       </section>
 
       <section class="sync-card">
-        <h2>Folder sync</h2>
-        <p class="muted">Two-way sync between a local folder and a remote folder.</p>
+        <h2>Folder auto-upload</h2>
+        <p class="muted">One-way upload of all files from a local folder to a remote folder.</p>
         <label for="storageSelect">Storage</label>
         <select id="storageSelect"></select>
         <label for="localPath">Local folder</label>
@@ -199,7 +199,7 @@
           <input id="newFolderName" type="text" placeholder="New folder name" />
           <button type="button" id="createRemote" class="btn secondary">Create</button>
         </div>
-        <button type="button" id="addSync" class="btn">Add folder sync</button>
+        <button type="button" id="addSync" class="btn">Add folder auto-upload</button>
       </section>
 
       <section class="sync-card">

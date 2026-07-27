@@ -143,7 +143,7 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let remote_root = arg_str(&args, "remote_root", "remoteRoot").unwrap_or_default();
             let local_path = arg_str(&args, "local_path", "localPath")
                 .ok_or_else(|| "local_path required".to_string())?;
-            let mode = arg_str(&args, "mode", "mode").unwrap_or_else(|| "sync".into());
+            let mode = arg_str(&args, "mode", "mode").unwrap_or_else(|| "folder_upload".into());
             let binding = commands::add_binding(
                 app.clone(),
                 state.clone(),

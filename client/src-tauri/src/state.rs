@@ -635,7 +635,7 @@ impl AppSyncState {
                     let allow_auto = crate::commands::allow_auto_upload(&prefs);
                     if let Err(e) = engine
                         .tick_filtered(|b| {
-                            if matches!(b.mode, BindingMode::AutoUpload) && !allow_auto {
+                            if b.mode.is_upload_only() && !allow_auto {
                                 return false;
                             }
                             true
@@ -776,6 +776,7 @@ pub fn load_server_config(data_dir: &PathBuf) -> ServerConfig {
 pub fn parse_mode(mode: &str) -> BindingMode {
     match mode {
         "auto_upload" => BindingMode::AutoUpload,
+        "folder_upload" => BindingMode::FolderUpload,
         _ => BindingMode::Sync,
     }
 }
