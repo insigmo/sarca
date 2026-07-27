@@ -19,6 +19,24 @@ function isMobilePlatform() {
   return label === "android" || label === "ios";
 }
 
+function cameraBinding(bindings) {
+  return (Array.isArray(bindings) ? bindings : []).find(
+    (b) => b?.mode === "auto_upload",
+  );
+}
+
+async function enableBackgroundSync() {
+  let prefs = {};
+  try {
+    prefs = (await invoke("get_client_prefs")) || {};
+  } catch {
+    // ignore
+  }
+  await invoke("set_client_prefs", {
+    prefs: { ...prefs, background_sync: true },
+  });
+}
+
 /** Prefer system folder picker; typed path only when native signals FOLDER_PICKER_USE_PROMPT. */
 async function chooseLocalFolder(existing) {
   try {
@@ -60,8 +78,8 @@ async function refreshBindings() {
   const host = $("bindings");
   host.innerHTML = "";
 
-  const media = bindings.find((b) => b.mode === "auto_upload");
-  $("mediaStatus").textContent = media
+  const media = cameraBinding(bindings);
+  $("mediaStatus").textContent = media?.enabled
     ? `On → ${media.local_path} (remote ${media.remote_root || "Camera"})`
     : "Off";
 
@@ -146,6 +164,24 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   $("enableMedia").onclick = async () => {
     try {
+      const bindings = await invoke("list_bindings");
+      const existing = cameraBinding(bindings);
+
+      if (existing?.enabled === true) {
+        await refreshBindings();
+        return;
+      }
+
+      if (existing) {
+        await invoke("set_binding_enabled", { id: existing.id, enabled: true });
+        await enableBackgroundSync();
+        await refreshBindings();
+        invoke("sync_now")
+          .then(() => refreshBindings())
+          .catch((syncErr) => setMsg(String(syncErr)));
+        return;
+      }
+
       const path = await chooseLocalFolder($("localPath").value.trim());
       if (!path) return;
       $("localPath").value = path;
@@ -156,16 +192,13 @@ window.addEventListener("DOMContentLoaded", async () => {
         parent: "",
         name: "Camera",
       });
-      const bindings = await invoke("list_bindings");
-      for (const b of bindings.filter((x) => x.mode === "auto_upload")) {
-        await invoke("remove_binding", { id: b.id });
-      }
       await invoke("add_binding", {
         storageId,
         remoteRoot: String(remote).replace(/\/$/, "") || "Camera",
         localPath: path,
         mode: "auto_upload",
       });
+      await enableBackgroundSync();
       await refreshBindings();
       // Fire-and-forget: awaiting sync_now kept the UI stuck for the whole upload.
       invoke("sync_now")
@@ -179,9 +212,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("disableMedia").onclick = async () => {
     try {
       const bindings = await invoke("list_bindings");
-      for (const b of bindings.filter((x) => x.mode === "auto_upload")) {
-        await invoke("remove_binding", { id: b.id });
+      const existing = cameraBinding(bindings);
+      if (!existing) {
+        await refreshBindings();
+        return;
       }
+      await invoke("set_binding_enabled", { id: existing.id, enabled: false });
       await refreshBindings();
     } catch (e) {
       setMsg(String(e));
