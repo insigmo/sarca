@@ -96,19 +96,61 @@ impl TelegramTokenClient {
         Ok(())
     }
 
-    /// Arm update filters (timeout=0). Call during bot validate so the next admin-add
-    /// is not dropped by a stale `allowed_updates` setting.
-    pub async fn arm_updates(&self) -> SarcaResult<()> {
-        let _ = self.get_updates_with_timeout(0).await?;
-        Ok(())
-    }
-
     pub async fn get_updates(&self) -> SarcaResult<Vec<DetectedChat>> {
-        // Short long-poll: return as soon as an update arrives (or after ~2s).
-        self.get_updates_with_timeout(2).await
+        // Pull the whole pending backlog first so a bot that is already admin in
+        // several channels surfaces all of them in one setup response.
+        let drained = self.drain_update_chats().await?;
+        if !drained.is_empty() {
+            return Ok(drained);
+        }
+        // Nothing pending — short long-poll, then drain any burst that arrived together.
+        let (first, next) = self.get_updates_page(None, 2).await?;
+        if first.is_empty() {
+            return Ok(first);
+        }
+        let mut all = first;
+        let mut seen: std::collections::HashSet<ChatId> = all.iter().map(|c| c.chat_id).collect();
+        let mut offset = next;
+        while let Some(off) = offset {
+            let (more, next_off) = self.get_updates_page(Some(off), 0).await?;
+            for chat in more {
+                if seen.insert(chat.chat_id) {
+                    all.push(chat);
+                }
+            }
+            offset = next_off;
+        }
+        Ok(all)
     }
 
-    async fn get_updates_with_timeout(&self, timeout_secs: u64) -> SarcaResult<Vec<DetectedChat>> {
+    /// Confirm and pull every pending update, collecting distinct chats.
+    async fn drain_update_chats(&self) -> SarcaResult<Vec<DetectedChat>> {
+        let mut all = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut offset: Option<i64> = None;
+        // Hard cap: Telegram returns ≤100 per call; 20 pages is already generous.
+        for _ in 0..20 {
+            let (chats, next_offset) = self.get_updates_page(offset, 0).await?;
+            for chat in chats {
+                if seen.insert(chat.chat_id) {
+                    all.push(chat);
+                }
+            }
+            match next_offset {
+                Some(next) => offset = Some(next),
+                None => break,
+            }
+        }
+        Ok(all)
+    }
+
+    /// One `getUpdates` page. Returns chats plus `Some(max_update_id + 1)` when the
+    /// page was non-empty (caller must pass that as the next offset to confirm).
+    async fn get_updates_page(
+        &self,
+        offset: Option<i64>,
+        timeout_secs: u64,
+    ) -> SarcaResult<(Vec<DetectedChat>, Option<i64>)> {
         let url = self.build_url("getUpdates");
         let masked = Self::mask_url(&url);
         // Retry once on 409 — Local Bot API / Telegram reject concurrent getUpdates
@@ -117,16 +159,16 @@ impl TelegramTokenClient {
         let req_timeout = std::time::Duration::from_secs(timeout_secs.saturating_add(8));
         loop {
             attempt += 1;
-            let response = reqwest::Client::new()
-                .get(&url)
-                .query(&[
-                    ("timeout", timeout_secs.to_string()),
-                    ("limit", "100".to_string()),
-                    ("allowed_updates", Self::ALLOWED_UPDATES.to_string()),
-                ])
-                .timeout(req_timeout)
-                .send()
-                .await?;
+            let mut query: Vec<(&str, String)> = vec![
+                ("timeout", timeout_secs.to_string()),
+                ("limit", "100".to_string()),
+                ("allowed_updates", Self::ALLOWED_UPDATES.to_string()),
+            ];
+            if let Some(off) = offset {
+                query.push(("offset", off.to_string()));
+            }
+            let response =
+                reqwest::Client::new().get(&url).query(&query).timeout(req_timeout).send().await?;
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             if status.as_u16() == 409 && attempt < 2 {
@@ -157,7 +199,11 @@ impl TelegramTokenClient {
             let body: GetUpdatesBodySchema = serde_json::from_str(&text).map_err(|e| {
                 SarcaError::TelegramAPIError(format!("getUpdates parse error: {e}"))
             })?;
-            return Ok(chats_from_updates(&body));
+            if body.result.is_empty() {
+                return Ok((Vec::new(), None));
+            }
+            let next_offset = body.result.iter().map(|u| u.update_id).max().map(|id| id + 1);
+            return Ok((chats_from_updates(&body), next_offset));
         }
     }
 
@@ -262,12 +308,13 @@ impl TelegramTokenClient {
             }
         }
 
-        // Fast path: manual chat ids already confirmed — skip long-poll.
-        if !found.is_empty() {
-            return Ok((found, None));
-        }
-
-        let chats = self.get_updates().await?;
+        // If probes already confirmed chats, only scoop the pending backlog (no wait).
+        // Otherwise long-poll so the wizard can catch a live admin-add.
+        let chats = if found.is_empty() {
+            self.get_updates().await?
+        } else {
+            self.drain_update_chats().await?
+        };
         for chat in chats {
             if exclude.contains(&chat.chat_id) || !seen.insert(chat.chat_id) {
                 continue;

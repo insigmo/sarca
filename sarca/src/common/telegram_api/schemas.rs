@@ -113,6 +113,7 @@ pub struct GetUpdatesBodySchema {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateSchema {
+    pub update_id: i64,
     #[serde(default)]
     pub channel_post: Option<MessageChatSchema>,
     #[serde(default)]
@@ -326,5 +327,51 @@ mod tests {
         assert_eq!(chats.len(), 1);
         assert_eq!(chats[0].chat_id, -1_004_385_550_541);
         assert_eq!(chats[0].title, "SarcaStorage2");
+    }
+
+    #[test]
+    fn chats_from_updates_reads_multiple_channels_in_one_payload() {
+        let json = r#"{
+          "result": [
+            {
+              "update_id": 10,
+              "my_chat_member": {
+                "chat": { "id": -1001, "title": "A", "type": "channel" },
+                "from": { "id": 1, "is_bot": false, "first_name": "U" },
+                "date": 1,
+                "old_chat_member": { "status": "left", "user": { "id": 2, "is_bot": true, "first_name": "B" } },
+                "new_chat_member": { "status": "administrator", "user": { "id": 2, "is_bot": true, "first_name": "B" } }
+              }
+            },
+            {
+              "update_id": 11,
+              "channel_post": {
+                "message_id": 1,
+                "chat": { "id": -1002, "title": "B", "type": "channel" },
+                "date": 1,
+                "text": "hi"
+              }
+            },
+            {
+              "update_id": 12,
+              "message": {
+                "message_id": 2,
+                "chat": { "id": 42, "type": "private" },
+                "date": 1,
+                "forward_from_chat": {
+                  "id": -1003,
+                  "title": "C",
+                  "type": "channel"
+                }
+              }
+            }
+          ]
+        }"#;
+        let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
+        let chats = chats_from_updates(&body);
+        assert_eq!(chats.len(), 3);
+        assert_eq!(chats[0].chat_id, -1001);
+        assert_eq!(chats[1].chat_id, -1002);
+        assert_eq!(chats[2].chat_id, -1003);
     }
 }
