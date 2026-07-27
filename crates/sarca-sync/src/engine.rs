@@ -14,6 +14,7 @@ use crate::{
     api::SarcaApi,
     hash::sha256_file,
     index::{mtime_ms_from_system, IndexEntry, LocalIndex},
+    scheduler::BindingScheduler,
     types::{Binding, BindingMode, SyncStatus},
 };
 
@@ -63,8 +64,8 @@ pub struct SyncEngine {
     index: LocalIndex,
     prompt: Arc<dyn ConflictPrompt>,
     statuses: Arc<RwLock<Vec<SyncStatus>>>,
-    /// Prevents overlapping ticks (UI `sync_now` + background loop).
-    tick_lock: tokio::sync::Mutex<()>,
+    /// Runs enabled bindings concurrently (per-id skip-when-busy, max 2 in flight).
+    scheduler: BindingScheduler,
 }
 
 impl SyncEngine {
@@ -76,7 +77,7 @@ impl SyncEngine {
             index,
             prompt,
             statuses: Arc::new(RwLock::new(Vec::new())),
-            tick_lock: tokio::sync::Mutex::new(()),
+            scheduler: BindingScheduler::new(2),
         })
     }
 
@@ -117,11 +118,15 @@ impl SyncEngine {
     /// Like [`tick`], but only processes bindings for which `allow` returns true.
     /// Auto-upload bindings run before two-way sync so a huge sync folder cannot
     /// starve Camera uploads for the whole poll interval.
+    ///
+    /// Bindings run concurrently via [`BindingScheduler`]: a binding already
+    /// in flight (e.g. from an overlapping call) is skipped rather than
+    /// serialized behind a global lock, so Camera auto-upload and folder sync
+    /// no longer block each other.
     pub async fn tick_filtered<F>(&self, allow: F) -> Result<()>
     where
         F: Fn(&Binding) -> bool,
     {
-        let _guard = self.tick_lock.lock().await;
         let mut bindings: Vec<Binding> = self
             .index
             .list_bindings()?
@@ -132,41 +137,69 @@ impl SyncEngine {
             BindingMode::AutoUpload | BindingMode::FolderUpload => 0,
             BindingMode::Sync => 1,
         });
-        let mut statuses = Vec::new();
-        for binding in bindings {
-            // Publish in-progress status so the UI is not blank for long ticks.
-            {
-                let mut guard = self.statuses.write().await;
-                let mut live = statuses.clone();
-                live.push(SyncStatus {
+
+        // Publish in-progress placeholders up front so the UI is not blank
+        // for long ticks and so per-file progress updates (in `push_local`)
+        // have a status entry to update while bindings run concurrently.
+        {
+            let mut guard = self.statuses.write().await;
+            for binding in &bindings {
+                let placeholder = SyncStatus {
                     binding_id: binding.id.clone(),
                     cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
                     last_error: None,
                     uploading: 0,
                     downloading: 0,
                     conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
-                });
-                *guard = live;
-            }
-            let status = match self.sync_binding(&binding).await {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(binding = %binding.id, error = %e, "sync failed");
-                    SyncStatus {
-                        binding_id: binding.id.clone(),
-                        cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
-                        last_error: Some(e.to_string()),
-                        uploading: 0,
-                        downloading: 0,
-                        conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
-                    }
+                };
+                match guard.iter_mut().find(|s| s.binding_id == binding.id) {
+                    Some(existing) => *existing = placeholder,
+                    None => guard.push(placeholder),
                 }
-            };
-            statuses.push(status);
-            *self.statuses.write().await = statuses.clone();
+            }
         }
-        *self.statuses.write().await = statuses;
+
+        let futs = bindings.into_iter().map(|binding| async move {
+            self.scheduler
+                .run(&binding.id, || async {
+                    match self.sync_binding(&binding).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(binding = %binding.id, error = %e, "sync failed");
+                            SyncStatus {
+                                binding_id: binding.id.clone(),
+                                cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
+                                last_error: Some(e.to_string()),
+                                uploading: 0,
+                                downloading: 0,
+                                conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
+                            }
+                        }
+                    }
+                })
+                .await
+        });
+        let results = futures::future::join_all(futs).await;
+
+        // Merge completed statuses back in; bindings that were skipped
+        // (`None`, already in flight elsewhere) keep their existing status.
+        let mut guard = self.statuses.write().await;
+        for status in results.into_iter().flatten() {
+            match guard.iter_mut().find(|s| s.binding_id == status.binding_id) {
+                Some(existing) => *existing = status,
+                None => guard.push(status),
+            }
+        }
         Ok(())
+    }
+
+    /// Runs a single binding through the same filtered pipeline (e.g. for a
+    /// UI-triggered "sync now" on one binding) without affecting others.
+    pub async fn tick_binding<F>(&self, binding_id: &str, allow: F) -> Result<()>
+    where
+        F: Fn(&Binding) -> bool,
+    {
+        self.tick_filtered(|b| b.id == binding_id && allow(b)).await
     }
 
     /// Continuous loop (desktop background / mobile foreground).
