@@ -19,6 +19,7 @@ use crate::{
     schemas::{
         setup::{
             BotValidateSchema,
+            ChannelPollHitSchema,
             ChannelPollResultSchema,
             LocalApiCredentialsSchema,
             LocalApiSaveResultSchema,
@@ -218,18 +219,21 @@ impl<'d> SetupService<'d> {
         probe: &[ChatId],
     ) -> SarcaResult<ChannelPollResultSchema> {
         let (found, hint) = self.discover_admin_chats(token, exclude, probe).await?;
-        if let Some((chat_id, title)) = found.into_iter().next() {
-            return Ok(ChannelPollResultSchema {
-                found: true,
-                chat_id: Some(chat_id),
-                title: Some(title),
-                hint: None,
-            });
-        }
+        // Cap to remaining slots (max 3 channels per storage).
+        let room = 3usize.saturating_sub(exclude.len());
+        let channels = found
+            .into_iter()
+            .take(room)
+            .map(|(chat_id, title)| {
+                ChannelPollHitSchema {
+                    chat_id,
+                    title,
+                }
+            })
+            .collect::<Vec<_>>();
+        let hint = if channels.is_empty() { hint } else { None };
         Ok(ChannelPollResultSchema {
-            found: false,
-            chat_id: None,
-            title: None,
+            channels,
             hint,
         })
     }

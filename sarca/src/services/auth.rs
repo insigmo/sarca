@@ -59,7 +59,13 @@ impl<'d> AuthService<'d> {
         let auth = JWTManager::validate_refresh(refresh_token, &config.secret_key)?;
         let user =
             self.repo.get_by_email(&auth.email).await.map_err(|_| SarcaError::NotAuthenticated)?;
-        Ok(Self::issue_tokens(auth, user.email_verified(), config))
+        // Re-issue from the DB row, never from the old claims: after a db-reset the
+        // email still resolves but `users.id` is new, and reusing the stale id would
+        // mint tokens whose `user_id` matches no row (access checks then fail with a
+        // bogus "storage does not exist").
+        let email_verified = user.email_verified();
+        let auth = AuthUser::new(user.id, user.email);
+        Ok(Self::issue_tokens(auth, email_verified, config))
     }
 
     pub async fn me(&self, user: &AuthUser) -> SarcaResult<MeSchema> {

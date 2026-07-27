@@ -16,6 +16,7 @@ use crate::{
         routing::app_state::AppState,
     },
     errors::{SarcaError, SarcaResult},
+    repositories::users::UsersRepository,
 };
 
 /// Middleware that requires to be logged in.
@@ -28,7 +29,16 @@ pub async fn logged_in_required<B>(
     let auth_user = authenticate_request(&req, &state.config.secret_key)
         .map_err(<(StatusCode, String)>::from)?;
 
-    req.extensions_mut().insert(auth_user);
+    // A signature-valid token can still name a user that no longer exists (the row was
+    // dropped, e.g. by a db reset). Such a session is not merely empty — it silently
+    // owns nothing, so listings look empty and writes fail deep in access checks.
+    // Reject it here so the client refreshes and gets a token bound to a live row.
+    let user = UsersRepository::new(&state.db)
+        .get_by_id(auth_user.id)
+        .await
+        .map_err(|_| <(StatusCode, String)>::from(SarcaError::NotAuthenticated))?;
+
+    req.extensions_mut().insert(AuthUser::new(user.id, user.email));
     Ok(next.run(req).await)
 }
 

@@ -17,13 +17,7 @@ use crate::{
         replication::ReplicationService,
         trash_purge::TrashPurgeService,
     },
-    startup::{
-        bootstrap_storage_from_env,
-        create_db,
-        create_superuser,
-        delete_orphan_storage_workers,
-        init_db,
-    },
+    startup::{create_db, create_superuser, delete_orphan_storage_workers, init_db},
     storage_manager::StorageManager,
 };
 
@@ -116,8 +110,6 @@ async fn main() {
 
     eprintln!("ensuring superuser…");
     create_superuser(&db, &config).await;
-    bootstrap_storage_from_env(&db, &config).await;
-
     let config_copy = config.clone();
     let workers = config.workers;
     tokio::spawn(async move {
