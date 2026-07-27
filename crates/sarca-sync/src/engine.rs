@@ -138,30 +138,36 @@ impl SyncEngine {
             BindingMode::Sync => 1,
         });
 
-        // Publish in-progress placeholders up front so the UI is not blank
-        // for long ticks and so per-file progress updates (in `push_local`)
-        // have a status entry to update while bindings run concurrently.
-        {
-            let mut guard = self.statuses.write().await;
-            for binding in &bindings {
-                let placeholder = SyncStatus {
-                    binding_id: binding.id.clone(),
-                    cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
-                    last_error: None,
-                    uploading: 0,
-                    downloading: 0,
-                    conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
-                };
-                match guard.iter_mut().find(|s| s.binding_id == binding.id) {
-                    Some(existing) => *existing = placeholder,
-                    None => guard.push(placeholder),
-                }
-            }
-        }
-
+        // Placeholders are seeded lazily, only once the scheduler has
+        // actually accepted a binding's run (inside the closure passed to
+        // `run`, below) — never up front for every binding. Seeding up
+        // front would clobber the still-valid status of a binding that
+        // gets skipped (`None`, already in flight from an overlapping
+        // tick), wiping its `last_error`/counts even though it never ran.
         let futs = bindings.into_iter().map(|binding| async move {
             self.scheduler
                 .run(&binding.id, || async {
+                    // Now that the scheduler has committed to running this
+                    // binding, publish an in-progress placeholder so the UI
+                    // is not blank for long ticks and so per-file progress
+                    // updates (in `push_local`) have a status entry to
+                    // update while other bindings run concurrently.
+                    {
+                        let placeholder = SyncStatus {
+                            binding_id: binding.id.clone(),
+                            cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
+                            last_error: None,
+                            uploading: 0,
+                            downloading: 0,
+                            conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
+                        };
+                        let mut guard = self.statuses.write().await;
+                        match guard.iter_mut().find(|s| s.binding_id == binding.id) {
+                            Some(existing) => *existing = placeholder,
+                            None => guard.push(placeholder),
+                        }
+                    }
+
                     match self.sync_binding(&binding).await {
                         Ok(s) => s,
                         Err(e) => {
