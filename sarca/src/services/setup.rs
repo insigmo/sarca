@@ -189,14 +189,27 @@ impl<'d> SetupService<'d> {
         if let Err(e) = client.delete_webhook().await {
             tracing::warn!("deleteWebhook during setup validate: {e}");
         }
-        // Reset sticky allowed_updates and open the Local Bot API session before
-        // the user adds the bot as admin (my_chat_member is not retroactive).
-        if let Err(e) = client.arm_updates().await {
-            tracing::warn!("arm getUpdates during setup validate: {e}");
-        }
+
+        // Chat ids already bound to any storage are not free for a new one.
+        let occupied = StorageChannelsRepository::new(self.db).list_all_chat_ids().await?;
+        // Discover now (sets allowed_updates + drains pending updates) so Continue
+        // lands on the channel step with every free admin chat already listed.
+        let (found, _) = client.discover_admin_chats(&occupied, &[]).await?;
+        let channels = found
+            .into_iter()
+            .take(3)
+            .map(|(chat_id, title)| {
+                ChannelPollHitSchema {
+                    chat_id,
+                    title,
+                }
+            })
+            .collect::<Vec<_>>();
+
         Ok(BotValidateSchema {
             bot_id: me.id,
             username: me.username,
+            channels,
         })
     }
 
@@ -218,7 +231,14 @@ impl<'d> SetupService<'d> {
         exclude: &[ChatId],
         probe: &[ChatId],
     ) -> SarcaResult<ChannelPollResultSchema> {
-        let (found, hint) = self.discover_admin_chats(token, exclude, probe).await?;
+        // Also skip chat ids already owned by any storage (unique globally).
+        let mut skip = StorageChannelsRepository::new(self.db).list_all_chat_ids().await?;
+        for id in exclude {
+            if !skip.contains(id) {
+                skip.push(*id);
+            }
+        }
+        let (found, hint) = self.discover_admin_chats(token, &skip, probe).await?;
         // Cap to remaining slots (max 3 channels per storage).
         let room = 3usize.saturating_sub(exclude.len());
         let channels = found

@@ -174,9 +174,32 @@ const SetupWizard = () => {
 			addAlert(`Bot @${res.username} looks good`, 'success')
 			setPollError('')
 			stopPolling()
+			const seeded = Array.isArray(res.channels) ? res.channels : []
+			const next = []
+			for (const hit of seeded) {
+				if (next.length >= MAX_CHANNELS) break
+				if (next.some((c) => c.chat_id === hit.chat_id)) continue
+				if (hit.chat_id == null) continue
+				next.push({
+					chat_id: hit.chat_id,
+					title: hit.title || String(hit.chat_id),
+				})
+			}
+			setChannels(next)
+			if (next.length) {
+				const labels = next.map((c) => c.title).join(', ')
+				addAlert(
+					next.length === 1
+						? `Found channel: ${labels}`
+						: `Found ${next.length} channels: ${labels}`,
+					'success',
+				)
+			}
 			setStep(2)
-			// Listen immediately so my_chat_member is caught when the user adds the bot.
-			queueMicrotask(() => startPolling())
+			// Keep listening only if we still have free slots (new admin adds / forwards).
+			if (next.length < MAX_CHANNELS) {
+				queueMicrotask(() => startPolling())
+			}
 		} catch {
 			/* apiRequest already alerts */
 		} finally {

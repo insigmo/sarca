@@ -44,6 +44,10 @@ pub struct BotTokenSchema {
 pub struct BotValidateSchema {
     pub bot_id: i64,
     pub username: String,
+    /// Free admin channels already visible in pending Telegram updates (capped at 3).
+    /// Seeded into the wizard so the user does not wait for a second poll.
+    #[serde(default)]
+    pub channels: Vec<ChannelPollHitSchema>,
 }
 
 #[derive(Debug, Deserialize)]

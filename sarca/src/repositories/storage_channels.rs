@@ -46,6 +46,18 @@ impl<'d> StorageChannelsRepository<'d> {
             .map_err(|e| map_not_found(&e, "storage channel"))
     }
 
+    /// All chat ids already bound to any storage (globally unique).
+    pub async fn list_all_chat_ids(&self) -> SarcaResult<Vec<ChatId>> {
+        let rows: Vec<(ChatId,)> = sqlx::query_as(format!("SELECT chat_id FROM {TABLE}").as_str())
+            .fetch_all(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
     /// First free slot (1..=3) not currently used by `storage_id`, or `None` if all 3 taken.
     pub async fn next_free_position(&self, storage_id: Uuid) -> SarcaResult<Option<i16>> {
         let channels = self.list_by_storage(storage_id).await?;
