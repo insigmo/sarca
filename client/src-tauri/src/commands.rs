@@ -516,8 +516,9 @@ pub async fn add_binding(
     let _ = ensure_sync_session(&app, &state).await;
     let binding =
         new_binding(&storage_id, remote_root, local_path, &mode).map_err(|e| e.to_string())?;
-    // Only one Camera auto-upload binding at a time — UI races used to leave duplicates
-    // that re-uploaded the same gallery three times per tick.
+    // Only one Camera (media) auto-upload binding at a time — UI races used to leave
+    // duplicates that re-uploaded the same gallery three times per tick.
+    // Folder uploads may be many; they are not deduped here.
     if matches!(binding.mode, BindingMode::AutoUpload) {
         let existing = state.engine.list_bindings().map_err(|e| e.to_string())?;
         for b in existing
@@ -550,7 +551,7 @@ pub async fn sync_now(app: AppHandle, state: State<'_, AppSyncState>) -> Result<
     state
         .engine
         .tick_filtered(|b| {
-            if matches!(b.mode, BindingMode::AutoUpload) && !allow_auto {
+            if b.mode.is_upload_only() && !allow_auto {
                 return false;
             }
             true

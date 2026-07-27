@@ -22,7 +22,7 @@
 - Multi-user access control, multiple storages & workers
 - Setup wizard for bot + channel
 - Optional email verify, password reset, Google / GitHub OAuth
-- Native sync client (Tauri): two-way folder sync + auto-upload — see [`client/`](client/). Release assets: `.AppImage` / `.deb` / `-setup.exe` / `.dmg` (not wrapped in tar.gz).
+- Native sync client (Tauri): Camera media auto-upload + one-way folder auto-upload — see [`client/`](client/). Release assets: `.AppImage` / `.deb` / `-setup.exe` / `.dmg` (not wrapped in tar.gz).
 
 ## What it does
 

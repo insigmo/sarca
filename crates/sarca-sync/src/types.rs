@@ -5,8 +5,19 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BindingMode {
+    /// Two-way folder sync (legacy; UI no longer creates these).
     Sync,
+    /// One-way photo/video upload (Camera gallery).
     AutoUpload,
+    /// One-way upload of all files from a local folder.
+    FolderUpload,
+}
+
+impl BindingMode {
+    /// Camera gallery or any-folder auto-upload (no remote→local pull).
+    pub fn is_upload_only(self) -> bool {
+        matches!(self, Self::AutoUpload | Self::FolderUpload)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
