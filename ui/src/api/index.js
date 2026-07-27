@@ -1176,7 +1176,7 @@ const skipLocalApi = async () => {
 
 /**
  * @param {string} token
- * @returns {Promise<{ bot_id: number, username: string }>}
+ * @returns {Promise<{ bot_id: number, username: string, channels?: Array<{ chat_id: number, title: string }> }>}
  */
 const validateBot = async (token) => {
 	return await apiRequest('/setup/bot/validate', 'post', getAuthToken(), {
