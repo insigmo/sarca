@@ -46,6 +46,7 @@ const SetupWizard = () => {
 
 	let pollTimer = null
 	let pollStartedAt = 0
+	let pollEpoch = 0
 
 	onMount(async () => {
 		try {
@@ -61,12 +62,14 @@ const SetupWizard = () => {
 	})
 
 	onCleanup(() => {
-		if (pollTimer) clearInterval(pollTimer)
+		pollEpoch += 1
+		if (pollTimer) clearTimeout(pollTimer)
 	})
 
 	const stopPolling = () => {
+		pollEpoch += 1
 		if (pollTimer) {
-			clearInterval(pollTimer)
+			clearTimeout(pollTimer)
 			pollTimer = null
 		}
 		setPolling(false)
@@ -161,7 +164,16 @@ const SetupWizard = () => {
 		setPollError('')
 		setPolling(true)
 		pollStartedAt = Date.now()
+		// Capture epoch after stopPolling bump so in-flight ticks from a previous
+		// run (or overlapping setInterval) cannot call getUpdates again → 409.
+		const epoch = pollEpoch
+		const scheduleNext = () => {
+			if (epoch !== pollEpoch || !polling()) return
+			pollTimer = setTimeout(tick, POLL_MS)
+		}
 		const tick = async () => {
+			pollTimer = null
+			if (epoch !== pollEpoch) return
 			if (Date.now() - pollStartedAt > POLL_TIMEOUT_MS) {
 				stopPolling()
 				setPollError(NOT_ADDED_MSG)
@@ -170,6 +182,7 @@ const SetupWizard = () => {
 			try {
 				const exclude = channels().map((c) => c.chat_id)
 				const res = await API.setup.pollChannel(token().trim(), exclude)
+				if (epoch !== pollEpoch) return
 				if (res.found && res.chat_id != null) {
 					stopPolling()
 					setChannels((list) => [
@@ -182,14 +195,16 @@ const SetupWizard = () => {
 				if (res.hint) {
 					stopPolling()
 					setPollError(res.hint)
+					return
 				}
+				scheduleNext()
 			} catch (e) {
+				if (epoch !== pollEpoch) return
 				stopPolling()
 				setPollError(e?.message || 'Channel detect failed')
 			}
 		}
 		tick()
-		pollTimer = setInterval(tick, POLL_MS)
 	}
 
 	const handleFinish = async () => {
