@@ -95,26 +95,49 @@ impl TelegramTokenClient {
     pub async fn get_updates(&self) -> SarcaResult<Vec<DetectedChat>> {
         let url = self.build_url("getUpdates");
         let masked = Self::mask_url(&url);
-        let response = reqwest::Client::new()
-            .get(&url)
-            .query(&[("timeout", "0"), ("limit", "100")])
-            .send()
-            .await?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            tracing::error!(
-                target: "http_outbound",
-                "{}",
-                json!({ "status": status.as_u16(), "method": "GET", "url": masked, "response": text })
-            );
-            return Err(SarcaError::TelegramAPIError(format!(
-                "getUpdates failed ({status}): {text}"
-            )));
+        // timeout=0: return immediately. Still retry once on 409 — Local Bot API /
+        // Telegram reject concurrent getUpdates for the same bot ("only one bot
+        // instance"). Overlapping UI polls used to surface this as a hard failure.
+        let mut attempt = 0u8;
+        loop {
+            attempt += 1;
+            let response = reqwest::Client::new()
+                .get(&url)
+                .query(&[("timeout", "0"), ("limit", "100")])
+                .send()
+                .await?;
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            if status.as_u16() == 409 && attempt < 2 {
+                tracing::warn!(
+                    target: "http_outbound",
+                    "{}",
+                    json!({ "status": 409, "method": "GET", "url": masked, "retry": true })
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+                continue;
+            }
+            if !status.is_success() {
+                tracing::error!(
+                    target: "http_outbound",
+                    "{}",
+                    json!({ "status": status.as_u16(), "method": "GET", "url": masked, "response": text })
+                );
+                let hint = if status.as_u16() == 409 {
+                    " Another program (or a second Sarca / Bot API client) is already \
+                     polling this bot with getUpdates — stop it and try again."
+                } else {
+                    ""
+                };
+                return Err(SarcaError::TelegramAPIError(format!(
+                    "getUpdates failed ({status}): {text}{hint}"
+                )));
+            }
+            let body: GetUpdatesBodySchema = serde_json::from_str(&text).map_err(|e| {
+                SarcaError::TelegramAPIError(format!("getUpdates parse error: {e}"))
+            })?;
+            return Ok(chats_from_updates(&body));
         }
-        let body: GetUpdatesBodySchema = serde_json::from_str(&text)
-            .map_err(|e| SarcaError::TelegramAPIError(format!("getUpdates parse error: {e}")))?;
-        Ok(chats_from_updates(&body))
     }
 
     pub async fn get_chat(&self, chat_id: ChatId) -> SarcaResult<ChatInfo> {
