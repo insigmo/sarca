@@ -31,8 +31,8 @@ const LONG_PRESS_MS = 520
  * @property {boolean} [selectable]
  * @property {boolean} [selected]
  * @property {(el: import("../api").FSElement, event: MouseEvent) => void} [onSelectItem]
- *   Desktop: row click selects (Ctrl/Shift multi-select). Mobile (≤840px): checkbox only
- *   selects; row tap opens via onOpen/navigate. Double-click always opens.
+ *   Desktop: row click selects (Ctrl/Shift multi-select). Mobile (≤840px): row tap
+ *   opens via onOpen/navigate; long-press / context menu can select. Double-click always opens.
  * @property {(el: import("../api").FSElement) => void} [onContextMenuItem]
  *   Called before opening the context menu (e.g. select the target).
  * @property {boolean} [draggableItem] Browse-mode internal drag source
@@ -370,17 +370,6 @@ const FSListItem = (props) => {
 		return window.matchMedia('(max-width: 840px)').matches
 	}
 
-	const handleSelectOnly = (event) => {
-		event.preventDefault()
-		event.stopPropagation()
-		if (suppressClickAfterLongPress) {
-			suppressClickAfterLongPress = false
-			return
-		}
-		if (!showSelect() || typeof props.onSelectItem !== 'function') return
-		props.onSelectItem(props.fsElement, event)
-	}
-
 	const dragEnabled = () =>
 		Boolean(props.draggableItem) &&
 		!isParentNav() &&
@@ -408,30 +397,6 @@ const FSListItem = (props) => {
 		}
 		handleNavigate()
 	}
-
-	const selectCheckbox = () => (
-		<Show when={showSelect()}>
-			<label
-				class="fs-item-check"
-				onPointerDown={(e) => e.stopPropagation()}
-				onTouchStart={(e) => e.stopPropagation()}
-				onClick={(e) => e.stopPropagation()}
-			>
-				<input
-					type="checkbox"
-					class="fs-item-check__input"
-					checked={isSelected()}
-					onChange={handleSelectOnly}
-					aria-label={
-						isSelected()
-							? `Deselect ${displayName()}`
-							: `Select ${displayName()}`
-					}
-				/>
-				<span class="fs-item-check__box" aria-hidden="true" />
-			</label>
-		</Show>
-	)
 
 	const handleItemDblClick = (event) => {
 		event.preventDefault()
@@ -499,7 +464,6 @@ const FSListItem = (props) => {
 						onTouchCancel={handleTouchEnd}
 						onKeyDown={handleItemKeyDown}
 					>
-						{selectCheckbox()}
 						<Show when={showTileStar()}>
 							<div
 								class="fs-grid-item__star"
@@ -577,7 +541,6 @@ const FSListItem = (props) => {
 					onTouchCancel={handleTouchEnd}
 					onKeyDown={handleItemKeyDown}
 				>
-					{selectCheckbox()}
 					<FileTypeIcon
 						name={props.fsElement.name}
 						isFile={props.fsElement.is_file}

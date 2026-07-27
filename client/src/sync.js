@@ -166,12 +166,11 @@ window.addEventListener("DOMContentLoaded", async () => {
         localPath: path,
         mode: "auto_upload",
       });
-      try {
-        await invoke("sync_now");
-      } catch (syncErr) {
-        setMsg(String(syncErr));
-      }
       await refreshBindings();
+      // Fire-and-forget: awaiting sync_now kept the UI stuck for the whole upload.
+      invoke("sync_now")
+        .then(() => refreshBindings())
+        .catch((syncErr) => setMsg(String(syncErr)));
     } catch (e) {
       setMsg(String(e));
     }
@@ -224,10 +223,13 @@ window.addEventListener("DOMContentLoaded", async () => {
         storageId,
         remoteRoot,
         localPath,
-        mode: "sync",
+        mode: "folder_upload",
       });
       $("localPath").value = "";
       await refreshBindings();
+      invoke("sync_now")
+        .then(() => refreshBindings())
+        .catch((syncErr) => setMsg(String(syncErr)));
     } catch (e) {
       setMsg(String(e));
     }

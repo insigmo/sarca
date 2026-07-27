@@ -78,6 +78,20 @@ impl<'d> StorageManagerService<'d> {
     }
 
     pub async fn upload(&self, data: UploadFileData) -> SarcaResult<()> {
+        // Always unlink the WORK_DIR spool when this future completes or is aborted
+        // (cancel / early `?` used to leave orphans until process restart).
+        struct RemoveSpool(std::path::PathBuf);
+        impl Drop for RemoveSpool {
+            fn drop(&mut self) {
+                if let Err(e) = std::fs::remove_file(&self.0) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!("failed to remove upload spool {}: {e}", self.0.display());
+                    }
+                }
+            }
+        }
+        let _spool_guard = RemoveSpool(data.file_path.clone());
+
         let storage = self.storages_repo.get_by_file_id(data.file_id).await?;
         let (primary, active_channels) =
             self.resolve_primary_channel(storage.id, storage.primary_position).await?;
@@ -160,12 +174,10 @@ impl<'d> StorageManagerService<'d> {
             // already closed) still leaves a visible file instead of a stale spool row.
             if let Err(e) = self.files_repo.set_as_uploaded(data.file_id).await {
                 tracing::error!("set_as_uploaded failed for {}: {e}", data.file_id);
-                let _ = tokio::fs::remove_file(&data.file_path).await;
                 return Err(e);
             }
         }
 
-        let _ = tokio::fs::remove_file(&data.file_path).await;
         result
     }
 

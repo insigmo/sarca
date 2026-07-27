@@ -45,17 +45,37 @@ fi
 #
 # Also set a permissive umask so newly created files are more likely world-readable
 # before the chmod loop catches them (Sarca retries PermissionDenied briefly).
+#
+# Sarca deletes Local Bot API `documents/` copies after upload/download; those files
+# must be world-writable (or Sarca cannot unlink). Periodic prune covers orphans from
+# crashes / older RO mounts (tdlib/telegram-bot-api#303).
 umask 022
 
 fix_bot_api_perms() {
 	chmod -R a+rX "$DATA_DIR" 2>/dev/null || true
+	# Allow Sarca (nobody) to unlink documents after it finishes with them.
+	find "$DATA_DIR" -type d -name documents -exec chmod -R a+rwX {} \; 2>/dev/null || true
+}
+
+prune_stale_local_copies() {
+	# Downloaded/uploaded document copies are safe to remove after Bot API's ~1h window.
+	find "$DATA_DIR" -path '*/documents/*' -type f -mmin +90 -delete 2>/dev/null || true
+	# Orphaned temp upload staging only (never touch very fresh temps Bot API may use).
+	find "$DATA_DIR" -path '*/temp/*' -type f -mmin +1440 -delete 2>/dev/null || true
 }
 
 fix_bot_api_perms
+prune_stale_local_copies
 (
 	while true; do
 		sleep 1
 		fix_bot_api_perms
+	done
+) &
+(
+	while true; do
+		sleep 300
+		prune_stale_local_copies
 	done
 ) &
 
