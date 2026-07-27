@@ -4267,7 +4267,7 @@ dependencies = [
 
 [[package]]
 name = "sarca"
-version = "0.0.56"
+version = "0.0.57"
 dependencies = [
  "async-stream",
  "axum",
@@ -4298,7 +4298,7 @@ dependencies = [
 
 [[package]]
 name = "sarca-client"
-version = "0.0.56"
+version = "0.0.57"
 dependencies = [
  "anyhow",
  "network-interface",
@@ -4312,6 +4312,7 @@ dependencies = [
  "tauri-plugin-notification",
  "tauri-plugin-process",
  "tauri-plugin-shell",
+ "tauri-plugin-single-instance",
  "tauri-utils",
  "tokio",
  "tracing",
@@ -5505,6 +5506,22 @@ dependencies = [
  "tauri-plugin",
  "thiserror 2.0.19",
  "tokio",
+]
+
+[[package]]
+name = "tauri-plugin-single-instance"
+version = "2.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3214becf9ef5783c0ae99a3bb25adf5353a7a16ebf53e74b909e29205735c6c"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tauri",
+ "thiserror 2.0.19",
+ "tokio",
+ "tracing",
+ "windows-sys 0.60.2",
+ "zbus",
 ]
 
 [[package]]
