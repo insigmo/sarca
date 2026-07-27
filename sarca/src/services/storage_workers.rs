@@ -33,7 +33,7 @@ impl<'d> StorageWorkersService<'d> {
         user: &AuthUser,
     ) -> SarcaResult<StorageWorker> {
         let storage_id = in_schema.storage_id.ok_or(SarcaError::WorkerRequiresStorage)?;
-        check_access(&self.access_repo, user.id, storage_id, &AccessType::W).await?;
+        check_access(&self.access_repo, user.id, storage_id, &AccessType::A).await?;
 
         // checking if user already has a storage worker with such name
         if self.repo.get_by_name_and_user_id(&in_schema.name, user.id).await.is_ok() {

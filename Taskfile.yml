@@ -102,6 +102,13 @@ tasks:
       - task: down
       - task: up
 
+  db:reset:
+    desc: Wipe all Postgres data (DROP SCHEMA) and restart Sarca to recreate schema+superuser
+    prompt: Wipe ALL Sarca DB data in Docker Postgres? This cannot be undone.
+    cmds:
+      - chmod +x "{{.ROOT_DIR}}/scripts/db-reset.sh"
+      - "{{.ROOT_DIR}}/scripts/db-reset.sh"
+
   smoke:
     desc: Upload sample image+video against running API (SARCA_BASE_URL)
     cmds:

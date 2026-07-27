@@ -12,9 +12,32 @@ import { useNavigate } from '@solidjs/router'
 import API from '../../api'
 import { alertStore } from '../../components/AlertStack'
 
-const POLL_MS = 2000
+const POLL_MS = 0
 const POLL_TIMEOUT_MS = 120_000
 const MAX_CHANNELS = 3
+
+/**
+ * Parse a Telegram channel id from raw number or t.me/c/<id> link.
+ * @param {string} input
+ * @returns {number | null}
+ */
+export const parseTelegramChatId = (input) => {
+	const s = String(input ?? '').trim()
+	if (!s) return null
+	const link = s.match(/(?:t\.me|telegram\.me)\/c\/(\d+)/i)
+	if (link) {
+		const id = Number(`-100${link[1]}`)
+		return Number.isSafeInteger(id) ? id : null
+	}
+	if (!/^-?\d+$/.test(s)) return null
+	const n = Number(s)
+	if (!Number.isSafeInteger(n)) return null
+	if (n < 0) return n
+	// Bare internal id (123…) or 100-prefixed absolute form.
+	if (s.startsWith('100') && s.length > 3) return -n
+	const id = Number(`-100${s}`)
+	return Number.isSafeInteger(id) ? id : null
+}
 
 /**
  * Two-phase setup wizard: Local Bot API (optional/once) → bot + channel detect → storage.
@@ -43,10 +66,13 @@ const SetupWizard = () => {
 	const [pollError, setPollError] = createSignal('')
 	const [finishing, setFinishing] = createSignal(false)
 	const [busy, setBusy] = createSignal(false)
+	const [chatIdInput, setChatIdInput] = createSignal('')
+	const [probeBusy, setProbeBusy] = createSignal(false)
 
 	let pollTimer = null
 	let pollStartedAt = 0
 	let pollEpoch = 0
+	let pendingProbeIds = []
 
 	onMount(async () => {
 		try {
@@ -149,6 +175,8 @@ const SetupWizard = () => {
 			setPollError('')
 			stopPolling()
 			setStep(2)
+			// Listen immediately so my_chat_member is caught when the user adds the bot.
+			queueMicrotask(() => startPolling())
 		} catch {
 			/* apiRequest already alerts */
 		} finally {
@@ -157,7 +185,7 @@ const SetupWizard = () => {
 	}
 
 	const NOT_ADDED_MSG =
-		'Bot was not added to a channel, or was not given admin rights.'
+		'Bot was not added to a channel, or was not given admin rights. Re-add the bot as admin while checking runs, or paste the channel id below.'
 
 	const startPolling = () => {
 		stopPolling()
@@ -181,7 +209,8 @@ const SetupWizard = () => {
 			}
 			try {
 				const exclude = channels().map((c) => c.chat_id)
-				const res = await API.setup.pollChannel(token().trim(), exclude)
+				const probe = pendingProbeIds.splice(0, pendingProbeIds.length)
+				const res = await API.setup.pollChannel(token().trim(), exclude, probe)
 				if (epoch !== pollEpoch) return
 				if (res.found && res.chat_id != null) {
 					stopPolling()
@@ -193,9 +222,7 @@ const SetupWizard = () => {
 					return
 				}
 				if (res.hint) {
-					stopPolling()
 					setPollError(res.hint)
-					return
 				}
 				scheduleNext()
 			} catch (e) {
@@ -205,6 +232,47 @@ const SetupWizard = () => {
 			}
 		}
 		tick()
+	}
+
+	const handleProbeChatId = async () => {
+		const chatId = parseTelegramChatId(chatIdInput())
+		if (chatId == null) {
+			addAlert('Enter a chat id like -100… or a t.me/c/… link', 'warning')
+			return
+		}
+		if (channels().some((c) => c.chat_id === chatId)) {
+			addAlert('That channel is already added', 'info')
+			return
+		}
+		setChatIdInput('')
+		setPollError('')
+		// Avoid concurrent getUpdates (409): feed the active poller when possible.
+		if (polling()) {
+			pendingProbeIds.push(chatId)
+			addAlert('Verifying chat id…', 'info')
+			return
+		}
+		setProbeBusy(true)
+		try {
+			const exclude = channels().map((c) => c.chat_id)
+			const res = await API.setup.pollChannel(token().trim(), exclude, [chatId])
+			if (res.found && res.chat_id != null) {
+				setChannels((list) => [
+					...list,
+					{ chat_id: res.chat_id, title: res.title || String(res.chat_id) },
+				])
+				addAlert(`Found channel: ${res.title || res.chat_id}`, 'success')
+				return
+			}
+			setPollError(
+				res.hint ||
+					'Could not verify that chat id. Check the bot is an admin there.',
+			)
+		} catch (e) {
+			setPollError(e?.message || 'Channel verify failed')
+		} finally {
+			setProbeBusy(false)
+		}
 	}
 
 	const handleFinish = async () => {
@@ -418,14 +486,17 @@ const SetupWizard = () => {
 								</Typography>
 								<Typography>
 									2. Add <strong>@{botUsername() || 'your bot'}</strong> as an
-									admin with permission.
+									admin <em>while checking runs</em>,{' '}
+									<strong>or</strong> forward any post from the channel to the
+									bot in a private chat, <strong>or</strong> paste a{' '}
+									<code>t.me/c/…</code> link / chat id below.
 								</Typography>
 
 								<Show when={polling()}>
 									<Stack direction="row" spacing={1} alignItems="center">
 										<CircularProgress size={22} />
 										<Typography variant="body2">
-											Checking whether the bot was added as an admin…
+											Listening for admin channels…
 										</Typography>
 									</Stack>
 								</Show>
@@ -455,6 +526,30 @@ const SetupWizard = () => {
 												/>
 											)}
 										</For>
+									</Stack>
+								</Show>
+
+								<Show when={channels().length < MAX_CHANNELS}>
+									<Stack
+										direction={{ xs: 'column', sm: 'row' }}
+										spacing={1}
+										alignItems={{ sm: 'flex-start' }}
+									>
+										<TextField
+											label="Chat id or t.me/c/… link"
+											value={chatIdInput()}
+											onChange={(e) => setChatIdInput(e.target.value)}
+											helperText="Private channel: forward a post to the bot, or paste t.me/c/… / -100…"
+											fullWidth
+										/>
+										<Button
+											variant="outlined"
+											disabled={probeBusy() || !chatIdInput().trim()}
+											onClick={handleProbeChatId}
+											sx={{ flexShrink: 0, mt: { sm: 0.5 } }}
+										>
+											{probeBusy() ? 'Checking…' : 'Add by id'}
+										</Button>
 									</Stack>
 								</Show>
 

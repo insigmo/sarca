@@ -38,3 +38,4 @@ docs/
 
 .idea/
 .tmp/
+.cursor/
