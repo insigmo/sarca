@@ -13,7 +13,7 @@ import { filesChromeStore } from '../common/filesChrome'
 import { alertStore } from './AlertStack'
 
 /**
- * Full Sync tab: auto-upload to Camera/, Wi‑Fi-only, folder backup, background, sync now.
+ * Sync tab: Camera media auto-upload + one-way folder auto-upload.
  * Storage is locked to the currently open Files storage.
  * @param {{ storageId?: string, storageName?: string }} props
  */
@@ -30,6 +30,7 @@ const SettingsSyncPanel = (props) => {
 		app_lock_pin: null,
 	})
 	const [localPath, setLocalPath] = createSignal('')
+	const [folderLocalPath, setFolderLocalPath] = createSignal('')
 	const [remoteRoot, setRemoteRoot] = createSignal('')
 	const [newFolderName, setNewFolderName] = createSignal('')
 	const [busy, setBusy] = createSignal(false)
@@ -44,18 +45,28 @@ const SettingsSyncPanel = (props) => {
 		(lockedStorageId() ? 'Current storage' : 'No storage open')
 
 	const autoBinding = () => bindings().find((b) => b.mode === 'auto_upload')
-	const syncBindings = () => bindings().filter((b) => b.mode !== 'auto_upload')
+	const folderBindings = () =>
+		bindings().filter(
+			(b) => b.mode === 'folder_upload' || b.mode === 'sync',
+		)
 
 	const refresh = async () => {
 		try {
-			const [label, binds, prefsDto, statusList] = await Promise.all([
+			const [label, bindsResult, prefsDto, statusList] = await Promise.all([
 				nativeInvoke('platform_label').catch(() => ''),
-				nativeInvoke('list_bindings').catch(() => []),
+				nativeInvoke('list_bindings').then(
+					(v) => ({ ok: true, value: v }),
+					(e) => ({ ok: false, error: e }),
+				),
 				nativeInvoke('get_client_prefs').catch(() => null),
 				nativeInvoke('sync_statuses').catch(() => []),
 			])
 			setPlatform(String(label || ''))
-			setBindings(Array.isArray(binds) ? binds : [])
+			if (bindsResult.ok) {
+				setBindings(Array.isArray(bindsResult.value) ? bindsResult.value : [])
+			} else {
+				setMsg(String(bindsResult.error))
+			}
 			setStatuses(Array.isArray(statusList) ? statusList : [])
 			if (prefsDto && typeof prefsDto === 'object') {
 				setPrefs({
@@ -65,9 +76,12 @@ const SettingsSyncPanel = (props) => {
 					app_lock_pin: prefsDto.app_lock_pin ?? null,
 				})
 			}
-			const auto = (Array.isArray(binds) ? binds : []).find(
-				(b) => b.mode === 'auto_upload',
-			)
+			const binds = bindsResult.ok
+				? Array.isArray(bindsResult.value)
+					? bindsResult.value
+					: []
+				: bindings()
+			const auto = binds.find((b) => b.mode === 'auto_upload')
 			if (auto?.local_path) setLocalPath(auto.local_path)
 			else if (!localPath()) {
 				try {
@@ -95,20 +109,33 @@ const SettingsSyncPanel = (props) => {
 		await nativeInvoke('set_client_prefs', { prefs: next })
 	}
 
-	const pickFolder = async () => {
+	const pickFolder = async (current) => {
 		setBusy(true)
 		setMsg('')
 		try {
-			const path = await pickLocalFolder(localPath())
-			if (path) setLocalPath(String(path))
-			else setMsg('No folder selected')
+			const path = await pickLocalFolder(current || '')
+			if (path) return String(path)
+			setMsg('No folder selected')
+			return null
 		} catch (e) {
 			const text = String(e?.message || e)
 			setMsg(text)
 			addAlert(text || 'Folder picker failed', 'error')
+			return null
 		} finally {
 			setBusy(false)
 		}
+	}
+
+	const kickSyncNow = () => {
+		// Do not await: a full upload can take minutes and used to keep the
+		// checkbox disabled/unchecked until sync finished (refresh ran only after).
+		nativeInvoke('sync_now')
+			.then(() => refresh())
+			.catch((syncErr) => {
+				addAlert(String(syncErr), 'error')
+				refresh()
+			})
 	}
 
 	const setAutoUpload = async (enabled) => {
@@ -117,7 +144,27 @@ const SettingsSyncPanel = (props) => {
 		try {
 			const sid = lockedStorageId()
 			if (!sid) throw new Error('Open a storage in Files first')
-			const existing = bindings().filter((b) => b.mode === 'auto_upload')
+
+			// Prefer live native list — local state can be empty after a failed refresh
+			// while the binding is still in SQLite (looked like "off" in the UI).
+			let live = []
+			try {
+				const listed = await nativeInvoke('list_bindings')
+				live = Array.isArray(listed) ? listed : []
+			} catch {
+				live = bindings()
+			}
+			const existing = live.filter((b) => b.mode === 'auto_upload')
+
+			if (enabled && existing.length > 0) {
+				// Already enabled — sync UI and kick upload without recreate (keeps index).
+				setBindings(live)
+				const auto = existing[0]
+				if (auto?.local_path) setLocalPath(auto.local_path)
+				kickSyncNow()
+				return
+			}
+
 			for (const b of existing) {
 				await nativeInvoke('remove_binding', { id: b.id })
 			}
@@ -136,38 +183,48 @@ const SettingsSyncPanel = (props) => {
 					parent: '',
 					name: 'Camera',
 				})
-				await nativeInvoke('add_binding', {
+				const binding = await nativeInvoke('add_binding', {
 					storageId: sid,
 					remoteRoot: String(remote).replace(/\/$/, '') || 'Camera',
 					localPath: path,
 					mode: 'auto_upload',
 				})
-				// Kick the engine immediately — waiting for the 30s background tick
-				// looks like "nothing uploaded" after enabling.
-				try {
-					await nativeInvoke('sync_now')
-				} catch (syncErr) {
-					addAlert(String(syncErr), 'error')
+				// Optimistic UI so the toggle stays on while the engine catches up.
+				if (binding && typeof binding === 'object') {
+					setBindings((prev) => [
+						...(Array.isArray(prev)
+							? prev.filter((b) => b.mode !== 'auto_upload')
+							: []),
+						binding,
+					])
 				}
+			} else {
+				setBindings((prev) =>
+					(Array.isArray(prev) ? prev : []).filter(
+						(b) => b.mode !== 'auto_upload',
+					),
+				)
 			}
 			await refresh()
+			if (enabled) kickSyncNow()
 		} catch (e) {
 			setMsg(String(e))
 			addAlert(String(e), 'error')
+			await refresh()
 		} finally {
 			setBusy(false)
 		}
 	}
 
-	const addFolderSync = async () => {
+	const addFolderUpload = async () => {
 		setBusy(true)
 		setMsg('')
 		try {
 			const sid = lockedStorageId()
-			let path = localPath().trim()
+			let path = folderLocalPath().trim()
 			if (!path) {
 				path = String((await pickLocalFolder('')) || '')
-				if (path) setLocalPath(path)
+				if (path) setFolderLocalPath(path)
 			}
 			let remote = remoteRoot().trim().replace(/\/$/, '')
 			const name = newFolderName().trim()
@@ -185,13 +242,24 @@ const SettingsSyncPanel = (props) => {
 			if (!sid) throw new Error('Open a storage in Files first')
 			if (!path) throw new Error('Set a local folder')
 			if (!remote) throw new Error('Set a remote folder path or create one')
-			await nativeInvoke('add_binding', {
+			const binding = await nativeInvoke('add_binding', {
 				storageId: sid,
 				remoteRoot: remote,
 				localPath: path,
-				mode: 'sync',
+				mode: 'folder_upload',
 			})
+			if (binding && typeof binding === 'object') {
+				setBindings((prev) => [
+					...(Array.isArray(prev) ? prev : []).filter(
+						(b) => !(b.mode === 'folder_upload' && b.local_path === path),
+					),
+					binding,
+				])
+			}
+			setFolderLocalPath('')
 			await refresh()
+			kickSyncNow()
+			addAlert('Folder auto-upload added', 'success')
 		} catch (e) {
 			setMsg(String(e))
 			addAlert(String(e), 'error')
@@ -212,26 +280,25 @@ const SettingsSyncPanel = (props) => {
 		}
 	}
 
-	const runSyncNow = async () => {
-		setBusy(true)
+	const runSyncNow = () => {
 		setMsg('')
-		try {
-			await nativeInvoke('sync_now')
-			await refresh()
-			addAlert('Sync started', 'success')
-		} catch (e) {
-			setMsg(String(e))
-			addAlert(String(e), 'error')
-		} finally {
-			setBusy(false)
-		}
+		addAlert('Upload started', 'success')
+		kickSyncNow()
+	}
+
+	const modeLabel = (mode) => {
+		if (mode === 'auto_upload') return 'Camera auto-upload'
+		if (mode === 'folder_upload') return 'Folder auto-upload'
+		if (mode === 'sync') return 'Legacy two-way sync'
+		return mode
 	}
 
 	return (
 		<div class="settings-sync-panel">
 			<p class="settings-bot-hint">
-				Photo and video auto-upload goes to remote <code>Camera/</code>. Folder
-				backup uses two-way sync bindings.
+				Photo and video auto-upload goes to remote <code>Camera/</code>. Any
+				other local folder can be set to one-way auto-upload into a remote
+				folder.
 			</p>
 
 			<label class="settings-toggle">
@@ -254,8 +321,11 @@ const SettingsSyncPanel = (props) => {
 						size="small"
 						disabled={busy()}
 						onClick={async () => {
-							await pickFolder()
-							if (localPath().trim()) await setAutoUpload(true)
+							const path = await pickFolder(localPath())
+							if (path) {
+								setLocalPath(path)
+								await setAutoUpload(true)
+							}
 						}}
 					>
 						Change local folder
@@ -291,8 +361,11 @@ const SettingsSyncPanel = (props) => {
 
 			<div class="settings-sync-panel__section">
 				<Typography variant="subtitle2" sx={{ mb: 1 }}>
-					Folder backup
+					Folder auto-upload
 				</Typography>
+				<p class="settings-account__hint">
+					Uploads all files one-way (no download, not only photos).
+				</p>
 				<div class="settings-select-field">
 					<span class="settings-select-field__label">Storage</span>
 					<p
@@ -307,15 +380,18 @@ const SettingsSyncPanel = (props) => {
 						label="Local folder"
 						size="small"
 						fullWidth
-						value={localPath()}
-						onChange={(_, v) => setLocalPath(v)}
+						value={folderLocalPath()}
+						onChange={(_, v) => setFolderLocalPath(v)}
 						disabled={busy()}
 					/>
 					<Button
 						variant="outlined"
 						size="small"
 						disabled={busy()}
-						onClick={pickFolder}
+						onClick={async () => {
+							const path = await pickFolder(folderLocalPath())
+							if (path) setFolderLocalPath(path)
+						}}
 					>
 						Browse…
 					</Button>
@@ -345,28 +421,28 @@ const SettingsSyncPanel = (props) => {
 					color="secondary"
 					sx={{ mt: 1 }}
 					disabled={busy()}
-					onClick={addFolderSync}
+					onClick={addFolderUpload}
 				>
-					Add folder sync
+					Add folder auto-upload
 				</Button>
 			</div>
 
 			<div class="settings-sync-panel__section">
 				<Typography variant="subtitle2" sx={{ mb: 1 }}>
-					Bindings
+					Folder bindings
 				</Typography>
 				<Show
-					when={syncBindings().length}
+					when={folderBindings().length}
 					fallback={
-						<p class="settings-account__hint">No folder sync bindings yet.</p>
+						<p class="settings-account__hint">No folder auto-uploads yet.</p>
 					}
 				>
 					<ul class="settings-sync-panel__list">
-						<For each={syncBindings()}>
+						<For each={folderBindings()}>
 							{(b) => (
 								<li>
 									<div>
-										<strong>{b.mode}</strong>
+										<strong>{modeLabel(b.mode)}</strong>
 										<div class="settings-account__hint">{b.local_path}</div>
 										<div class="settings-account__hint">
 											{b.remote_root || '(root)'}
@@ -395,7 +471,7 @@ const SettingsSyncPanel = (props) => {
 					disabled={busy()}
 					onClick={runSyncNow}
 				>
-					Sync now
+					Upload now
 				</Button>
 			</div>
 

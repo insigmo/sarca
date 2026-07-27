@@ -63,6 +63,8 @@ pub struct SyncEngine {
     index: LocalIndex,
     prompt: Arc<dyn ConflictPrompt>,
     statuses: Arc<RwLock<Vec<SyncStatus>>>,
+    /// Prevents overlapping ticks (UI `sync_now` + background loop).
+    tick_lock: tokio::sync::Mutex<()>,
 }
 
 impl SyncEngine {
@@ -74,6 +76,7 @@ impl SyncEngine {
             index,
             prompt,
             statuses: Arc::new(RwLock::new(Vec::new())),
+            tick_lock: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -114,6 +117,7 @@ impl SyncEngine {
     where
         F: Fn(&Binding) -> bool,
     {
+        let _guard = self.tick_lock.lock().await;
         let mut bindings: Vec<Binding> = self
             .index
             .list_bindings()?
@@ -121,7 +125,7 @@ impl SyncEngine {
             .filter(|b| b.enabled && allow(b))
             .collect();
         bindings.sort_by_key(|b| match b.mode {
-            BindingMode::AutoUpload => 0,
+            BindingMode::AutoUpload | BindingMode::FolderUpload => 0,
             BindingMode::Sync => 1,
         });
         let mut statuses = Vec::new();
@@ -267,6 +271,7 @@ impl SyncEngine {
             return Ok(0);
         }
         let media_only = matches!(binding.mode, BindingMode::AutoUpload);
+        let upload_only = binding.mode.is_upload_only();
         let mut uploaded = 0usize;
         for file in WalkDir::new(&root).into_iter().filter_map(Result::ok) {
             if !file.file_type().is_file() {
@@ -350,8 +355,8 @@ impl SyncEngine {
                 },
             )?;
             uploaded += 1;
-            // Live progress for long Camera uploads (Telegram is slow).
-            if media_only {
+            // Live progress for long Camera / folder uploads (Telegram is slow).
+            if upload_only {
                 let mut guard = self.statuses.write().await;
                 if let Some(s) = guard.iter_mut().find(|s| s.binding_id == binding.id) {
                     s.uploading = uploaded;
@@ -555,7 +560,8 @@ fn conflict_path(path: &Path) -> PathBuf {
     parent.join(name)
 }
 
-/// Photo/video extensions accepted for [`BindingMode::AutoUpload`].
+/// Photo/video extensions accepted for [`BindingMode::AutoUpload`] (Camera gallery).
+/// [`BindingMode::FolderUpload`] uploads every file and does not use this filter.
 pub fn is_media_file(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
@@ -613,5 +619,12 @@ mod tests {
         assert!(!is_media_file(Path::new("/home/beta/Pictures/index.html")));
         assert!(!is_media_file(Path::new("notes.txt")));
         assert!(!is_media_file(Path::new("noext")));
+    }
+
+    #[test]
+    fn upload_only_modes() {
+        assert!(BindingMode::AutoUpload.is_upload_only());
+        assert!(BindingMode::FolderUpload.is_upload_only());
+        assert!(!BindingMode::Sync.is_upload_only());
     }
 }
