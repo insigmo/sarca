@@ -136,6 +136,50 @@ impl<'d> StorageWorkersRepository<'d> {
         })
     }
 
+    pub async fn get_by_token(&self, token: &str) -> SarcaResult<Option<StorageWorker>> {
+        sqlx::query_as(&format!("SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE token = $1"))
+            .bind(token)
+            .fetch_optional(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })
+    }
+
+    /// Move an existing worker (same bot token) onto another storage.
+    pub async fn rebind_to_storage(
+        &self,
+        id: Uuid,
+        storage_id: Uuid,
+        name: &str,
+    ) -> SarcaResult<StorageWorker> {
+        sqlx::query_as(&format!(
+            "UPDATE {STORAGE_WORKERS_TABLE} SET storage_id = $2, name = $3 WHERE id = $1 \
+             RETURNING *"
+        ))
+        .bind(id)
+        .bind(storage_id)
+        .bind(name)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+                    SarcaError::StorageWorkerNameConflict
+                },
+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+                    SarcaError::DoesNotExist("Such storage does not exist".to_string())
+                },
+                sqlx::Error::RowNotFound => SarcaError::DoesNotExist("storage_worker".to_owned()),
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
+            }
+        })
+    }
+
     pub async fn update_credentials(
         &self,
         id: Uuid,

@@ -126,12 +126,16 @@ impl<'d> StoragesService<'d> {
         // Grant access before channel setup so a failed/partial create is still
         // visible via name lookup (and can be cleaned up / reused) instead of
         // leaving an orphan row that bootstrap recreates on every restart.
-        let access_schema = GrantAccess::new(user.email.clone(), AccessType::A);
-        if let Err(e) = self.access_repo.create_or_update(storage.id, access_schema).await {
+        // Grant by id, not email: `check_access` below and in every later call keys on
+        // `user.id`, so an email lookup landing on a different row silently locks the
+        // creator out of the storage they just made.
+        if let Err(e) = self.access_repo.grant_for_user_id(storage.id, user.id, AccessType::A).await
+        {
             tracing::error!(
-                "[STORAGES SERVICE] Failed to grant access to user {} for storage {}: {:?}. \
+                "[STORAGES SERVICE] Failed to grant access to user {} ({}) for storage {}: {:?}. \
                  Rolling back.",
                 user.email,
+                user.id,
                 storage.id,
                 e
             );
@@ -236,6 +240,19 @@ impl<'d> StoragesService<'d> {
                 }
             }
             workers.update_credentials(existing.id, &name, token).await?
+        } else if let Some(owned) = workers.get_by_token(token).await? {
+            // Bot tokens are globally unique, so the same bot cannot be inserted twice.
+            // When this user already registered it elsewhere (e.g. the env-bootstrap
+            // storage), move it here instead of failing setup with a token conflict.
+            if owned.user_id != user.id {
+                return Err(SarcaError::StorageWorkerTokenConflict);
+            }
+            if let Ok(other) = workers.get_by_name_and_user_id(&name, user.id).await {
+                if other.id != owned.id {
+                    name = format!("{name}_{}", &storage_id.to_string()[..8]);
+                }
+            }
+            workers.rebind_to_storage(owned.id, storage_id, &name).await?
         } else {
             if workers.get_by_name_and_user_id(&name, user.id).await.is_ok() {
                 name = format!("{name}_{}", &storage_id.to_string()[..8]);

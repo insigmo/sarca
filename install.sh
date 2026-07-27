@@ -180,9 +180,6 @@ write_or_merge_conf() {
     "TELEGRAM_RATE_LIMIT=18" \
     "TELEGRAM_CHUNK_SIZE_MB=20" \
     "WORK_DIR=${dest}/work" \
-    "TELEGRAM_BOT_TOKEN=" \
-    "TELEGRAM_CHANNEL_ID=" \
-    "STORAGE_NAME=" \
     "TELEGRAM_API_ID=" \
     "TELEGRAM_API_HASH=" \
     "DATABASE_USER=sarca" \
