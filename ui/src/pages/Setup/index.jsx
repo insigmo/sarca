@@ -212,13 +212,36 @@ const SetupWizard = () => {
 				const probe = pendingProbeIds.splice(0, pendingProbeIds.length)
 				const res = await API.setup.pollChannel(token().trim(), exclude, probe)
 				if (epoch !== pollEpoch) return
-				if (res.found && res.chat_id != null) {
-					stopPolling()
-					setChannels((list) => [
-						...list,
-						{ chat_id: res.chat_id, title: res.title || String(res.chat_id) },
-					])
-					addAlert(`Found channel: ${res.title || res.chat_id}`, 'success')
+				const hits = Array.isArray(res.channels) ? res.channels : []
+				if (hits.length) {
+					setChannels((list) => {
+						const next = [...list]
+						for (const hit of hits) {
+							if (next.length >= MAX_CHANNELS) break
+							if (next.some((c) => c.chat_id === hit.chat_id)) continue
+							next.push({
+								chat_id: hit.chat_id,
+								title: hit.title || String(hit.chat_id),
+							})
+						}
+						return next
+					})
+					const labels = hits
+						.slice(0, MAX_CHANNELS - exclude.length)
+						.map((h) => h.title || h.chat_id)
+						.join(', ')
+					addAlert(
+						hits.length === 1
+							? `Found channel: ${labels}`
+							: `Found ${Math.min(hits.length, MAX_CHANNELS - exclude.length)} channels: ${labels}`,
+						'success',
+					)
+					// Keep polling until the storage is full (up to 3).
+					if (exclude.length + hits.length >= MAX_CHANNELS) {
+						stopPolling()
+						return
+					}
+					scheduleNext()
 					return
 				}
 				if (res.hint) {
@@ -256,12 +279,27 @@ const SetupWizard = () => {
 		try {
 			const exclude = channels().map((c) => c.chat_id)
 			const res = await API.setup.pollChannel(token().trim(), exclude, [chatId])
-			if (res.found && res.chat_id != null) {
-				setChannels((list) => [
-					...list,
-					{ chat_id: res.chat_id, title: res.title || String(res.chat_id) },
-				])
-				addAlert(`Found channel: ${res.title || res.chat_id}`, 'success')
+			const hits = Array.isArray(res.channels) ? res.channels : []
+			if (hits.length) {
+				setChannels((list) => {
+					const next = [...list]
+					for (const hit of hits) {
+						if (next.length >= MAX_CHANNELS) break
+						if (next.some((c) => c.chat_id === hit.chat_id)) continue
+						next.push({
+							chat_id: hit.chat_id,
+							title: hit.title || String(hit.chat_id),
+						})
+					}
+					return next
+				})
+				const labels = hits.map((h) => h.title || h.chat_id).join(', ')
+				addAlert(
+					hits.length === 1
+						? `Found channel: ${labels}`
+						: `Found ${hits.length} channels: ${labels}`,
+					'success',
+				)
 				return
 			}
 			setPollError(
