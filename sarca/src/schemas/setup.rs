@@ -57,10 +57,16 @@ pub struct ChannelPollSchema {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ChannelPollHitSchema {
+    pub chat_id: ChatId,
+    pub title: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ChannelPollResultSchema {
-    pub found: bool,
-    pub chat_id: Option<ChatId>,
-    pub title: Option<String>,
+    /// All newly discovered admin chats in this poll (already excluding known ids).
+    /// Capped at 3 so the wizard can add a full storage in one response.
+    pub channels: Vec<ChannelPollHitSchema>,
     /// Present when a chat was seen but the bot is not an admin (or similar).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,

@@ -33,13 +33,6 @@ pub struct Config {
     /// Default 48 MB. Non-video files use `telegram_chunk_size_mb`.
     pub telegram_video_chunk_size_mb: u32,
 
-    /// Optional bootstrap: bot token from @`BotFather`.
-    pub telegram_bot_token: Option<String>,
-    /// Optional bootstrap: channel id without `-100` prefix.
-    pub telegram_channel_id: Option<i64>,
-    /// Optional bootstrap: storage name to create for the superuser.
-    pub storage_name: Option<String>,
-
     /// Public base URL for email links and OAuth redirect URIs.
     pub public_base_url: String,
 
@@ -115,10 +108,6 @@ impl Config {
         let telegram_video_chunk_size_mb =
             Self::get_env_var_with_default("TELEGRAM_VIDEO_CHUNK_SIZE_MB", 48u32)?;
 
-        let telegram_bot_token = Self::get_optional_env_var("TELEGRAM_BOT_TOKEN");
-        let telegram_channel_id = Self::get_optional_parsed_env_var("TELEGRAM_CHANNEL_ID")?;
-        let storage_name = Self::get_optional_env_var("STORAGE_NAME");
-
         let public_base_url =
             Self::get_env_var_with_default("PUBLIC_BASE_URL", format!("http://127.0.0.1:{port}"))?;
         let smtp_host = Self::get_optional_env_var("SMTP_HOST");
@@ -151,9 +140,6 @@ impl Config {
             work_dir,
             telegram_chunk_size_mb,
             telegram_video_chunk_size_mb,
-            telegram_bot_token,
-            telegram_channel_id,
-            storage_name,
             public_base_url,
             smtp_host,
             smtp_port,
@@ -210,17 +196,6 @@ impl Config {
             _ => None,
         }
     }
-
-    /// Missing or blank env → `None`; non-empty but unparsable → error.
-    #[inline]
-    fn get_optional_parsed_env_var<T: FromStr>(env_var: &str) -> SarcaResult<Option<T>> {
-        Self::get_optional_env_var(env_var).map_or(Ok(None), |value| {
-            value
-                .parse::<T>()
-                .map(Some)
-                .map_err(|_| SarcaError::EnvVarParsingError(env_var.to_owned()))
-        })
-    }
 }
 
 #[cfg(test)]
@@ -252,9 +227,6 @@ mod tests {
             "TELEGRAM_CHUNK_SIZE_MB",
             "TELEGRAM_VIDEO_CHUNK_SIZE_MB",
             "WORK_DIR",
-            "TELEGRAM_BOT_TOKEN",
-            "TELEGRAM_CHANNEL_ID",
-            "STORAGE_NAME",
         ] {
             env::remove_var(k);
         }
@@ -284,35 +256,6 @@ mod tests {
         let cfg = Config::new().unwrap();
         assert_eq!(cfg.port, 8001);
         assert!(cfg.db_uri.contains("127.0.0.1:5432/sarca"));
-        assert!(cfg.telegram_bot_token.is_none());
-        clear_required();
-    }
-
-    #[test]
-    fn optional_bootstrap_vars() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_required();
-        set_required();
-        env::set_var("TELEGRAM_BOT_TOKEN", "tok");
-        env::set_var("TELEGRAM_CHANNEL_ID", "123");
-        env::set_var("STORAGE_NAME", "main");
-        let cfg = Config::new().unwrap();
-        assert_eq!(cfg.telegram_bot_token.as_deref(), Some("tok"));
-        assert_eq!(cfg.telegram_channel_id, Some(123));
-        assert_eq!(cfg.storage_name.as_deref(), Some("main"));
-        clear_required();
-    }
-
-    #[test]
-    fn blank_optional_is_none() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_required();
-        set_required();
-        env::set_var("TELEGRAM_BOT_TOKEN", "  ");
-        env::set_var("STORAGE_NAME", "");
-        let cfg = Config::new().unwrap();
-        assert!(cfg.telegram_bot_token.is_none());
-        assert!(cfg.storage_name.is_none());
         clear_required();
     }
 

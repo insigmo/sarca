@@ -9,15 +9,6 @@ pub struct GrantAccess {
     pub access_type: AccessType,
 }
 
-impl GrantAccess {
-    pub fn new(user_email: String, access_type: AccessType) -> Self {
-        Self {
-            user_email,
-            access_type,
-        }
-    }
-}
-
 #[derive(Deserialize)]
 pub struct RestrictAccess {
     pub user_id: Uuid,

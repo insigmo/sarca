@@ -1188,7 +1188,7 @@ const validateBot = async (token) => {
  * @param {string} token
  * @param {number[]} [exclude_chat_ids]
  * @param {number[]} [probe_chat_ids]
- * @returns {Promise<{ found: boolean, chat_id?: number, title?: string, hint?: string }>}
+ * @returns {Promise<{ channels: Array<{ chat_id: number, title: string }>, hint?: string }>}
  */
 const pollChannel = async (token, exclude_chat_ids = [], probe_chat_ids = []) => {
 	return await apiRequest('/setup/channel/poll', 'post', getAuthToken(), {
