@@ -39,3 +39,5 @@ docs/
 .idea/
 .tmp/
 .cursor/
+# Git worktrees (local)
+.worktrees/
