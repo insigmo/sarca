@@ -28,6 +28,8 @@
     "allow-list-bindings",
     "allow-add-binding",
     "allow-remove-binding",
+    "allow-set-binding-enabled",
+    "allow-update-binding-local-path",
     "allow-sync-now",
     "allow-sync-statuses",
     "allow-get-client-prefs",

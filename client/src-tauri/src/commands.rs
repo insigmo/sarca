@@ -544,20 +544,65 @@ pub fn remove_binding(state: State<'_, AppSyncState>, id: String) -> Result<(), 
 }
 
 #[tauri::command]
-pub async fn sync_now(app: AppHandle, state: State<'_, AppSyncState>) -> Result<(), String> {
+pub fn set_binding_enabled(
+    state: State<'_, AppSyncState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .engine
+        .set_binding_enabled(&id, enabled)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn update_binding_local_path(
+    state: State<'_, AppSyncState>,
+    id: String,
+    local_path: String,
+) -> Result<Binding, String> {
+    let mut binding = state
+        .engine
+        .list_bindings()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| format!("binding not found: {id}"))?;
+    binding.local_path = local_path;
+    state
+        .engine
+        .upsert_binding(&binding)
+        .map_err(|e| e.to_string())?;
+    Ok(binding)
+}
+
+#[tauri::command]
+pub async fn sync_now(
+    app: AppHandle,
+    state: State<'_, AppSyncState>,
+    binding_id: Option<String>,
+) -> Result<(), String> {
     let _ = ensure_sync_session(&app, &state).await;
     let prefs = load_prefs(&state);
     let allow_auto = allow_auto_upload(&prefs);
-    state
-        .engine
-        .tick_filtered(|b| {
-            if b.mode.is_upload_only() && !allow_auto {
-                return false;
-            }
-            true
-        })
-        .await
-        .map_err(|e| e.to_string())
+    let allow = |b: &Binding| {
+        if b.mode.is_upload_only() && !allow_auto {
+            return false;
+        }
+        true
+    };
+    match binding_id {
+        Some(id) => state
+            .engine
+            .tick_binding(&id, allow)
+            .await
+            .map_err(|e| e.to_string()),
+        None => state
+            .engine
+            .tick_filtered(allow)
+            .await
+            .map_err(|e| e.to_string()),
+    }
 }
 
 #[tauri::command]
