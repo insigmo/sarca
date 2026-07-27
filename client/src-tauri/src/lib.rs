@@ -271,6 +271,8 @@ pub fn run() {
             commands::list_bindings,
             commands::add_binding,
             commands::remove_binding,
+            commands::set_binding_enabled,
+            commands::update_binding_local_path,
             commands::sync_now,
             commands::sync_statuses,
             commands::get_client_prefs,

@@ -17,6 +17,8 @@ fn main() {
         "list_bindings",
         "add_binding",
         "remove_binding",
+        "set_binding_enabled",
+        "update_binding_local_path",
         "sync_now",
         "sync_statuses",
         "get_client_prefs",
