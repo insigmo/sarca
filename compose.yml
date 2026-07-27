@@ -29,8 +29,8 @@ services:
       - ./ui/dist:/ui:ro
       - sarca-work-volume:/work
       # Local Bot API (`--local`) returns absolute paths under this dir; Sarca must
-      # see the same files to open/download without a second HTTP hop.
-      - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
+      # see the same files to open/download, and delete documents/ copies after use.
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
     environment:
       # Docker network layout — overrides host-oriented values in mounted conf.
       # PORT is taken from sarca.conf via `docker compose --env-file sarca.conf`

@@ -274,12 +274,14 @@ fn mode_str(mode: BindingMode) -> &'static str {
     match mode {
         BindingMode::Sync => "sync",
         BindingMode::AutoUpload => "auto_upload",
+        BindingMode::FolderUpload => "folder_upload",
     }
 }
 
 fn parse_mode(s: &str) -> BindingMode {
     match s {
         "auto_upload" => BindingMode::AutoUpload,
+        "folder_upload" => BindingMode::FolderUpload,
         _ => BindingMode::Sync,
     }
 }

@@ -1,11 +1,9 @@
 /**
- * Material Icon Theme → file/folder glyph URLs for the Files UI.
+ * Material Icon Theme glyphs for the Files UI.
  *
- * Uses `generateManifest()` for extension/filename → icon-name mapping, then
- * resolves against a curated set of SVG imports (avoids bundling all ~1250 icons).
+ * Curated SVG imports only (avoids bundling all ~1250 icons and the ~440KB
+ * `generateManifest()` JSON that was blowing past Vite's chunk size warning).
  */
-import { generateManifest } from 'material-icon-theme'
-
 import fileUrl from 'material-icon-theme/icons/file.svg?url'
 import folderUrl from 'material-icon-theme/icons/folder.svg?url'
 import folderOpenUrl from 'material-icon-theme/icons/folder-open.svg?url'
@@ -69,19 +67,101 @@ const ICON_URLS = {
 	http: httpUrl,
 }
 
-/** Extra associations for types the VS Code manifest omits or names oddly. */
-const EXTRA_EXTENSIONS = {
-	webloc: 'url',
-	desktop: 'url',
+/** @type {Record<string, string>} */
+const FILE_NAMES = {
+	'readme.md': 'markdown',
+	'license': 'document',
+	'licence': 'document',
+	'package.json': 'json',
+	'tsconfig.json': 'json',
+	'cargo.toml': 'rust',
 }
 
-let manifestCache = null
-
-const getManifest = () => {
-	if (!manifestCache) {
-		manifestCache = generateManifest()
-	}
-	return manifestCache
+/** Extension → icon id for the curated set above. */
+/** @type {Record<string, string>} */
+const FILE_EXTENSIONS = {
+	pdf: 'pdf',
+	png: 'image',
+	jpg: 'image',
+	jpeg: 'image',
+	gif: 'image',
+	webp: 'image',
+	bmp: 'image',
+	ico: 'image',
+	heic: 'image',
+	heif: 'image',
+	avif: 'image',
+	tif: 'image',
+	tiff: 'image',
+	svg: 'svg',
+	zip: 'zip',
+	rar: 'zip',
+	'7z': 'zip',
+	tar: 'zip',
+	gz: 'zip',
+	tgz: 'zip',
+	bz2: 'zip',
+	xz: 'zip',
+	mp4: 'video',
+	mov: 'video',
+	mkv: 'video',
+	webm: 'video',
+	avi: 'video',
+	m4v: 'video',
+	'3gp': 'video',
+	mp3: 'audio',
+	wav: 'audio',
+	flac: 'audio',
+	aac: 'audio',
+	ogg: 'audio',
+	m4a: 'audio',
+	wma: 'audio',
+	doc: 'word',
+	docx: 'word',
+	odt: 'word',
+	rtf: 'word',
+	ppt: 'powerpoint',
+	pptx: 'powerpoint',
+	odp: 'powerpoint',
+	xls: 'table',
+	xlsx: 'table',
+	ods: 'table',
+	csv: 'table',
+	tsv: 'table',
+	md: 'markdown',
+	markdown: 'markdown',
+	mdx: 'markdown',
+	html: 'html',
+	htm: 'html',
+	json: 'json',
+	jsonc: 'json',
+	js: 'javascript',
+	mjs: 'javascript',
+	cjs: 'javascript',
+	jsx: 'react',
+	ts: 'typescript',
+	mts: 'typescript',
+	cts: 'typescript',
+	tsx: 'react_ts',
+	py: 'python',
+	pyw: 'python',
+	css: 'css',
+	scss: 'css',
+	sass: 'css',
+	less: 'css',
+	xml: 'xml',
+	xsl: 'xml',
+	yml: 'yaml',
+	yaml: 'yaml',
+	toml: 'toml',
+	rs: 'rust',
+	log: 'log',
+	txt: 'document',
+	text: 'document',
+	url: 'url',
+	webloc: 'url',
+	desktop: 'url',
+	http: 'http',
 }
 
 /**
@@ -97,20 +177,16 @@ const resolveMaterialIconName = (name, opts = {}) => {
 
 	const lower = String(name || '').toLowerCase()
 	if (lower.startsWith('http://') || lower.startsWith('https://')) return 'http'
-	const m = getManifest()
 
-	if (m.fileNames?.[lower] && ICON_URLS[m.fileNames[lower]]) {
-		return m.fileNames[lower]
+	if (FILE_NAMES[lower] && ICON_URLS[FILE_NAMES[lower]]) {
+		return FILE_NAMES[lower]
 	}
 
 	const ext = lower.includes('.') ? lower.slice(lower.lastIndexOf('.') + 1) : ''
 	if (!ext) return 'file'
 
-	const fromExtra = EXTRA_EXTENSIONS[ext]
-	if (fromExtra) return fromExtra
-
-	const fromManifest = m.fileExtensions?.[ext]
-	if (fromManifest) return fromManifest
+	const fromExt = FILE_EXTENSIONS[ext]
+	if (fromExt) return fromExt
 
 	return 'file'
 }
