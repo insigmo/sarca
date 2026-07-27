@@ -51,6 +51,9 @@ pub struct ChannelPollSchema {
     pub token: String,
     #[serde(default)]
     pub exclude_chat_ids: Vec<ChatId>,
+    /// Optional chat ids to verify directly (when `my_chat_member` was missed).
+    #[serde(default)]
+    pub probe_chat_ids: Vec<ChatId>,
 }
 
 #[derive(Debug, Serialize)]

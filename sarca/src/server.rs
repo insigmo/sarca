@@ -1,10 +1,14 @@
 use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
-use axum::{Router, http::StatusCode};
-use tower::limit::ConcurrencyLimitLayer;
+use axum::{
+    Router,
+    http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
+};
+use tower::{ServiceBuilder, limit::ConcurrencyLimitLayer};
 use tower_http::{
     cors,
     services::{ServeDir, ServeFile},
+    set_header::SetResponseHeaderLayer,
 };
 
 use crate::{
@@ -34,8 +38,20 @@ impl Server {
 
         tracing::info!("serving UI from {}", ui_dir.display());
 
-        let serve_ui = ServeFile::new(index);
-        let serve_assets = ServeDir::new(assets);
+        // Hashed Vite assets are safe to cache forever; index.html must revalidate
+        // or browsers keep a stale script src → 404 → white screen after rebuild.
+        let serve_assets = ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=31536000, immutable"),
+            ))
+            .service(ServeDir::new(assets));
+        let serve_ui = ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                CACHE_CONTROL,
+                HeaderValue::from_static("no-cache"),
+            ))
+            .service(ServeFile::new(index));
 
         let router = Router::new()
             .nest("/api", Self::build_api_router(workers, app_state))
