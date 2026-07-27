@@ -20,10 +20,28 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
+#[cfg(desktop)]
+fn focus_main_window(app: &impl Manager<tauri::Wry>) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[allow(unused_mut)]
-    let mut builder = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            focus_main_window(app);
+        }));
+    }
+
+    builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
@@ -141,10 +159,7 @@ pub fn run() {
                 app.on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
                     "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                        focus_main_window(app);
                     }
                     "disconnect" => {
                         let handle = app.clone();
@@ -212,10 +227,7 @@ pub fn run() {
                         } = event
                         {
                             let app = tray.app_handle();
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
+                            focus_main_window(app);
                         }
                     })
                     .build(app)?;
@@ -268,6 +280,21 @@ pub fn run() {
             commands::get_cache_size,
             commands::clear_local_cache,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Sarca client");
+        .build(tauri::generate_context!())
+        .expect("error while building Sarca client")
+        .run(|app_handle, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+            {
+                if !has_visible_windows {
+                    focus_main_window(app_handle);
+                }
+            }
+            // Non-macOS: keep the run-event callback so Builder::run stays equivalent.
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app_handle, &event);
+        });
 }
