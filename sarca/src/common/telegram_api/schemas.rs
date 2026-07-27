@@ -124,6 +124,21 @@ pub struct UpdateSchema {
 #[derive(Debug, Deserialize)]
 pub struct MessageChatSchema {
     pub chat: UpdateChatSchema,
+    /// Legacy forward (Bot API < 7.0 style).
+    #[serde(default)]
+    pub forward_from_chat: Option<UpdateChatSchema>,
+    /// Modern forward origin (channel posts forwarded to the bot DM).
+    #[serde(default)]
+    pub forward_origin: Option<ForwardOriginSchema>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ForwardOriginSchema {
+    #[serde(default)]
+    #[serde(rename = "type")]
+    pub origin_type: Option<String>,
+    #[serde(default)]
+    pub chat: Option<UpdateChatSchema>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -156,10 +171,24 @@ pub fn chats_from_updates(body: &GetUpdatesBodySchema) -> Vec<DetectedChat> {
             push_detected(&mut out, &member.chat);
         }
         if let Some(msg) = &update.message {
-            // Groups/supergroups when bot is added; skip private DMs.
+            // Groups/supergroups when bot is added.
             let t = msg.chat.chat_type.as_deref().unwrap_or("");
             if t == "group" || t == "supergroup" || t == "channel" {
                 push_detected(&mut out, &msg.chat);
+            }
+            // Private channel already admin: user forwards any post to the bot DM.
+            if let Some(fwd) = &msg.forward_from_chat {
+                if fwd.chat_type.as_deref() == Some("channel") || fwd.id < 0 {
+                    push_detected(&mut out, fwd);
+                }
+            }
+            if let Some(origin) = &msg.forward_origin {
+                let is_channel = origin.origin_type.as_deref() == Some("channel");
+                if let Some(chat) = &origin.chat {
+                    if is_channel || chat.chat_type.as_deref() == Some("channel") || chat.id < 0 {
+                        push_detected(&mut out, chat);
+                    }
+                }
             }
         }
     }
@@ -222,5 +251,80 @@ mod tests {
         }"#;
         let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
         assert!(chats_from_updates(&body).is_empty());
+    }
+
+    #[test]
+    fn chats_from_updates_reads_my_chat_member() {
+        let json = r#"{
+          "result": [{
+            "update_id": 3,
+            "my_chat_member": {
+              "chat": { "id": -100111, "title": "Admin Chan", "type": "channel" },
+              "from": { "id": 1, "is_bot": false, "first_name": "U" },
+              "date": 1,
+              "old_chat_member": { "status": "left", "user": { "id": 2, "is_bot": true, "first_name": "B" } },
+              "new_chat_member": { "status": "administrator", "user": { "id": 2, "is_bot": true, "first_name": "B" } }
+            }
+          }]
+        }"#;
+        let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
+        let chats = chats_from_updates(&body);
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].chat_id, -100_111);
+        assert_eq!(chats[0].title, "Admin Chan");
+    }
+
+    #[test]
+    fn chats_from_updates_reads_forward_from_chat_in_dm() {
+        let json = r#"{
+          "result": [{
+            "update_id": 4,
+            "message": {
+              "message_id": 1,
+              "chat": { "id": 42, "first_name": "User", "type": "private" },
+              "date": 1,
+              "forward_from_chat": {
+                "id": -1004478634219,
+                "title": "SarcaStorage1",
+                "type": "channel"
+              },
+              "text": "hello"
+            }
+          }]
+        }"#;
+        let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
+        let chats = chats_from_updates(&body);
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].chat_id, -1_004_478_634_219);
+        assert_eq!(chats[0].title, "SarcaStorage1");
+    }
+
+    #[test]
+    fn chats_from_updates_reads_forward_origin_channel() {
+        let json = r#"{
+          "result": [{
+            "update_id": 5,
+            "message": {
+              "message_id": 2,
+              "chat": { "id": 99, "type": "private" },
+              "date": 1,
+              "forward_origin": {
+                "type": "channel",
+                "chat": {
+                  "id": -1004385550541,
+                  "title": "SarcaStorage2",
+                  "type": "channel"
+                },
+                "message_id": 10,
+                "date": 1
+              }
+            }
+          }]
+        }"#;
+        let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
+        let chats = chats_from_updates(&body);
+        assert_eq!(chats.len(), 1);
+        assert_eq!(chats[0].chat_id, -1_004_385_550_541);
+        assert_eq!(chats[0].title, "SarcaStorage2");
     }
 }

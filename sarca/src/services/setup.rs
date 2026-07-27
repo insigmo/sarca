@@ -2,13 +2,20 @@ use sqlx::PgPool;
 
 use crate::{
     common::{
+        access::check_access,
         jwt_manager::AuthUser,
         telegram_api::token_client::TelegramTokenClient,
         types::ChatId,
     },
     conf,
     errors::{SarcaError, SarcaResult},
-    repositories::{app_settings::AppSettingsRepository, storages::StoragesRepository},
+    models::{access::AccessType, storages::Storage},
+    repositories::{
+        access::AccessRepository,
+        app_settings::AppSettingsRepository,
+        storage_channels::StorageChannelsRepository,
+        storages::StoragesRepository,
+    },
     schemas::{
         setup::{
             BotValidateSchema,
@@ -20,10 +27,9 @@ use crate::{
             SetupCreateStorageSchema,
             SetupStatusSchema,
         },
-        storage_workers::InStorageWorkerSchema,
-        storages::{ChannelInput, InStorageSchema},
+        storages::{ChannelInput, InStorageSchema, SetStorageBotSchema},
     },
-    services::{storage_workers::StorageWorkersService, storages::StoragesService},
+    services::storages::StoragesService,
 };
 
 pub struct SetupService<'d> {
@@ -182,6 +188,11 @@ impl<'d> SetupService<'d> {
         if let Err(e) = client.delete_webhook().await {
             tracing::warn!("deleteWebhook during setup validate: {e}");
         }
+        // Reset sticky allowed_updates and open the Local Bot API session before
+        // the user adds the bot as admin (my_chat_member is not retroactive).
+        if let Err(e) = client.arm_updates().await {
+            tracing::warn!("arm getUpdates during setup validate: {e}");
+        }
         Ok(BotValidateSchema {
             bot_id: me.id,
             username: me.username,
@@ -194,17 +205,19 @@ impl<'d> SetupService<'d> {
         &self,
         token: &str,
         exclude: &[ChatId],
+        probe: &[ChatId],
     ) -> SarcaResult<(Vec<(ChatId, String)>, Option<String>)> {
         let client = TelegramTokenClient::new(self.telegram_base_url, token.trim());
-        client.discover_admin_chats(exclude).await
+        client.discover_admin_chats(exclude, probe).await
     }
 
     pub async fn poll_channel(
         &self,
         token: &str,
         exclude: &[ChatId],
+        probe: &[ChatId],
     ) -> SarcaResult<ChannelPollResultSchema> {
-        let (found, hint) = self.discover_admin_chats(token, exclude).await?;
+        let (found, hint) = self.discover_admin_chats(token, exclude, probe).await?;
         if let Some((chat_id, title)) = found.into_iter().next() {
             return Ok(ChannelPollResultSchema {
                 found: true,
@@ -241,8 +254,29 @@ impl<'d> SetupService<'d> {
             }
         }
 
-        let client = TelegramTokenClient::new(self.telegram_base_url, body.token.trim());
-        let me = client.get_me().await?;
+        let token = body.token.trim().to_owned();
+        let client = TelegramTokenClient::new(self.telegram_base_url, &token);
+        // Warm Local Bot API / validate token before mutating DB.
+        let _me = client.get_me().await?;
+
+        let storages = StoragesService::new(self.db, self.telegram_base_url, self.rate_limit);
+
+        // Retry path: previous Finish may have left channels without a worker.
+        if let Some(existing) = self.storage_owned_by_chats(&body.chat_ids, user).await? {
+            storages
+                .set_bot(
+                    existing.id,
+                    SetStorageBotSchema {
+                        token,
+                    },
+                    user,
+                )
+                .await?;
+            return Ok(SetupCreateStorageResultSchema {
+                id: existing.id,
+                name: existing.name,
+            });
+        }
 
         let mut channels = Vec::with_capacity(body.chat_ids.len());
         for (i, chat_id) in body.chat_ids.iter().copied().enumerate() {
@@ -256,8 +290,7 @@ impl<'d> SetupService<'d> {
             });
         }
 
-        let storages = StoragesService::new(self.db, self.telegram_base_url, self.rate_limit);
-        let storage = storages
+        let storage = match storages
             .create(
                 InStorageSchema {
                     name: name.clone(),
@@ -265,26 +298,52 @@ impl<'d> SetupService<'d> {
                 },
                 user,
             )
-            .await?;
+            .await
+        {
+            Ok(s) => s,
+            Err(SarcaError::StorageChatIdConflict) => {
+                // Lost race / partial prior attempt — recover if we own the chats.
+                if let Some(existing) = self.storage_owned_by_chats(&body.chat_ids, user).await? {
+                    storages
+                        .set_bot(
+                            existing.id,
+                            SetStorageBotSchema {
+                                token,
+                            },
+                            user,
+                        )
+                        .await?;
+                    return Ok(SetupCreateStorageResultSchema {
+                        id: existing.id,
+                        name: existing.name,
+                    });
+                }
+                return Err(SarcaError::StorageChatIdConflict);
+            },
+            Err(e) => return Err(e),
+        };
 
-        let workers = StorageWorkersService::new(self.db);
-        let worker_name = me.username;
-        if let Err(e) = workers
-            .create(
-                InStorageWorkerSchema {
-                    name: worker_name,
-                    token: body.token.trim().to_owned(),
-                    storage_id: Some(storage.id),
+        if let Err(e) = storages
+            .set_bot(
+                storage.id,
+                SetStorageBotSchema {
+                    token,
                 },
                 user,
             )
             .await
         {
             tracing::error!(
-                "setup: storage {} created but worker failed: {e:?}; rolling back storage",
+                "setup: storage {} created but set_bot failed: {e:?}; force-deleting storage",
                 storage.id
             );
-            let _ = storages.delete(storage.id, user).await;
+            // Bypass access check — we just created this row; delete must not leave orphans.
+            if let Err(del_e) = self.storages_repo.delete_storage(storage.id).await {
+                tracing::error!(
+                    "setup: force-delete of orphan storage {} failed: {del_e:?}",
+                    storage.id
+                );
+            }
             return Err(e);
         }
 
@@ -292,5 +351,44 @@ impl<'d> SetupService<'d> {
             id: storage.id,
             name: storage.name,
         })
+    }
+
+    /// If every `chat_id` belongs to the same storage and this user is admin, return it.
+    async fn storage_owned_by_chats(
+        &self,
+        chat_ids: &[ChatId],
+        user: &AuthUser,
+    ) -> SarcaResult<Option<Storage>> {
+        if chat_ids.is_empty() {
+            return Ok(None);
+        }
+        let channels = StorageChannelsRepository::new(self.db);
+        let mut storage_id = None;
+        for &chat_id in chat_ids {
+            let ch = match channels.get_by_chat_id(chat_id).await {
+                Ok(c) => c,
+                Err(SarcaError::DoesNotExist(_)) => return Ok(None),
+                Err(e) => return Err(e),
+            };
+            match storage_id {
+                None => storage_id = Some(ch.storage_id),
+                Some(id) if id != ch.storage_id => return Ok(None),
+                Some(_) => {},
+            }
+        }
+        let Some(storage_id) = storage_id else {
+            return Ok(None);
+        };
+        if check_access(&AccessRepository::new(self.db), user.id, storage_id, &AccessType::A)
+            .await
+            .is_err()
+        {
+            return Ok(None);
+        }
+        match self.storages_repo.get_by_id(storage_id).await {
+            Ok(s) => Ok(Some(s)),
+            Err(SarcaError::DoesNotExist(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }

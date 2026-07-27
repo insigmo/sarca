@@ -35,5 +35,7 @@ if [[ -z "${DEB}" || ! -f "${DEB}" ]]; then
 fi
 
 echo "Installing ${DEB}…"
-sudo apt-get install -y "${DEB}"
+# Same version (e.g. 0.0.56 rebuild) must still overwrite files — plain
+# `apt-get install` no-ops with "already the newest version".
+sudo apt-get install --reinstall -y "${DEB}"
 echo "Installed ${DEB}"

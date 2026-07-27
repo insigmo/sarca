@@ -23,6 +23,10 @@ pub struct TelegramTokenClient {
 }
 
 impl TelegramTokenClient {
+    /// `allowed_updates` must be set explicitly — Telegram remembers the last filter;
+    /// a sticky restrictive list silently drops `my_chat_member`.
+    const ALLOWED_UPDATES: &'static str = r#"["message","edited_message","channel_post","edited_channel_post","my_chat_member","chat_member"]"#;
+
     pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
@@ -92,18 +96,35 @@ impl TelegramTokenClient {
         Ok(())
     }
 
+    /// Arm update filters (timeout=0). Call during bot validate so the next admin-add
+    /// is not dropped by a stale `allowed_updates` setting.
+    pub async fn arm_updates(&self) -> SarcaResult<()> {
+        let _ = self.get_updates_with_timeout(0).await?;
+        Ok(())
+    }
+
     pub async fn get_updates(&self) -> SarcaResult<Vec<DetectedChat>> {
+        // Short long-poll: return as soon as an update arrives (or after ~2s).
+        self.get_updates_with_timeout(2).await
+    }
+
+    async fn get_updates_with_timeout(&self, timeout_secs: u64) -> SarcaResult<Vec<DetectedChat>> {
         let url = self.build_url("getUpdates");
         let masked = Self::mask_url(&url);
-        // timeout=0: return immediately. Still retry once on 409 — Local Bot API /
-        // Telegram reject concurrent getUpdates for the same bot ("only one bot
-        // instance"). Overlapping UI polls used to surface this as a hard failure.
+        // Retry once on 409 — Local Bot API / Telegram reject concurrent getUpdates
+        // for the same bot ("only one bot instance").
         let mut attempt = 0u8;
+        let req_timeout = std::time::Duration::from_secs(timeout_secs.saturating_add(8));
         loop {
             attempt += 1;
             let response = reqwest::Client::new()
                 .get(&url)
-                .query(&[("timeout", "0"), ("limit", "100")])
+                .query(&[
+                    ("timeout", timeout_secs.to_string()),
+                    ("limit", "100".to_string()),
+                    ("allowed_updates", Self::ALLOWED_UPDATES.to_string()),
+                ])
+                .timeout(req_timeout)
                 .send()
                 .await?;
             let status = response.status();
@@ -201,18 +222,52 @@ impl TelegramTokenClient {
     }
 
     /// Chats where this bot is admin/creator (negative chat ids only).
-    /// `exclude` skips already-known chat ids. Returns `(found, hint)` where hint
-    /// explains non-admin sightings when nothing was found.
+    /// `exclude` skips already-known chat ids. `probe` checks explicit ids first
+    /// (recovery when `my_chat_member` was missed). Returns `(found, hint)` where
+    /// hint explains non-admin sightings when nothing was found.
     pub async fn discover_admin_chats(
         &self,
         exclude: &[ChatId],
+        probe: &[ChatId],
     ) -> SarcaResult<(Vec<(ChatId, String)>, Option<String>)> {
         let me = self.get_me().await?;
-        let chats = self.get_updates().await?;
         let mut saw_non_admin = false;
         let mut found = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
+        for &chat_id in probe {
+            if exclude.contains(&chat_id) || chat_id >= 0 || !seen.insert(chat_id) {
+                continue;
+            }
+            match self.classify_admin_chat(chat_id, me.id, None).await {
+                AdminClass::Admin(title) => found.push((chat_id, title)),
+                AdminClass::NotAdmin => {
+                    return Ok((
+                        Vec::new(),
+                        Some(format!(
+                            "Bot is in chat {chat_id} but is not an admin. Give it admin rights \
+                             with Post messages and Delete messages."
+                        )),
+                    ));
+                },
+                AdminClass::Unknown => {
+                    return Ok((
+                        Vec::new(),
+                        Some(format!(
+                            "Cannot access chat {chat_id}. Add the bot as an admin there, or check \
+                             the id."
+                        )),
+                    ));
+                },
+            }
+        }
+
+        // Fast path: manual chat ids already confirmed — skip long-poll.
+        if !found.is_empty() {
+            return Ok((found, None));
+        }
+
+        let chats = self.get_updates().await?;
         for chat in chats {
             if exclude.contains(&chat.chat_id) || !seen.insert(chat.chat_id) {
                 continue;
@@ -221,22 +276,9 @@ impl TelegramTokenClient {
                 continue;
             }
 
-            let title = match self.get_chat(chat.chat_id).await {
-                Ok(info) => info.title,
-                Err(_) => chat.title,
-            };
-
-            match self.get_chat_member_status(chat.chat_id, me.id).await {
-                Ok(status) if status == "administrator" || status == "creator" => {
-                    found.push((chat.chat_id, title));
-                },
-                Ok(_) => {
-                    saw_non_admin = true;
-                },
-                Err(e) => {
-                    tracing::warn!("discover: getChatMember for {} failed: {e}", chat.chat_id);
-                    saw_non_admin = true;
-                },
+            match self.classify_admin_chat(chat.chat_id, me.id, Some(chat.title.clone())).await {
+                AdminClass::Admin(title) => found.push((chat.chat_id, title)),
+                AdminClass::NotAdmin | AdminClass::Unknown => saw_non_admin = true,
             }
         }
 
@@ -251,4 +293,32 @@ impl TelegramTokenClient {
         };
         Ok((found, hint))
     }
+
+    async fn classify_admin_chat(
+        &self,
+        chat_id: ChatId,
+        bot_id: i64,
+        fallback_title: Option<String>,
+    ) -> AdminClass {
+        let title = match self.get_chat(chat_id).await {
+            Ok(info) => info.title,
+            Err(_) => fallback_title.unwrap_or_else(|| chat_id.to_string()),
+        };
+        match self.get_chat_member_status(chat_id, bot_id).await {
+            Ok(status) if status == "administrator" || status == "creator" => {
+                AdminClass::Admin(title)
+            },
+            Ok(_) => AdminClass::NotAdmin,
+            Err(e) => {
+                tracing::warn!("discover: getChatMember for {chat_id} failed: {e}");
+                AdminClass::Unknown
+            },
+        }
+    }
+}
+
+enum AdminClass {
+    Admin(String),
+    NotAdmin,
+    Unknown,
 }

@@ -38,6 +38,14 @@ impl<'d> StorageChannelsRepository<'d> {
             .map_err(|e| map_not_found(&e, "storage channel"))
     }
 
+    pub async fn get_by_chat_id(&self, chat_id: ChatId) -> SarcaResult<StorageChannel> {
+        sqlx::query_as(format!("SELECT * FROM {TABLE} WHERE chat_id = $1").as_str())
+            .bind(chat_id)
+            .fetch_one(self.db)
+            .await
+            .map_err(|e| map_not_found(&e, "storage channel"))
+    }
+
     /// First free slot (1..=3) not currently used by `storage_id`, or `None` if all 3 taken.
     pub async fn next_free_position(&self, storage_id: Uuid) -> SarcaResult<Option<i16>> {
         let channels = self.list_by_storage(storage_id).await?;
