@@ -68,15 +68,20 @@ Edit `%LOCALAPPDATA%\Sarca\sarca.conf`, then run `sarca.cmd` from the install fo
 
 ### Docker Compose
 
-`compose.yml` mounts `./sarca.conf` into the containers. Secrets and Telegram credentials live there. Docker networking (`DATABASE_HOST=db`, `WORK_DIR=/work`) is set in compose. **`PORT` is read from `sarca.conf`** for both the published host port and the process listen port — always pass `--env-file sarca.conf` so Compose can interpolate it.
+`compose.yml` is pull-only: GHCR image + Postgres + Local Bot API. It mounts `./sarca.conf` (and `./docker/telegram-bot-api-entrypoint.sh` from the installer). Secrets and Telegram credentials live in `sarca.conf`. Docker networking (`DATABASE_HOST=db`, `WORK_DIR=/work`) is set in compose. **`PORT` is read from `sarca.conf`** for both the published host port and the process listen port — always pass `--env-file sarca.conf` so Compose can interpolate it.
+
+Local binary/UI overrides live in `compose.dev.yml` and are used by `task up` / `task restart` (requires a built `runtime/sarca` **file**, not a directory).
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
 cd sarca
 # edit sarca.conf: SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID, TELEGRAM_API_HASH, PORT
 # keep DATABASE_USER/PASSWORD/NAME = sarca (matches compose db service)
+docker compose --env-file sarca.conf pull
 docker compose --env-file sarca.conf up -d
 ```
+
+From a git checkout on a Pi (no local build): same `docker compose --env-file sarca.conf up -d` — do **not** use `compose.dev.yml` unless you have built `runtime/sarca` + `ui/dist`.
 
 Open http://127.0.0.1:$PORT (default `8000` if unset in conf).
 
