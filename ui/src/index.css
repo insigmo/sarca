@@ -360,30 +360,6 @@ a.default-link:hover {
 	margin-top: -4px;
 }
 
-.auth-divider {
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	margin: 4px 0;
-	color: var(--sarca-ink-soft);
-	font-size: 0.8rem;
-	font-weight: 600;
-	letter-spacing: 0.02em;
-	text-transform: lowercase;
-}
-
-.auth-divider::before,
-.auth-divider::after {
-	content: '';
-	flex: 1;
-	height: 1px;
-	background: var(--sarca-border);
-}
-
-.auth-divider span {
-	flex-shrink: 0;
-}
-
 .auth-message {
 	margin: 0;
 	color: var(--sarca-ink-soft);
