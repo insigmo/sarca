@@ -544,20 +544,81 @@ pub fn remove_binding(state: State<'_, AppSyncState>, id: String) -> Result<(), 
 }
 
 #[tauri::command]
-pub async fn sync_now(app: AppHandle, state: State<'_, AppSyncState>) -> Result<(), String> {
+pub fn set_binding_enabled(
+    state: State<'_, AppSyncState>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    state
+        .engine
+        .set_binding_enabled(&id, enabled)
+        .map_err(|e| e.to_string())
+}
+
+/// Two-way `Sync` bindings track per-file state (content hash, remote file
+/// id, cursor) keyed to the *old* local root; repointing them at a different
+/// folder would desync every entry (spurious deletes/uploads on the next
+/// tick). Upload-only bindings (Camera / folder auto-upload) are safe to
+/// repoint: `push_local` just re-walks the new root and its existing
+/// size/mtime/hash comparisons in the index still protect against
+/// accidental re-uploads of files that happen to already match.
+fn ensure_local_path_change_allowed(mode: BindingMode) -> Result<(), String> {
+    if mode.is_upload_only() {
+        Ok(())
+    } else {
+        Err("Changing the local folder is only supported for upload-only bindings".into())
+    }
+}
+
+#[tauri::command]
+pub fn update_binding_local_path(
+    state: State<'_, AppSyncState>,
+    id: String,
+    local_path: String,
+) -> Result<Binding, String> {
+    let mut binding = state
+        .engine
+        .list_bindings()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| format!("binding not found: {id}"))?;
+    ensure_local_path_change_allowed(binding.mode)?;
+    binding.local_path = local_path;
+    state
+        .engine
+        .upsert_binding(&binding)
+        .map_err(|e| e.to_string())?;
+    Ok(binding)
+}
+
+#[tauri::command]
+pub async fn sync_now(
+    app: AppHandle,
+    state: State<'_, AppSyncState>,
+    binding_id: Option<String>,
+) -> Result<(), String> {
     let _ = ensure_sync_session(&app, &state).await;
     let prefs = load_prefs(&state);
     let allow_auto = allow_auto_upload(&prefs);
-    state
-        .engine
-        .tick_filtered(|b| {
-            if b.mode.is_upload_only() && !allow_auto {
-                return false;
-            }
-            true
-        })
-        .await
-        .map_err(|e| e.to_string())
+    let allow = |b: &Binding| {
+        if b.mode.is_upload_only() && !allow_auto {
+            return false;
+        }
+        true
+    };
+    match binding_id {
+        Some(id) => state
+            .engine
+            .tick_binding(&id, allow)
+            .await
+            .map_err(|e| e.to_string()),
+        None => state
+            .engine
+            .tick_filtered(allow)
+            .await
+            .map_err(|e| e.to_string()),
+    }
 }
 
 #[tauri::command]
@@ -716,6 +777,17 @@ mod tests {
         assert!(SESSION_EXPIRED_MSG.contains("Session expired"));
         assert!(is_unauthorized("create_folder failed: 401 Unauthorized"));
         assert!(!is_unauthorized("create_folder failed: 500"));
+    }
+
+    #[test]
+    fn update_binding_local_path_rejects_two_way_sync_bindings() {
+        assert!(ensure_local_path_change_allowed(BindingMode::AutoUpload).is_ok());
+        assert!(ensure_local_path_change_allowed(BindingMode::FolderUpload).is_ok());
+        let err = ensure_local_path_change_allowed(BindingMode::Sync).unwrap_err();
+        assert!(
+            err.contains("upload-only"),
+            "error should explain why Sync bindings are rejected: {err}"
+        );
     }
 
     #[test]

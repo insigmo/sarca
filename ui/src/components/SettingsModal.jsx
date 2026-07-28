@@ -23,6 +23,7 @@ import Access from './Access'
 import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
 import SettingsSyncPanel from './SettingsSyncPanel'
+import AppLockToggle from './AppLockToggle'
 import { nativeClientStore } from '../common/nativeClient'
 
 const SettingsModal = () => {
@@ -687,22 +688,17 @@ const SettingsModal = () => {
 												</p>
 											}
 										>
-											<label class="settings-toggle">
-												<span>App lock</span>
-												<input
-													type="checkbox"
-													checked={lockEnabled()}
-													onChange={(e) => {
-														const on = e.currentTarget.checked
-														if (on) {
-															setLockEnabled(true)
-															setSecurityMsg('Enter a new PIN below, then save')
-														} else {
-															saveAppLock(false)
-														}
-													}}
-												/>
-											</label>
+											<AppLockToggle
+												checked={lockEnabled()}
+												onChange={(on) => {
+													if (on) {
+														setLockEnabled(true)
+														setSecurityMsg('Enter a new PIN below, then save')
+													} else {
+														saveAppLock(false)
+													}
+												}}
+											/>
 											<TextField
 												label={
 													lockEnabled()

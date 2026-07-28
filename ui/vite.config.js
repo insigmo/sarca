@@ -21,4 +21,10 @@ export default defineConfig({
 		// Size is kept under the warning via slim icon maps + dynamic imports
 		// for marked/mammoth in FileViewer.
 	},
+	test: {
+		environment: 'jsdom',
+		globals: true,
+		setupFiles: './src/test/setup.js',
+		include: ['src/**/*.test.{js,jsx}'],
+	},
 })
