@@ -50,8 +50,10 @@ class StartupPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun shareText(invoke: Invoke) {
     try {
-      val text = invoke.getString("text") ?: ""
-      val subject = invoke.getString("subject") ?: "Sarca client logs"
+      // Invoke has getArgs()/parseArgs — not getString (that lives on JSObject).
+      val args = invoke.getArgs()
+      val text = args.getString("text", "") ?: ""
+      val subject = args.getString("subject", "Sarca client logs") ?: "Sarca client logs"
       val send =
         Intent(Intent.ACTION_SEND).apply {
           type = "text/plain"

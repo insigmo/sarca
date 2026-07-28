@@ -41,3 +41,4 @@ docs/
 .cursor/
 # Git worktrees (local)
 .worktrees/
+target-android/
