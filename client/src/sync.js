@@ -26,12 +26,16 @@ function cameraBinding(bindings) {
 }
 
 async function enableBackgroundSync() {
-  let prefs = {};
+  // If loading existing prefs fails, skip rather than call set_client_prefs
+  // with a bare `{ background_sync: true }` — that would silently wipe any
+  // other saved prefs (e.g. app_lock_enabled/app_lock_pin) on disk.
+  let prefs;
   try {
-    prefs = (await invoke("get_client_prefs")) || {};
+    prefs = await invoke("get_client_prefs");
   } catch {
-    // ignore
+    return;
   }
+  if (!prefs || typeof prefs !== "object") return;
   await invoke("set_client_prefs", {
     prefs: { ...prefs, background_sync: true },
   });
