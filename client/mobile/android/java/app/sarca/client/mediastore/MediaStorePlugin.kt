@@ -60,12 +60,18 @@ class MediaStorePlugin(private val activity: Activity) : Plugin(activity) {
   private fun queryCollection(collectionUri: Uri): JSArray {
     val items = JSArray()
     val resolver = activity.contentResolver
+    // DATA is queried on every API level (not just pre-Q): even though scoped
+    // storage means it's not always a directly readable path on Q+, when it
+    // IS readable it lets Rust skip materializing this item into a cache
+    // copy before upload (see AndroidDcimMediaSource::list_dcim_via_mediastore).
     val projection =
       if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        @Suppress("DEPRECATION")
         arrayOf(
           MediaStore.MediaColumns._ID,
           MediaStore.MediaColumns.DISPLAY_NAME,
           MediaStore.MediaColumns.RELATIVE_PATH,
+          MediaStore.MediaColumns.DATA,
           MediaStore.MediaColumns.SIZE,
           MediaStore.MediaColumns.DATE_MODIFIED,
         )
@@ -90,12 +96,7 @@ class MediaStorePlugin(private val activity: Activity) : Plugin(activity) {
           -1
         }
       @Suppress("DEPRECATION")
-      val dataIdx =
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-          cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
-        } else {
-          -1
-        }
+      val dataIdx = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
       val sizeIdx = cursor.getColumnIndex(MediaStore.MediaColumns.SIZE)
       val mtimeIdx = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED)
 
@@ -116,6 +117,9 @@ class MediaStorePlugin(private val activity: Activity) : Plugin(activity) {
         val dateModifiedSec =
           if (mtimeIdx >= 0 && !cursor.isNull(mtimeIdx)) cursor.getLong(mtimeIdx) else 0L
 
+        val dataPath = if (dataIdx >= 0 && !cursor.isNull(dataIdx)) cursor.getString(dataIdx) else null
+        val readablePath = dataPath?.takeIf { isReadableFile(it) }
+
         val itemUri = ContentUris.withAppendedId(collectionUri, id)
         val item = JSObject()
         item.put("uri", itemUri.toString())
@@ -123,6 +127,11 @@ class MediaStorePlugin(private val activity: Activity) : Plugin(activity) {
         item.put("relativePath", relativePath)
         item.put("size", size)
         item.put("dateModifiedMs", dateModifiedSec * 1000)
+        // Only set when directly readable: lets Rust skip materializing this
+        // item into a cache copy before upload (see `materializeForUpload`).
+        if (readablePath != null) {
+          item.put("path", readablePath)
+        }
         items.put(item)
       }
     }
@@ -137,11 +146,15 @@ class MediaStorePlugin(private val activity: Activity) : Plugin(activity) {
       val dataIdx = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
       if (dataIdx < 0) return null
       val path = cursor.getString(dataIdx) ?: return null
-      if (path.isBlank()) return null
-      val file = File(path)
-      return if (file.isFile && file.canRead()) path else null
+      return path.takeIf { isReadableFile(it) }
     }
     return null
+  }
+
+  private fun isReadableFile(path: String): Boolean {
+    if (path.isBlank()) return false
+    val file = File(path)
+    return file.isFile && file.canRead()
   }
 
   private fun copyToUploadCache(uri: Uri): String {
