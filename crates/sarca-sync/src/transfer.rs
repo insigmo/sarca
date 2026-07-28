@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const MAX_DONE: usize = 100;
+pub const MAX_WAITING: usize = 2000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -103,6 +104,56 @@ impl TransferQueue {
         id
     }
 
+    pub fn enqueue_waiting(
+        &mut self,
+        binding_id: &str,
+        direction: TransferDirection,
+        relative_path: &str,
+        size: Option<i64>,
+    ) -> Option<String> {
+        let (path, name) = split_path(relative_path);
+        let matches = |i: &TransferItem| {
+            i.binding_id == binding_id
+                && i.direction == direction
+                && i.path == path
+                && i.name == name
+        };
+        // Check the cap *before* evicting any matching Active entry: if we're
+        // over cap and there's no existing Waiting row to replace in-place,
+        // bail out without touching Active — otherwise an in-flight upload
+        // would be silently dropped from the queue for nothing (it stays
+        // Active, just not re-enqueued as Waiting).
+        let has_existing_waiting = self.waiting.iter().any(matches);
+        if !has_existing_waiting && self.waiting.len() >= MAX_WAITING {
+            return None;
+        }
+        self.active.retain(|i| !matches(i));
+        self.waiting.retain(|i| !matches(i));
+        let id = Uuid::new_v4().to_string();
+        self.waiting.push(TransferItem {
+            id: id.clone(),
+            binding_id: binding_id.to_owned(),
+            direction,
+            path,
+            name,
+            size,
+            status: TransferStatus::Waiting,
+            updated_at_ms: now_ms(),
+        });
+        Some(id)
+    }
+
+    pub fn promote(&mut self, id: &str) -> bool {
+        let Some(pos) = self.waiting.iter().position(|i| i.id == id) else {
+            return false;
+        };
+        let mut item = self.waiting.remove(pos);
+        item.status = TransferStatus::Active;
+        item.updated_at_ms = now_ms();
+        self.active.push(item);
+        true
+    }
+
     pub fn complete(&mut self, id: &str) {
         if let Some(mut item) = self.take_active_or_waiting(id) {
             item.status = TransferStatus::Done;
@@ -195,5 +246,35 @@ mod tests {
             q.complete(&id);
         }
         assert_eq!(q.snapshot().items.len(), MAX_DONE);
+    }
+
+    #[test]
+    fn enqueue_waiting_then_promote_then_complete() {
+        let mut q = TransferQueue::default();
+        let id = q
+            .enqueue_waiting("b1", TransferDirection::Upload, "Camera/a.jpg", Some(10))
+            .expect("enqueued");
+        let snap = q.snapshot();
+        assert_eq!(snap.uploading, 1);
+        assert_eq!(snap.items[0].status, TransferStatus::Waiting);
+        assert!(q.promote(&id));
+        assert_eq!(q.snapshot().items[0].status, TransferStatus::Active);
+        q.complete(&id);
+        assert_eq!(q.snapshot().uploading, 0);
+        assert_eq!(q.snapshot().items[0].status, TransferStatus::Done);
+    }
+
+    #[test]
+    fn waiting_cap_returns_none_beyond_limit() {
+        let mut q = TransferQueue::default();
+        for i in 0..MAX_WAITING {
+            assert!(q
+                .enqueue_waiting("b", TransferDirection::Upload, &format!("f{i}.jpg"), None)
+                .is_some());
+        }
+        assert!(q
+            .enqueue_waiting("b", TransferDirection::Upload, "overflow.jpg", None)
+            .is_none());
+        assert_eq!(q.snapshot().uploading, MAX_WAITING);
     }
 }
