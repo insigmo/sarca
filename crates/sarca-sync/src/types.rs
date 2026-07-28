@@ -38,6 +38,42 @@ pub struct SyncStatus {
     pub uploading: usize,
     pub downloading: usize,
     pub conflicts: usize,
+    /// Candidates returned by discovery this tick.
+    #[serde(default)]
+    pub scanned: usize,
+    /// Candidates that needed upload work after size/mtime filter.
+    #[serde(default)]
+    pub pending: usize,
+    /// `scanned - pending` when the tick completed without a discovery error.
+    #[serde(default)]
+    pub already_synced: usize,
+}
+
+/// Derive scan honesty counters from discovery + filter sizes.
+pub fn scan_counters(scanned: usize, pending: usize) -> (usize, usize, usize) {
+    (scanned, pending, scanned.saturating_sub(pending))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_status_scan_fields_default_to_zero() {
+        let s = SyncStatus {
+            binding_id: "b".into(),
+            ..Default::default()
+        };
+        assert_eq!(s.scanned, 0);
+        assert_eq!(s.pending, 0);
+        assert_eq!(s.already_synced, 0);
+    }
+
+    #[test]
+    fn scan_counters_compute_already_synced() {
+        assert_eq!(scan_counters(5, 2), (5, 2, 3));
+        assert_eq!(scan_counters(0, 0), (0, 0, 0));
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
