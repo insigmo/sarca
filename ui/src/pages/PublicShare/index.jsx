@@ -472,7 +472,12 @@ const PublicShare = () => {
 									<Show
 										when={children().length}
 										fallback={
-											<div class="files-canvas__empty">This folder is empty</div>
+											<div
+												class="files-canvas__empty"
+												onMouseDown={(e) => e.preventDefault()}
+											>
+												This folder is empty
+											</div>
 										}
 									>
 										<div class="files-grid">
