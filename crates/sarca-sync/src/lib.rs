@@ -28,7 +28,7 @@ pub use transfer::{
     TransferDirection, TransferItem, TransferQueueSnapshot, TransferStatus,
 };
 pub use types::{
-    Binding, BindingMode, ChangelogEvent, ChangelogResponse, SnapshotEntry, SnapshotResponse,
-    SyncStatus,
+    scan_counters, Binding, BindingMode, ChangelogEvent, ChangelogResponse, SnapshotEntry,
+    SnapshotResponse, SyncStatus,
 };
 pub use vfs::{UnsupportedVirtualDrive, VirtualDrive};
