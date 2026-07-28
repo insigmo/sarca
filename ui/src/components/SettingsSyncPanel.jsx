@@ -20,6 +20,7 @@ import {
 	withBackgroundSyncOn,
 } from '../common/autoUploadActions'
 import { sortTransferItems } from '../common/syncTransferQueue'
+import { syncScanHint } from '../common/syncScanHint'
 import { filesChromeStore } from '../common/filesChrome'
 import { alertStore } from './AlertStack'
 import FluentIcon from './FluentIcon'
@@ -63,6 +64,14 @@ const SettingsSyncPanel = (props) => {
 	// Camera row can exist while soft-disabled — never removed on toggle-off.
 	const autoBinding = () => cameraBinding(bindings())
 	const cameraOn = () => autoBinding()?.enabled === true
+	const cameraScanHint = createMemo(() => {
+		const auto = autoBinding()
+		if (!auto) return null
+		const st = statuses().find((s) => s?.binding_id === auto.id) || null
+		return syncScanHint(st, {
+			unfinishedUploads: Number(transferSnap().uploading) || 0,
+		})
+	})
 	const folderBindings = () =>
 		bindings().filter(
 			(b) => b.mode === 'folder_upload' || b.mode === 'sync',
@@ -449,6 +458,9 @@ const SettingsSyncPanel = (props) => {
 				<p class="settings-sync-panel__meta">
 					{autoBinding().local_path} → {autoBinding().remote_root || 'Camera'}
 				</p>
+				<Show when={cameraScanHint()}>
+					<p class="settings-bot-hint">{cameraScanHint()}</p>
+				</Show>
 				<div class="settings-sync-panel__row">
 					<Button
 						variant="outlined"

@@ -25,7 +25,12 @@ pub struct FsMediaSource;
 impl LocalMediaSource for FsMediaSource {
     async fn list_candidates(&self, binding: &Binding) -> Result<Vec<LocalCandidate>> {
         let media_only = matches!(binding.mode, BindingMode::AutoUpload);
-        collect_fs_candidates(Path::new(&binding.local_path), media_only)
+        let root = binding.local_path.clone();
+        // WalkDir is blocking; keep it off the Tokio worker so Tauri IPC / UI
+        // stay responsive during large gallery scans.
+        tokio::task::spawn_blocking(move || collect_fs_candidates(Path::new(&root), media_only))
+            .await
+            .map_err(|e| anyhow::anyhow!("walk join error: {e}"))?
     }
 }
 
