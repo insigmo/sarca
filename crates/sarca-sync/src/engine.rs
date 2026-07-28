@@ -449,6 +449,17 @@ impl SyncEngine {
                 }
             };
 
+            if existing.as_ref().and_then(|e| e.content_hash.as_ref()) == Some(&hash) {
+                // Content unchanged (e.g. mtime-only touch) — update index only.
+                if let Some(mut e) = existing {
+                    e.size = size;
+                    e.mtime_ms = mtime;
+                    self.index.upsert_entry(&binding.id, &e)?;
+                }
+                self.transfer_complete(&tid).await;
+                continue;
+            }
+
             let (parent, filename) = split_parent_name(&rel);
             let remote_parent = join_remote(&binding.remote_root, &parent);
             if let Err(e) = self.ensure_remote_parents(binding, &parent).await {
