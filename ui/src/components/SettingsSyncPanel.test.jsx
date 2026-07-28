@@ -501,4 +501,60 @@ describe('SettingsSyncPanel', () => {
 		].find((el) => el.textContent.includes('Uploading'))
 		expect(uploadRow?.textContent).toContain('2')
 	})
+
+	it('shows already-uploaded scan hint for Camera binding', async () => {
+		nativeInvoke.mockImplementation(async (cmd) => {
+			switch (cmd) {
+				case 'platform_label':
+					return 'Linux'
+				case 'device_label':
+					return 'dev'
+				case 'list_bindings':
+					return [
+						{
+							id: 'cam',
+							mode: 'auto_upload',
+							enabled: true,
+							local_path: '/pictures',
+							remote_root: 'Camera/dev',
+							storage_id: 'sid',
+						},
+					]
+				case 'get_client_prefs':
+					return {
+						wifi_only: true,
+						background_sync: true,
+						app_lock_enabled: false,
+						app_lock_pin: null,
+					}
+				case 'sync_statuses':
+					return [
+						{
+							binding_id: 'cam',
+							scanned: 5,
+							pending: 0,
+							already_synced: 5,
+							uploading: 0,
+							downloading: 0,
+							conflicts: 0,
+							cursor: 0,
+							last_error: null,
+						},
+					]
+				case 'sync_transfer_queue':
+					return { uploading: 0, downloading: 0, items: [] }
+				case 'default_gallery_path':
+					return '/pictures'
+				default:
+					return null
+			}
+		})
+
+		const { findByText } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		expect(
+			await findByText('5 media files found, all already uploaded'),
+		).toBeTruthy()
+	})
 })
