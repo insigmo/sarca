@@ -1,6 +1,5 @@
 import { For, Show, createSignal, onCleanup, onMount } from 'solid-js'
 import Button from '@suid/material/Button'
-import TextField from '@suid/material/TextField'
 import Typography from '@suid/material/Typography'
 
 import {
@@ -19,7 +18,7 @@ import { alertStore } from './AlertStack'
 import SettingsSwitch from './SettingsSwitch'
 
 /**
- * Sync tab: Camera media auto-upload + one-way folder auto-upload.
+ * Sync tab: Camera media auto-upload + manage existing folder bindings.
  * Storage is locked to the currently open Files storage.
  * @param {{ storageId?: string, storageName?: string }} props
  */
@@ -37,19 +36,12 @@ const SettingsSyncPanel = (props) => {
 	})
 	const [prefsLoaded, setPrefsLoaded] = createSignal(false)
 	const [localPath, setLocalPath] = createSignal('')
-	const [folderLocalPath, setFolderLocalPath] = createSignal('')
-	const [remoteRoot, setRemoteRoot] = createSignal('')
-	const [newFolderName, setNewFolderName] = createSignal('')
 	const [busy, setBusy] = createSignal(false)
 	const [msg, setMsg] = createSignal('')
 
 	const isMobile = () => isMobileNativePlatform(platform())
 
 	const lockedStorageId = () => props.storageId || chrome.storageId() || ''
-	const lockedStorageName = () =>
-		props.storageName ||
-		chrome.storageName() ||
-		(lockedStorageId() ? 'Current storage' : 'No storage open')
 
 	// Camera row can exist while soft-disabled — never removed on toggle-off.
 	const autoBinding = () => cameraBinding(bindings())
@@ -253,59 +245,6 @@ const SettingsSyncPanel = (props) => {
 		}
 	}
 
-	const addFolderUpload = async () => {
-		setBusy(true)
-		setMsg('')
-		try {
-			const sid = lockedStorageId()
-			let path = folderLocalPath().trim()
-			if (!path) {
-				path = String((await pickLocalFolder('')) || '')
-				if (path) setFolderLocalPath(path)
-			}
-			let remote = remoteRoot().trim().replace(/\/$/, '')
-			const name = newFolderName().trim()
-			if (name) {
-				remote = String(
-					await nativeInvoke('ensure_remote_folder', {
-						storageId: sid,
-						parent: remote,
-						name,
-					}),
-				).replace(/\/$/, '')
-				setRemoteRoot(remote)
-				setNewFolderName('')
-			}
-			if (!sid) throw new Error('Open a storage in Files first')
-			if (!path) throw new Error('Set a local folder')
-			if (!remote) throw new Error('Set a remote folder path or create one')
-			const binding = await nativeInvoke('add_binding', {
-				storageId: sid,
-				remoteRoot: remote,
-				localPath: path,
-				mode: 'folder_upload',
-			})
-			if (binding && typeof binding === 'object') {
-				setBindings((prev) => [
-					...(Array.isArray(prev) ? prev : []).filter(
-						(b) => !(b.mode === 'folder_upload' && b.local_path === path),
-					),
-					binding,
-				])
-			}
-			await enableBackgroundSyncSafely()
-			setFolderLocalPath('')
-			await refresh()
-			kickSyncNow()
-			addAlert('Folder auto-upload added', 'success')
-		} catch (e) {
-			setMsg(String(e))
-			addAlert(String(e), 'error')
-		} finally {
-			setBusy(false)
-		}
-	}
-
 	const removeBinding = async (id) => {
 		setBusy(true)
 		try {
@@ -346,9 +285,7 @@ const SettingsSyncPanel = (props) => {
 	return (
 		<div class="settings-sync-panel">
 			<p class="settings-bot-hint">
-				Photo and video auto-upload goes to remote <code>Camera/</code>. Any
-				other local folder can be set to one-way auto-upload into a remote
-				folder.
+				Photo and video auto-upload goes to remote <code>Camera/</code>.
 			</p>
 
 			<label class="settings-toggle">
@@ -435,80 +372,12 @@ const SettingsSyncPanel = (props) => {
 
 			<div class="settings-sync-panel__section">
 				<Typography variant="subtitle2" sx={{ mb: 1 }}>
-					Folder auto-upload
-				</Typography>
-				<p class="settings-account__hint">
-					Uploads all files one-way (no download, not only photos).
-				</p>
-				<div class="settings-select-field">
-					<span class="settings-select-field__label">Storage</span>
-					<p
-						class="settings-sync-panel__storage-locked"
-						title={lockedStorageId()}
-					>
-						{lockedStorageName()}
-					</p>
-				</div>
-				<div class="settings-sync-panel__row">
-					<TextField
-						label="Local folder"
-						size="small"
-						fullWidth
-						value={folderLocalPath()}
-						onChange={(_, v) => setFolderLocalPath(v)}
-						disabled={busy()}
-					/>
-					<Button
-						variant="outlined"
-						size="small"
-						disabled={busy()}
-						onClick={async () => {
-							const path = await pickFolder(folderLocalPath())
-							if (path) setFolderLocalPath(path)
-						}}
-					>
-						Browse…
-					</Button>
-				</div>
-				<TextField
-					label="Remote folder path"
-					size="small"
-					fullWidth
-					sx={{ mt: 1 }}
-					value={remoteRoot()}
-					onChange={(_, v) => setRemoteRoot(v)}
-					disabled={busy()}
-					placeholder="e.g. Documents/Notes"
-				/>
-				<div class="settings-sync-panel__row" style={{ 'margin-top': '8px' }}>
-					<TextField
-						label="Or create remote folder"
-						size="small"
-						fullWidth
-						value={newFolderName()}
-						onChange={(_, v) => setNewFolderName(v)}
-						disabled={busy()}
-					/>
-				</div>
-				<Button
-					variant="contained"
-					color="secondary"
-					sx={{ mt: 1 }}
-					disabled={busy()}
-					onClick={addFolderUpload}
-				>
-					Add folder auto-upload
-				</Button>
-			</div>
-
-			<div class="settings-sync-panel__section">
-				<Typography variant="subtitle2" sx={{ mb: 1 }}>
 					Folder bindings
 				</Typography>
 				<Show
 					when={folderBindings().length}
 					fallback={
-						<p class="settings-account__hint">No folder auto-uploads yet.</p>
+						<p class="settings-account__hint">No folder bindings.</p>
 					}
 				>
 					<ul class="settings-sync-panel__list">
