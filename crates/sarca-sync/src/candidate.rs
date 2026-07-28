@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
+use tracing::warn;
 use walkdir::WalkDir;
 
 use crate::index::mtime_ms_from_system;
@@ -55,13 +56,27 @@ pub fn is_media_file(path: &Path) -> bool {
     )
 }
 
+/// Walks `root` collecting candidate files. Individual entry errors (e.g. a
+/// permission-denied subdirectory, or a file removed mid-walk) are logged and
+/// skipped rather than aborting the whole scan — a single flaky entry should
+/// not block auto-upload of every other file in the tree. Only bails when
+/// walking produced zero usable files *and* at least one error occurred,
+/// since that combination usually means the whole root is unreadable.
 pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalCandidate>> {
     if !root.exists() {
         bail!("local folder missing or unreadable: {}", root.display());
     }
     let mut out = Vec::new();
+    let mut walk_errors = 0usize;
     for entry in WalkDir::new(root) {
-        let entry = entry.with_context(|| format!("walk {}", root.display()))?;
+        let entry = match entry {
+            Ok(e) => e,
+            Err(e) => {
+                warn!(root = %root.display(), error = %e, "walk entry error, skipping");
+                walk_errors += 1;
+                continue;
+            }
+        };
         if !entry.file_type().is_file() {
             continue;
         }
@@ -77,9 +92,14 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
         if rel.is_empty() {
             continue;
         }
-        let meta = entry
-            .metadata()
-            .with_context(|| format!("meta {}", path.display()))?;
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "stat error, skipping");
+                walk_errors += 1;
+                continue;
+            }
+        };
         let mtime = meta.modified().ok().map(mtime_ms_from_system).unwrap_or(0);
         out.push(LocalCandidate {
             relative_path: rel,
@@ -89,13 +109,18 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
             ephemeral: false,
         });
     }
+    if out.is_empty() && walk_errors > 0 {
+        bail!(
+            "failed to walk {} ({walk_errors} error(s), 0 files found)",
+            root.display()
+        );
+    }
     Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     #[test]
     fn strip_dcim_prefix_strips_only_dcim_root() {
@@ -119,5 +144,46 @@ mod tests {
 
         let missing = dir.path().join("nope");
         assert!(collect_fs_candidates(&missing, true).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn collect_fs_candidates_tolerates_walk_errors_when_some_files_found() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.jpg"), b"x").unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("b.jpg"), b"y").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = collect_fs_candidates(dir.path(), true);
+
+        // Restore permissions unconditionally so tempdir cleanup can proceed.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let got = result.expect("a single unreadable subdir must not fail the whole walk");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].relative_path, "a.jpg");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn collect_fs_candidates_errors_when_every_entry_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(locked.join("b.jpg"), b"y").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = collect_fs_candidates(dir.path(), true);
+
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            result.is_err(),
+            "zero files found plus a walk error should still hard-fail"
+        );
     }
 }
