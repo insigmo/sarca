@@ -169,6 +169,27 @@ impl SyncEngine {
         self.transfers.write().await.abandon(id);
     }
 
+    /// Called when `push_local` exits early (error) with candidates still
+    /// sitting in the queue as Waiting. Without this, an aborted upload run
+    /// leaves a stale "Uploading N" count in the UI forever, since nothing
+    /// else ever promotes/completes those ids. Also deletes any ephemeral
+    /// (cache-copy) files backing the abandoned candidates so they don't
+    /// leak — they'll be re-materialized fresh on the next tick if still
+    /// needed.
+    async fn abandon_pending(&self, rest: Vec<(LocalCandidate, Option<String>)>) {
+        for (candidate, _) in &rest {
+            if candidate.ephemeral {
+                tokio::fs::remove_file(&candidate.absolute_path).await.ok();
+            }
+        }
+        let mut queue = self.transfers.write().await;
+        for (_, waiting_id) in rest {
+            if let Some(id) = waiting_id {
+                queue.abandon(&id);
+            }
+        }
+    }
+
     /// Promote a previously-enqueued Waiting transfer to Active. Falls back
     /// to [`begin`](TransferQueue::begin) if there was no waiting id (e.g.
     /// the queue was over [`crate::transfer::MAX_WAITING`] at enqueue time).
@@ -415,13 +436,45 @@ impl SyncEngine {
         let upload_only = binding.mode.is_upload_only();
 
         let candidates = self.config.media_source.list_candidates(binding).await?;
-        let pending = {
+        // Filter against the SQLite-backed index *before* taking the transfer
+        // queue lock: with thousands of MediaStore candidates this loop can
+        // be slow, and holding an async write lock across it would starve
+        // any concurrent reader of `transfer_queue()` (e.g. the Sync
+        // Settings UI polling progress) for the whole duration.
+        let pending_candidates = filter_pending_candidates(&self.index, &binding.id, &candidates)?;
+        let ephemeral_selected: std::collections::HashSet<PathBuf> = pending_candidates
+            .iter()
+            .filter(|c| c.ephemeral)
+            .map(|c| c.absolute_path.clone())
+            .collect();
+        // Ephemeral (cache-copy) candidates that were materialized but did not
+        // survive filtering (e.g. content already unchanged) would otherwise
+        // leak on disk forever — delete them now, before the lock, since we
+        // don't need it for this cleanup.
+        for c in &candidates {
+            if c.ephemeral && !ephemeral_selected.contains(&c.absolute_path) {
+                tokio::fs::remove_file(&c.absolute_path).await.ok();
+            }
+        }
+        let pending: Vec<(LocalCandidate, Option<String>)> = {
             let mut queue = self.transfers.write().await;
-            select_pending_uploads(&self.index, &binding.id, &candidates, &mut queue)?
+            pending_candidates
+                .into_iter()
+                .map(|c| {
+                    let tid = queue.enqueue_waiting(
+                        &binding.id,
+                        TransferDirection::Upload,
+                        &c.relative_path,
+                        Some(c.size),
+                    );
+                    (c, tid)
+                })
+                .collect()
         };
 
         let mut uploaded = 0usize;
-        for (candidate, waiting_id) in pending {
+        let mut pending_iter = pending.into_iter();
+        while let Some((candidate, waiting_id)) = pending_iter.next() {
             let LocalCandidate {
                 relative_path: rel,
                 absolute_path: path,
@@ -445,6 +498,10 @@ impl SyncEngine {
                 Ok(h) => h,
                 Err(e) => {
                     self.transfer_abandon(&tid).await;
+                    if ephemeral {
+                        tokio::fs::remove_file(&path).await.ok();
+                    }
+                    self.abandon_pending(pending_iter.collect()).await;
                     return Err(e).with_context(|| format!("hash {}", path.display()));
                 }
             };
@@ -457,6 +514,9 @@ impl SyncEngine {
                     self.index.upsert_entry(&binding.id, &e)?;
                 }
                 self.transfer_complete(&tid).await;
+                if ephemeral {
+                    tokio::fs::remove_file(&path).await.ok();
+                }
                 continue;
             }
 
@@ -464,6 +524,10 @@ impl SyncEngine {
             let remote_parent = join_remote(&binding.remote_root, &parent);
             if let Err(e) = self.ensure_remote_parents(binding, &parent).await {
                 self.transfer_abandon(&tid).await;
+                if ephemeral {
+                    tokio::fs::remove_file(&path).await.ok();
+                }
+                self.abandon_pending(pending_iter.collect()).await;
                 return Err(e);
             }
             let upload_result = self
@@ -480,6 +544,10 @@ impl SyncEngine {
                 .await;
             if let Err(e) = upload_result {
                 self.transfer_abandon(&tid).await;
+                if ephemeral {
+                    tokio::fs::remove_file(&path).await.ok();
+                }
+                self.abandon_pending(pending_iter.collect()).await;
                 return Err(e).with_context(|| {
                     format!(
                         "upload {} → {}/{}",
@@ -681,6 +749,28 @@ impl SyncEngine {
 }
 
 /// Filters `candidates` down to those whose size/mtime differ from the
+/// index (or have no index entry yet). Pure index reads — callers should not
+/// hold the transfer queue lock while calling this so a slow/large scan
+/// cannot starve concurrent readers of the queue (see `push_local`).
+fn filter_pending_candidates(
+    index: &LocalIndex,
+    binding_id: &str,
+    candidates: &[LocalCandidate],
+) -> Result<Vec<LocalCandidate>> {
+    let mut out = Vec::new();
+    for c in candidates {
+        let existing = index.get_entry(binding_id, &c.relative_path)?;
+        let needs = existing
+            .as_ref()
+            .is_none_or(|e| e.size != c.size || e.mtime_ms != c.mtime_ms);
+        if needs {
+            out.push(c.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// Filters `candidates` down to those whose size/mtime differ from the
 /// index (or have no index entry yet), enqueuing each as Waiting in
 /// `queue`. The paired `Option<String>` is the waiting transfer id, or
 /// `None` if the queue was over [`crate::transfer::MAX_WAITING`].
@@ -690,22 +780,16 @@ pub fn select_pending_uploads(
     candidates: &[LocalCandidate],
     queue: &mut TransferQueue,
 ) -> Result<Vec<(LocalCandidate, Option<String>)>> {
-    let mut out = Vec::new();
-    for c in candidates {
-        let existing = index.get_entry(binding_id, &c.relative_path)?;
-        let needs = existing
-            .as_ref()
-            .is_none_or(|e| e.size != c.size || e.mtime_ms != c.mtime_ms);
-        if !needs {
-            continue;
-        }
+    let pending = filter_pending_candidates(index, binding_id, candidates)?;
+    let mut out = Vec::with_capacity(pending.len());
+    for c in pending {
         let tid = queue.enqueue_waiting(
             binding_id,
             TransferDirection::Upload,
             &c.relative_path,
             Some(c.size),
         );
-        out.push((c.clone(), tid));
+        out.push((c, tid));
     }
     Ok(out)
 }
@@ -951,6 +1035,125 @@ mod tests {
         assert!(
             statuses.iter().any(|s| s.binding_id == folder_id),
             "surviving binding must keep its status"
+        );
+    }
+
+    #[tokio::test]
+    async fn push_local_error_clears_stale_waiting_and_uploading_count() {
+        // Regression test for the "stuck Uploading N" bug: if an upload
+        // fails partway through a batch, every candidate still sitting in
+        // the queue as Waiting must be cleared — not left there forever
+        // with nothing to ever promote/complete it.
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        for i in 0..3 {
+            std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
+        }
+        let engine = SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                // Port 9 ("discard") is never bound in test environments, so
+                // this fails fast with connection-refused instead of a slow
+                // timeout (same trick used by api.rs's own tests).
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
+                    "http://127.0.0.1:9",
+                    "",
+                ))),
+                data_dir: dir.path().to_path_buf(),
+                media_source: Arc::new(crate::media_source::FsMediaSource),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap();
+        let binding = Binding {
+            id: "cam".into(),
+            storage_id: uuid::Uuid::new_v4(),
+            remote_root: "Camera".into(),
+            local_path: pics.to_string_lossy().into(),
+            mode: BindingMode::AutoUpload,
+            enabled: true,
+        };
+
+        let result = engine.push_local(&binding).await;
+        assert!(result.is_err(), "upload must fail against an unreachable API");
+
+        let snap = engine.transfer_queue().await;
+        assert_eq!(
+            snap.uploading, 0,
+            "no Waiting/Active transfers should remain stuck after push_local errors out"
+        );
+    }
+
+    struct FixedMediaSource(Vec<LocalCandidate>);
+
+    #[async_trait]
+    impl LocalMediaSource for FixedMediaSource {
+        async fn list_candidates(&self, _binding: &Binding) -> Result<Vec<LocalCandidate>> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn push_local_deletes_ephemeral_files_not_selected_for_upload() {
+        // Regression test for lazy-materialize cleanup: a candidate whose
+        // ephemeral (cache-copy) file was already materialized, but which
+        // doesn't need uploading (content unchanged), must not leak its
+        // cache file on disk forever.
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join("cache");
+        std::fs::create_dir_all(&cache).unwrap();
+        let unchanged_path = cache.join("unchanged.jpg");
+        std::fs::write(&unchanged_path, b"x").unwrap();
+
+        let engine = SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
+                    "http://127.0.0.1:9",
+                    "",
+                ))),
+                data_dir: dir.path().to_path_buf(),
+                media_source: Arc::new(FixedMediaSource(vec![LocalCandidate {
+                    relative_path: "unchanged.jpg".into(),
+                    absolute_path: unchanged_path.clone(),
+                    size: 1,
+                    mtime_ms: 5,
+                    ephemeral: true,
+                }])),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap();
+        let binding = Binding {
+            id: "cam".into(),
+            storage_id: uuid::Uuid::new_v4(),
+            remote_root: "Camera".into(),
+            local_path: cache.to_string_lossy().into(),
+            mode: BindingMode::AutoUpload,
+            enabled: true,
+        };
+        // Pre-seed the index so this candidate looks already-synced (unchanged).
+        engine
+            .index
+            .upsert_entry(
+                &binding.id,
+                &IndexEntry {
+                    relative_path: "unchanged.jpg".into(),
+                    size: 1,
+                    mtime_ms: 5,
+                    content_hash: Some("whatever".into()),
+                    remote_file_id: None,
+                    last_cursor: 0,
+                },
+            )
+            .unwrap();
+
+        let uploaded = engine.push_local(&binding).await.unwrap();
+        assert_eq!(uploaded, 0);
+        assert!(
+            !unchanged_path.exists(),
+            "ephemeral file not selected for upload must be cleaned up"
         );
     }
 
