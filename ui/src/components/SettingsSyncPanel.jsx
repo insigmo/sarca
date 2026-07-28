@@ -1,6 +1,9 @@
-import { For, Show, createSignal, onCleanup, onMount } from 'solid-js'
+import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import Button from '@suid/material/Button'
+import CircularProgress from '@suid/material/CircularProgress'
 import Typography from '@suid/material/Typography'
+import AccessTimeIcon from '@suid/icons-material/AccessTime'
+import CheckIcon from '@suid/icons-material/Check'
 
 import {
 	formatBytes,
@@ -14,8 +17,10 @@ import {
 	resolveCameraToggle,
 	withBackgroundSyncOn,
 } from '../common/autoUploadActions'
+import { sortTransferItems } from '../common/syncTransferQueue'
 import { filesChromeStore } from '../common/filesChrome'
 import { alertStore } from './AlertStack'
+import FluentIcon from './FluentIcon'
 import SettingsSwitch from './SettingsSwitch'
 
 /**
@@ -41,6 +46,13 @@ const SettingsSyncPanel = (props) => {
 	const [busy, setBusy] = createSignal(false)
 	const [msg, setMsg] = createSignal('')
 	const [cameraRootMigrateTried, setCameraRootMigrateTried] = createSignal(false)
+	/** @type {import('solid-js').Accessor<'upload' | 'download' | null>} */
+	const [queueView, setQueueView] = createSignal(null)
+	const [transferSnap, setTransferSnap] = createSignal({
+		uploading: 0,
+		downloading: 0,
+		items: [],
+	})
 
 	const isMobile = () => isMobileNativePlatform(platform())
 
@@ -82,6 +94,21 @@ const SettingsSyncPanel = (props) => {
 		}
 	}
 
+	const refreshTransfers = async () => {
+		try {
+			const snap = await nativeInvoke('sync_transfer_queue')
+			if (snap && typeof snap === 'object') {
+				setTransferSnap({
+					uploading: Number(snap.uploading) || 0,
+					downloading: Number(snap.downloading) || 0,
+					items: Array.isArray(snap.items) ? snap.items : [],
+				})
+			}
+		} catch {
+			// Older clients may not expose this command yet.
+		}
+	}
+
 	const refresh = async () => {
 		try {
 			const [label, device, bindsResult, prefsDto, statusList] = await Promise.all([
@@ -102,6 +129,7 @@ const SettingsSyncPanel = (props) => {
 				setMsg(String(bindsResult.error))
 			}
 			setStatuses(Array.isArray(statusList) ? statusList : [])
+			await refreshTransfers()
 			if (prefsDto && typeof prefsDto === 'object') {
 				setPrefs({
 					wifi_only: prefsDto.wifi_only !== false,
@@ -137,8 +165,32 @@ const SettingsSyncPanel = (props) => {
 		const id = window.setInterval(() => {
 			refresh()
 		}, 8000)
-		onCleanup(() => window.clearInterval(id))
+		const fast = window.setInterval(() => {
+			refreshTransfers()
+		}, 2000)
+		onCleanup(() => {
+			window.clearInterval(id)
+			window.clearInterval(fast)
+		})
 	})
+
+	const queueItems = createMemo(() => {
+		const dir = queueView()
+		if (!dir) return []
+		return sortTransferItems(
+			(transferSnap().items || []).filter((i) => i.direction === dir),
+		)
+	})
+
+	const statusIcon = (status) => {
+		if (status === 'active') {
+			return <CircularProgress size={16} color="secondary" />
+		}
+		if (status === 'waiting') {
+			return <AccessTimeIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
+		}
+		return <CheckIcon sx={{ fontSize: 16, color: 'success.main' }} />
+	}
 
 	const savePrefs = async (next) => {
 		setPrefs(next)
@@ -337,19 +389,23 @@ const SettingsSyncPanel = (props) => {
 
 	return (
 		<div class="settings-sync-panel">
+			<Show
+				when={queueView()}
+				fallback={
+					<>
 			<p class="settings-bot-hint">
 				Photo and video auto-upload goes to remote <code>{desiredCameraRemoteRoot()}/</code>.
 			</p>
 
-			<label class="settings-toggle">
-				<span>Включить автозагрузку фото и видео</span>
+			<div class="settings-toggle">
+				<span>Enable photo and video auto-upload</span>
 				<SettingsSwitch
 					id="settings-camera-switch"
 					checked={cameraOn()}
 					disabled={busy()}
 					onChange={(checked) => setAutoUpload(checked)}
 				/>
-			</label>
+			</div>
 
 			<Show when={autoBinding()}>
 				<p class="settings-sync-panel__meta">
@@ -398,8 +454,8 @@ const SettingsSyncPanel = (props) => {
 			</Show>
 
 			<Show when={autoBinding() && isMobile()}>
-				<label class="settings-toggle">
-					<span>Загружать только через WIFI</span>
+				<div class="settings-toggle">
+					<span>Upload on Wi‑Fi only</span>
 					<SettingsSwitch
 						id="settings-wifi-switch"
 						checked={prefs().wifi_only !== false}
@@ -408,10 +464,10 @@ const SettingsSyncPanel = (props) => {
 							savePrefs({ ...prefs(), wifi_only: checked })
 						}
 					/>
-				</label>
+				</div>
 			</Show>
 
-			<label class="settings-toggle">
+			<div class="settings-toggle">
 				<span>Background backup / sync</span>
 				<SettingsSwitch
 					id="settings-background-switch"
@@ -421,7 +477,37 @@ const SettingsSyncPanel = (props) => {
 						savePrefs({ ...prefs(), background_sync: checked })
 					}
 				/>
-			</label>
+			</div>
+
+			<div class="settings-sync-panel__section">
+				<Typography variant="subtitle2" sx={{ mb: 1 }}>
+					Upload &amp; download
+				</Typography>
+				<div class="settings-sync-panel__queue">
+					<button
+						type="button"
+						class="settings-sync-panel__queue-row"
+						onClick={() => setQueueView('download')}
+					>
+						<span>Downloading</span>
+						<span class="settings-sync-panel__queue-count">
+							{transferSnap().downloading}
+							<FluentIcon name="chevronRight" size={16} aria-hidden="true" />
+						</span>
+					</button>
+					<button
+						type="button"
+						class="settings-sync-panel__queue-row"
+						onClick={() => setQueueView('upload')}
+					>
+						<span>Uploading</span>
+						<span class="settings-sync-panel__queue-count">
+							{transferSnap().uploading}
+							<FluentIcon name="chevronRight" size={16} aria-hidden="true" />
+						</span>
+					</button>
+				</div>
+			</div>
 
 			<div class="settings-sync-panel__section">
 				<Typography variant="subtitle2" sx={{ mb: 1 }}>
@@ -503,6 +589,58 @@ const SettingsSyncPanel = (props) => {
 			<p class="settings-account__hint" style={{ display: 'none' }}>
 				{formatBytes(0)}
 			</p>
+					</>
+				}
+			>
+				<div class="settings-sync-panel__transfer">
+					<button
+						type="button"
+						class="settings-sync-panel__transfer-back"
+						onClick={() => setQueueView(null)}
+					>
+						<FluentIcon name="chevronLeft" size={18} aria-hidden="true" />
+						<span>
+							{queueView() === 'upload' ? 'Upload list' : 'Download list'}
+						</span>
+					</button>
+					<Show
+						when={queueItems().length}
+						fallback={
+							<p class="settings-account__hint">No transfers yet.</p>
+						}
+					>
+						<ul class="settings-sync-panel__transfer-list">
+							<For each={queueItems()}>
+								{(item) => (
+									<li class="settings-sync-panel__transfer-item">
+										<div class="settings-sync-panel__transfer-meta">
+											<Show when={item.path}>
+												<div class="settings-account__hint">
+													{item.path}/
+												</div>
+											</Show>
+											<div class="settings-sync-panel__transfer-name">
+												{item.name}
+											</div>
+											<Show when={item.size != null}>
+												<div class="settings-account__hint">
+													{formatBytes(Number(item.size) || 0)}
+												</div>
+											</Show>
+										</div>
+										<div
+											class="settings-sync-panel__transfer-status"
+											aria-label={item.status}
+										>
+											{statusIcon(item.status)}
+										</div>
+									</li>
+								)}
+							</For>
+						</ul>
+					</Show>
+				</div>
+			</Show>
 		</div>
 	)
 }

@@ -52,7 +52,7 @@ const AlertStack = () => {
 				right: '1rem',
 				top: '5rem',
 				'@media (max-width: 840px)': {
-					top: 'calc(56px + 12px + env(safe-area-inset-top, 0px))',
+					top: 'calc(56px + 12px + max(var(--sarca-safe-top), var(--sarca-android-top)))',
 				},
 				maxWidth: 360,
 				width: '30vw',

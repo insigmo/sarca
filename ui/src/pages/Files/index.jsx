@@ -439,6 +439,10 @@ const Files = () => {
 		}
 		if (!filesCanvasEl) return
 
+		// Kill native browser text selection during marquee drag.
+		event.preventDefault()
+		window.getSelection?.()?.removeAllRanges?.()
+
 		const canvasRect = filesCanvasEl.getBoundingClientRect()
 		const additive = Boolean(event.ctrlKey || event.metaKey)
 		/** Snapshot of selection when starting an additive marquee. */
@@ -481,6 +485,8 @@ const Files = () => {
 
 		const onMove = (ev) => {
 			if (!marqueeGesture || !filesCanvasEl) return
+			ev.preventDefault()
+			window.getSelection?.()?.removeAllRanges?.()
 			const dx = ev.clientX - marqueeGesture.x0
 			const dy = ev.clientY - marqueeGesture.y0
 			if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {

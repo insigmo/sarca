@@ -89,6 +89,9 @@ const SidebarNav = (props) => {
 			aria-current={props.mode === mode ? 'page' : undefined}
 			aria-label={label}
 			title={label}
+			onMouseDown={(e) => {
+				if (e.button === 0) e.preventDefault()
+			}}
 			onClick={() => props.onSelect(mode)}
 		>
 			<FluentIcon

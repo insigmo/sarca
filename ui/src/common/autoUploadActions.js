@@ -44,7 +44,17 @@ export function withBackgroundSyncOn(prefs) {
  * @returns {string}
  */
 export function cameraRemoteRoot(deviceLabel) {
-	const cleaned = String(deviceLabel || '')
+	const raw = String(deviceLabel || '').trim()
+	const lowerRaw = raw.toLowerCase()
+	if (
+		!raw ||
+		lowerRaw === 'localhost' ||
+		lowerRaw === 'localhost.localdomain' ||
+		lowerRaw === '127.0.0.1'
+	) {
+		return 'Camera/Unknown device'
+	}
+	const cleaned = raw
 		.replace(/[\\/]+/g, ' ')
 		.replace(/\.+/g, ' ')
 		.replace(/\s+/g, ' ')
