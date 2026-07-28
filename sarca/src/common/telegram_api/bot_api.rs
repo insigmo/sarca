@@ -1022,56 +1022,50 @@ impl<'t> TelegramBotApi<'t> {
         storage_id: Uuid,
     ) -> SarcaResult<()> {
         let token = self.scheduler.get_token(storage_id).await?;
-        let url = self.build_url("", "deleteMessage", &token);
-        let masked_url = Self::mask_url(&url);
+        self.delete_message_with_token(chat_id, message_id, &token).await
+    }
 
-        let permit = SendPermit::acquire(&token).await;
-        let response = Self::send_with_retries("deleteMessage", Some(&permit), || {
+    /// Same as [`Self::delete_message`] but uses a caller-supplied bot token (e.g. after
+    /// storage/worker rows are removed during durable purge).
+    pub async fn delete_message_with_token(
+        &self,
+        chat_id: ChatId,
+        message_id: i64,
+        token: &str,
+    ) -> SarcaResult<()> {
+        let url = self.build_url("", "deleteMessage", token);
+
+        let permit = SendPermit::acquire(token).await;
+        let result = Self::send_with_retries("deleteMessage", Some(&permit), || {
             reqwest::Client::new()
                 .post(&url)
                 .form(&[("chat_id", chat_id.to_string()), ("message_id", message_id.to_string())])
                 .send()
         })
-        .await?;
-        permit.mark_ok().await;
+        .await;
+        if result.is_ok() {
+            permit.mark_ok().await;
+        }
         drop(permit);
 
-        let status = response.status();
-        if status.is_success() {
-            return Ok(());
+        match result {
+            Ok(_) => Ok(()),
+            Err(error) if is_soft_delete_error(&error.to_string()) => Ok(()),
+            Err(error) => Err(error),
         }
-
-        let error_body = response.text().await.unwrap_or_default();
-        let lower = error_body.to_lowercase();
-        if lower.contains("message to delete not found")
-            || lower.contains("message can't be deleted")
-            || lower.contains("message_id_invalid")
-        {
-            return Ok(());
-        }
-
-        tracing::warn!(
-            target: "http_outbound",
-            "{}",
-            json!({
-                "status": status.as_u16(),
-                "method": "POST",
-                "url": masked_url,
-                "body": {
-                    "chat_id": chat_id,
-                    "message_id": message_id
-                },
-                "response": error_body,
-            })
-        );
-
-        Err(SarcaError::TelegramAPIError(format!("{status}: {error_body}")))
     }
 
     #[inline]
     fn build_url(&self, pre: &str, relative: &str, token: &str) -> String {
         format!("{}/{pre}bot{token}/{relative}", self.base_url)
     }
+}
+
+fn is_soft_delete_error(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    ["message to delete not found", "message can't be deleted", "message_id_invalid"]
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 /// Whether a Telegram API error indicates the chat is gone / unreachable for the bot
@@ -1292,5 +1286,18 @@ mod flood_wait_tests {
         assert!(super::MIN_SEND_GAP_AFTER_FLOOD.as_millis() >= 3000);
         assert!(super::POST_FLOOD_EXTRA_COOLDOWN.as_secs() >= 5);
         assert!(super::FLOOD_PACING_WINDOW.as_secs() >= 180);
+    }
+}
+
+#[cfg(test)]
+mod delete_message_tests {
+    use super::is_soft_delete_error;
+
+    #[test]
+    fn accepts_already_missing_delete_errors() {
+        assert!(is_soft_delete_error("400 Bad Request: message to delete not found"));
+        assert!(is_soft_delete_error(r#"{"description":"Bad Request: message can't be deleted"}"#));
+        assert!(is_soft_delete_error("400: MESSAGE_ID_INVALID"));
+        assert!(!is_soft_delete_error("400 Bad Request: chat not found"));
     }
 }
