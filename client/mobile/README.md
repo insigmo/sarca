@@ -19,7 +19,8 @@ Self-hosted servers often use `http://` on LAN. After `tauri android init`, run:
 ```
 
 CI runs this automatically before building the APK. It enables cleartext traffic so both
-`http://` and `https://` work in the WebView.
+`http://` and `https://` work in the WebView, installs mobile plugins, and replaces
+Tauri’s default launcher icons with Sarca icons from `src-tauri/icons/android/`.
 
 ## Android sideload signing
 
