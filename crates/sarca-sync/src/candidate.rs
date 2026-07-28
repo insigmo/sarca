@@ -68,7 +68,7 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
     }
     let mut out = Vec::new();
     let mut walk_errors = 0usize;
-    for entry in WalkDir::new(root) {
+    for entry in WalkDir::new(root).follow_links(true) {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -84,11 +84,15 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
         if media_only && !is_media_file(&path) {
             continue;
         }
-        let rel = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .replace('\\', "/");
+        let Ok(rel_os) = path.strip_prefix(root) else {
+            warn!(
+                path = %path.display(),
+                root = %root.display(),
+                "skip entry outside binding root"
+            );
+            continue;
+        };
+        let rel = rel_os.to_string_lossy().replace('\\', "/");
         if rel.is_empty() {
             continue;
         }
@@ -128,6 +132,23 @@ mod tests {
         assert_eq!(strip_dcim_prefix("DCIM/a.jpg"), "a.jpg");
         assert_eq!(strip_dcim_prefix("Camera/a.jpg"), "Camera/a.jpg");
         assert_eq!(strip_dcim_prefix("dcim/x.jpg"), "dcim/x.jpg"); // case-sensitive; MediaStore uses DCIM
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn collect_fs_candidates_follows_symlink_to_media_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("a.jpg"), b"x").unwrap();
+        let link = dir.path().join("link.jpg");
+        std::os::unix::fs::symlink(real.join("a.jpg"), &link).unwrap();
+
+        let got = collect_fs_candidates(dir.path(), true).unwrap();
+        assert!(
+            got.iter().any(|c| c.relative_path == "link.jpg"),
+            "symlink-to-file must be collected as link.jpg: {got:?}"
+        );
     }
 
     #[test]
