@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use sarca_sync::{normalize_server_url, Binding, BindingMode, SarcaApi, StorageSummary, SyncStatus};
+use sarca_sync::{
+    normalize_server_url, Binding, BindingMode, SarcaApi, StorageSummary, SyncStatus,
+    TransferQueueSnapshot,
+};
 use serde::Serialize;
 use tauri::{AppHandle, State};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -11,6 +14,8 @@ use tauri_plugin_dialog::DialogExt;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tokio::sync::oneshot;
 
+use crate::client_log;
+use crate::startup::{is_useless_hostname, sanitize_device_label};
 use crate::state::{
     navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding,
     read_webview_session, session_ready_for_sync, AppSyncState, ClientPrefs, ServerConfig,
@@ -53,7 +58,9 @@ pub fn load_prefs(state: &AppSyncState) -> ClientPrefs {
 
 fn save_prefs(state: &AppSyncState, prefs: &ClientPrefs) -> Result<(), String> {
     let json = serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?;
-    fs::write(prefs_path(state), json).map_err(|e| e.to_string())
+    fs::write(prefs_path(state), json).map_err(|e| e.to_string())?;
+    client_log::set_enabled(prefs.enable_logs, state.data_dir());
+    Ok(())
 }
 
 fn dir_size(path: &Path) -> u64 {
@@ -178,20 +185,24 @@ pub fn platform_label() -> String {
 }
 
 #[tauri::command]
-pub fn device_label() -> String {
+pub fn device_label(app: AppHandle) -> String {
     let fallback = platform_label();
+    #[cfg(target_os = "android")]
+    {
+        if let Some(label) = crate::startup::device_model_label(&app) {
+            return label;
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = &app;
+    }
     let raw = hostname::get()
         .ok()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let cleaned = raw
-        .replace(['/', '\\'], " ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim()
-        .to_string();
-    if cleaned.is_empty() {
+    let cleaned = sanitize_device_label(&raw);
+    if cleaned.is_empty() || is_useless_hostname(&cleaned) {
         fallback
     } else {
         cleaned
@@ -570,6 +581,10 @@ pub fn set_binding_enabled(
     id: String,
     enabled: bool,
 ) -> Result<(), String> {
+    client_log::write_line(
+        state.data_dir(),
+        &format!("set_binding_enabled id={id} enabled={enabled}"),
+    );
     state
         .engine
         .set_binding_enabled(&id, enabled)
@@ -678,6 +693,13 @@ pub async fn sync_statuses(state: State<'_, AppSyncState>) -> Result<Vec<SyncSta
 }
 
 #[tauri::command]
+pub async fn sync_transfer_queue(
+    state: State<'_, AppSyncState>,
+) -> Result<TransferQueueSnapshot, String> {
+    Ok(state.engine.transfer_queue().await)
+}
+
+#[tauri::command]
 pub fn get_client_prefs(state: State<'_, AppSyncState>) -> Result<ClientPrefs, String> {
     Ok(load_prefs(&state))
 }
@@ -689,6 +711,53 @@ pub fn set_client_prefs(
 ) -> Result<ClientPrefs, String> {
     save_prefs(&state, &prefs)?;
     Ok(prefs)
+}
+
+#[derive(Serialize)]
+pub struct ExportLogsDto {
+    pub path: String,
+    pub shared: bool,
+    /// Log text for desktop download / clipboard when share sheet is unavailable.
+    pub content: String,
+}
+
+/// Export client logs: Android opens a share sheet; desktop returns path + content.
+#[tauri::command]
+pub async fn export_logs(
+    app: AppHandle,
+    state: State<'_, AppSyncState>,
+) -> Result<ExportLogsDto, String> {
+    let data_dir = state.data_dir().clone();
+    // Ensure the file exists so share/save always has something.
+    if !client_log::is_enabled() {
+        client_log::set_enabled(true, &data_dir);
+        client_log::write_line(&data_dir, "export_logs: logging was off; enabled for export");
+        let mut prefs = load_prefs(&state);
+        prefs.enable_logs = true;
+        let _ = save_prefs(&state, &prefs);
+    }
+    let text = client_log::read_export(&data_dir, 512 * 1024)?;
+    #[cfg(target_os = "android")]
+    {
+        let path = client_log::log_path(&data_dir);
+        crate::startup::share_text(&app, &text, "Sarca client logs").await?;
+        return Ok(ExportLogsDto {
+            path: path.display().to_string(),
+            shared: true,
+            content: text,
+        });
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        let export = data_dir.join("logs").join("sarca-client-export.log");
+        fs::write(&export, &text).map_err(|e| e.to_string())?;
+        Ok(ExportLogsDto {
+            path: export.display().to_string(),
+            shared: false,
+            content: text,
+        })
+    }
 }
 
 #[tauri::command]

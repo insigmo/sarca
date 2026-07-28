@@ -65,4 +65,9 @@ describe('cameraRemoteRoot', () => {
 		expect(cameraRemoteRoot('../My/Phone\\Name')).toBe('Camera/My Phone Name')
 		expect(cameraRemoteRoot('   ')).toBe('Camera/Unknown device')
 	})
+
+	it('rejects localhost-style hostnames', () => {
+		expect(cameraRemoteRoot('localhost')).toBe('Camera/Unknown device')
+		expect(cameraRemoteRoot('127.0.0.1')).toBe('Camera/Unknown device')
+	})
 })

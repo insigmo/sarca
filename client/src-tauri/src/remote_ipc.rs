@@ -27,9 +27,11 @@ pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "update_session",
     "get_client_prefs",
     "set_client_prefs",
+    "export_logs",
     "list_storages",
     "list_bindings",
     "sync_statuses",
+    "sync_transfer_queue",
     "sync_now",
     "add_binding",
     "remove_binding",
@@ -88,7 +90,7 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
     let state = app.state::<AppSyncState>();
     match cmd {
         "platform_label" => Ok(json!(commands::platform_label())),
-        "device_label" => Ok(json!(commands::device_label())),
+        "device_label" => Ok(json!(commands::device_label(app.clone()))),
         "default_gallery_path" => Ok(json!(commands::default_gallery_path())),
         "is_on_wifi" => Ok(json!(commands::is_on_wifi())),
         "get_about" => Ok(serde_json::to_value(commands::get_about()).map_err(|e| e.to_string())?),
@@ -126,6 +128,10 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let saved = commands::set_client_prefs(state.clone(), prefs)?;
             serde_json::to_value(saved).map_err(|e| e.to_string())
         }
+        "export_logs" => {
+            let dto = commands::export_logs(app.clone(), state.clone()).await?;
+            serde_json::to_value(dto).map_err(|e| e.to_string())
+        }
         "list_storages" => {
             let list = commands::list_storages(app.clone(), state.clone()).await?;
             serde_json::to_value(list).map_err(|e| e.to_string())
@@ -137,6 +143,10 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
         "sync_statuses" => {
             let list = commands::sync_statuses(state.clone()).await?;
             serde_json::to_value(list).map_err(|e| e.to_string())
+        }
+        "sync_transfer_queue" => {
+            let snap = commands::sync_transfer_queue(state.clone()).await?;
+            serde_json::to_value(snap).map_err(|e| e.to_string())
         }
         "sync_now" => {
             let binding_id = arg_str(&args, "binding_id", "bindingId");
@@ -267,6 +277,7 @@ mod tests {
             "pick_local_folder",
             "set_client_prefs",
             "get_client_prefs",
+            "export_logs",
             "add_binding",
             "remove_binding",
             "ensure_remote_folder",
@@ -274,6 +285,7 @@ mod tests {
             "list_bindings",
             "sync_now",
             "sync_statuses",
+            "sync_transfer_queue",
             "is_on_wifi",
             "get_about",
             "get_cache_size",

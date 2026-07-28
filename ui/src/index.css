@@ -112,7 +112,18 @@
 html,
 body,
 #root {
+	height: 100%;
 	min-height: 100%;
+}
+
+:root {
+	--sarca-safe-top: env(safe-area-inset-top, 0px);
+	--sarca-safe-right: env(safe-area-inset-right, 0px);
+	--sarca-safe-bottom: env(safe-area-inset-bottom, 0px);
+	--sarca-safe-left: env(safe-area-inset-left, 0px);
+	/* Android WebView often reports 0 insets while drawing edge-to-edge */
+	--sarca-android-top: 0px;
+	--sarca-android-bottom: 0px;
 }
 
 body {
@@ -203,7 +214,10 @@ a.default-link:hover {
 .app-shell-root {
 	display: flex;
 	flex-direction: column;
-	min-height: 100dvh;
+	height: 100dvh;
+	max-height: 100dvh;
+	min-height: 0;
+	overflow: hidden;
 }
 
 .app-shell-stage {
@@ -245,7 +259,7 @@ a.default-link:hover {
 	border-bottom: 1px solid var(--sarca-border);
 	box-shadow: var(--sarca-shadow-soft) !important;
 	color: var(--sarca-header-ink) !important;
-	padding-top: env(safe-area-inset-top, 0px);
+	padding-top: max(var(--sarca-safe-top), var(--sarca-android-top));
 }
 
 .sarca-header-icon {
@@ -550,6 +564,8 @@ a.default-link:hover {
 	align-items: stretch;
 	flex: 1;
 	width: 100%;
+	height: 100%;
+	max-height: 100%;
 	min-height: 0;
 	gap: 0;
 	overflow: hidden;
@@ -567,6 +583,23 @@ a.default-link:hover {
 .files-shell *::selection {
 	background: transparent !important;
 	color: inherit !important;
+}
+
+/* Authenticated shell: block native text selection everywhere except editables. */
+body.sarca-no-select,
+body.sarca-no-select *:not(input):not(textarea):not(select):not([contenteditable='true']):not(.allow-text-select):not(.allow-text-select *) {
+	user-select: none !important;
+	-webkit-user-select: none !important;
+}
+
+body.sarca-no-select *:not(input):not(textarea):not(select):not([contenteditable='true']):not(.allow-text-select):not(.allow-text-select *)::selection {
+	background: transparent !important;
+	color: inherit !important;
+}
+
+body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .allow-text-select, .allow-text-select *) {
+	user-select: text !important;
+	-webkit-user-select: text !important;
 }
 
 .files-shell__main {
@@ -604,7 +637,10 @@ a.default-link:hover {
 	flex-shrink: 0;
 	flex-direction: column;
 	align-self: stretch;
-	min-height: 100%;
+	height: 100%;
+	max-height: 100%;
+	min-height: 0;
+	overflow: hidden;
 	border: none;
 	border-right: 1px solid var(--sarca-border);
 	border-radius: 0;
@@ -613,6 +649,7 @@ a.default-link:hover {
 	-webkit-backdrop-filter: none;
 	padding: 8px 8px 12px;
 	box-shadow: none;
+	box-sizing: border-box;
 }
 
 .files-sidebar--collapsed {
@@ -628,6 +665,7 @@ a.default-link:hover {
 	display: flex;
 	justify-content: flex-end;
 	padding: 0 0 4px;
+	flex-shrink: 0;
 }
 
 .files-sidebar--collapsed .files-sidebar__header {
@@ -650,6 +688,7 @@ a.default-link:hover {
 	justify-content: space-between;
 	min-height: 0;
 	gap: 6px;
+	overflow: hidden;
 }
 
 .files-sidebar__top,
@@ -657,6 +696,18 @@ a.default-link:hover {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
+}
+
+.files-sidebar__top {
+	flex: 1;
+	min-height: 0;
+	overflow-x: hidden;
+	overflow-y: auto;
+	scrollbar-width: thin;
+}
+
+.files-sidebar__bottom {
+	flex-shrink: 0;
 }
 
 .files-sidebar__divider {
@@ -793,11 +844,16 @@ a.default-link:hover {
 @media (min-width: 841px) {
 	.files-sidebar--desktop {
 		display: flex;
-		min-height: 100%;
+		height: 100%;
+		max-height: 100%;
+		min-height: 0;
 	}
 
 	.app-shell-outlet {
-		min-height: calc(100dvh - 64px - env(safe-area-inset-top, 0px));
+		flex: 1;
+		min-height: 0;
+		height: 100%;
+		overflow: hidden;
 	}
 
 	.app-shell-outlet:has(> .files-shell) {
@@ -823,9 +879,9 @@ a.default-link:hover {
 		bottom: 0;
 		left: 0;
 		z-index: 1260;
-		width: min(300px, 88vw);
-		padding: calc(16px + env(safe-area-inset-top, 0px)) 12px
-			calc(16px + env(safe-area-inset-bottom, 0px));
+		width: min(320px, 90vw);
+		padding: calc(16px + max(var(--sarca-safe-top), var(--sarca-android-top))) 14px
+			calc(16px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
 		border-right: 1px solid var(--sarca-border);
 		background: var(--sarca-modal-bg);
 		backdrop-filter: blur(20px);
@@ -834,20 +890,27 @@ a.default-link:hover {
 	}
 
 	.files-sidebar--drawer .files-sidebar__new {
-		min-height: 46px;
-		padding: 8px 14px;
-		font-size: 0.9rem;
+		min-height: 52px;
+		padding: 10px 16px;
+		font-size: 1rem;
+	}
+
+	.files-sidebar--drawer .files-sidebar__new .fluent-icon,
+	.files-sidebar--drawer .files-sidebar__new .MuiSvgIcon-root {
+		font-size: 1.35rem;
 	}
 
 	.files-sidebar--drawer .files-sidebar__item {
-		min-height: 44px;
-		padding: 8px 10px;
-		font-size: 0.88rem;
+		min-height: 52px;
+		padding: 12px 12px;
+		font-size: 1rem;
+		gap: 12px;
+		border-radius: 12px;
 	}
 
 	.files-sidebar--drawer .files-sidebar__item .fluent-icon,
 	.files-sidebar--drawer .files-sidebar__item .MuiSvgIcon-root {
-		font-size: 1.25rem;
+		font-size: 1.45rem;
 	}
 }
 
@@ -968,6 +1031,14 @@ a.default-link:hover {
 	.files-page__nav-toggle {
 		display: inline-flex !important;
 		margin-right: auto;
+		width: 48px;
+		height: 48px;
+		padding: 10px;
+	}
+
+	.files-page__nav-toggle .fluent-icon,
+	.files-page__nav-toggle .MuiSvgIcon-root {
+		font-size: 1.45rem;
 	}
 }
 
@@ -975,7 +1046,7 @@ a.default-link:hover {
 	--files-row: 148px;
 	padding: 12px 12px 0;
 	/* Always one empty row below the last file row */
-	padding-bottom: calc(24px + var(--files-row) + env(safe-area-inset-bottom, 0px));
+	padding-bottom: calc(24px + var(--files-row) + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
 	min-height: 0;
 	flex: 1;
 	overflow: auto;
@@ -1008,7 +1079,7 @@ a.default-link:hover {
 .files-canvas--list {
 	--files-row: 64px;
 	padding: 10px 10px 0;
-	padding-bottom: calc(24px + var(--files-row) + env(safe-area-inset-bottom, 0px));
+	padding-bottom: calc(24px + var(--files-row) + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
 }
 
 .files-canvas__empty {
@@ -1737,7 +1808,7 @@ a.default-link:hover {
 	align-items: center;
 	justify-content: center;
 	padding: 24px;
-	padding-top: max(24px, env(safe-area-inset-top, 0px));
+	padding-top: max(24px, max(var(--sarca-safe-top), var(--sarca-android-top)));
 	animation: sarca-fade 0.22s ease both;
 }
 
@@ -2397,7 +2468,7 @@ a.default-link:hover {
 	}
 
 	.app-shell-main {
-		padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px)) !important;
+		padding-bottom: calc(24px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom))) !important;
 	}
 
 	.settings-overlay {
@@ -2419,7 +2490,7 @@ a.default-link:hover {
 	}
 
 	.settings-modal__body {
-		padding-bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+		padding-bottom: calc(22px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
 	}
 
 	.settings-modal__layout {
@@ -2562,38 +2633,68 @@ a.default-link:hover {
 	max-height: none !important;
 	margin: 0 !important;
 	padding: 0 !important;
+	padding-top: max(var(--sarca-safe-top), var(--sarca-android-top)) !important;
+	padding-right: max(var(--sarca-safe-right), 0px) !important;
+	padding-bottom: max(var(--sarca-safe-bottom), var(--sarca-android-bottom)) !important;
+	padding-left: max(var(--sarca-safe-left), 0px) !important;
 	border-radius: 0 !important;
 	border: none !important;
 	box-shadow: none !important;
 	background: #050816;
 	animation: sarca-fade 0.2s ease both;
 	overflow: hidden;
+	box-sizing: border-box !important;
+}
+
+.file-viewer__chrome {
+	flex-shrink: 0;
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 8px 12px 10px;
+	z-index: 40;
+	box-sizing: border-box;
+	background: #050816;
+}
+
+.file-viewer__caption {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	pointer-events: none;
+}
+
+.file-viewer__actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
 }
 
 .file-viewer__close,
 .file-viewer__download {
-	position: absolute;
-	top: calc(18px + env(safe-area-inset-top, 0px));
+	position: static;
+	top: auto;
+	right: auto;
 	z-index: 40;
-	width: 48px;
-	height: 48px;
+	width: 36px;
+	height: 36px;
 	border: 1px solid rgba(255, 255, 255, 0.22);
 	border-radius: 50%;
 	display: grid;
 	place-items: center;
 	cursor: pointer;
-	font-size: 1.35rem;
+	font-size: 1.1rem;
 	line-height: 1;
 	color: #fff;
 	background: rgba(12, 16, 40, 0.45);
 	backdrop-filter: blur(18px);
 	-webkit-backdrop-filter: blur(18px);
-	box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
 	transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
-}
-
-.file-viewer__close {
-	right: calc(18px + env(safe-area-inset-right, 0px));
+	flex-shrink: 0;
 }
 
 .file-viewer__close:hover {
@@ -2602,14 +2703,17 @@ a.default-link:hover {
 	background: rgba(20, 24, 52, 0.65);
 }
 
-.file-viewer__download {
-	right: calc(18px + 48px + 10px + env(safe-area-inset-right, 0px));
-}
-
 .file-viewer__download:hover {
 	transform: scale(1.08);
 	box-shadow: 0 0 0 4px rgba(124, 92, 191, 0.22), 0 10px 32px rgba(0, 0, 0, 0.4);
 	background: rgba(20, 24, 52, 0.65);
+}
+
+.file-viewer__body {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	width: 100%;
 }
 
 .file-viewer__nav {
@@ -2657,7 +2761,7 @@ a.default-link:hover {
 /* Thin edge sensors for HTML iframe (mousemove does not reach parent). */
 .file-viewer__edge-sense {
 	position: absolute;
-	top: 96px;
+	top: 12px;
 	bottom: 24px;
 	width: 28px;
 	z-index: 18;
@@ -2728,40 +2832,20 @@ a.default-link:hover {
 	box-shadow: none;
 }
 
-.file-viewer__caption {
-	position: absolute;
-	top: 0;
-	left: 0;
-	right: 0;
-	z-index: 15;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	padding: 22px 160px 52px 22px;
-	pointer-events: none;
-	background: linear-gradient(
-		180deg,
-		rgba(5, 8, 22, 0.75) 0%,
-		rgba(5, 8, 22, 0.35) 55%,
-		transparent 100%
-	);
-}
-
 .file-viewer__title {
 	margin: 0;
-	font-size: 1.1rem;
+	font-size: 0.92rem;
 	font-weight: 700;
 	letter-spacing: -0.01em;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	color: #fff;
-	text-shadow: 0 2px 12px rgba(0, 0, 0, 0.55);
 }
 
 .file-viewer__meta {
 	margin: 0;
-	font-size: 0.8rem;
+	font-size: 0.72rem;
 	color: rgba(220, 226, 255, 0.75);
 }
 
@@ -2926,9 +3010,7 @@ a.default-link:hover {
 	transition: width 0.08s linear;
 }
 
-.file-viewer__close,
-.file-viewer__download,
-.file-viewer__caption,
+.file-viewer__chrome,
 .file-viewer__nav,
 .file-viewer__player .file-viewer__controls {
 	opacity: 1;
@@ -2939,16 +3021,14 @@ a.default-link:hover {
 	cursor: none;
 }
 
-.file-viewer--chrome-hidden .file-viewer__close,
-.file-viewer--chrome-hidden .file-viewer__download,
-.file-viewer--chrome-hidden .file-viewer__caption,
+.file-viewer--chrome-hidden .file-viewer__chrome,
 .file-viewer--chrome-hidden .file-viewer__nav,
 .file-viewer--chrome-hidden .file-viewer__player .file-viewer__controls {
 	opacity: 0;
 	pointer-events: none;
 }
 
-.file-viewer--chrome-hidden .file-viewer__caption {
+.file-viewer--chrome-hidden .file-viewer__chrome {
 	transform: translateY(-6px);
 }
 
@@ -3148,25 +3228,21 @@ a.default-link:hover {
 }
 
 @media (max-width: 840px) {
+	.file-viewer__chrome {
+		padding: 6px 10px 8px;
+		gap: 8px;
+	}
+
 	.file-viewer__close,
 	.file-viewer__download {
-		top: calc(12px + env(safe-area-inset-top, 0px));
-		width: 44px;
-		height: 44px;
-		font-size: 1.25rem;
-	}
-
-	.file-viewer__close {
-		right: calc(12px + env(safe-area-inset-right, 0px));
-	}
-
-	.file-viewer__download {
-		right: calc(12px + 44px + 8px + env(safe-area-inset-right, 0px));
+		width: 36px;
+		height: 36px;
+		font-size: 1.05rem;
 	}
 
 	.file-viewer__nav {
-		width: 44px;
-		height: 44px;
+		width: 48px;
+		height: 48px;
 		font-size: 1.6rem;
 	}
 
@@ -3180,24 +3256,26 @@ a.default-link:hover {
 
 	.file-viewer__edge-sense {
 		width: 22px;
-		top: 88px;
+		top: 12px;
 	}
 
 	.file-viewer__volume-slider {
 		width: 64px;
 	}
 
-	.file-viewer__caption {
-		padding: 16px 140px 40px 14px;
-	}
-
 	.file-viewer__controls {
-		bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-		width: calc(100% - 24px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px));
+		bottom: calc(16px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
+		width: calc(
+			100% - 24px - var(--sarca-safe-left) - var(--sarca-safe-right)
+		);
 	}
 
 	.file-viewer__title {
-		font-size: 0.95rem;
+		font-size: 0.85rem;
+	}
+
+	.file-viewer__meta {
+		font-size: 0.68rem;
 	}
 }
 
@@ -3240,8 +3318,8 @@ a.default-link:hover {
 /* —— Drive-style upload manager —— */
 .upload-mgr {
 	position: fixed;
-	right: max(16px, env(safe-area-inset-right, 0px));
-	bottom: max(16px, env(safe-area-inset-bottom, 0px));
+	right: max(16px, var(--sarca-safe-right));
+	bottom: max(16px, max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
 	z-index: 12000;
 	/* Width/height set inline from UploadManager; CSS clamps as a safety net. */
 	min-width: 280px;
@@ -3651,6 +3729,109 @@ a.default-link:hover {
 	max-height: 160px;
 	background: color-mix(in srgb, var(--sarca-paper, #f3f2f1) 80%, transparent);
 	border-radius: 6px;
+}
+
+.settings-sync-panel__queue {
+	border: 1px solid color-mix(in srgb, var(--sarca-ink, #1b1a19) 12%, transparent);
+	border-radius: 8px;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--sarca-ink, #1b1a19) 3%, transparent);
+}
+
+.settings-sync-panel__queue-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	width: 100%;
+	margin: 0;
+	padding: 12px 14px;
+	border: none;
+	border-bottom: 1px solid color-mix(in srgb, var(--sarca-ink, #1b1a19) 10%, transparent);
+	background: transparent;
+	font: inherit;
+	font-size: 0.95rem;
+	color: var(--sarca-ink, #1b1a19);
+	cursor: pointer;
+	text-align: left;
+}
+
+.settings-sync-panel__queue-row:last-child {
+	border-bottom: none;
+}
+
+.settings-sync-panel__queue-row:hover {
+	background: color-mix(in srgb, var(--sarca-ink, #1b1a19) 5%, transparent);
+}
+
+.settings-sync-panel__queue-row:focus-visible {
+	outline: 2px solid var(--sarca-teal, #0078d4);
+	outline-offset: -2px;
+}
+
+.settings-sync-panel__queue-count {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	color: var(--sarca-muted, #605e5c);
+	font-variant-numeric: tabular-nums;
+}
+
+.settings-sync-panel__transfer-back {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	margin: 0 0 12px;
+	padding: 4px 0;
+	border: none;
+	background: transparent;
+	font: inherit;
+	font-size: 0.95rem;
+	font-weight: 600;
+	color: var(--sarca-ink, #1b1a19);
+	cursor: pointer;
+}
+
+.settings-sync-panel__transfer-back:focus-visible {
+	outline: 2px solid var(--sarca-teal, #0078d4);
+	outline-offset: 2px;
+}
+
+.settings-sync-panel__transfer-list {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.settings-sync-panel__transfer-item {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 12px 0;
+	border-bottom: 1px solid color-mix(in srgb, var(--sarca-ink, #1b1a19) 8%, transparent);
+}
+
+.settings-sync-panel__transfer-meta {
+	min-width: 0;
+	flex: 1 1 auto;
+}
+
+.settings-sync-panel__transfer-name {
+	font-size: 0.95rem;
+	line-height: 1.35;
+	color: var(--sarca-ink, #1b1a19);
+	word-break: break-word;
+}
+
+.settings-sync-panel__transfer-status {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 20px;
+	min-height: 20px;
+	margin-top: 2px;
 }
 
 .app-lock-gate {

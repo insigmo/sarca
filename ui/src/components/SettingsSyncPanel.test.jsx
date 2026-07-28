@@ -47,6 +47,8 @@ function mockNativeInvoke(initialBindings = []) {
 				}
 			case 'sync_statuses':
 				return []
+			case 'sync_transfer_queue':
+				return { uploading: 0, downloading: 0, items: [] }
 			case 'default_gallery_path':
 				return '/pictures'
 			case 'ensure_remote_folder':
@@ -287,5 +289,65 @@ describe('SettingsSyncPanel', () => {
 			id: '1',
 			remoteRoot: 'Camera/Pixel 8',
 		})
+	})
+
+	it('shows Downloading/Uploading rows and opens upload list', async () => {
+		const state = mockNativeInvoke([])
+		nativeInvoke.mockImplementation(async (cmd) => {
+			switch (cmd) {
+				case 'platform_label':
+					return ''
+				case 'device_label':
+					return 'Pixel 8'
+				case 'list_bindings':
+					return state.bindings.map((b) => ({ ...b }))
+				case 'get_client_prefs':
+					return {
+						wifi_only: true,
+						background_sync: true,
+						app_lock_enabled: false,
+						app_lock_pin: null,
+					}
+				case 'sync_statuses':
+					return []
+				case 'sync_transfer_queue':
+					return {
+						uploading: 1,
+						downloading: 0,
+						items: [
+							{
+								id: 't1',
+								binding_id: 'b1',
+								direction: 'upload',
+								path: 'Camera',
+								name: 'a.jpg',
+								size: 12,
+								status: 'active',
+								updated_at_ms: 1,
+							},
+						],
+					}
+				case 'default_gallery_path':
+					return '/pictures'
+				default:
+					return null
+			}
+		})
+
+		const { container, getByText, findByText } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		await waitFor(() =>
+			expect(callsFor('sync_transfer_queue').length).toBeGreaterThan(0),
+		)
+		expect(getByText('Downloading')).toBeTruthy()
+		expect(getByText('Uploading')).toBeTruthy()
+		const uploadRow = [
+			...container.querySelectorAll('.settings-sync-panel__queue-row'),
+		].find((el) => el.textContent.includes('Uploading'))
+		expect(uploadRow?.textContent).toContain('1')
+		fireEvent.click(uploadRow)
+		expect(await findByText('Upload list')).toBeTruthy()
+		expect(await findByText('a.jpg')).toBeTruthy()
 	})
 })
