@@ -139,6 +139,17 @@ impl LocalIndex {
         Ok(())
     }
 
+    pub fn set_binding_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        let n = self.lock()?.execute(
+            "UPDATE bindings SET enabled = ?2 WHERE id = ?1",
+            params![id, i64::from(enabled)],
+        )?;
+        if n == 0 {
+            anyhow::bail!("binding not found: {id}");
+        }
+        Ok(())
+    }
+
     pub fn get_cursor(&self, binding_id: &str) -> Result<i64> {
         let v: Option<i64> = self
             .lock()?
@@ -297,4 +308,48 @@ pub fn mtime_ms_from_system(mtime: std::time::SystemTime) -> i64 {
 #[allow(dead_code)]
 pub fn utc_from_mtime_ms(ms: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(ms).unwrap_or_else(Utc::now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn set_binding_enabled_preserves_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = LocalIndex::open(&dir.path().join("sync-index.sqlite")).unwrap();
+        let id = "b1".to_string();
+        let sid = uuid::Uuid::new_v4();
+        idx.upsert_binding(&crate::types::Binding {
+            id: id.clone(),
+            storage_id: sid,
+            remote_root: "Camera".into(),
+            local_path: "/tmp/pics".into(),
+            mode: crate::types::BindingMode::AutoUpload,
+            enabled: true,
+        })
+        .unwrap();
+        idx.upsert_entry(
+            &id,
+            &IndexEntry {
+                relative_path: "a.jpg".into(),
+                size: 10,
+                mtime_ms: 1,
+                content_hash: Some("abc".into()),
+                remote_file_id: None,
+                last_cursor: 0,
+            },
+        )
+        .unwrap();
+
+        idx.set_binding_enabled(&id, false).unwrap();
+        let b = idx.list_bindings().unwrap().into_iter().find(|x| x.id == id).unwrap();
+        assert!(!b.enabled);
+        assert!(idx.get_entry(&id, "a.jpg").unwrap().is_some());
+
+        idx.set_binding_enabled(&id, true).unwrap();
+        let b = idx.list_bindings().unwrap().into_iter().find(|x| x.id == id).unwrap();
+        assert!(b.enabled);
+        assert!(idx.get_entry(&id, "a.jpg").unwrap().is_some());
+    }
 }
