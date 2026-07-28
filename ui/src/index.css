@@ -1459,6 +1459,8 @@ a.default-link:hover {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	user-select: none;
+	-webkit-user-select: none;
 }
 
 .fs-grid-item__star {
@@ -1544,6 +1546,8 @@ a.default-link:hover {
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	user-select: none;
+	-webkit-user-select: none;
 }
 
 .fs-list-item__meta {
@@ -1555,6 +1559,8 @@ a.default-link:hover {
 	color: var(--sarca-ink-soft);
 	overflow: hidden;
 	white-space: nowrap;
+	user-select: none;
+	-webkit-user-select: none;
 }
 
 .fs-list-item__dot {
