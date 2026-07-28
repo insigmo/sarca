@@ -35,11 +35,6 @@ pub struct MeSchema {
     pub is_superuser: bool,
 }
 
-#[derive(Serialize)]
-pub struct ProvidersSchema {
-    pub smtp: bool,
-}
-
 #[derive(Deserialize)]
 pub struct TokenBodySchema {
     pub token: String,

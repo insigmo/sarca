@@ -20,7 +20,6 @@ use crate::{
         ForgotPasswordSchema,
         LoginSchema,
         MeSchema,
-        ProvidersSchema,
         RefreshSchema,
         ResetPasswordSchema,
         TokenBodySchema,
@@ -41,7 +40,6 @@ impl AuthRouter {
         Router::new()
             .route("/login", post(Self::login))
             .route("/refresh", post(Self::refresh))
-            .route("/providers", get(Self::providers))
             .route("/verify", post(Self::verify).get(Self::verify_get))
             .route("/password/forgot", post(Self::forgot_password))
             .route("/password/reset", post(Self::reset_password))
@@ -70,15 +68,7 @@ impl AuthRouter {
         State(state): State<Arc<AppState>>,
         Extension(user): Extension<AuthUser>,
     ) -> Result<Json<MeSchema>, (StatusCode, String)> {
-        AuthService::new(&state.db)
-            .me(&user, &state.config)
-            .await
-            .map(Json)
-            .map_err(Into::into)
-    }
-
-    async fn providers(State(state): State<Arc<AppState>>) -> Json<ProvidersSchema> {
-        Json(AuthService::providers(&state.config))
+        AuthService::new(&state.db).me(&user, &state.config).await.map(Json).map_err(Into::into)
     }
 
     async fn verify_request(

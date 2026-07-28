@@ -18,13 +18,7 @@ from test_api import _create_folder, _tree_names
 # ---------------------------------------------------------------------------
 
 
-def test_auth_me_and_providers(client: httpx.Client, auth_headers: dict[str, str]) -> None:
-    r = client.get("/api/auth/providers")
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert "smtp" in body
-    assert isinstance(body["smtp"], bool)
-
+def test_auth_me(client: httpx.Client, auth_headers: dict[str, str]) -> None:
     r = client.get("/api/auth/me", headers=auth_headers)
     assert r.status_code == 200, r.text
     me = r.json()
