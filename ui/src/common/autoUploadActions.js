@@ -37,3 +37,18 @@ export function resolveCameraToggle(bindings, enable) {
 export function withBackgroundSyncOn(prefs) {
 	return { ...prefs, background_sync: true }
 }
+
+/**
+ * Builds remote camera path per device: `Camera/<device>`.
+ * @param {string} deviceLabel
+ * @returns {string}
+ */
+export function cameraRemoteRoot(deviceLabel) {
+	const cleaned = String(deviceLabel || '')
+		.replace(/[\\/]+/g, ' ')
+		.replace(/\.+/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim()
+	const suffix = cleaned || 'Unknown device'
+	return `Camera/${suffix}`
+}

@@ -10,6 +10,7 @@ import {
 } from '../common/nativeBridge'
 import {
 	cameraBinding,
+	cameraRemoteRoot,
 	resolveCameraToggle,
 	withBackgroundSyncOn,
 } from '../common/autoUploadActions'
@@ -26,6 +27,7 @@ const SettingsSyncPanel = (props) => {
 	const { addAlert } = alertStore
 	const chrome = filesChromeStore
 	const [platform, setPlatform] = createSignal('')
+	const [deviceLabel, setDeviceLabel] = createSignal('')
 	const [bindings, setBindings] = createSignal([])
 	const [statuses, setStatuses] = createSignal([])
 	const [prefs, setPrefs] = createSignal({
@@ -50,11 +52,14 @@ const SettingsSyncPanel = (props) => {
 		bindings().filter(
 			(b) => b.mode === 'folder_upload' || b.mode === 'sync',
 		)
+	const desiredCameraRemoteRoot = () =>
+		cameraRemoteRoot(deviceLabel().trim() || platform().trim() || '')
 
 	const refresh = async () => {
 		try {
-			const [label, bindsResult, prefsDto, statusList] = await Promise.all([
+			const [label, device, bindsResult, prefsDto, statusList] = await Promise.all([
 				nativeInvoke('platform_label').catch(() => ''),
+				nativeInvoke('device_label').catch(() => ''),
 				nativeInvoke('list_bindings').then(
 					(v) => ({ ok: true, value: v }),
 					(e) => ({ ok: false, error: e }),
@@ -63,6 +68,7 @@ const SettingsSyncPanel = (props) => {
 				nativeInvoke('sync_statuses').catch(() => []),
 			])
 			setPlatform(String(label || ''))
+			setDeviceLabel(String(device || ''))
 			if (bindsResult.ok) {
 				setBindings(Array.isArray(bindsResult.value) ? bindsResult.value : [])
 			} else {
@@ -196,6 +202,19 @@ const SettingsSyncPanel = (props) => {
 					enabled: decision.enabled,
 				})
 				if (decision.enabled) {
+					const existing = live.find((b) => b.id === decision.id) || null
+					const expectedRoot = desiredCameraRemoteRoot()
+					if (existing && String(existing.remote_root || '') !== expectedRoot) {
+						await nativeInvoke('ensure_remote_folder', {
+							storageId: sid,
+							parent: 'Camera',
+							name: expectedRoot.replace(/^Camera\//, ''),
+						})
+						await nativeInvoke('update_binding_remote_root', {
+							id: existing.id,
+							remoteRoot: expectedRoot,
+						})
+					}
 					await enableBackgroundSyncSafely()
 				}
 				await refresh()
@@ -213,14 +232,20 @@ const SettingsSyncPanel = (props) => {
 				if (path) setLocalPath(path)
 			}
 			if (!path) throw new Error('Choose a local gallery / Pictures folder')
-			const remote = await nativeInvoke('ensure_remote_folder', {
+			await nativeInvoke('ensure_remote_folder', {
 				storageId: sid,
 				parent: '',
 				name: 'Camera',
 			})
+			const expectedRoot = desiredCameraRemoteRoot()
+			await nativeInvoke('ensure_remote_folder', {
+				storageId: sid,
+				parent: 'Camera',
+				name: expectedRoot.replace(/^Camera\//, ''),
+			})
 			const binding = await nativeInvoke('add_binding', {
 				storageId: sid,
-				remoteRoot: String(remote).replace(/\/$/, '') || 'Camera',
+				remoteRoot: expectedRoot,
 				localPath: path,
 				mode: 'auto_upload',
 			})
@@ -285,7 +310,7 @@ const SettingsSyncPanel = (props) => {
 	return (
 		<div class="settings-sync-panel">
 			<p class="settings-bot-hint">
-				Photo and video auto-upload goes to remote <code>Camera/</code>.
+				Photo and video auto-upload goes to remote <code>{desiredCameraRemoteRoot()}/</code>.
 			</p>
 
 			<label class="settings-toggle">

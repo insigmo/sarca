@@ -19,6 +19,7 @@ use crate::state::AppSyncState;
 /// Keep in sync with `build.rs` AppManifest commands and `capabilities/default.json`.
 pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "platform_label",
+    "device_label",
     "default_gallery_path",
     "is_on_wifi",
     "get_about",
@@ -34,6 +35,7 @@ pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "remove_binding",
     "set_binding_enabled",
     "update_binding_local_path",
+    "update_binding_remote_root",
     "ensure_remote_folder",
     "pick_local_folder",
     "get_cache_size",
@@ -86,6 +88,7 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
     let state = app.state::<AppSyncState>();
     match cmd {
         "platform_label" => Ok(json!(commands::platform_label())),
+        "device_label" => Ok(json!(commands::device_label())),
         "default_gallery_path" => Ok(json!(commands::default_gallery_path())),
         "is_on_wifi" => Ok(json!(commands::is_on_wifi())),
         "get_about" => Ok(serde_json::to_value(commands::get_about()).map_err(|e| e.to_string())?),
@@ -176,6 +179,13 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let local_path = arg_str(&args, "local_path", "localPath")
                 .ok_or_else(|| "local_path required".to_string())?;
             let binding = commands::update_binding_local_path(state.clone(), id, local_path)?;
+            serde_json::to_value(binding).map_err(|e| e.to_string())
+        }
+        "update_binding_remote_root" => {
+            let id = arg_str(&args, "id", "id").ok_or_else(|| "id required".to_string())?;
+            let remote_root = arg_str(&args, "remote_root", "remoteRoot")
+                .ok_or_else(|| "remote_root required".to_string())?;
+            let binding = commands::update_binding_remote_root(state.clone(), id, remote_root)?;
             serde_json::to_value(binding).map_err(|e| e.to_string())
         }
         "ensure_remote_folder" => {
@@ -269,8 +279,10 @@ mod tests {
             "get_cache_size",
             "clear_local_cache",
             "platform_label",
+            "device_label",
             "set_binding_enabled",
             "update_binding_local_path",
+            "update_binding_remote_root",
         ] {
             assert!(
                 is_dispatched_command(cmd),
@@ -283,6 +295,7 @@ mod tests {
     fn soft_disable_commands_are_dispatched() {
         assert!(is_dispatched_command("set_binding_enabled"));
         assert!(is_dispatched_command("update_binding_local_path"));
+        assert!(is_dispatched_command("update_binding_remote_root"));
     }
 
     #[test]
