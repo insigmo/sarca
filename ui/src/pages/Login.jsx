@@ -8,7 +8,6 @@ import createLocalStore from '../../libs'
 import { A, useNavigate } from '@solidjs/router'
 
 import API from '../api'
-import OAuthButtons from '../components/OAuthButtons'
 import logoUrl from '../assets/logo.svg'
 
 const Login = () => {
@@ -22,7 +21,6 @@ const Login = () => {
 	})
 
 	/**
-	 *
 	 * @param {SubmitEvent} event
 	 */
 	const handleSubmit = async (event) => {
@@ -39,6 +37,19 @@ const Login = () => {
 			email: tokenData.email || email,
 			email_verified: tokenData.email_verified,
 		})
+
+		try {
+			const me = await API.auth.meSilent()
+			if (me) {
+				setStore('user', {
+					email: me.email,
+					email_verified: me.email_verified,
+					is_superuser: !!me.is_superuser,
+				})
+			}
+		} catch {
+			/* keep login payload */
+		}
 
 		const redirect_url = store.redirect || '/'
 		navigate(redirect_url)
@@ -90,17 +101,8 @@ const Login = () => {
 							<Button type="submit" variant="contained" color="secondary" size="large">
 								Sign in
 							</Button>
-							<A
-								class="default-link"
-								href="/register"
-								style={{ 'text-align': 'center' }}
-							>
-								Don't have an account yet? Register
-							</A>
 						</Stack>
 					</Box>
-
-					<OAuthButtons />
 				</Box>
 			</Paper>
 		</div>

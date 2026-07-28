@@ -4,7 +4,6 @@ pub mod email_tokens;
 pub mod file_chunks;
 pub mod file_sync_events;
 pub mod files;
-pub mod oauth_accounts;
 pub mod share_links;
 pub mod storage_channels;
 pub mod storage_purge;
