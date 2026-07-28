@@ -33,7 +33,7 @@ pub struct Config {
     /// Default 48 MB. Non-video files use `telegram_chunk_size_mb`.
     pub telegram_video_chunk_size_mb: u32,
 
-    /// Public base URL for email links and OAuth redirect URIs.
+    /// Public base URL for email links (verify / reset).
     pub public_base_url: String,
 
     pub smtp_host: Option<String>,
@@ -43,24 +43,11 @@ pub struct Config {
     pub smtp_from: String,
     /// `starttls` | `none` | `tls`
     pub smtp_tls: String,
-
-    pub oauth_google_client_id: Option<String>,
-    pub oauth_google_client_secret: Option<String>,
-    pub oauth_github_client_id: Option<String>,
-    pub oauth_github_client_secret: Option<String>,
 }
 
 impl Config {
     pub fn smtp_configured(&self) -> bool {
         self.smtp_host.is_some()
-    }
-
-    pub fn google_oauth_configured(&self) -> bool {
-        self.oauth_google_client_id.is_some() && self.oauth_google_client_secret.is_some()
-    }
-
-    pub fn github_oauth_configured(&self) -> bool {
-        self.oauth_github_client_id.is_some() && self.oauth_github_client_secret.is_some()
     }
 
     pub fn new() -> SarcaResult<Self> {
@@ -118,11 +105,6 @@ impl Config {
             Self::get_env_var_with_default("SMTP_FROM", "Sarca <noreply@example.com>".to_owned())?;
         let smtp_tls = Self::get_env_var_with_default("SMTP_TLS", "starttls".to_owned())?;
 
-        let oauth_google_client_id = Self::get_optional_env_var("OAUTH_GOOGLE_CLIENT_ID");
-        let oauth_google_client_secret = Self::get_optional_env_var("OAUTH_GOOGLE_CLIENT_SECRET");
-        let oauth_github_client_id = Self::get_optional_env_var("OAUTH_GITHUB_CLIENT_ID");
-        let oauth_github_client_secret = Self::get_optional_env_var("OAUTH_GITHUB_CLIENT_SECRET");
-
         Ok(Self {
             db_uri,
             db_uri_without_dbname,
@@ -147,10 +129,6 @@ impl Config {
             smtp_password,
             smtp_from,
             smtp_tls,
-            oauth_google_client_id,
-            oauth_google_client_secret,
-            oauth_github_client_id,
-            oauth_github_client_secret,
         })
     }
 

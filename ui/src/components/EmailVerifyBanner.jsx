@@ -22,6 +22,7 @@ const EmailVerifyBanner = () => {
 		setStore('user', {
 			email: me.email,
 			email_verified: me.email_verified,
+			is_superuser: !!me.is_superuser,
 		})
 	})
 
