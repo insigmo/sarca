@@ -178,6 +178,27 @@ pub fn platform_label() -> String {
 }
 
 #[tauri::command]
+pub fn device_label() -> String {
+    let fallback = platform_label();
+    let raw = hostname::get()
+        .ok()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let cleaned = raw
+        .replace(['/', '\\'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string();
+    if cleaned.is_empty() {
+        fallback
+    } else {
+        cleaned
+    }
+}
+
+#[tauri::command]
 pub async fn get_session(state: State<'_, AppSyncState>) -> Result<SessionDto, String> {
     let cfg = state.server.lock().await.clone();
     Ok(SessionDto {
@@ -570,6 +591,14 @@ fn ensure_local_path_change_allowed(mode: BindingMode) -> Result<(), String> {
     }
 }
 
+fn ensure_remote_root_change_allowed(mode: BindingMode) -> Result<(), String> {
+    if mode.is_upload_only() {
+        Ok(())
+    } else {
+        Err("Changing the remote folder is only supported for upload-only bindings".into())
+    }
+}
+
 #[tauri::command]
 pub fn update_binding_local_path(
     state: State<'_, AppSyncState>,
@@ -585,6 +614,28 @@ pub fn update_binding_local_path(
         .ok_or_else(|| format!("binding not found: {id}"))?;
     ensure_local_path_change_allowed(binding.mode)?;
     binding.local_path = local_path;
+    state
+        .engine
+        .upsert_binding(&binding)
+        .map_err(|e| e.to_string())?;
+    Ok(binding)
+}
+
+#[tauri::command]
+pub fn update_binding_remote_root(
+    state: State<'_, AppSyncState>,
+    id: String,
+    remote_root: String,
+) -> Result<Binding, String> {
+    let mut binding = state
+        .engine
+        .list_bindings()
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .find(|b| b.id == id)
+        .ok_or_else(|| format!("binding not found: {id}"))?;
+    ensure_remote_root_change_allowed(binding.mode)?;
+    binding.remote_root = remote_root.trim().trim_matches('/').to_owned();
     state
         .engine
         .upsert_binding(&binding)
