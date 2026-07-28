@@ -17,6 +17,8 @@ FOLDER_PICKER_SRC="$ROOT/mobile/android/java/app/sarca/client/folderpicker/Folde
 FOLDER_PICKER_DST="$APP_SRC/java/app/sarca/client/folderpicker/FolderPickerPlugin.kt"
 STARTUP_SRC="$ROOT/mobile/android/java/app/sarca/client/startup/StartupPlugin.kt"
 STARTUP_DST="$APP_SRC/java/app/sarca/client/startup/StartupPlugin.kt"
+MEDIASTORE_SRC="$ROOT/mobile/android/java/app/sarca/client/mediastore/MediaStorePlugin.kt"
+MEDIASTORE_DST="$APP_SRC/java/app/sarca/client/mediastore/MediaStorePlugin.kt"
 
 if [[ ! -f "$MANIFEST" ]]; then
   echo "AndroidManifest not found at $MANIFEST (run tauri android init first)" >&2
@@ -54,6 +56,12 @@ if [[ -f "$STARTUP_SRC" ]]; then
   mkdir -p "$(dirname "$STARTUP_DST")"
   cp -a "$STARTUP_SRC" "$STARTUP_DST"
   echo "Installed StartupPlugin.kt → $STARTUP_DST"
+fi
+
+if [[ -f "$MEDIASTORE_SRC" ]]; then
+  mkdir -p "$(dirname "$MEDIASTORE_DST")"
+  cp -a "$MEDIASTORE_SRC" "$MEDIASTORE_DST"
+  echo "Installed MediaStorePlugin.kt → $MEDIASTORE_DST"
 fi
 
 python3 - "$MANIFEST" <<'PY'

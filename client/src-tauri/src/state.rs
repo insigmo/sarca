@@ -6,7 +6,11 @@ use std::{
 };
 
 use anyhow::Result;
-use sarca_sync::{Binding, BindingMode, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig};
+use sarca_sync::{
+    Binding, BindingMode, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig,
+};
+#[cfg(not(target_os = "android"))]
+use sarca_sync::FsMediaSource;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
 use tokio::sync::{Mutex, RwLock};
@@ -598,6 +602,10 @@ impl AppSyncState {
             poll_interval: Duration::from_secs(30),
             api,
             data_dir: data_dir.clone(),
+            #[cfg(target_os = "android")]
+            media_source: Arc::new(crate::mediastore::AndroidDcimMediaSource::new(app.clone())),
+            #[cfg(not(target_os = "android"))]
+            media_source: Arc::new(FsMediaSource),
         };
         let engine = Arc::new(SyncEngine::open(config, Arc::new(KeepBothPrompt))?);
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
