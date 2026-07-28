@@ -1,3 +1,5 @@
+# Production stack: pull images + mount sarca.conf only.
+# Local binary/UI overrides: compose.dev.yml (see `task up` / `task restart`).
 volumes:
   sarca-db-volume:
     name: sarca-db-volume
@@ -14,22 +16,10 @@ services:
   sarca:
     container_name: sarca
     image: ghcr.io/insigmo/sarca:latest
-    build:
-      context: .
-      dockerfile: Dockerfile.amd64
-      args:
-        VERSION: latest
-    entrypoint: ["/bin/sh", "/sarca-entrypoint.sh"]
     volumes:
-      # App reads KEY=VALUE from this file (same format as native install).
       - ./sarca.conf:/sarca.conf:ro
-      - ./docker/sarca-entrypoint.sh:/sarca-entrypoint.sh:ro
-      # Local builds override release assets in the image (task binary / task ui).
-      - ./runtime/sarca:/sarca:ro
-      - ./ui/dist:/ui:ro
       - sarca-work-volume:/work
-      # Local Bot API (`--local`) returns absolute paths under this dir; Sarca must
-      # see the same files to open/download, and delete documents/ copies after use.
+      # Local Bot API returns absolute paths under this dir; Sarca must see the same files.
       - telegram-bot-api-data:/var/lib/telegram-bot-api
     environment:
       PORT: ${PORT:-8000}
@@ -53,6 +43,9 @@ services:
       - telegram-bot-api-data:/var/lib/telegram-bot-api
     env_file:
       - sarca.conf
+    environment:
+      # Official Local Bot API flag (sarca.conf uses TELEGRAM_LOCAL_API for the app).
+      TELEGRAM_LOCAL: "1"
     entrypoint: ["/bin/sh", "/sarca-telegram-entrypoint.sh"]
     restart: unless-stopped
     ports:
