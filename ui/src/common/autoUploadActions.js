@@ -62,3 +62,32 @@ export function cameraRemoteRoot(deviceLabel) {
 	const suffix = cleaned || 'Unknown device'
 	return `Camera/${suffix}`
 }
+
+/**
+ * Like {@link cameraRemoteRoot}, but returns `null` while labels are still loading
+ * so the Sync UI never flashes sticky "Unknown device".
+ * @param {string} deviceLabel
+ * @param {string} [platformLabel]
+ * @returns {string | null}
+ */
+export function displayCameraRemoteRoot(deviceLabel, platformLabel = '') {
+	const label =
+		String(deviceLabel || '').trim() || String(platformLabel || '').trim()
+	if (!label) return null
+	return cameraRemoteRoot(label)
+}
+
+/**
+ * True when an existing binding remote_root should be rewritten to `expectedRoot`.
+ * @param {string} remoteRoot
+ * @param {string} expectedRoot
+ * @returns {boolean}
+ */
+export function needsCameraRootMigration(remoteRoot, expectedRoot) {
+	const root = String(remoteRoot || '')
+	const expected = String(expectedRoot || '')
+	if (!expected || expected === 'Camera' || expected === 'Camera/Unknown device') {
+		return false
+	}
+	return root === 'Camera' || root === 'Camera/Unknown device'
+}

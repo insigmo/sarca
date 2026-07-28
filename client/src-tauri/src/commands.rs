@@ -8,14 +8,17 @@ use sarca_sync::{
     TransferQueueSnapshot,
 };
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri_plugin_dialog::DialogExt;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tokio::sync::oneshot;
 
 use crate::client_log;
-use crate::startup::{is_useless_hostname, sanitize_device_label};
+use crate::startup::{
+    is_usable_device_label, is_useless_hostname, read_device_label_cache, sanitize_device_label,
+    write_device_label_cache,
+};
 use crate::state::{
     navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding,
     read_webview_session, session_ready_for_sync, AppSyncState, ClientPrefs, ServerConfig,
@@ -186,16 +189,41 @@ pub fn platform_label() -> String {
 
 #[tauri::command]
 pub fn device_label(app: AppHandle) -> String {
+    resolve_device_label(&app)
+}
+
+/// Resolve the device label, preferring the on-disk cache; refresh/write cache when needed.
+pub fn resolve_device_label(app: &AppHandle) -> String {
     let fallback = platform_label();
+    let data_dir = app
+        .try_state::<AppSyncState>()
+        .map(|s| s.data_dir().clone());
+
+    if let Some(ref dir) = data_dir {
+        if let Some(cached) = read_device_label_cache(dir) {
+            return cached;
+        }
+    }
+
+    let live = resolve_live_device_label(app, &fallback);
+    if let Some(ref dir) = data_dir {
+        if is_usable_device_label(&live) {
+            let _ = write_device_label_cache(dir, &live);
+        }
+    }
+    live
+}
+
+fn resolve_live_device_label(app: &AppHandle, fallback: &str) -> String {
     #[cfg(target_os = "android")]
     {
-        if let Some(label) = crate::startup::device_model_label(&app) {
+        if let Some(label) = crate::startup::device_model_label(app) {
             return label;
         }
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = &app;
+        let _ = app;
     }
     let raw = hostname::get()
         .ok()
@@ -203,10 +231,15 @@ pub fn device_label(app: AppHandle) -> String {
         .unwrap_or_default();
     let cleaned = sanitize_device_label(&raw);
     if cleaned.is_empty() || is_useless_hostname(&cleaned) {
-        fallback
+        fallback.to_string()
     } else {
         cleaned
     }
+}
+
+/// Best-effort: resolve + persist device identity during app startup.
+pub fn ensure_device_label_cached(app: &AppHandle) {
+    let _ = resolve_device_label(app);
 }
 
 #[tauri::command]
