@@ -68,18 +68,17 @@ impl<'d> AuthService<'d> {
         Ok(Self::issue_tokens(auth, email_verified, config))
     }
 
-    pub async fn me(&self, user: &AuthUser) -> SarcaResult<MeSchema> {
+    pub async fn me(&self, user: &AuthUser, config: &Config) -> SarcaResult<MeSchema> {
         let u = self.repo.get_by_id(user.id).await?;
         Ok(MeSchema {
             email_verified: u.email_verified(),
+            is_superuser: u.email.eq_ignore_ascii_case(&config.superuser_email),
             email: u.email,
         })
     }
 
     pub fn providers(config: &Config) -> ProvidersSchema {
         ProvidersSchema {
-            google: config.google_oauth_configured(),
-            github: config.github_oauth_configured(),
             smtp: config.smtp_configured(),
         }
     }
@@ -110,28 +109,6 @@ impl<'d> AuthService<'d> {
 
         let (subject, text, html) = mailer::verify_email_body(&config.public_base_url, &raw);
         Mailer::new(config).send(email, &subject, &text, &html).await
-    }
-
-    /// Soft-send verify mail on register (no error if SMTP unset / send fails).
-    pub async fn send_verify_email_soft(&self, user_id: Uuid, email: &str, config: &Config) {
-        if !config.smtp_configured() {
-            return;
-        }
-        let raw = Self::new_raw_token();
-        let hash = Self::hash_token(&raw);
-        let expires_at = Utc::now() + ChronoDuration::hours(VERIFY_TTL_HOURS);
-
-        if let Err(e) = self.tokens.invalidate_unused(user_id, PURPOSE_VERIFY).await {
-            tracing::warn!("verify token invalidate failed: {e}");
-            return;
-        }
-        if let Err(e) = self.tokens.create(user_id, PURPOSE_VERIFY, &hash, expires_at).await {
-            tracing::warn!("verify token create failed: {e}");
-            return;
-        }
-
-        let (subject, text, html) = mailer::verify_email_body(&config.public_base_url, &raw);
-        Mailer::new(config).send_soft(email, &subject, &text, &html).await;
     }
 
     pub async fn verify_token(&self, raw_token: &str) -> SarcaResult<()> {

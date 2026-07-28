@@ -375,7 +375,7 @@ pub async fn init_db(db: &PgPool) {
         CREATE INDEX IF NOT EXISTS share_links_created_by_idx
           ON share_links (created_by);
     ",
-        // --- auth: email verify / password reset / OAuth (Wave 4) ---
+        // --- auth: email verify / password reset ---
         // Add email_verified_at only once; backfill existing users as verified.
         r#"
         DO $$
@@ -410,18 +410,7 @@ pub async fn init_db(db: &PgPool) {
           ON email_tokens (user_id, purpose);
     ",
         "
-        CREATE TABLE IF NOT EXISTS oauth_accounts (
-            id               UUID PRIMARY KEY,
-            user_id          UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            provider         TEXT NOT NULL,
-            provider_user_id TEXT NOT NULL,
-            created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            UNIQUE (provider, provider_user_id)
-        );
-    ",
-        "
-        CREATE INDEX IF NOT EXISTS oauth_accounts_user_idx
-          ON oauth_accounts (user_id);
+        DROP TABLE IF EXISTS oauth_accounts;
     ",
         "
         ALTER TABLE files

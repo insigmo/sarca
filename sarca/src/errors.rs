@@ -25,6 +25,8 @@ pub enum SarcaError {
     StorageWorkerTokenConflict,
     #[error("not authenticated")]
     NotAuthenticated,
+    #[error("forbidden")]
+    Forbidden,
     #[error("[Telegram API] {0}")]
     TelegramAPIError(String),
     #[error("You need to add at least 1 storage worker")]
@@ -57,10 +59,6 @@ pub enum SarcaError {
     MailNotConfigured,
     #[error("invalid or expired token")]
     InvalidToken,
-    #[error("OAuth provider is not configured")]
-    OAuthNotConfigured,
-    #[error("OAuth failed")]
-    OAuthFailed,
     #[error("unknown error")]
     Unknown,
     #[error("{0} header is required")]
@@ -83,6 +81,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::CannotManageAccessOfYourself
             | SarcaError::TrashPathConflict => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
+            SarcaError::Forbidden => (StatusCode::FORBIDDEN, e.to_string()),
             SarcaError::DoesNotExist(_) => (StatusCode::NOT_FOUND, e.to_string()),
             SarcaError::FolderTooLargeForZip => (StatusCode::PAYLOAD_TOO_LARGE, e.to_string()),
             SarcaError::HeaderMissed(_)
@@ -95,8 +94,6 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::InvalidTrashRetention
             | SarcaError::InvalidShareExpiry
             | SarcaError::InvalidToken
-            | SarcaError::OAuthNotConfigured
-            | SarcaError::OAuthFailed
             | SarcaError::TelegramAPIError(_) => (StatusCode::BAD_REQUEST, e.to_string()),
             SarcaError::MailNotConfigured => (StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
             _ => {
