@@ -442,4 +442,63 @@ describe('SettingsSyncPanel', () => {
 		expect(await findByText('Upload list')).toBeTruthy()
 		expect(await findByText('a.jpg')).toBeTruthy()
 	})
+
+	it('shows unfinished upload count including waiting', async () => {
+		mockNativeInvoke([])
+		nativeInvoke.mockImplementation(async (cmd) => {
+			switch (cmd) {
+				case 'platform_label':
+					return ''
+				case 'device_label':
+					return 'Pixel 8'
+				case 'list_bindings':
+					return []
+				case 'get_client_prefs':
+					return {
+						wifi_only: true,
+						background_sync: true,
+						app_lock_enabled: false,
+						app_lock_pin: null,
+					}
+				case 'sync_statuses':
+					return []
+				case 'sync_transfer_queue':
+					return {
+						uploading: 2,
+						downloading: 0,
+						items: [
+							{
+								direction: 'upload',
+								status: 'active',
+								name: 'a.jpg',
+								path: '',
+								size: 1,
+							},
+							{
+								direction: 'upload',
+								status: 'waiting',
+								name: 'b.jpg',
+								path: '',
+								size: 1,
+							},
+						],
+					}
+				case 'default_gallery_path':
+					return '/pictures'
+				default:
+					return null
+			}
+		})
+
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		await waitFor(() =>
+			expect(callsFor('sync_transfer_queue').length).toBeGreaterThan(0),
+		)
+		const uploadRow = [
+			...container.querySelectorAll('.settings-sync-panel__queue-row'),
+		].find((el) => el.textContent.includes('Uploading'))
+		expect(uploadRow?.textContent).toContain('2')
+	})
 })
