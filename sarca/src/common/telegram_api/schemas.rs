@@ -145,6 +145,15 @@ pub struct ForwardOriginSchema {
 #[derive(Debug, Deserialize)]
 pub struct ChatMemberUpdateSchema {
     pub chat: UpdateChatSchema,
+    /// Present on real Bot API payloads; used to ignore kick/left noise.
+    #[serde(default)]
+    pub new_chat_member: Option<ChatMemberStatusSchema>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatMemberStatusSchema {
+    #[serde(default)]
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,7 +178,17 @@ pub fn chats_from_updates(body: &GetUpdatesBodySchema) -> Vec<DetectedChat> {
             push_detected(&mut out, &post.chat);
         }
         if let Some(member) = &update.my_chat_member {
-            push_detected(&mut out, &member.chat);
+            // Only promote-to-admin is useful. Kick/left/member events used to
+            // become candidates, then burn a getChatMember 403 and (worse) keep
+            // the long-poll from waiting on a fresh admin-add in the same tick.
+            match member.new_chat_member.as_ref().and_then(|m| m.status.as_deref()) {
+                Some("administrator" | "creator") => {
+                    push_detected(&mut out, &member.chat);
+                },
+                // Malformed / stripped payload — keep prior behavior (classify later).
+                None => push_detected(&mut out, &member.chat),
+                Some(_) => {},
+            }
         }
         if let Some(msg) = &update.message {
             // Groups/supergroups when bot is added.
@@ -273,6 +292,24 @@ mod tests {
         assert_eq!(chats.len(), 1);
         assert_eq!(chats[0].chat_id, -100_111);
         assert_eq!(chats[0].title, "Admin Chan");
+    }
+
+    #[test]
+    fn chats_from_updates_skips_my_chat_member_kick() {
+        let json = r#"{
+          "result": [{
+            "update_id": 3,
+            "my_chat_member": {
+              "chat": { "id": -100111, "title": "Gone Chan", "type": "channel" },
+              "from": { "id": 1, "is_bot": false, "first_name": "U" },
+              "date": 1,
+              "old_chat_member": { "status": "administrator", "user": { "id": 2, "is_bot": true, "first_name": "B" } },
+              "new_chat_member": { "status": "kicked", "user": { "id": 2, "is_bot": true, "first_name": "B" } }
+            }
+          }]
+        }"#;
+        let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
+        assert!(chats_from_updates(&body).is_empty());
     }
 
     #[test]

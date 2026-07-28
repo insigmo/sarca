@@ -281,8 +281,14 @@ impl TelegramTokenClient {
         let mut found = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
+        let mut skipped_excluded: Vec<String> = Vec::new();
+
         for &chat_id in probe {
-            if exclude.contains(&chat_id) || chat_id >= 0 || !seen.insert(chat_id) {
+            if chat_id >= 0 || !seen.insert(chat_id) {
+                continue;
+            }
+            if exclude.contains(&chat_id) {
+                skipped_excluded.push(chat_id.to_string());
                 continue;
             }
             match self.classify_admin_chat(chat_id, me.id, None).await {
@@ -316,7 +322,11 @@ impl TelegramTokenClient {
             self.drain_update_chats().await?
         };
         for chat in chats {
-            if exclude.contains(&chat.chat_id) || !seen.insert(chat.chat_id) {
+            if !seen.insert(chat.chat_id) {
+                continue;
+            }
+            if exclude.contains(&chat.chat_id) {
+                skipped_excluded.push(chat.title.clone());
                 continue;
             }
             if chat.chat_id >= 0 {
@@ -329,7 +339,15 @@ impl TelegramTokenClient {
             }
         }
 
-        let hint = if saw_non_admin && found.is_empty() {
+        let hint = if !found.is_empty() {
+            None
+        } else if !skipped_excluded.is_empty() {
+            let labels = skipped_excluded.join(", ");
+            Some(format!(
+                "Seen channel(s) already linked to another storage: {labels}. Use a different \
+                 channel, or open the existing storage instead of creating a new one."
+            ))
+        } else if saw_non_admin {
             Some(
                 "Bot was added to a channel but does not have admin rights. Make it an admin with \
                  Post messages and Delete messages."

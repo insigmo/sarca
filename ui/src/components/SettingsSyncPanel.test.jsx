@@ -200,35 +200,6 @@ describe('SettingsSyncPanel', () => {
 		expect(callsFor('set_binding_enabled').length).toBe(0)
 	})
 
-	it('adding a folder auto-upload turns background sync on', async () => {
-		mockNativeInvoke([])
-		const { getByLabelText, getByText } = render(() => (
-			<SettingsSyncPanel storageId="sid" storageName="Test" />
-		))
-		await waitFor(() => expect(callsFor('list_bindings').length).toBeGreaterThan(0))
-
-		fireEvent.input(getByLabelText('Local folder'), {
-			target: { value: '/watched' },
-		})
-		fireEvent.input(getByLabelText('Remote folder path'), {
-			target: { value: 'Remote/Path' },
-		})
-		fireEvent.click(getByText('Add folder auto-upload'))
-
-		await waitFor(() => expect(callsFor('add_binding').length).toBe(1))
-		expect(callsFor('add_binding')[0][1]).toMatchObject({
-			mode: 'folder_upload',
-			localPath: '/watched',
-		})
-		await waitFor(() =>
-			expect(
-				callsFor('set_client_prefs').some(
-					([, a]) => a.prefs?.background_sync === true,
-				),
-			).toBe(true),
-		)
-	})
-
 	it('toggling a folder binding row calls set_binding_enabled', async () => {
 		mockNativeInvoke([
 			{

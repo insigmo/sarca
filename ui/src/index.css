@@ -818,6 +818,23 @@ a.default-link:hover {
 		-webkit-backdrop-filter: blur(20px);
 		animation: sarca-fade 0.2s ease both;
 	}
+
+	.files-sidebar--drawer .files-sidebar__new {
+		min-height: 46px;
+		padding: 8px 14px;
+		font-size: 0.9rem;
+	}
+
+	.files-sidebar--drawer .files-sidebar__item {
+		min-height: 44px;
+		padding: 8px 10px;
+		font-size: 0.88rem;
+	}
+
+	.files-sidebar--drawer .files-sidebar__item .fluent-icon,
+	.files-sidebar--drawer .files-sidebar__item .MuiSvgIcon-root {
+		font-size: 1.25rem;
+	}
 }
 
 .files-page {
@@ -831,6 +848,14 @@ a.default-link:hover {
 	/* Equal side gutters — same inset left (by sidebar) and right */
 	padding-inline: 12px;
 	box-sizing: border-box;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+/* Keep native text selection only inside file/folder items. */
+.files-page :is(.fs-grid-item, .fs-grid-item *, .fs-list-item, .fs-list-item *) {
+	user-select: text;
+	-webkit-user-select: text;
 }
 
 @media (min-width: 841px) {
@@ -986,6 +1011,8 @@ a.default-link:hover {
 	color: var(--sarca-ink-soft);
 	font-size: 0.95rem;
 	font-weight: 500;
+	user-select: none;
+	-webkit-user-select: none;
 }
 
 .files-list {
