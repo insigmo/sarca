@@ -227,14 +227,6 @@ a.default-link:hover {
 	min-height: 0;
 }
 
-.app-shell-banner:not(:has(*)) {
-	display: none;
-}
-
-.app-shell-banner:has(*) {
-	padding: 12px 20px 0;
-}
-
 .app-shell-outlet {
 	display: flex;
 	flex: 1;
@@ -370,11 +362,6 @@ a.default-link:hover {
 
 .auth-message--error {
 	color: var(--sarca-danger, #c62828);
-}
-
-.email-verify-banner__hint {
-	font-size: 0.8rem;
-	opacity: 0.85;
 }
 
 /* —— Page chrome —— */
