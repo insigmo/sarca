@@ -25,6 +25,8 @@ REQUIRED = [
     "allow-get-cache-size",
     "allow-clear-local-cache",
     "allow-platform-label",
+    "allow-set-binding-enabled",
+    "allow-update-binding-local-path",
 ]
 
 

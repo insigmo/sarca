@@ -9,8 +9,14 @@ import {
 	nativeInvoke,
 	pickLocalFolder,
 } from '../common/nativeBridge'
+import {
+	cameraBinding,
+	resolveCameraToggle,
+	withBackgroundSyncOn,
+} from '../common/autoUploadActions'
 import { filesChromeStore } from '../common/filesChrome'
 import { alertStore } from './AlertStack'
+import SettingsSwitch from './SettingsSwitch'
 
 /**
  * Sync tab: Camera media auto-upload + one-way folder auto-upload.
@@ -29,6 +35,7 @@ const SettingsSyncPanel = (props) => {
 		app_lock_enabled: false,
 		app_lock_pin: null,
 	})
+	const [prefsLoaded, setPrefsLoaded] = createSignal(false)
 	const [localPath, setLocalPath] = createSignal('')
 	const [folderLocalPath, setFolderLocalPath] = createSignal('')
 	const [remoteRoot, setRemoteRoot] = createSignal('')
@@ -44,7 +51,9 @@ const SettingsSyncPanel = (props) => {
 		chrome.storageName() ||
 		(lockedStorageId() ? 'Current storage' : 'No storage open')
 
-	const autoBinding = () => bindings().find((b) => b.mode === 'auto_upload')
+	// Camera row can exist while soft-disabled — never removed on toggle-off.
+	const autoBinding = () => cameraBinding(bindings())
+	const cameraOn = () => autoBinding()?.enabled === true
 	const folderBindings = () =>
 		bindings().filter(
 			(b) => b.mode === 'folder_upload' || b.mode === 'sync',
@@ -75,6 +84,7 @@ const SettingsSyncPanel = (props) => {
 					app_lock_enabled: Boolean(prefsDto.app_lock_enabled),
 					app_lock_pin: prefsDto.app_lock_pin ?? null,
 				})
+				setPrefsLoaded(true)
 			}
 			const binds = bindsResult.ok
 				? Array.isArray(bindsResult.value)
@@ -109,6 +119,30 @@ const SettingsSyncPanel = (props) => {
 		await nativeInvoke('set_client_prefs', { prefs: next })
 	}
 
+	// Turning a binding on always wants background_sync enabled, but naively
+	// saving `withBackgroundSyncOn(prefs())` before the first successful
+	// `refresh()` would persist the signal's hardcoded defaults (in
+	// particular app_lock_enabled/app_lock_pin) over whatever the user
+	// actually has saved, silently disabling their app lock. Fetch a fresh
+	// base straight from native prefs whenever we haven't loaded real prefs
+	// yet, and skip the save entirely if that also fails.
+	const enableBackgroundSyncSafely = async () => {
+		if (prefsLoaded()) {
+			await savePrefs(withBackgroundSyncOn(prefs()))
+			return
+		}
+		try {
+			const fresh = await nativeInvoke('get_client_prefs')
+			if (fresh && typeof fresh === 'object') {
+				setPrefsLoaded(true)
+				await savePrefs(withBackgroundSyncOn(fresh))
+			}
+		} catch {
+			// No reliable prefs source — skip rather than risk overwriting
+			// real prefs (e.g. app lock) with defaults.
+		}
+	}
+
 	const pickFolder = async (current) => {
 		setBusy(true)
 		setMsg('')
@@ -138,7 +172,7 @@ const SettingsSyncPanel = (props) => {
 			})
 	}
 
-	const setAutoUpload = async (enabled) => {
+	const setAutoUpload = async (enable) => {
 		setBusy(true)
 		setMsg('')
 		try {
@@ -154,59 +188,62 @@ const SettingsSyncPanel = (props) => {
 			} catch {
 				live = bindings()
 			}
-			const existing = live.filter((b) => b.mode === 'auto_upload')
 
-			if (enabled && existing.length > 0) {
-				// Already enabled — sync UI and kick upload without recreate (keeps index).
+			const decision = resolveCameraToggle(live, enable)
+
+			if (decision.action === 'noop') {
 				setBindings(live)
-				const auto = existing[0]
-				if (auto?.local_path) setLocalPath(auto.local_path)
-				kickSyncNow()
 				return
 			}
 
-			for (const b of existing) {
-				await nativeInvoke('remove_binding', { id: b.id })
+			if (decision.action === 'set_enabled') {
+				// Soft-disable / re-enable in place — never remove_binding, so the
+				// index and remote mapping survive a toggle-off/on cycle.
+				await nativeInvoke('set_binding_enabled', {
+					id: decision.id,
+					enabled: decision.enabled,
+				})
+				if (decision.enabled) {
+					await enableBackgroundSyncSafely()
+				}
+				await refresh()
+				if (decision.enabled) kickSyncNow()
+				return
 			}
-			if (enabled) {
-				let path = localPath().trim()
+
+			// decision.action === 'add'
+			let path = localPath().trim()
+			if (!path) {
+				path = String((await nativeInvoke('default_gallery_path')) || '')
 				if (!path) {
-					path = String((await nativeInvoke('default_gallery_path')) || '')
-					if (!path) {
-						path = String((await pickLocalFolder('')) || '')
-					}
-					if (path) setLocalPath(path)
+					path = String((await pickLocalFolder('')) || '')
 				}
-				if (!path) throw new Error('Choose a local gallery / Pictures folder')
-				const remote = await nativeInvoke('ensure_remote_folder', {
-					storageId: sid,
-					parent: '',
-					name: 'Camera',
-				})
-				const binding = await nativeInvoke('add_binding', {
-					storageId: sid,
-					remoteRoot: String(remote).replace(/\/$/, '') || 'Camera',
-					localPath: path,
-					mode: 'auto_upload',
-				})
-				// Optimistic UI so the toggle stays on while the engine catches up.
-				if (binding && typeof binding === 'object') {
-					setBindings((prev) => [
-						...(Array.isArray(prev)
-							? prev.filter((b) => b.mode !== 'auto_upload')
-							: []),
-						binding,
-					])
-				}
-			} else {
-				setBindings((prev) =>
-					(Array.isArray(prev) ? prev : []).filter(
-						(b) => b.mode !== 'auto_upload',
-					),
-				)
+				if (path) setLocalPath(path)
 			}
+			if (!path) throw new Error('Choose a local gallery / Pictures folder')
+			const remote = await nativeInvoke('ensure_remote_folder', {
+				storageId: sid,
+				parent: '',
+				name: 'Camera',
+			})
+			const binding = await nativeInvoke('add_binding', {
+				storageId: sid,
+				remoteRoot: String(remote).replace(/\/$/, '') || 'Camera',
+				localPath: path,
+				mode: 'auto_upload',
+			})
+			// Optimistic UI so the toggle stays on while the engine catches up.
+			if (binding && typeof binding === 'object') {
+				setBindings((prev) => [
+					...(Array.isArray(prev)
+						? prev.filter((b) => b.mode !== 'auto_upload')
+						: []),
+					binding,
+				])
+			}
+			await enableBackgroundSyncSafely()
 			await refresh()
-			if (enabled) kickSyncNow()
+			kickSyncNow()
 		} catch (e) {
 			setMsg(String(e))
 			addAlert(String(e), 'error')
@@ -256,6 +293,7 @@ const SettingsSyncPanel = (props) => {
 					binding,
 				])
 			}
+			await enableBackgroundSyncSafely()
 			setFolderLocalPath('')
 			await refresh()
 			kickSyncNow()
@@ -272,6 +310,18 @@ const SettingsSyncPanel = (props) => {
 		setBusy(true)
 		try {
 			await nativeInvoke('remove_binding', { id })
+			await refresh()
+		} catch (e) {
+			addAlert(String(e), 'error')
+		} finally {
+			setBusy(false)
+		}
+	}
+
+	const toggleFolderBinding = async (id, enabled) => {
+		setBusy(true)
+		try {
+			await nativeInvoke('set_binding_enabled', { id, enabled })
 			await refresh()
 		} catch (e) {
 			addAlert(String(e), 'error')
@@ -303,11 +353,11 @@ const SettingsSyncPanel = (props) => {
 
 			<label class="settings-toggle">
 				<span>Включить автозагрузку фото и видео</span>
-				<input
-					type="checkbox"
-					checked={Boolean(autoBinding())}
+				<SettingsSwitch
+					id="settings-camera-switch"
+					checked={cameraOn()}
 					disabled={busy()}
-					onChange={(e) => setAutoUpload(e.currentTarget.checked)}
+					onChange={(checked) => setAutoUpload(checked)}
 				/>
 			</label>
 
@@ -322,9 +372,33 @@ const SettingsSyncPanel = (props) => {
 						disabled={busy()}
 						onClick={async () => {
 							const path = await pickFolder(localPath())
-							if (path) {
-								setLocalPath(path)
-								await setAutoUpload(true)
+							if (!path) return
+							setLocalPath(path)
+							try {
+								const existing = cameraBinding(
+									await nativeInvoke('list_bindings'),
+								)
+								if (existing) {
+									await nativeInvoke('update_binding_local_path', {
+										id: existing.id,
+										localPath: path,
+									})
+									if (!existing.enabled) {
+										await nativeInvoke('set_binding_enabled', {
+											id: existing.id,
+											enabled: true,
+										})
+									}
+									await enableBackgroundSyncSafely()
+									kickSyncNow()
+									await refresh()
+								} else {
+									await setAutoUpload(true)
+								}
+							} catch (e) {
+								setMsg(String(e))
+								addAlert(String(e), 'error')
+								await refresh()
 							}
 						}}
 					>
@@ -336,12 +410,12 @@ const SettingsSyncPanel = (props) => {
 			<Show when={autoBinding() && isMobile()}>
 				<label class="settings-toggle">
 					<span>Загружать только через WIFI</span>
-					<input
-						type="checkbox"
+					<SettingsSwitch
+						id="settings-wifi-switch"
 						checked={prefs().wifi_only !== false}
 						disabled={busy()}
-						onChange={(e) =>
-							savePrefs({ ...prefs(), wifi_only: e.currentTarget.checked })
+						onChange={(checked) =>
+							savePrefs({ ...prefs(), wifi_only: checked })
 						}
 					/>
 				</label>
@@ -349,12 +423,12 @@ const SettingsSyncPanel = (props) => {
 
 			<label class="settings-toggle">
 				<span>Background backup / sync</span>
-				<input
-					type="checkbox"
+				<SettingsSwitch
+					id="settings-background-switch"
 					checked={prefs().background_sync !== false}
 					disabled={busy()}
-					onChange={(e) =>
-						savePrefs({ ...prefs(), background_sync: e.currentTarget.checked })
+					onChange={(checked) =>
+						savePrefs({ ...prefs(), background_sync: checked })
 					}
 				/>
 			</label>
@@ -448,15 +522,26 @@ const SettingsSyncPanel = (props) => {
 											{b.remote_root || '(root)'}
 										</div>
 									</div>
-									<Button
-										size="small"
-										color="error"
-										variant="outlined"
-										disabled={busy()}
-										onClick={() => removeBinding(b.id)}
-									>
-										Remove
-									</Button>
+									<div class="settings-sync-panel__row">
+										<SettingsSwitch
+											id={`settings-folder-switch-${b.id}`}
+											ariaLabel={`${modeLabel(b.mode)}: ${b.local_path}`}
+											checked={b.enabled === true}
+											disabled={busy()}
+											onChange={(checked) =>
+												toggleFolderBinding(b.id, checked)
+											}
+										/>
+										<Button
+											size="small"
+											color="error"
+											variant="outlined"
+											disabled={busy()}
+											onClick={() => removeBinding(b.id)}
+										>
+											Remove
+										</Button>
+									</div>
 								</li>
 							)}
 						</For>

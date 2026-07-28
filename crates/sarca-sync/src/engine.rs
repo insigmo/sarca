@@ -14,6 +14,7 @@ use crate::{
     api::SarcaApi,
     hash::sha256_file,
     index::{mtime_ms_from_system, IndexEntry, LocalIndex},
+    scheduler::BindingScheduler,
     types::{Binding, BindingMode, SyncStatus},
 };
 
@@ -63,8 +64,8 @@ pub struct SyncEngine {
     index: LocalIndex,
     prompt: Arc<dyn ConflictPrompt>,
     statuses: Arc<RwLock<Vec<SyncStatus>>>,
-    /// Prevents overlapping ticks (UI `sync_now` + background loop).
-    tick_lock: tokio::sync::Mutex<()>,
+    /// Runs enabled bindings concurrently (per-id skip-when-busy, max 2 in flight).
+    scheduler: BindingScheduler,
 }
 
 impl SyncEngine {
@@ -76,7 +77,7 @@ impl SyncEngine {
             index,
             prompt,
             statuses: Arc::new(RwLock::new(Vec::new())),
-            tick_lock: tokio::sync::Mutex::new(()),
+            scheduler: BindingScheduler::new(2),
         })
     }
 
@@ -98,7 +99,29 @@ impl SyncEngine {
     }
 
     pub fn remove_binding(&self, id: &str) -> Result<()> {
-        self.index.remove_binding(id)
+        self.index.remove_binding(id)?;
+        self.clear_status(id);
+        Ok(())
+    }
+
+    pub fn set_binding_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+        self.index.set_binding_enabled(id, enabled)?;
+        if !enabled {
+            self.clear_status(id);
+        }
+        Ok(())
+    }
+
+    /// Best-effort immediate removal of a binding's status entry, e.g. right
+    /// after disabling/removing it so a stale error banner doesn't linger in
+    /// the UI until the next tick. This is synchronous (`statuses` is an
+    /// async `RwLock`), so it uses `try_write`: if a tick currently holds the
+    /// lock, the entry is instead pruned by `tick_filtered`'s own retain pass
+    /// once that tick completes — never left stuck forever.
+    fn clear_status(&self, id: &str) {
+        if let Ok(mut guard) = self.statuses.try_write() {
+            guard.retain(|s| s.binding_id != id);
+        }
     }
 
     pub async fn statuses(&self) -> Vec<SyncStatus> {
@@ -113,11 +136,15 @@ impl SyncEngine {
     /// Like [`tick`], but only processes bindings for which `allow` returns true.
     /// Auto-upload bindings run before two-way sync so a huge sync folder cannot
     /// starve Camera uploads for the whole poll interval.
+    ///
+    /// Bindings run concurrently via [`BindingScheduler`]: a binding already
+    /// in flight (e.g. from an overlapping call) is skipped rather than
+    /// serialized behind a global lock, so Camera auto-upload and folder sync
+    /// no longer block each other.
     pub async fn tick_filtered<F>(&self, allow: F) -> Result<()>
     where
         F: Fn(&Binding) -> bool,
     {
-        let _guard = self.tick_lock.lock().await;
         let mut bindings: Vec<Binding> = self
             .index
             .list_bindings()?
@@ -128,41 +155,85 @@ impl SyncEngine {
             BindingMode::AutoUpload | BindingMode::FolderUpload => 0,
             BindingMode::Sync => 1,
         });
-        let mut statuses = Vec::new();
-        for binding in bindings {
-            // Publish in-progress status so the UI is not blank for long ticks.
-            {
-                let mut guard = self.statuses.write().await;
-                let mut live = statuses.clone();
-                live.push(SyncStatus {
-                    binding_id: binding.id.clone(),
-                    cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
-                    last_error: None,
-                    uploading: 0,
-                    downloading: 0,
-                    conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
-                });
-                *guard = live;
-            }
-            let status = match self.sync_binding(&binding).await {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(binding = %binding.id, error = %e, "sync failed");
-                    SyncStatus {
-                        binding_id: binding.id.clone(),
-                        cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
-                        last_error: Some(e.to_string()),
-                        uploading: 0,
-                        downloading: 0,
-                        conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
+
+        // Placeholders are seeded lazily, only once the scheduler has
+        // actually accepted a binding's run (inside the closure passed to
+        // `run`, below) — never up front for every binding. Seeding up
+        // front would clobber the still-valid status of a binding that
+        // gets skipped (`None`, already in flight from an overlapping
+        // tick), wiping its `last_error`/counts even though it never ran.
+        let futs = bindings.into_iter().map(|binding| async move {
+            self.scheduler
+                .run(&binding.id, || async {
+                    // Now that the scheduler has committed to running this
+                    // binding, publish an in-progress placeholder so the UI
+                    // is not blank for long ticks and so per-file progress
+                    // updates (in `push_local`) have a status entry to
+                    // update while other bindings run concurrently.
+                    {
+                        let placeholder = SyncStatus {
+                            binding_id: binding.id.clone(),
+                            cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
+                            last_error: None,
+                            uploading: 0,
+                            downloading: 0,
+                            conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
+                        };
+                        let mut guard = self.statuses.write().await;
+                        match guard.iter_mut().find(|s| s.binding_id == binding.id) {
+                            Some(existing) => *existing = placeholder,
+                            None => guard.push(placeholder),
+                        }
                     }
-                }
-            };
-            statuses.push(status);
-            *self.statuses.write().await = statuses.clone();
+
+                    match self.sync_binding(&binding).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            warn!(binding = %binding.id, error = %e, "sync failed");
+                            SyncStatus {
+                                binding_id: binding.id.clone(),
+                                cursor: self.index.get_cursor(&binding.id).unwrap_or(0),
+                                last_error: Some(e.to_string()),
+                                uploading: 0,
+                                downloading: 0,
+                                conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
+                            }
+                        }
+                    }
+                })
+                .await
+        });
+        let results = futures::future::join_all(futs).await;
+
+        // Merge completed statuses back in; bindings that were skipped
+        // (`None`, already in flight elsewhere) keep their existing status.
+        let mut guard = self.statuses.write().await;
+        for status in results.into_iter().flatten() {
+            match guard.iter_mut().find(|s| s.binding_id == status.binding_id) {
+                Some(existing) => *existing = status,
+                None => guard.push(status),
+            }
         }
-        *self.statuses.write().await = statuses;
+
+        // Drop statuses for bindings that no longer exist or were disabled
+        // since they were last synced — otherwise a removed/disabled
+        // binding's stale `last_error` keeps showing an error banner in the
+        // UI forever (the binding never runs again to clear it). Re-read
+        // the authoritative list here (not the `allow`-filtered `bindings`
+        // above) so a binding merely skipped by `allow` this tick — e.g.
+        // Wi‑Fi‑only throttling — keeps its status.
+        let current = self.index.list_bindings()?;
+        guard.retain(|s| current.iter().any(|b| b.id == s.binding_id && b.enabled));
         Ok(())
+    }
+
+    /// Runs a single binding through the same filtered pipeline (e.g. for a
+    /// UI-triggered "sync now" on one binding) without affecting others.
+    pub async fn tick_binding<F>(&self, binding_id: &str, allow: F) -> Result<()>
+    where
+        F: Fn(&Binding) -> bool,
+    {
+        self.tick_filtered(|b| b.id == binding_id && allow(b)).await
     }
 
     /// Continuous loop (desktop background / mobile foreground).
@@ -626,5 +697,163 @@ mod tests {
         assert!(BindingMode::AutoUpload.is_upload_only());
         assert!(BindingMode::FolderUpload.is_upload_only());
         assert!(!BindingMode::Sync.is_upload_only());
+    }
+
+    #[test]
+    fn engine_set_binding_enabled_updates_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
+                    "http://127.0.0.1",
+                    "",
+                ))),
+                data_dir: dir.path().to_path_buf(),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap();
+        let id = "cam".to_string();
+        engine
+            .upsert_binding(&Binding {
+                id: id.clone(),
+                storage_id: uuid::Uuid::new_v4(),
+                remote_root: "Camera".into(),
+                local_path: dir.path().join("pics").to_string_lossy().into(),
+                mode: BindingMode::AutoUpload,
+                enabled: true,
+            })
+            .unwrap();
+        engine.set_binding_enabled(&id, false).unwrap();
+        let b = engine
+            .list_bindings()
+            .unwrap()
+            .into_iter()
+            .find(|b| b.id == id)
+            .unwrap();
+        assert!(!b.enabled);
+    }
+
+    fn test_engine(dir: &std::path::Path) -> SyncEngine {
+        SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
+                    "http://127.0.0.1",
+                    "",
+                ))),
+                data_dir: dir.to_path_buf(),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn disabling_binding_clears_its_status_immediately() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        let id = "cam".to_string();
+        engine
+            .upsert_binding(&Binding {
+                id: id.clone(),
+                storage_id: uuid::Uuid::new_v4(),
+                remote_root: "Camera".into(),
+                local_path: dir.path().join("pics").to_string_lossy().into(),
+                mode: BindingMode::AutoUpload,
+                enabled: true,
+            })
+            .unwrap();
+        engine.tick().await.unwrap();
+        assert!(
+            engine
+                .statuses()
+                .await
+                .iter()
+                .any(|s| s.binding_id == id),
+            "status should exist after a successful tick"
+        );
+
+        engine.set_binding_enabled(&id, false).unwrap();
+        assert!(
+            engine
+                .statuses()
+                .await
+                .iter()
+                .all(|s| s.binding_id != id),
+            "disabling a binding must clear its status so UI error banners clear"
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_binding_clears_its_status_immediately() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        let id = "cam".to_string();
+        engine
+            .upsert_binding(&Binding {
+                id: id.clone(),
+                storage_id: uuid::Uuid::new_v4(),
+                remote_root: "Camera".into(),
+                local_path: dir.path().join("pics").to_string_lossy().into(),
+                mode: BindingMode::AutoUpload,
+                enabled: true,
+            })
+            .unwrap();
+        engine.tick().await.unwrap();
+        assert!(engine.statuses().await.iter().any(|s| s.binding_id == id));
+
+        engine.remove_binding(&id).unwrap();
+        assert!(
+            engine
+                .statuses()
+                .await
+                .iter()
+                .all(|s| s.binding_id != id),
+            "removing a binding must clear its status"
+        );
+    }
+
+    #[tokio::test]
+    async fn tick_prunes_stale_status_for_binding_removed_since_last_tick() {
+        // Simulates the case where the fast `clear_status` best-effort path
+        // was skipped (e.g. lock contention) — the next `tick` must still
+        // prune it via the authoritative retain pass.
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        let cam_id = "cam".to_string();
+        let folder_id = "folder".to_string();
+        for (id, mode) in [
+            (cam_id.clone(), BindingMode::AutoUpload),
+            (folder_id.clone(), BindingMode::FolderUpload),
+        ] {
+            engine
+                .upsert_binding(&Binding {
+                    id: id.clone(),
+                    storage_id: uuid::Uuid::new_v4(),
+                    remote_root: "Root".into(),
+                    local_path: dir.path().join(&id).to_string_lossy().into(),
+                    mode,
+                    enabled: true,
+                })
+                .unwrap();
+        }
+        engine.tick().await.unwrap();
+        assert_eq!(engine.statuses().await.len(), 2);
+
+        // Remove directly via the index to bypass `clear_status`.
+        engine.index.remove_binding(&cam_id).unwrap();
+        engine.tick().await.unwrap();
+
+        let statuses = engine.statuses().await;
+        assert!(
+            statuses.iter().all(|s| s.binding_id != cam_id),
+            "next tick must prune status for a binding removed out from under it"
+        );
+        assert!(
+            statuses.iter().any(|s| s.binding_id == folder_id),
+            "surviving binding must keep its status"
+        );
     }
 }

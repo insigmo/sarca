@@ -1,0 +1,38 @@
+name: UI unit tests
+
+# Dedicated, lightweight workflow for ui/**-only PRs so they don't trigger
+# the full client.yml fan-out (5 desktop targets + Android build).
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "ui/**"
+      - ".github/workflows/ui.yml"
+  push:
+    branches: ["master", "feature/sync-clients"]
+    paths:
+      - "ui/**"
+      - ".github/workflows/ui.yml"
+
+concurrency:
+  group: ui-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ui-unit:
+    name: ui unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+        working-directory: ui
+      - run: pnpm test
+        working-directory: ui
