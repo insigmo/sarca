@@ -1,14 +1,20 @@
 export default function SettingsSwitch(props) {
 	const checked = () => Boolean(props.checked)
 	const disabled = () => Boolean(props.disabled)
-	const toggle = () => {
+	const toggle = (e) => {
+		// Prevent <label> ancestors from synthesizing a second click on this
+		// button (would flip the switch twice → auto-upload appears to
+		// enable then immediately disable).
+		e?.preventDefault?.()
+		e?.stopPropagation?.()
 		if (disabled()) return
 		props.onChange?.(!checked())
 	}
 	const onKeyDown = (e) => {
 		if (e.key === ' ' || e.key === 'Enter') {
 			e.preventDefault()
-			toggle()
+			e.stopPropagation()
+			toggle(e)
 		}
 	}
 	return (

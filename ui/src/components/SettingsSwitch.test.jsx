@@ -23,4 +23,19 @@ describe('SettingsSwitch', () => {
 			'Folder auto-upload: /pics',
 		)
 	})
+
+	it('stops label ancestors from receiving the click', () => {
+		const onChange = vi.fn()
+		const onLabelClick = vi.fn()
+		const { getByRole } = render(() => (
+			<label onClick={onLabelClick}>
+				<span>Toggle</span>
+				<SettingsSwitch checked={false} onChange={onChange} />
+			</label>
+		))
+		fireEvent.click(getByRole('switch'))
+		expect(onChange).toHaveBeenCalledTimes(1)
+		expect(onChange).toHaveBeenCalledWith(true)
+		expect(onLabelClick).not.toHaveBeenCalled()
+	})
 })

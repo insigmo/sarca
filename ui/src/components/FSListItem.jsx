@@ -455,6 +455,10 @@ const FSListItem = (props) => {
 							if (!props.dropTarget) return
 							props.onDropItem?.(e)
 						}}
+						onMouseDown={(e) => {
+							// Prevent native text highlight when clicking / dragging tiles.
+							if (e.button === 0) e.preventDefault()
+						}}
 						onClick={handleItemClick}
 						onDblClick={handleItemDblClick}
 						onContextMenu={handleContextMenu}
@@ -531,6 +535,9 @@ const FSListItem = (props) => {
 					onDrop={(e) => {
 						if (!props.dropTarget) return
 						props.onDropItem?.(e)
+					}}
+					onMouseDown={(e) => {
+						if (e.button === 0) e.preventDefault()
 					}}
 					onClick={handleItemClick}
 					onDblClick={handleItemDblClick}

@@ -614,42 +614,45 @@ const FileViewer = (props) => {
 						setNavPeekRight(false)
 					}}
 				>
-					<button
-						type="button"
-						class="file-viewer__close"
-						aria-label="Close"
-						title="Close"
-						onClick={props.onClose}
+					<header
+						class="file-viewer__chrome"
 						onMouseEnter={() => pinChrome(true)}
 						onMouseLeave={() => pinChrome(false)}
 					>
-						<CloseIcon fontSize="inherit" />
-					</button>
+						<div class="file-viewer__caption">
+							<span class="file-viewer__title">{props.file.name}</span>
+							<span class="file-viewer__meta">
+								{convertSize(props.file.size || 0)}
+								{streamKinds() ? ' · streaming' : ''}
+								{viewableFiles().length > 1
+									? ` · ${currentIndex() + 1}/${viewableFiles().length}`
+									: ''}
+							</span>
+						</div>
+						<div class="file-viewer__actions">
+							<button
+								type="button"
+								class="file-viewer__download"
+								aria-label="Download"
+								title="Download"
+								disabled={isDownloading()}
+								onClick={downloadFile}
+							>
+								<DownloadIcon fontSize="inherit" />
+							</button>
+							<button
+								type="button"
+								class="file-viewer__close"
+								aria-label="Close"
+								title="Close"
+								onClick={props.onClose}
+							>
+								<CloseIcon fontSize="inherit" />
+							</button>
+						</div>
+					</header>
 
-					<button
-						type="button"
-						class="file-viewer__download"
-						aria-label="Download"
-						title="Download"
-						disabled={isDownloading()}
-						onClick={downloadFile}
-						onMouseEnter={() => pinChrome(true)}
-						onMouseLeave={() => pinChrome(false)}
-					>
-						<DownloadIcon fontSize="inherit" />
-					</button>
-
-					<div class="file-viewer__caption">
-						<span class="file-viewer__title">{props.file.name}</span>
-						<span class="file-viewer__meta">
-							{convertSize(props.file.size || 0)}
-							{streamKinds() ? ' · streaming' : ''}
-							{viewableFiles().length > 1
-								? ` · ${currentIndex() + 1}/${viewableFiles().length}`
-								: ''}
-						</span>
-					</div>
-
+					<div class="file-viewer__body">
 					<Show when={isDocNavKind() && hasPrev()}>
 						<div
 							class="file-viewer__edge-sense file-viewer__edge-sense--prev"
@@ -953,6 +956,7 @@ const FileViewer = (props) => {
 								</div>
 							</Show>
 						</Show>
+					</div>
 					</div>
 
 					<Show when={isDownloading()}>
