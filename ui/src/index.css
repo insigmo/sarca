@@ -553,6 +553,20 @@ a.default-link:hover {
 	min-height: 0;
 	gap: 0;
 	overflow: hidden;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+/* Hard-disable text selection visuals across Files UI. */
+.files-shell,
+.files-shell * {
+	user-select: none !important;
+	-webkit-user-select: none !important;
+}
+
+.files-shell *::selection {
+	background: transparent !important;
+	color: inherit !important;
 }
 
 .files-shell__main {
@@ -850,12 +864,6 @@ a.default-link:hover {
 	box-sizing: border-box;
 	user-select: none;
 	-webkit-user-select: none;
-}
-
-/* Keep native text selection only inside file/folder items. */
-.files-page :is(.fs-grid-item, .fs-grid-item *, .fs-list-item, .fs-list-item *) {
-	user-select: text;
-	-webkit-user-select: text;
 }
 
 @media (min-width: 841px) {
