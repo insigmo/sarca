@@ -15,7 +15,7 @@ use crate::{
     errors::{SarcaError, SarcaResult},
     models::email_tokens::{PURPOSE_RESET, PURPOSE_VERIFY},
     repositories::{email_tokens::EmailTokensRepository, users::UsersRepository},
-    schemas::auth::{LoginSchema, MeSchema, ProvidersSchema, TokenSchema},
+    schemas::auth::{LoginSchema, MeSchema, TokenSchema},
 };
 
 const VERIFY_TTL_HOURS: i64 = 48;
@@ -75,12 +75,6 @@ impl<'d> AuthService<'d> {
             is_superuser: u.email.eq_ignore_ascii_case(&config.superuser_email),
             email: u.email,
         })
-    }
-
-    pub fn providers(config: &Config) -> ProvidersSchema {
-        ProvidersSchema {
-            smtp: config.smtp_configured(),
-        }
     }
 
     pub async fn request_verify(&self, user: &AuthUser, config: &Config) -> SarcaResult<()> {

@@ -38,11 +38,13 @@ impl<'d> UsersService<'d> {
         let users = self.repo.list_all().await?;
         Ok(users
             .into_iter()
-            .map(|u| UserOut {
-                is_superuser: u.email.eq_ignore_ascii_case(&config.superuser_email),
-                email_verified: u.email_verified(),
-                id: u.id,
-                email: u.email,
+            .map(|u| {
+                UserOut {
+                    is_superuser: u.email.eq_ignore_ascii_case(&config.superuser_email),
+                    email_verified: u.email_verified(),
+                    id: u.id,
+                    email: u.email,
+                }
             })
             .collect())
     }

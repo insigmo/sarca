@@ -45,9 +45,7 @@ impl UsersRouter {
         Extension(user): Extension<AuthUser>,
         Json(in_user): Json<InUser>,
     ) -> impl IntoResponse {
-        UsersService::new(&state.db)
-            .create_by_superuser(&user, in_user, &state.config)
-            .await?;
+        UsersService::new(&state.db).create_by_superuser(&user, in_user, &state.config).await?;
         Ok::<_, (StatusCode, String)>(StatusCode::CREATED)
     }
 }

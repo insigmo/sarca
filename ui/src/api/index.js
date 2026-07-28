@@ -50,11 +50,6 @@ const listUsers = async () => {
  */
 
 /**
- * @typedef {Object} AuthProviders
- * @property {boolean} [smtp]
- */
-
-/**
  * @typedef {Object} AuthMe
  * @property {string} email
  * @property {boolean} email_verified
@@ -83,29 +78,6 @@ const refresh = async (refresh_token) => {
 	return await apiRequest('/auth/refresh', 'post', undefined, {
 		refresh_token,
 	})
-}
-
-/**
- * SMTP / mail feature flags from the server.
- * @returns {Promise<AuthProviders>}
- */
-const getProviders = async () => {
-	try {
-		const data = await apiRequest(
-			'/auth/providers',
-			'get',
-			undefined,
-			undefined,
-			false,
-			false,
-			true,
-		)
-		return {
-			smtp: !!data?.smtp,
-		}
-	} catch {
-		return { smtp: false }
-	}
 }
 
 /**
@@ -1331,7 +1303,6 @@ const API = {
 	auth: {
 		login,
 		refresh,
-		getProviders,
 		me,
 		meSilent,
 		requestVerify,
