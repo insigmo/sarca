@@ -1,4 +1,4 @@
-import { onMount } from 'solid-js'
+import { onCleanup, onMount } from 'solid-js'
 import { Outlet, useNavigate } from '@solidjs/router'
 import Header from '../components/Header'
 import SettingsModal from '../components/SettingsModal'
@@ -11,9 +11,20 @@ import Toolbar from '@suid/material/Toolbar'
 import { checkAuth } from '../common/auth_guard'
 import { storageSettingsStore } from '../common/storageSettings'
 import { filesChromeStore } from '../common/filesChrome'
+import { installTextSelectionGuard } from '../common/suppressTextSelection'
+import { installAndroidSafeAreaFallbacks } from '../common/androidSafeArea'
 
 const BasicLayout = () => {
-	onMount(checkAuth)
+	onMount(() => {
+		checkAuth()
+		installAndroidSafeAreaFallbacks()
+		document.body.classList.add('sarca-no-select')
+		const stopGuard = installTextSelectionGuard()
+		onCleanup(() => {
+			stopGuard()
+			document.body.classList.remove('sarca-no-select')
+		})
+	})
 	const navigate = useNavigate()
 	const { storage, close, patchName } = storageSettingsStore
 	const chrome = filesChromeStore
@@ -27,7 +38,7 @@ const BasicLayout = () => {
 					class="app-shell-toolbar-spacer"
 					sx={{
 						minHeight: { xs: 56, sm: 64 },
-						paddingTop: 'env(safe-area-inset-top, 0px)',
+						paddingTop: 'max(var(--sarca-safe-top), var(--sarca-android-top))',
 						boxSizing: 'content-box',
 					}}
 				/>

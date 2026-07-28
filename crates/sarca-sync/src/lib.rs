@@ -4,6 +4,7 @@ mod api;
 mod hash;
 mod index;
 mod scheduler;
+mod transfer;
 mod types;
 pub mod vfs;
 
@@ -18,6 +19,9 @@ pub use engine::{
 pub use hash::sha256_file;
 pub use index::LocalIndex;
 pub use scheduler::BindingScheduler;
+pub use transfer::{
+    TransferDirection, TransferItem, TransferQueueSnapshot, TransferStatus,
+};
 pub use types::{
     Binding, BindingMode, ChangelogEvent, ChangelogResponse, SnapshotEntry, SnapshotResponse,
     SyncStatus,

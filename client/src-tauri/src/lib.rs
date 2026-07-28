@@ -2,9 +2,11 @@
 
 #[cfg(test)]
 mod acl_check;
+mod client_log;
 mod commands;
 mod folder_picker;
 mod remote_ipc;
+mod startup;
 mod state;
 
 use std::time::Duration;
@@ -46,6 +48,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(folder_picker::init())
+        .plugin(startup::init())
         .plugin(
             PluginBuilder::<tauri::Wry, ()>::new("sarca-nav")
                 // Mark every navigation as native *before* page scripts when the
@@ -244,7 +247,27 @@ pub fn run() {
             }
 
             let state = app.state::<AppSyncState>();
+            {
+                let prefs = commands::load_prefs(&state);
+                client_log::set_enabled(prefs.enable_logs, state.data_dir());
+            }
             state.start_background_loop();
+
+            #[cfg(target_os = "android")]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    // Let the activity settle before system permission dialogs.
+                    tokio::time::sleep(Duration::from_millis(600)).await;
+                    if let Err(e) = startup::ensure_runtime_access(&handle).await {
+                        tracing::warn!(error = %e, "android runtime access prompt failed");
+                        client_log::write_line(
+                            handle.state::<AppSyncState>().data_dir(),
+                            &format!("ensure_runtime_access failed: {e}"),
+                        );
+                    }
+                });
+            }
 
             if let Some(cfg) = reconnect {
                 let handle = app.handle().clone();
@@ -277,8 +300,10 @@ pub fn run() {
             commands::update_binding_remote_root,
             commands::sync_now,
             commands::sync_statuses,
+            commands::sync_transfer_queue,
             commands::get_client_prefs,
             commands::set_client_prefs,
+            commands::export_logs,
             commands::is_on_wifi,
             commands::get_about,
             commands::get_cache_size,

@@ -18,6 +18,7 @@ import OAuthCallback from './pages/OAuthCallback'
 import NotFound from './pages/404'
 import { initTheme, useThemeMode } from './common/theme'
 import { bindOpenSettingsDeepLink } from './common/nativeClient'
+import { installAndroidSafeAreaFallbacks } from './common/androidSafeArea'
 import AppLockGate from './components/AppLockGate'
 
 /** Legacy workers routes → storages (bot is in storage settings). */
@@ -181,6 +182,7 @@ const App = () => {
 	const mode = useThemeMode()
 	onMount(() => {
 		initTheme()
+		installAndroidSafeAreaFallbacks()
 		return bindOpenSettingsDeepLink()
 	})
 

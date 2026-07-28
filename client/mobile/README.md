@@ -53,10 +53,11 @@ Manual resign:
   Typed `window.prompt` is only used if the tree URI cannot be mapped to a filesystem path.
 - **iOS:** typed path fallback (no walkable folder picker yet).
 
-The APK patch script adds media read permissions and installs `FolderPickerPlugin.kt`.
+The APK patch script adds media read + battery-optimization permissions and installs
+`FolderPickerPlugin.kt` plus `StartupPlugin.kt` (runtime permission prompts + device model).
 
-Platform media-library observers (Android MediaStore, iOS Photos) can be layered later as
-Tauri plugins; folder path + walk is the MVP that works on all targets.
+On each Android app start the client asks for photo/video access and battery-optimization
+exemption so background auto-upload is less likely to be killed.
 
 ## Background
 
