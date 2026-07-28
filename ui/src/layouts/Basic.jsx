@@ -3,7 +3,6 @@ import { Outlet, useNavigate } from '@solidjs/router'
 import Header from '../components/Header'
 import SettingsModal from '../components/SettingsModal'
 import StorageSettingsModal from '../components/StorageSettingsModal'
-import EmailVerifyBanner from '../components/EmailVerifyBanner'
 import Box from '@suid/material/Box'
 import CssBaseline from '@suid/material/CssBaseline'
 import Toolbar from '@suid/material/Toolbar'
@@ -44,9 +43,6 @@ const BasicLayout = () => {
 				/>
 
 				<Box class="app-shell-stage">
-					<div class="app-shell-banner">
-						<EmailVerifyBanner />
-					</div>
 					<div class="app-shell-outlet app-shell-main">
 						<Outlet />
 					</div>

@@ -88,7 +88,7 @@ const me = async () => {
 }
 
 /**
- * Soft-fail variant for app shell (banner). No toast on missing endpoint.
+ * Soft-fail variant for app shell. No toast on missing endpoint.
  * @returns {Promise<AuthMe|null>}
  */
 const meSilent = async () => {
@@ -105,14 +105,6 @@ const meSilent = async () => {
 	} catch {
 		return null
 	}
-}
-
-/**
- * Resend verification email (auth required).
- * @returns {Promise<void>}
- */
-const requestVerify = async () => {
-	return await apiRequest('/auth/verify/request', 'post', getAuthToken())
 }
 
 /**
@@ -1305,7 +1297,6 @@ const API = {
 		refresh,
 		me,
 		meSilent,
-		requestVerify,
 		verifyEmail,
 		forgotPassword,
 		resetPassword,
