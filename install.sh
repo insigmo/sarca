@@ -14,7 +14,7 @@ usage() {
 Usage: install.sh [--docker] [--version vX.Y.Z] [--prefix DIR]
 
   (default)  Download the matching release archive and install binary + UI
-  --docker   Download compose.yml + sarca.conf into ./sarca (or \$PREFIX)
+  --docker   Download compose.yml + telegram entrypoint + sarca.conf into ./sarca (or \$PREFIX)
 
 Env:
   SARCA_REPO     GitHub repo (default: ${REPO})
@@ -371,15 +371,14 @@ install_docker() {
   fi
   rm -f "${tmp_env}"
 
+  # Local Bot API needs a small host entrypoint (permission fix across containers).
   mkdir -p "${dest}/docker"
   curl -fsSL -H "Cache-Control: no-cache" \
     "${RAW}/docker/telegram-bot-api-entrypoint.sh" \
     -o "${dest}/docker/telegram-bot-api-entrypoint.sh"
   chmod +x "${dest}/docker/telegram-bot-api-entrypoint.sh"
-  curl -fsSL -H "Cache-Control: no-cache" \
-    "${RAW}/docker/sarca-entrypoint.sh" \
-    -o "${dest}/docker/sarca-entrypoint.sh"
-  chmod +x "${dest}/docker/sarca-entrypoint.sh"
+  # Legacy: older compose.yml mounted sarca-entrypoint from the host.
+  rm -f "${dest}/docker/sarca-entrypoint.sh"
 
   echo
   echo "Next:"
