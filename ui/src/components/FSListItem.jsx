@@ -10,6 +10,7 @@ import { useNavigate, useParams } from '@solidjs/router'
 
 import API from '../api'
 import { convertSize } from '../common/size_converter'
+import { enqueueThumbFetch } from '../common/thumbQueue'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
 import FileTypeIcon from './FileTypeIcon'
@@ -197,24 +198,29 @@ const FSListItem = (props) => {
 		const el = props.fsElement
 		let revoked = false
 		let objectUrl = null
+		const ac = new AbortController()
 
 		setThumbUrl(null)
 
 		if (el.is_file && el.has_thumb) {
-			API.files
-				.thumb(props.storageId, el.path)
+			enqueueThumbFetch(
+				() => API.files.thumb(props.storageId, el.path),
+				{ signal: ac.signal },
+			)
 				.then((blob) => {
 					if (revoked) return
 					objectUrl = URL.createObjectURL(blob)
 					setThumbUrl(objectUrl)
 				})
-				.catch(() => {
-					if (!revoked) setThumbUrl(null)
+				.catch((err) => {
+					if (revoked || err?.name === 'AbortError') return
+					setThumbUrl(null)
 				})
 		}
 
 		onCleanup(() => {
 			revoked = true
+			ac.abort()
 			if (objectUrl) URL.revokeObjectURL(objectUrl)
 		})
 	})
