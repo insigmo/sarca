@@ -18,6 +18,7 @@ export default function SettingsSwitch(props) {
 			role="switch"
 			class="settings-switch"
 			aria-checked={checked() ? 'true' : 'false'}
+			aria-label={props.ariaLabel}
 			disabled={disabled()}
 			onClick={toggle}
 			onKeyDown={onKeyDown}

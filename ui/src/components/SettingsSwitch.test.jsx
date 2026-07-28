@@ -13,4 +13,14 @@ describe('SettingsSwitch', () => {
 		fireEvent.click(sw)
 		expect(onChange).toHaveBeenCalledWith(true)
 	})
+
+	it('exposes an aria-label when provided', () => {
+		const { getByRole } = render(() => (
+			<SettingsSwitch checked={false} ariaLabel="Folder auto-upload: /pics" />
+		))
+		expect(getByRole('switch')).toHaveAttribute(
+			'aria-label',
+			'Folder auto-upload: /pics',
+		)
+	})
 })
