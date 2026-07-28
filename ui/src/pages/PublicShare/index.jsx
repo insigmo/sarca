@@ -23,6 +23,7 @@ import VisibilityIcon from '@suid/icons-material/Visibility'
 
 import API from '../../api'
 import { convertSize } from '../../common/size_converter'
+import { enqueueThumbFetch } from '../../common/thumbQueue'
 import FileTypeIcon from '../../components/FileTypeIcon'
 import FileViewer from '../../components/FileViewer'
 import { alertStore } from '../../components/AlertStack'
@@ -138,12 +139,15 @@ const PublicShare = () => {
 		/** @type {string[]} */
 		const created = []
 		let cancelled = false
+		const ac = new AbortController()
 
 		for (const el of list) {
 			if (!el.is_file || !el.has_thumb) continue
 			const path = el.path
-			API.publicShares
-				.thumbPublicShare(t, path)
+			enqueueThumbFetch(
+				() => API.publicShares.thumbPublicShare(t, path),
+				{ signal: ac.signal },
+			)
 				.then((blob) => {
 					if (cancelled) return
 					const url = URL.createObjectURL(blob)
@@ -155,6 +159,7 @@ const PublicShare = () => {
 
 		onCleanup(() => {
 			cancelled = true
+			ac.abort()
 			for (const url of created) URL.revokeObjectURL(url)
 			setThumbs({})
 		})
