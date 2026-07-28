@@ -4,7 +4,8 @@ vars:
   NATIVE_PREFIX:
     sh: 'echo "${HOME}/.local/share/sarca"'
   # Compose interpolates ${PORT} from sarca.conf (host publish + container listen).
-  COMPOSE: docker compose --env-file sarca.conf
+  # Base compose.yml is pull-only; compose.dev.yml bind-mounts local runtime/sarca + ui/dist.
+  COMPOSE: docker compose -f compose.yml -f compose.dev.yml --env-file sarca.conf
   # Source before any pnpm invocation — Task often has a minimal non-login PATH.
   ENSURE_PNPM: '. "{{.ROOT_DIR}}/scripts/ensure-pnpm-env.sh"'
 
@@ -82,11 +83,12 @@ tasks:
         echo "native binary → $PREFIX/sarca"
 
   up:
-    desc: Build binary+UI and start Docker stack
+    desc: Build binary+UI and start Docker stack (compose.yml + compose.dev.yml)
     deps: [ui, binary]
     cmds:
       - chmod +x "{{.ROOT_DIR}}/docker/sarca-entrypoint.sh" "{{.ROOT_DIR}}/docker/telegram-bot-api-entrypoint.sh"
       - test -x "{{.ROOT_DIR}}/runtime/sarca"
+      - test -f "{{.ROOT_DIR}}/runtime/sarca" -a ! -d "{{.ROOT_DIR}}/runtime/sarca"
       - test -f "{{.ROOT_DIR}}/ui/dist/index.html"
       - test -f "{{.ROOT_DIR}}/sarca.conf"
       - "{{.COMPOSE}} up -d --build --force-recreate --remove-orphans"
