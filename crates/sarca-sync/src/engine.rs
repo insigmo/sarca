@@ -8,13 +8,13 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
-use walkdir::WalkDir;
 
 use crate::{
     api::SarcaApi,
-    candidate::is_media_file,
+    candidate::LocalCandidate,
     hash::sha256_file,
     index::{mtime_ms_from_system, IndexEntry, LocalIndex},
+    media_source::LocalMediaSource,
     scheduler::BindingScheduler,
     transfer::{TransferDirection, TransferQueue, TransferQueueSnapshot},
     types::{Binding, BindingMode, SyncStatus},
@@ -59,6 +59,10 @@ pub struct SyncEngineConfig {
     pub poll_interval: Duration,
     pub api: Arc<tokio::sync::RwLock<SarcaApi>>,
     pub data_dir: PathBuf,
+    /// Discovers local upload candidates for a binding. Defaults to
+    /// [`FsMediaSource`] (filesystem walk); Android's Camera auto-upload
+    /// overrides this with a MediaStore-backed source.
+    pub media_source: Arc<dyn LocalMediaSource>,
 }
 
 pub struct SyncEngine {
@@ -163,6 +167,26 @@ impl SyncEngine {
 
     async fn transfer_abandon(&self, id: &str) {
         self.transfers.write().await.abandon(id);
+    }
+
+    /// Promote a previously-enqueued Waiting transfer to Active. Falls back
+    /// to [`begin`](TransferQueue::begin) if there was no waiting id (e.g.
+    /// the queue was over [`crate::transfer::MAX_WAITING`] at enqueue time).
+    async fn transfer_promote(
+        &self,
+        waiting_id: Option<&str>,
+        binding_id: &str,
+        direction: TransferDirection,
+        relative_path: &str,
+        size: Option<i64>,
+    ) -> String {
+        let mut queue = self.transfers.write().await;
+        if let Some(id) = waiting_id {
+            if queue.promote(id) {
+                return id.to_owned();
+            }
+        }
+        queue.begin(binding_id, direction, relative_path, size)
     }
 
     /// Run one sync/auto-upload pass for all enabled bindings.
@@ -388,72 +412,49 @@ impl SyncEngine {
 
     async fn push_local(&self, binding: &Binding) -> Result<usize> {
         let root = PathBuf::from(&binding.local_path);
-        if !root.exists() {
-            tokio::fs::create_dir_all(&root).await?;
-            return Ok(0);
-        }
-        let media_only = matches!(binding.mode, BindingMode::AutoUpload);
         let upload_only = binding.mode.is_upload_only();
+
+        let candidates = self.config.media_source.list_candidates(binding).await?;
+        let pending = {
+            let mut queue = self.transfers.write().await;
+            select_pending_uploads(&self.index, &binding.id, &candidates, &mut queue)?
+        };
+
         let mut uploaded = 0usize;
-        for file in WalkDir::new(&root).into_iter().filter_map(Result::ok) {
-            if !file.file_type().is_file() {
-                continue;
-            }
-            let path = file.path();
-            if media_only && !is_media_file(path) {
-                continue;
-            }
-            let rel = path
-                .strip_prefix(&root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if rel.is_empty() {
-                continue;
-            }
-            let meta = file
-                .metadata()
-                .with_context(|| format!("meta {}", path.display()))?;
-            let mtime = meta.modified().ok().map(mtime_ms_from_system).unwrap_or(0);
-            let size = meta.len() as i64;
+        for (candidate, waiting_id) in pending {
+            let LocalCandidate {
+                relative_path: rel,
+                absolute_path: path,
+                size,
+                mtime_ms: mtime,
+                ephemeral,
+            } = candidate;
             let existing = self.index.get_entry(&binding.id, &rel)?;
-            let needs_hash = existing
-                .as_ref()
-                .is_none_or(|e| e.size != size || e.mtime_ms != mtime);
-            if !needs_hash {
-                continue;
-            }
-            let hash = sha256_file(path).await?;
-            if existing.as_ref().and_then(|e| e.content_hash.as_ref()) == Some(&hash) {
-                // Touch index mtime/size only.
-                if let Some(mut e) = existing {
-                    e.size = size;
-                    e.mtime_ms = mtime;
-                    self.index.upsert_entry(&binding.id, &e)?;
-                }
-                continue;
-            }
 
-            // Conflict if remote side also differs and we are in Sync mode.
-            if matches!(binding.mode, BindingMode::Sync) {
-                if let Some(prev) = &existing {
-                    if prev.content_hash.as_ref() != Some(&hash) && prev.remote_file_id.is_some() {
-                        // Local changed vs last synced; remote may also have changed — resolved in pull.
-                    }
-                }
-            }
-
-            let (parent, filename) = split_parent_name(&rel);
-            let remote_parent = join_remote(&binding.remote_root, &parent);
-            self.ensure_remote_parents(binding, &parent).await?;
             let tid = self
-                .transfer_begin(
+                .transfer_promote(
+                    waiting_id.as_deref(),
                     &binding.id,
                     TransferDirection::Upload,
                     &rel,
                     Some(size),
                 )
                 .await;
+
+            let hash = match sha256_file(&path).await {
+                Ok(h) => h,
+                Err(e) => {
+                    self.transfer_abandon(&tid).await;
+                    return Err(e).with_context(|| format!("hash {}", path.display()));
+                }
+            };
+
+            let (parent, filename) = split_parent_name(&rel);
+            let remote_parent = join_remote(&binding.remote_root, &parent);
+            if let Err(e) = self.ensure_remote_parents(binding, &parent).await {
+                self.transfer_abandon(&tid).await;
+                return Err(e);
+            }
             let upload_result = self
                 .api()
                 .await
@@ -461,7 +462,7 @@ impl SyncEngine {
                     binding.storage_id,
                     &remote_parent,
                     &filename,
-                    path,
+                    &path,
                     Some(mtime),
                     Some(&hash),
                 )
@@ -489,6 +490,9 @@ impl SyncEngine {
                     last_cursor: self.index.get_cursor(&binding.id)?,
                 },
             )?;
+            if ephemeral {
+                tokio::fs::remove_file(&path).await.ok();
+            }
             uploaded += 1;
             // Live progress for long Camera / folder uploads (Telegram is slow).
             if upload_only {
@@ -665,6 +669,36 @@ impl SyncEngine {
     }
 }
 
+/// Filters `candidates` down to those whose size/mtime differ from the
+/// index (or have no index entry yet), enqueuing each as Waiting in
+/// `queue`. The paired `Option<String>` is the waiting transfer id, or
+/// `None` if the queue was over [`crate::transfer::MAX_WAITING`].
+pub fn select_pending_uploads(
+    index: &LocalIndex,
+    binding_id: &str,
+    candidates: &[LocalCandidate],
+    queue: &mut TransferQueue,
+) -> Result<Vec<(LocalCandidate, Option<String>)>> {
+    let mut out = Vec::new();
+    for c in candidates {
+        let existing = index.get_entry(binding_id, &c.relative_path)?;
+        let needs = existing
+            .as_ref()
+            .is_none_or(|e| e.size != c.size || e.mtime_ms != c.mtime_ms);
+        if !needs {
+            continue;
+        }
+        let tid = queue.enqueue_waiting(
+            binding_id,
+            TransferDirection::Upload,
+            &c.relative_path,
+            Some(c.size),
+        );
+        out.push((c.clone(), tid));
+    }
+    Ok(out)
+}
+
 fn strip_remote_root(path: &str, remote_root: &str) -> Option<String> {
     let path = path.trim_start_matches('/');
     let root = remote_root.trim().trim_matches('/');
@@ -712,7 +746,8 @@ fn conflict_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::candidate::is_media_file;
+    use crate::candidate::{is_media_file, LocalCandidate};
+    use crate::transfer::TransferStatus;
 
     #[test]
     fn strip_root_works() {
@@ -759,6 +794,7 @@ mod tests {
                     "",
                 ))),
                 data_dir: dir.path().to_path_buf(),
+                media_source: Arc::new(crate::media_source::FsMediaSource),
             },
             Arc::new(KeepBothPrompt),
         )
@@ -793,6 +829,7 @@ mod tests {
                     "",
                 ))),
                 data_dir: dir.to_path_buf(),
+                media_source: Arc::new(crate::media_source::FsMediaSource),
             },
             Arc::new(KeepBothPrompt),
         )
@@ -904,5 +941,73 @@ mod tests {
             statuses.iter().any(|s| s.binding_id == folder_id),
             "surviving binding must keep its status"
         );
+    }
+
+    #[test]
+    fn select_pending_uploads_marks_waiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = LocalIndex::open(&dir.path().join("i.sqlite")).unwrap();
+        let id = "b1";
+        idx.upsert_binding(&Binding {
+            id: id.to_string(),
+            storage_id: uuid::Uuid::new_v4(),
+            remote_root: "Camera".into(),
+            local_path: dir.path().join("pics").to_string_lossy().into(),
+            mode: BindingMode::AutoUpload,
+            enabled: true,
+        })
+        .unwrap();
+        let c = LocalCandidate {
+            relative_path: "a.jpg".into(),
+            absolute_path: dir.path().join("a.jpg"),
+            size: 3,
+            mtime_ms: 1,
+            ephemeral: false,
+        };
+        let mut q = TransferQueue::default();
+        let pending = select_pending_uploads(&idx, id, &[c], &mut q).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].1.is_some());
+        assert_eq!(q.snapshot().uploading, 1);
+        assert_eq!(q.snapshot().items[0].status, TransferStatus::Waiting);
+    }
+
+    #[test]
+    fn select_pending_uploads_skips_unchanged_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let idx = LocalIndex::open(&dir.path().join("i.sqlite")).unwrap();
+        let id = "b1";
+        idx.upsert_binding(&Binding {
+            id: id.to_string(),
+            storage_id: uuid::Uuid::new_v4(),
+            remote_root: "Camera".into(),
+            local_path: dir.path().join("pics").to_string_lossy().into(),
+            mode: BindingMode::AutoUpload,
+            enabled: true,
+        })
+        .unwrap();
+        idx.upsert_entry(
+            id,
+            &IndexEntry {
+                relative_path: "a.jpg".into(),
+                size: 3,
+                mtime_ms: 1,
+                content_hash: Some("abc".into()),
+                remote_file_id: None,
+                last_cursor: 0,
+            },
+        )
+        .unwrap();
+        let c = LocalCandidate {
+            relative_path: "a.jpg".into(),
+            absolute_path: dir.path().join("a.jpg"),
+            size: 3,
+            mtime_ms: 1,
+            ephemeral: false,
+        };
+        let mut q = TransferQueue::default();
+        let pending = select_pending_uploads(&idx, id, &[c], &mut q).unwrap();
+        assert!(pending.is_empty());
+        assert_eq!(q.snapshot().uploading, 0);
     }
 }
