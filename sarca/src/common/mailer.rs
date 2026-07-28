@@ -71,7 +71,7 @@ impl<'c> Mailer<'c> {
         Ok(())
     }
 
-    /// Best-effort send: log failures, never propagate (for register / forgot).
+    /// Best-effort send: log failures, never propagate (for forgot-password).
     pub async fn send_soft(&self, to_email: &str, subject: &str, text: &str, html: &str) {
         if let Err(e) = self.send(to_email, subject, text, html).await {
             if !matches!(e, SarcaError::MailNotConfigured) {

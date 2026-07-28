@@ -2,6 +2,7 @@ import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 import IconButton from '@suid/material/IconButton'
 import Button from '@suid/material/Button'
+import Box from '@suid/material/Box'
 import TextField from '@suid/material/TextField'
 import Typography from '@suid/material/Typography'
 import API from '../api'
@@ -55,8 +56,16 @@ const SettingsModal = () => {
 	const [pinDraft, setPinDraft] = createSignal('')
 	const [pinConfirm, setPinConfirm] = createSignal('')
 	const [securityMsg, setSecurityMsg] = createSignal('')
+	/** @type {[import("solid-js").Accessor<boolean>, any]} */
+	const [isSuperuser, setIsSuperuser] = createSignal(!!store.user?.is_superuser)
+	/** @type {[import("solid-js").Accessor<Array<{id: string, email: string, email_verified: boolean, is_superuser: boolean}>>, any]} */
+	const [adminUsers, setAdminUsers] = createSignal([])
+	const [newUserEmail, setNewUserEmail] = createSignal('')
+	const [newUserPassword, setNewUserPassword] = createSignal('')
+	const [usersBusy, setUsersBusy] = createSignal(false)
 
 	const showSyncTab = () => isNative() && Boolean(chrome.storageId())
+	const showUsersTab = () => isSuperuser()
 
 	const logout = () => {
 		closeSettings()
@@ -106,12 +115,64 @@ const SettingsModal = () => {
 		}
 	}
 
+	const refreshSuperuser = async () => {
+		try {
+			const me = await API.auth.meSilent()
+			const su = !!me?.is_superuser
+			setIsSuperuser(su)
+			if (me) {
+				setStore('user', {
+					email: me.email,
+					email_verified: me.email_verified,
+					is_superuser: su,
+				})
+			}
+			return su
+		} catch {
+			setIsSuperuser(false)
+			return false
+		}
+	}
+
+	const fetchAdminUsers = async () => {
+		try {
+			const data = await API.users.listUsers()
+			setAdminUsers(data?.users || [])
+		} catch (err) {
+			console.error(err)
+			setAdminUsers([])
+		}
+	}
+
+	const createAdminUser = async (event) => {
+		event.preventDefault()
+		const email = newUserEmail().trim()
+		const password = newUserPassword()
+		if (!email || !password) {
+			addAlert('Email and password are required', 'error')
+			return
+		}
+		setUsersBusy(true)
+		try {
+			await API.users.createUser(email, password)
+			setNewUserEmail('')
+			setNewUserPassword('')
+			addAlert('User created', 'success')
+			await fetchAdminUsers()
+		} catch (err) {
+			console.error(err)
+		} finally {
+			setUsersBusy(false)
+		}
+	}
+
 	createEffect(() => {
 		if (!isOpen()) return
 
 		// Re-check after late native inject (Android remote WebView).
 		refreshNative()
 		refreshStorages()
+		refreshSuperuser()
 		document.body.style.overflow = 'hidden'
 
 		const onKeyDown = (e) => {
@@ -129,6 +190,18 @@ const SettingsModal = () => {
 		if (!isOpen() || tab() !== 'access') return
 		accessStorageId()
 		fetchAccessUsers()
+	})
+
+	createEffect(() => {
+		if (!isOpen() || tab() !== 'users') return
+		refreshSuperuser().then((su) => {
+			if (su) fetchAdminUsers()
+			else setTab('general')
+		})
+	})
+
+	createEffect(() => {
+		if (!showUsersTab() && tab() === 'users') setTab('general')
 	})
 
 	createEffect(() => {
@@ -324,8 +397,8 @@ const SettingsModal = () => {
 								<h2 id="settings-modal-title">Settings</h2>
 								<p class="settings-modal__sub">
 									{isNative()
-										? 'General, access, sync, trash, storage, and security'
-										: 'General, access, trash, storage, and security'}
+										? 'General, access, users, sync, trash, storage, and security'
+										: 'General, access, users, trash, storage, and security'}
 								</p>
 							</div>
 							<IconButton
@@ -377,6 +450,25 @@ const SettingsModal = () => {
 										<span class="settings-nav__desc">Who can open</span>
 									</span>
 								</button>
+								<Show when={showUsersTab()}>
+									<button
+										type="button"
+										class="settings-nav__item"
+										classList={{ 'settings-nav__item--active': tab() === 'users' }}
+										onClick={() => setTab('users')}
+									>
+										<span class="settings-nav__icon" aria-hidden="true">
+											<FluentIcon
+												name={tab() === 'users' ? 'personFilled' : 'person'}
+												size={20}
+											/>
+										</span>
+										<span class="settings-nav__text">
+											<span class="settings-nav__title">Users</span>
+											<span class="settings-nav__desc">Create accounts</span>
+										</span>
+									</button>
+								</Show>
 								<Show when={showSyncTab()}>
 									<button
 										type="button"
@@ -540,6 +632,79 @@ const SettingsModal = () => {
 										onClose={() => setIsGrantVisible(false)}
 										storageId={accessStorageId()}
 									/>
+								</Show>
+
+								<Show when={tab() === 'users' && showUsersTab()}>
+									<div class="settings-users">
+										<Typography
+											variant="body2"
+											color="text.secondary"
+											sx={{ mb: 2 }}
+										>
+											Only the superuser can create accounts. New users can sign in
+											with email and password.
+										</Typography>
+										<Box
+											component="form"
+											onSubmit={createAdminUser}
+											sx={{
+												display: 'flex',
+												flexDirection: 'column',
+												gap: 1.5,
+												mb: 3,
+											}}
+										>
+											<TextField
+												label="Email"
+												type="email"
+												required
+												value={newUserEmail()}
+												onChange={(e) => setNewUserEmail(e.target.value)}
+											/>
+											<TextField
+												label="Password"
+												type="password"
+												required
+												autoComplete="new-password"
+												value={newUserPassword()}
+												onChange={(e) => setNewUserPassword(e.target.value)}
+											/>
+											<Button
+												type="submit"
+												variant="contained"
+												color="secondary"
+												disabled={usersBusy()}
+											>
+												Create user
+											</Button>
+										</Box>
+										<div class="settings-users__list">
+											<For
+												each={adminUsers()}
+												fallback={
+													<Typography color="text.secondary">
+														No users yet.
+													</Typography>
+												}
+											>
+												{(u) => (
+													<div class="settings-users__row">
+														<div>
+															<strong>{u.email}</strong>
+															<Show when={u.is_superuser}>
+																<span class="settings-users__badge">
+																	superuser
+																</span>
+															</Show>
+														</div>
+														<span class="settings-users__meta">
+															{u.email_verified ? 'verified' : 'unverified'}
+														</span>
+													</div>
+												)}
+											</For>
+										</div>
+									</div>
 								</Show>
 
 								<Show when={tab() === 'trash'}>

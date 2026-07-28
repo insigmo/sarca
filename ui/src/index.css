@@ -384,11 +384,6 @@ a.default-link:hover {
 	flex-shrink: 0;
 }
 
-.oauth-btn {
-	border-color: var(--sarca-border) !important;
-	font-weight: 700 !important;
-}
-
 .auth-message {
 	margin: 0;
 	color: var(--sarca-ink-soft);
@@ -1457,6 +1452,39 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	gap: 12px;
 	align-items: flex-end;
 	margin-bottom: 16px;
+}
+
+.settings-users__list {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.settings-users__row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px 12px;
+	border-radius: 14px;
+	background: var(--sarca-glass);
+	border: 1px solid var(--sarca-border);
+}
+
+.settings-users__badge {
+	margin-left: 8px;
+	padding: 2px 8px;
+	border-radius: 999px;
+	font-size: 0.75rem;
+	font-weight: 600;
+	background: color-mix(in srgb, var(--sarca-accent, #0078d4) 18%, transparent);
+	color: var(--sarca-teal-deep, #0078d4);
+}
+
+.settings-users__meta {
+	color: var(--sarca-ink-soft);
+	font-size: 0.85rem;
+	flex-shrink: 0;
 }
 
 .access-list {
