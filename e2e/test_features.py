@@ -22,9 +22,7 @@ def test_auth_me_and_providers(client: httpx.Client, auth_headers: dict[str, str
     r = client.get("/api/auth/providers")
     assert r.status_code == 200, r.text
     body = r.json()
-    assert "google" in body and "github" in body and "smtp" in body
-    assert isinstance(body["google"], bool)
-    assert isinstance(body["github"], bool)
+    assert "smtp" in body
     assert isinstance(body["smtp"], bool)
 
     r = client.get("/api/auth/me", headers=auth_headers)
@@ -32,7 +30,9 @@ def test_auth_me_and_providers(client: httpx.Client, auth_headers: dict[str, str
     me = r.json()
     assert "email" in me
     assert "email_verified" in me
+    assert "is_superuser" in me
     assert me["email_verified"] is True  # superuser / existing users backfilled
+    assert me["is_superuser"] is True
 
 
 def test_login_includes_email_verified(tokens: dict[str, str]) -> None:
@@ -61,10 +61,32 @@ def test_verify_rejects_bad_token(client: httpx.Client) -> None:
     assert r.status_code in (400, 401, 404), r.text
 
 
-def test_oauth_start_unconfigured_is_error(client: httpx.Client) -> None:
-    # Without OAuth client ids, start should fail (not 500 HTML).
-    r = client.get("/api/auth/oauth/google/start", follow_redirects=False)
-    assert r.status_code in (400, 404, 502, 503), r.text
+def test_public_register_rejected(client: httpx.Client) -> None:
+    r = client.post(
+        "/api/users",
+        json={"email": "open-reg@example.com", "password": "abcdefgh"},
+    )
+    assert r.status_code in (401, 403), r.text
+
+
+def test_superuser_can_create_and_list_users(
+    client: httpx.Client, auth_headers: dict[str, str]
+) -> None:
+    import uuid
+
+    email = f"user-{uuid.uuid4().hex[:8]}@example.com"
+    r = client.post(
+        "/api/users",
+        headers=auth_headers,
+        json={"email": email, "password": "abcdefgh"},
+    )
+    assert r.status_code == 201, r.text
+
+    r = client.get("/api/users", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    emails = {u["email"] for u in r.json()["users"]}
+    assert email in emails
+
 
 
 # ---------------------------------------------------------------------------

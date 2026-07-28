@@ -4,7 +4,6 @@ pub mod chunk_replicas;
 pub mod email_tokens;
 pub mod favorites;
 pub mod files;
-pub mod oauth_accounts;
 pub mod recent_files;
 pub mod share_links;
 pub mod storage_channels;

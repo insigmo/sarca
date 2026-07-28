@@ -32,12 +32,11 @@ impl TokenSchema {
 pub struct MeSchema {
     pub email: String,
     pub email_verified: bool,
+    pub is_superuser: bool,
 }
 
 #[derive(Serialize)]
 pub struct ProvidersSchema {
-    pub google: bool,
-    pub github: bool,
     pub smtp: bool,
 }
 
@@ -55,9 +54,4 @@ pub struct ForgotPasswordSchema {
 pub struct ResetPasswordSchema {
     pub token: String,
     pub new_password: String,
-}
-
-#[derive(Deserialize)]
-pub struct OAuthExchangeSchema {
-    pub code: String,
 }

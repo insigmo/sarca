@@ -17,16 +17,24 @@ import { alertStore } from '../components/AlertStack'
  */
 
 /**
- *
+ * Create a user (superuser only).
  * @param {string} email
  * @param {string} password
- * @returns {Promise<any>}
+ * @returns {Promise<void>}
  */
-const register = async (email, password) => {
-	return await apiRequest('/users', 'post', undefined, {
+const createUser = async (email, password) => {
+	return await apiRequest('/users', 'post', getAuthToken(), {
 		email,
 		password,
 	})
+}
+
+/**
+ * List all users (superuser only).
+ * @returns {Promise<{users: Array<{id: string, email: string, email_verified: boolean, is_superuser: boolean}>}>}
+ */
+const listUsers = async () => {
+	return await apiRequest('/users', 'get', getAuthToken())
 }
 
 /////////////////////////////////////////////////////////////
@@ -43,8 +51,6 @@ const register = async (email, password) => {
 
 /**
  * @typedef {Object} AuthProviders
- * @property {boolean} google
- * @property {boolean} github
  * @property {boolean} [smtp]
  */
 
@@ -52,6 +58,7 @@ const register = async (email, password) => {
  * @typedef {Object} AuthMe
  * @property {string} email
  * @property {boolean} email_verified
+ * @property {boolean} [is_superuser]
  */
 
 /**
@@ -79,8 +86,7 @@ const refresh = async (refresh_token) => {
 }
 
 /**
- * Which OAuth/SMTP features the server has configured.
- * Missing endpoint → all disabled (no toast).
+ * SMTP / mail feature flags from the server.
  * @returns {Promise<AuthProviders>}
  */
 const getProviders = async () => {
@@ -95,12 +101,10 @@ const getProviders = async () => {
 			true,
 		)
 		return {
-			google: !!data?.google,
-			github: !!data?.github,
 			smtp: !!data?.smtp,
 		}
 	} catch {
-		return { google: false, github: false, smtp: false }
+		return { smtp: false }
 	}
 }
 
@@ -170,24 +174,6 @@ const resetPassword = async (token, new_password) => {
 		new_password,
 	})
 }
-
-/**
- * Exchange OAuth one-time code for JWTs.
- * @param {string} code
- * @returns {Promise<TokenData>}
- */
-const exchangeOAuth = async (code) => {
-	return await apiRequest('/auth/oauth/exchange', 'post', undefined, {
-		code,
-	})
-}
-
-/**
- * Browser redirect URL for OAuth start (full navigation).
- * @param {'google'|'github'} provider
- * @returns {string}
- */
-const oauthStartUrl = (provider) => `${API_BASE}/auth/oauth/${provider}/start`
 
 /////////////////////////////////////////////////////////////
 ////  STORAGES
@@ -1339,7 +1325,8 @@ const getSyncSnapshot = async (storage_id) => {
 
 const API = {
 	users: {
-		register,
+		createUser,
+		listUsers,
 	},
 	auth: {
 		login,
@@ -1351,8 +1338,6 @@ const API = {
 		verifyEmail,
 		forgotPassword,
 		resetPassword,
-		exchangeOAuth,
-		oauthStartUrl,
 	},
 	storages: {
 		listStorages,
