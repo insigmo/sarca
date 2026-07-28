@@ -34,6 +34,8 @@ function mockNativeInvoke(initialBindings = []) {
 		switch (cmd) {
 			case 'platform_label':
 				return ''
+			case 'device_label':
+				return 'Pixel 8'
 			case 'list_bindings':
 				return state.bindings.map((b) => ({ ...b }))
 			case 'get_client_prefs':
@@ -48,7 +50,7 @@ function mockNativeInvoke(initialBindings = []) {
 			case 'default_gallery_path':
 				return '/pictures'
 			case 'ensure_remote_folder':
-				return 'Camera'
+				return args.parent ? `${args.parent}/${args.name}` : String(args.name || '')
 			case 'add_binding': {
 				const binding = {
 					id: `new-${state.nextId++}`,
@@ -68,6 +70,11 @@ function mockNativeInvoke(initialBindings = []) {
 			case 'update_binding_local_path': {
 				const b = state.bindings.find((x) => x.id === args.id)
 				if (b) b.local_path = args.localPath
+				return b ? { ...b } : null
+			}
+			case 'update_binding_remote_root': {
+				const b = state.bindings.find((x) => x.id === args.id)
+				if (b) b.remote_root = args.remoteRoot
 				return b ? { ...b } : null
 			}
 			case 'remove_binding': {
@@ -104,7 +111,10 @@ describe('SettingsSyncPanel', () => {
 		fireEvent.click(sw)
 
 		await waitFor(() => expect(callsFor('add_binding').length).toBe(1))
-		expect(callsFor('add_binding')[0][1]).toMatchObject({ mode: 'auto_upload' })
+		expect(callsFor('add_binding')[0][1]).toMatchObject({
+			mode: 'auto_upload',
+			remoteRoot: 'Camera/Pixel 8',
+		})
 
 		await waitFor(() =>
 			expect(
@@ -142,6 +152,33 @@ describe('SettingsSyncPanel', () => {
 		})
 		expect(callsFor('remove_binding').length).toBe(0)
 		expect(callsFor('add_binding').length).toBe(0)
+	})
+
+	it('re-enabling updates legacy Camera root to device subfolder', async () => {
+		mockNativeInvoke([
+			{
+				id: '1',
+				mode: 'auto_upload',
+				enabled: false,
+				local_path: '/p',
+				remote_root: 'Camera',
+			},
+		])
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		await waitFor(() => expect(callsFor('list_bindings').length).toBeGreaterThan(0))
+
+		const sw = container.querySelector('#settings-camera-switch')
+		await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('false'))
+		fireEvent.click(sw)
+
+		await waitFor(() => expect(callsFor('set_binding_enabled').length).toBe(1))
+		await waitFor(() => expect(callsFor('update_binding_remote_root').length).toBe(1))
+		expect(callsFor('update_binding_remote_root')[0][1]).toEqual({
+			id: '1',
+			remoteRoot: 'Camera/Pixel 8',
+		})
 	})
 
 	it('re-enabling a disabled camera binding uses set_binding_enabled, not add_binding', async () => {
