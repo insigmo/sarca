@@ -291,6 +291,98 @@ describe('SettingsSyncPanel', () => {
 		})
 	})
 
+	it('migrates Camera/Unknown device placeholder to resolved device folder', async () => {
+		mockNativeInvoke([
+			{
+				id: '1',
+				mode: 'auto_upload',
+				enabled: true,
+				local_path: '/p',
+				remote_root: 'Camera/Unknown device',
+			},
+		])
+		render(() => <SettingsSyncPanel storageId="sid" storageName="Test" />)
+		await waitFor(() =>
+			expect(callsFor('update_binding_remote_root').length).toBe(1),
+		)
+		expect(callsFor('update_binding_remote_root')[0][1]).toEqual({
+			id: '1',
+			remoteRoot: 'Camera/Pixel 8',
+		})
+	})
+
+	it('does not show Unknown device before labels resolve', async () => {
+		let resolveDevice
+		const devicePromise = new Promise((r) => {
+			resolveDevice = r
+		})
+		const state = mockNativeInvoke([
+			{
+				id: '1',
+				mode: 'auto_upload',
+				enabled: true,
+				local_path: '/p',
+				remote_root: 'Camera/Pixel 8',
+			},
+		])
+		nativeInvoke.mockImplementation(async (cmd, args = {}) => {
+			if (cmd === 'device_label') return devicePromise
+			if (cmd === 'platform_label') return devicePromise.then(() => 'Android')
+			switch (cmd) {
+				case 'list_bindings':
+					return state.bindings.map((b) => ({ ...b }))
+				case 'get_client_prefs':
+					return {
+						wifi_only: true,
+						background_sync: true,
+						app_lock_enabled: false,
+						app_lock_pin: null,
+					}
+				case 'sync_statuses':
+					return []
+				case 'sync_transfer_queue':
+					return { uploading: 0, downloading: 0, items: [] }
+				default:
+					return null
+			}
+		})
+
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		await waitFor(() =>
+			expect(
+				container
+					.querySelector('#settings-camera-switch')
+					?.getAttribute('aria-checked'),
+			).toBe('true'),
+		)
+		expect(container.textContent).not.toContain('Unknown device')
+
+		resolveDevice('Pixel 8')
+		await waitFor(() => expect(container.textContent).toContain('Camera/Pixel 8'))
+	})
+
+	it('add_binding uses a fresh native device_label even if UI signal is empty', async () => {
+		mockNativeInvoke([])
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		await waitFor(() => expect(callsFor('list_bindings').length).toBeGreaterThan(0))
+
+		const sw = container.querySelector('#settings-camera-switch')
+		fireEvent.click(sw)
+
+		await waitFor(() => expect(callsFor('add_binding').length).toBe(1))
+		expect(callsFor('add_binding')[0][1]).toMatchObject({
+			mode: 'auto_upload',
+			remoteRoot: 'Camera/Pixel 8',
+		})
+		expect(
+			callsFor('device_label').length,
+		).toBeGreaterThanOrEqual(2)
+	})
+
 	it('shows Downloading/Uploading rows and opens upload list', async () => {
 		const state = mockNativeInvoke([])
 		nativeInvoke.mockImplementation(async (cmd) => {

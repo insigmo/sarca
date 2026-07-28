@@ -1,4 +1,10 @@
 //! Android startup helpers: runtime permissions, device model, share text.
+//! Also owns the on-disk device-label cache used by Sync Camera roots.
+
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use tauri::{
     plugin::{Builder as PluginBuilder, TauriPlugin},
@@ -129,9 +135,45 @@ pub fn is_useless_hostname(s: &str) -> bool {
         || lower == "(none)"
 }
 
+/// True when `s` is safe to show as Camera/<label> (not empty / localhost).
+pub fn is_usable_device_label(s: &str) -> bool {
+    let cleaned = sanitize_device_label(s);
+    !cleaned.is_empty() && !is_useless_hostname(&cleaned)
+}
+
+fn device_label_cache_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("device_label.txt")
+}
+
+/// Read a previously persisted device label from the app data dir.
+pub fn read_device_label_cache(data_dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(device_label_cache_path(data_dir)).ok()?;
+    let cleaned = sanitize_device_label(&raw);
+    if is_usable_device_label(&cleaned) {
+        Some(cleaned)
+    } else {
+        None
+    }
+}
+
+/// Persist a usable device label for immediate Sync UI / binding use later.
+pub fn write_device_label_cache(data_dir: &Path, label: &str) -> Result<(), String> {
+    let cleaned = sanitize_device_label(label);
+    if !is_usable_device_label(&cleaned) {
+        return Err("device label is empty or useless".into());
+    }
+    if let Some(parent) = device_label_cache_path(data_dir).parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(device_label_cache_path(data_dir), &cleaned).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn rejects_localhost_hostnames() {
@@ -144,5 +186,34 @@ mod tests {
     #[test]
     fn sanitize_strips_path_chars() {
         assert_eq!(sanitize_device_label("Foo/Bar\\Baz"), "Foo Bar Baz");
+    }
+
+    #[test]
+    fn usable_device_label_rejects_empty_and_localhost() {
+        assert!(!is_usable_device_label(""));
+        assert!(!is_usable_device_label("   "));
+        assert!(!is_usable_device_label("localhost"));
+        assert!(!is_usable_device_label("127.0.0.1"));
+        assert!(is_usable_device_label("Pixel 8"));
+        assert!(is_usable_device_label("Google Pixel 8"));
+    }
+
+    #[test]
+    fn device_label_cache_round_trips_and_skips_useless() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("sarca-device-label-{nanos}"));
+        fs::create_dir_all(&dir).unwrap();
+
+        assert_eq!(read_device_label_cache(&dir), None);
+        assert!(write_device_label_cache(&dir, "localhost").is_err());
+        assert_eq!(read_device_label_cache(&dir), None);
+
+        write_device_label_cache(&dir, "  Pixel/8\\Pro  ").unwrap();
+        assert_eq!(read_device_label_cache(&dir).as_deref(), Some("Pixel 8 Pro"));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -14,6 +14,8 @@ import {
 import {
 	cameraBinding,
 	cameraRemoteRoot,
+	displayCameraRemoteRoot,
+	needsCameraRootMigration,
 	resolveCameraToggle,
 	withBackgroundSyncOn,
 } from '../common/autoUploadActions'
@@ -66,7 +68,29 @@ const SettingsSyncPanel = (props) => {
 			(b) => b.mode === 'folder_upload' || b.mode === 'sync',
 		)
 	const desiredCameraRemoteRoot = () =>
-		cameraRemoteRoot(deviceLabel().trim() || platform().trim() || '')
+		displayCameraRemoteRoot(deviceLabel(), platform())
+
+	const resolveExpectedCameraRoot = async () => {
+		// Prefer a fresh native label (cached on disk after startup) so binding
+		// creation never races the UI signal and writes Camera/Unknown device.
+		try {
+			const live = String((await nativeInvoke('device_label')) || '').trim()
+			if (live) {
+				setDeviceLabel(live)
+				return cameraRemoteRoot(live)
+			}
+		} catch {
+			// fall through
+		}
+		const fromUi = desiredCameraRemoteRoot()
+		if (fromUi) return fromUi
+		const plat = platform().trim() || String((await nativeInvoke('platform_label').catch(() => '')) || '').trim()
+		if (plat) {
+			setPlatform(plat)
+			return cameraRemoteRoot(plat)
+		}
+		return cameraRemoteRoot('')
+	}
 
 	const maybeMigrateLegacyCameraRoot = async (liveBindings) => {
 		if (cameraRootMigrateTried()) return
@@ -74,9 +98,8 @@ const SettingsSyncPanel = (props) => {
 		if (!sid) return
 		const existing = cameraBinding(liveBindings)
 		if (!existing) return
-		if (String(existing.remote_root || '') !== 'Camera') return
-		const expectedRoot = desiredCameraRemoteRoot()
-		if (!expectedRoot || expectedRoot === 'Camera') return
+		const expectedRoot = await resolveExpectedCameraRoot()
+		if (!needsCameraRootMigration(existing.remote_root, expectedRoot)) return
 		setCameraRootMigrateTried(true)
 		try {
 			await nativeInvoke('ensure_remote_folder', {
@@ -109,11 +132,21 @@ const SettingsSyncPanel = (props) => {
 		}
 	}
 
+	const refreshLabels = async () => {
+		const [label, device] = await Promise.all([
+			nativeInvoke('platform_label').catch(() => ''),
+			nativeInvoke('device_label').catch(() => ''),
+		])
+		setPlatform(String(label || ''))
+		setDeviceLabel(String(device || ''))
+	}
+
 	const refresh = async () => {
 		try {
-			const [label, device, bindsResult, prefsDto, statusList] = await Promise.all([
-				nativeInvoke('platform_label').catch(() => ''),
-				nativeInvoke('device_label').catch(() => ''),
+			// Kick labels off in parallel, but never let a slow device_label IPC
+			// block bindings — that left the auto-upload toggle looking off.
+			const labelsP = refreshLabels()
+			const [bindsResult, prefsDto, statusList] = await Promise.all([
 				nativeInvoke('list_bindings').then(
 					(v) => ({ ok: true, value: v }),
 					(e) => ({ ok: false, error: e }),
@@ -121,8 +154,6 @@ const SettingsSyncPanel = (props) => {
 				nativeInvoke('get_client_prefs').catch(() => null),
 				nativeInvoke('sync_statuses').catch(() => []),
 			])
-			setPlatform(String(label || ''))
-			setDeviceLabel(String(device || ''))
 			if (bindsResult.ok) {
 				setBindings(Array.isArray(bindsResult.value) ? bindsResult.value : [])
 			} else {
@@ -154,6 +185,7 @@ const SettingsSyncPanel = (props) => {
 					// ignore
 				}
 			}
+			await labelsP
 			await maybeMigrateLegacyCameraRoot(binds)
 		} catch (e) {
 			setMsg(String(e))
@@ -283,7 +315,7 @@ const SettingsSyncPanel = (props) => {
 				})
 				if (decision.enabled) {
 					const existing = live.find((b) => b.id === decision.id) || null
-					const expectedRoot = desiredCameraRemoteRoot()
+					const expectedRoot = await resolveExpectedCameraRoot()
 					if (existing && String(existing.remote_root || '') !== expectedRoot) {
 						await nativeInvoke('ensure_remote_folder', {
 							storageId: sid,
@@ -317,7 +349,7 @@ const SettingsSyncPanel = (props) => {
 				parent: '',
 				name: 'Camera',
 			})
-			const expectedRoot = desiredCameraRemoteRoot()
+			const expectedRoot = await resolveExpectedCameraRoot()
 			await nativeInvoke('ensure_remote_folder', {
 				storageId: sid,
 				parent: 'Camera',
@@ -394,7 +426,13 @@ const SettingsSyncPanel = (props) => {
 				fallback={
 					<>
 			<p class="settings-bot-hint">
-				Photo and video auto-upload goes to remote <code>{desiredCameraRemoteRoot()}/</code>.
+				Photo and video auto-upload goes to remote{' '}
+				<code>
+					{desiredCameraRemoteRoot()
+						? `${desiredCameraRemoteRoot()}/`
+						: 'Camera/…/'}
+				</code>
+				.
 			</p>
 
 			<div class="settings-toggle">
