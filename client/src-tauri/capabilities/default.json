@@ -2,7 +2,9 @@
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default",
   "description": "Default Sarca client capabilities (local shell + remote server UI)",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "remote": {
     "urls": [
       "http://*:*/*",
