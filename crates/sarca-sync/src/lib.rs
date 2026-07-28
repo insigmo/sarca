@@ -4,6 +4,7 @@ mod api;
 mod candidate;
 mod hash;
 mod index;
+mod media_source;
 mod scheduler;
 mod transfer;
 mod types;
@@ -15,9 +16,13 @@ pub use api::{
     authorization_header_value, normalize_server_url, LoginResponse, SarcaApi, StorageSummary,
 };
 pub use candidate::{collect_fs_candidates, is_media_file, strip_dcim_prefix, LocalCandidate};
-pub use engine::{ConflictChoice, ConflictPrompt, KeepBothPrompt, SyncEngine, SyncEngineConfig};
+pub use engine::{
+    select_pending_uploads, ConflictChoice, ConflictPrompt, KeepBothPrompt, SyncEngine,
+    SyncEngineConfig,
+};
 pub use hash::sha256_file;
 pub use index::LocalIndex;
+pub use media_source::{FsMediaSource, LocalMediaSource};
 pub use scheduler::BindingScheduler;
 pub use transfer::{
     TransferDirection, TransferItem, TransferQueueSnapshot, TransferStatus,

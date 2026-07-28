@@ -112,21 +112,23 @@ impl TransferQueue {
         size: Option<i64>,
     ) -> Option<String> {
         let (path, name) = split_path(relative_path);
-        self.active.retain(|i| {
-            !(i.binding_id == binding_id
+        let matches = |i: &TransferItem| {
+            i.binding_id == binding_id
                 && i.direction == direction
                 && i.path == path
-                && i.name == name)
-        });
-        self.waiting.retain(|i| {
-            !(i.binding_id == binding_id
-                && i.direction == direction
-                && i.path == path
-                && i.name == name)
-        });
-        if self.waiting.len() >= MAX_WAITING {
+                && i.name == name
+        };
+        // Check the cap *before* evicting any matching Active entry: if we're
+        // over cap and there's no existing Waiting row to replace in-place,
+        // bail out without touching Active — otherwise an in-flight upload
+        // would be silently dropped from the queue for nothing (it stays
+        // Active, just not re-enqueued as Waiting).
+        let has_existing_waiting = self.waiting.iter().any(matches);
+        if !has_existing_waiting && self.waiting.len() >= MAX_WAITING {
             return None;
         }
+        self.active.retain(|i| !matches(i));
+        self.waiting.retain(|i| !matches(i));
         let id = Uuid::new_v4().to_string();
         self.waiting.push(TransferItem {
             id: id.clone(),
