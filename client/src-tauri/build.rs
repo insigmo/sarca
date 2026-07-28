@@ -4,6 +4,7 @@ fn main() {
     // Those calls require explicit ACL allow-* permissions for every command.
     const COMMANDS: &[&str] = &[
         "platform_label",
+        "device_label",
         "get_session",
         "update_session",
         "connect",
@@ -19,6 +20,7 @@ fn main() {
         "remove_binding",
         "set_binding_enabled",
         "update_binding_local_path",
+        "update_binding_remote_root",
         "sync_now",
         "sync_statuses",
         "get_client_prefs",
