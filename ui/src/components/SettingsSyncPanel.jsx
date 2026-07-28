@@ -40,6 +40,7 @@ const SettingsSyncPanel = (props) => {
 	const [localPath, setLocalPath] = createSignal('')
 	const [busy, setBusy] = createSignal(false)
 	const [msg, setMsg] = createSignal('')
+	const [cameraRootMigrateTried, setCameraRootMigrateTried] = createSignal(false)
 
 	const isMobile = () => isMobileNativePlatform(platform())
 
@@ -54,6 +55,32 @@ const SettingsSyncPanel = (props) => {
 		)
 	const desiredCameraRemoteRoot = () =>
 		cameraRemoteRoot(deviceLabel().trim() || platform().trim() || '')
+
+	const maybeMigrateLegacyCameraRoot = async (liveBindings) => {
+		if (cameraRootMigrateTried()) return
+		const sid = lockedStorageId()
+		if (!sid) return
+		const existing = cameraBinding(liveBindings)
+		if (!existing) return
+		if (String(existing.remote_root || '') !== 'Camera') return
+		const expectedRoot = desiredCameraRemoteRoot()
+		if (!expectedRoot || expectedRoot === 'Camera') return
+		setCameraRootMigrateTried(true)
+		try {
+			await nativeInvoke('ensure_remote_folder', {
+				storageId: sid,
+				parent: 'Camera',
+				name: expectedRoot.replace(/^Camera\//, ''),
+			})
+			await nativeInvoke('update_binding_remote_root', {
+				id: existing.id,
+				remoteRoot: expectedRoot,
+			})
+			await refresh()
+		} catch {
+			// Keep compatibility with clients that don't expose this command yet.
+		}
+	}
 
 	const refresh = async () => {
 		try {
@@ -99,6 +126,7 @@ const SettingsSyncPanel = (props) => {
 					// ignore
 				}
 			}
+			await maybeMigrateLegacyCameraRoot(binds)
 		} catch (e) {
 			setMsg(String(e))
 		}

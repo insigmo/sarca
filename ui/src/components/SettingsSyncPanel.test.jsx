@@ -174,8 +174,11 @@ describe('SettingsSyncPanel', () => {
 		fireEvent.click(sw)
 
 		await waitFor(() => expect(callsFor('set_binding_enabled').length).toBe(1))
-		await waitFor(() => expect(callsFor('update_binding_remote_root').length).toBe(1))
-		expect(callsFor('update_binding_remote_root')[0][1]).toEqual({
+		await waitFor(() =>
+			expect(callsFor('update_binding_remote_root').length).toBeGreaterThan(0),
+		)
+		const updates = callsFor('update_binding_remote_root')
+		expect(updates[updates.length - 1][1]).toEqual({
 			id: '1',
 			remoteRoot: 'Camera/Pixel 8',
 		})
@@ -263,6 +266,26 @@ describe('SettingsSyncPanel', () => {
 		expect(callsFor('set_binding_enabled')[0][1]).toEqual({
 			id: 'f1',
 			enabled: false,
+		})
+	})
+
+	it('migrates legacy Camera root to per-device folder on refresh', async () => {
+		mockNativeInvoke([
+			{
+				id: '1',
+				mode: 'auto_upload',
+				enabled: true,
+				local_path: '/p',
+				remote_root: 'Camera',
+			},
+		])
+		render(() => <SettingsSyncPanel storageId="sid" storageName="Test" />)
+		await waitFor(() =>
+			expect(callsFor('update_binding_remote_root').length).toBe(1),
+		)
+		expect(callsFor('update_binding_remote_root')[0][1]).toEqual({
+			id: '1',
+			remoteRoot: 'Camera/Pixel 8',
 		})
 	})
 })
