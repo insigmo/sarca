@@ -4278,7 +4278,7 @@ dependencies = [
 
 [[package]]
 name = "sarca"
-version = "0.0.69"
+version = "0.0.71"
 dependencies = [
  "async-stream",
  "axum",
@@ -4309,9 +4309,10 @@ dependencies = [
 
 [[package]]
 name = "sarca-client"
-version = "0.0.69"
+version = "0.0.71"
 dependencies = [
  "anyhow",
+ "async-trait",
  "hostname",
  "network-interface",
  "sarca-sync",
