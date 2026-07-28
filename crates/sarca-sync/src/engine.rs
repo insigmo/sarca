@@ -12,6 +12,7 @@ use walkdir::WalkDir;
 
 use crate::{
     api::SarcaApi,
+    candidate::is_media_file,
     hash::sha256_file,
     index::{mtime_ms_from_system, IndexEntry, LocalIndex},
     scheduler::BindingScheduler,
@@ -708,39 +709,10 @@ fn conflict_path(path: &Path) -> PathBuf {
     parent.join(name)
 }
 
-/// Photo/video extensions accepted for [`BindingMode::AutoUpload`] (Camera gallery).
-/// [`BindingMode::FolderUpload`] uploads every file and does not use this filter.
-pub fn is_media_file(path: &Path) -> bool {
-    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
-        return false;
-    };
-    matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "jpg"
-            | "jpeg"
-            | "png"
-            | "gif"
-            | "webp"
-            | "heic"
-            | "heif"
-            | "tif"
-            | "tiff"
-            | "bmp"
-            | "avif"
-            | "mp4"
-            | "mov"
-            | "m4v"
-            | "mkv"
-            | "webm"
-            | "avi"
-            | "3gp"
-            | "3gpp"
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::candidate::is_media_file;
 
     #[test]
     fn strip_root_works() {
