@@ -1870,7 +1870,10 @@ const Files = () => {
 					<Show
 						when={sortedFsLayer().length}
 						fallback={
-							<div class="files-canvas__empty">
+							<div
+								class="files-canvas__empty"
+								onMouseDown={(e) => e.preventDefault()}
+							>
 								{listMode() === 'trash'
 									? 'Trash is empty'
 									: listMode() === 'favorites'

@@ -341,6 +341,9 @@ const SetupWizard = () => {
 			addAlert('Add at least one channel', 'error')
 			return
 		}
+		// Stop listening so Finish is not blocked and we do not keep getUpdates
+		// running while create_storage / set_bot talk to Telegram.
+		stopPolling()
 		setFinishing(true)
 		try {
 			const created = await API.setup.setupCreateStorage(
@@ -658,7 +661,7 @@ const SetupWizard = () => {
 									</Show>
 									<Button
 										variant="contained"
-										disabled={!channels().length || finishing() || polling()}
+										disabled={!channels().length || finishing()}
 										onClick={handleFinish}
 									>
 										{finishing() ? 'Creating…' : 'Finish'}
