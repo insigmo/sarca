@@ -251,6 +251,9 @@ pub fn run() {
                 let prefs = commands::load_prefs(&state);
                 client_log::set_enabled(prefs.enable_logs, state.data_dir());
             }
+            // Resolve device identity once early so Sync UI / Camera remote_root
+            // never wait on a later Android plugin IPC round-trip.
+            commands::ensure_device_label_cached(app.handle());
             state.start_background_loop();
 
             #[cfg(target_os = "android")]
