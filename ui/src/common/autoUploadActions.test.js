@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
 	cameraBinding,
+	cameraRemoteRoot,
 	resolveCameraToggle,
 	withBackgroundSyncOn,
 } from './autoUploadActions'
@@ -52,5 +53,16 @@ describe('withBackgroundSyncOn', () => {
 	it('forces background_sync true', () => {
 		expect(withBackgroundSyncOn({ wifi_only: true, background_sync: false }))
 			.toEqual({ wifi_only: true, background_sync: true })
+	})
+})
+
+describe('cameraRemoteRoot', () => {
+	it('builds Camera/<device> path', () => {
+		expect(cameraRemoteRoot('Pixel 8')).toBe('Camera/Pixel 8')
+	})
+
+	it('sanitizes unsafe path characters and falls back', () => {
+		expect(cameraRemoteRoot('../My/Phone\\Name')).toBe('Camera/My Phone Name')
+		expect(cameraRemoteRoot('   ')).toBe('Camera/Unknown device')
 	})
 })

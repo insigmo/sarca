@@ -258,6 +258,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::platform_label,
+            commands::device_label,
             commands::get_session,
             commands::update_session,
             commands::connect,
@@ -273,6 +274,7 @@ pub fn run() {
             commands::remove_binding,
             commands::set_binding_enabled,
             commands::update_binding_local_path,
+            commands::update_binding_remote_root,
             commands::sync_now,
             commands::sync_statuses,
             commands::get_client_prefs,

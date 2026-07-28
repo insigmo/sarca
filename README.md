@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/insigmo/sarca/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/insigmo/sarca/docker-image.yml?style=flat-square&logo=github"></a>
+  <a href="https://github.com/insigmo/sarca/actions/workflows/release.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/insigmo/sarca/release.yml?style=flat-square&logo=github"></a>
   <a href="https://github.com/insigmo/sarca/pkgs/container/sarca"><img alt="GHCR" src="https://img.shields.io/badge/ghcr.io-sarca-14635C?style=flat-square&logo=docker"></a>
 </p>
 
