@@ -99,11 +99,29 @@ impl SyncEngine {
     }
 
     pub fn remove_binding(&self, id: &str) -> Result<()> {
-        self.index.remove_binding(id)
+        self.index.remove_binding(id)?;
+        self.clear_status(id);
+        Ok(())
     }
 
     pub fn set_binding_enabled(&self, id: &str, enabled: bool) -> Result<()> {
-        self.index.set_binding_enabled(id, enabled)
+        self.index.set_binding_enabled(id, enabled)?;
+        if !enabled {
+            self.clear_status(id);
+        }
+        Ok(())
+    }
+
+    /// Best-effort immediate removal of a binding's status entry, e.g. right
+    /// after disabling/removing it so a stale error banner doesn't linger in
+    /// the UI until the next tick. This is synchronous (`statuses` is an
+    /// async `RwLock`), so it uses `try_write`: if a tick currently holds the
+    /// lock, the entry is instead pruned by `tick_filtered`'s own retain pass
+    /// once that tick completes — never left stuck forever.
+    fn clear_status(&self, id: &str) {
+        if let Ok(mut guard) = self.statuses.try_write() {
+            guard.retain(|s| s.binding_id != id);
+        }
     }
 
     pub async fn statuses(&self) -> Vec<SyncStatus> {
@@ -196,6 +214,16 @@ impl SyncEngine {
                 None => guard.push(status),
             }
         }
+
+        // Drop statuses for bindings that no longer exist or were disabled
+        // since they were last synced — otherwise a removed/disabled
+        // binding's stale `last_error` keeps showing an error banner in the
+        // UI forever (the binding never runs again to clear it). Re-read
+        // the authoritative list here (not the `allow`-filtered `bindings`
+        // above) so a binding merely skipped by `allow` this tick — e.g.
+        // Wi‑Fi‑only throttling — keeps its status.
+        let current = self.index.list_bindings()?;
+        guard.retain(|s| current.iter().any(|b| b.id == s.binding_id && b.enabled));
         Ok(())
     }
 
@@ -705,5 +733,127 @@ mod tests {
             .find(|b| b.id == id)
             .unwrap();
         assert!(!b.enabled);
+    }
+
+    fn test_engine(dir: &std::path::Path) -> SyncEngine {
+        SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
+                    "http://127.0.0.1",
+                    "",
+                ))),
+                data_dir: dir.to_path_buf(),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn disabling_binding_clears_its_status_immediately() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        let id = "cam".to_string();
+        engine
+            .upsert_binding(&Binding {
+                id: id.clone(),
+                storage_id: uuid::Uuid::new_v4(),
+                remote_root: "Camera".into(),
+                local_path: dir.path().join("pics").to_string_lossy().into(),
+                mode: BindingMode::AutoUpload,
+                enabled: true,
+            })
+            .unwrap();
+        engine.tick().await.unwrap();
+        assert!(
+            engine
+                .statuses()
+                .await
+                .iter()
+                .any(|s| s.binding_id == id),
+            "status should exist after a successful tick"
+        );
+
+        engine.set_binding_enabled(&id, false).unwrap();
+        assert!(
+            engine
+                .statuses()
+                .await
+                .iter()
+                .all(|s| s.binding_id != id),
+            "disabling a binding must clear its status so UI error banners clear"
+        );
+    }
+
+    #[tokio::test]
+    async fn removing_binding_clears_its_status_immediately() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        let id = "cam".to_string();
+        engine
+            .upsert_binding(&Binding {
+                id: id.clone(),
+                storage_id: uuid::Uuid::new_v4(),
+                remote_root: "Camera".into(),
+                local_path: dir.path().join("pics").to_string_lossy().into(),
+                mode: BindingMode::AutoUpload,
+                enabled: true,
+            })
+            .unwrap();
+        engine.tick().await.unwrap();
+        assert!(engine.statuses().await.iter().any(|s| s.binding_id == id));
+
+        engine.remove_binding(&id).unwrap();
+        assert!(
+            engine
+                .statuses()
+                .await
+                .iter()
+                .all(|s| s.binding_id != id),
+            "removing a binding must clear its status"
+        );
+    }
+
+    #[tokio::test]
+    async fn tick_prunes_stale_status_for_binding_removed_since_last_tick() {
+        // Simulates the case where the fast `clear_status` best-effort path
+        // was skipped (e.g. lock contention) — the next `tick` must still
+        // prune it via the authoritative retain pass.
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        let cam_id = "cam".to_string();
+        let folder_id = "folder".to_string();
+        for (id, mode) in [
+            (cam_id.clone(), BindingMode::AutoUpload),
+            (folder_id.clone(), BindingMode::FolderUpload),
+        ] {
+            engine
+                .upsert_binding(&Binding {
+                    id: id.clone(),
+                    storage_id: uuid::Uuid::new_v4(),
+                    remote_root: "Root".into(),
+                    local_path: dir.path().join(&id).to_string_lossy().into(),
+                    mode,
+                    enabled: true,
+                })
+                .unwrap();
+        }
+        engine.tick().await.unwrap();
+        assert_eq!(engine.statuses().await.len(), 2);
+
+        // Remove directly via the index to bypass `clear_status`.
+        engine.index.remove_binding(&cam_id).unwrap();
+        engine.tick().await.unwrap();
+
+        let statuses = engine.statuses().await;
+        assert!(
+            statuses.iter().all(|s| s.binding_id != cam_id),
+            "next tick must prune status for a binding removed out from under it"
+        );
+        assert!(
+            statuses.iter().any(|s| s.binding_id == folder_id),
+            "surviving binding must keep its status"
+        );
     }
 }
