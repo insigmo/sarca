@@ -474,6 +474,37 @@ impl<'d> FilesRepository<'d> {
             .collect())
     }
 
+    /// `(chat_id, message_id)` for thumbnail Telegram messages of all files in a storage.
+    pub async fn list_thumb_messages_for_storage(
+        &self,
+        storage_id: Uuid,
+    ) -> SarcaResult<Vec<(i64, i64)>> {
+        let rows: Vec<(i64, Option<i64>)> = sqlx::query_as(
+            format!(
+                "
+                SELECT DISTINCT sc.chat_id, f.thumb_telegram_message_id
+                FROM {FILES_TABLE} f
+                JOIN storage_channels sc ON sc.storage_id = f.storage_id
+                WHERE f.storage_id = $1
+                  AND f.thumb_telegram_message_id IS NOT NULL
+                "
+            )
+            .as_str(),
+        )
+        .bind(storage_id)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|(chat_id, message_id)| message_id.map(|mid| (chat_id, mid)))
+            .collect())
+    }
+
     /// True if any remaining file (live or trashed) still uses this thumb message
     /// on a channel with `chat_id`.
     pub async fn thumb_message_still_referenced(

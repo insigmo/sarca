@@ -453,11 +453,16 @@ pub async fn init_db(db: &PgPool) {
           should_upsert BOOLEAN;
         BEGIN
           IF TG_OP = 'DELETE' THEN
-            INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
-            VALUES (
-              OLD.storage_id, OLD.id, OLD.path, 'delete', OLD.size,
-              RIGHT(OLD.path, 1) <> '/', OLD.content_hash, OLD.source_mtime
-            );
+            -- Skip when the parent storage is already gone (ON DELETE CASCADE from
+            -- storages). Inserting a sync event would violate file_sync_events_storage_id_fkey
+            -- and abort the whole storage delete.
+            IF EXISTS (SELECT 1 FROM storages WHERE id = OLD.storage_id) THEN
+              INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
+              VALUES (
+                OLD.storage_id, OLD.id, OLD.path, 'delete', OLD.size,
+                RIGHT(OLD.path, 1) <> '/', OLD.content_hash, OLD.source_mtime
+              );
+            END IF;
             RETURN OLD;
           END IF;
 
@@ -526,6 +531,45 @@ pub async fn init_db(db: &PgPool) {
           FOR EACH ROW
           EXECUTE PROCEDURE sarca_files_sync_event();
     "#,
+        // --- durable Telegram purge after storage delete ---
+        "
+        CREATE TABLE IF NOT EXISTS storage_purge_jobs (
+            id           UUID PRIMARY KEY,
+            storage_id   UUID NOT NULL,
+            bot_token    TEXT NOT NULL,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            completed_at TIMESTAMPTZ NULL
+        );
+    ",
+        "
+        CREATE TABLE IF NOT EXISTS storage_purge_messages (
+            id           BIGSERIAL PRIMARY KEY,
+            job_id       UUID NOT NULL REFERENCES storage_purge_jobs(id) ON DELETE CASCADE,
+            chat_id      BIGINT NOT NULL,
+            message_id   BIGINT NOT NULL,
+            status       TEXT NOT NULL DEFAULT 'pending'
+                         CONSTRAINT storage_purge_messages_status_check
+                         CHECK (status IN ('pending', 'in_progress', 'done', 'failed')),
+            attempts     INT NOT NULL DEFAULT 0,
+            last_error   TEXT,
+            updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (job_id, chat_id, message_id)
+        );
+    ",
+        "
+        ALTER TABLE storage_purge_messages
+          DROP CONSTRAINT IF EXISTS storage_purge_messages_status_check;
+    ",
+        "
+        ALTER TABLE storage_purge_messages
+          ADD CONSTRAINT storage_purge_messages_status_check
+          CHECK (status IN ('pending', 'in_progress', 'done', 'failed'));
+    ",
+        "
+        CREATE INDEX IF NOT EXISTS storage_purge_messages_pending_idx
+          ON storage_purge_messages (status, id)
+          WHERE status = 'pending';
+    ",
     ] {
         sqlx::query(statement)
             .execute(&mut *transaction)

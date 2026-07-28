@@ -7,6 +7,7 @@ pub mod files;
 pub mod oauth_accounts;
 pub mod share_links;
 pub mod storage_channels;
+pub mod storage_purge;
 pub mod storage_workers;
 pub mod storages;
 pub mod users;

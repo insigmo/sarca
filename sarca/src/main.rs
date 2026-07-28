@@ -15,6 +15,7 @@ use crate::{
     services::{
         channel_health::ChannelHealthService,
         replication::ReplicationService,
+        storage_purge::StoragePurgeService,
         trash_purge::TrashPurgeService,
     },
     startup::{create_db, create_superuser, delete_orphan_storage_workers, init_db},
@@ -157,6 +158,18 @@ async fn main() {
             );
         },
         Err(e) => tracing::error!("trash purge scheduler db pool failed: {e}"),
+    }
+
+    match get_pool(&config.db_uri, workers.into(), db_timeout).await {
+        Ok(db) => {
+            StoragePurgeService::spawn_loop(
+                db,
+                config.telegram_api_base_url.clone(),
+                config.telegram_rate_limit,
+                Duration::from_secs(5),
+            );
+        },
+        Err(e) => tracing::error!("storage purge scheduler db pool failed: {e}"),
     }
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);

@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -146,10 +146,39 @@ impl<'d> StoragesRepository<'d> {
     }
 
     pub async fn delete_storage(&self, storage_id: Uuid) -> SarcaResult<()> {
+        let mut tx = self.db.begin().await.map_err(|e| {
+            tracing::error!("delete storage transaction begin: {e}");
+            SarcaError::Unknown
+        })?;
+        self.delete_storage_in_tx(&mut tx, storage_id).await?;
+        tx.commit().await.map_err(|e| {
+            tracing::error!("delete storage transaction commit: {e}");
+            SarcaError::Unknown
+        })
+    }
+
+    /// Delete a storage and its dependent rows within an existing transaction.
+    pub async fn delete_storage_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        storage_id: Uuid,
+    ) -> SarcaResult<()> {
         // storage_workers.storage_id has no ON DELETE; detach first
         sqlx::query("UPDATE storage_workers SET storage_id = NULL WHERE storage_id = $1")
             .bind(storage_id)
-            .execute(self.db)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
+
+        // Delete files while the storage row still exists so the sync-event trigger
+        // can record deletes (CASCADE-from-storage would leave storage already gone
+        // and trip file_sync_events_storage_id_fkey).
+        sqlx::query("DELETE FROM files WHERE storage_id = $1")
+            .bind(storage_id)
+            .execute(&mut **tx)
             .await
             .map_err(|e| {
                 tracing::error!("{e}");
@@ -158,7 +187,7 @@ impl<'d> StoragesRepository<'d> {
 
         sqlx::query(format!("DELETE FROM {TABLE} WHERE id = $1").as_str())
             .bind(storage_id)
-            .execute(self.db)
+            .execute(&mut **tx)
             .await
             .map_err(|e| map_not_found(&e, "storage"))?;
         Ok(())
