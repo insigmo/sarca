@@ -5,6 +5,7 @@ mod acl_check;
 mod client_log;
 mod commands;
 mod folder_picker;
+mod mediastore;
 mod remote_ipc;
 mod startup;
 mod state;
@@ -49,6 +50,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(folder_picker::init())
         .plugin(startup::init())
+        .plugin(mediastore::init())
         .plugin(
             PluginBuilder::<tauri::Wry, ()>::new("sarca-nav")
                 // Mark every navigation as native *before* page scripts when the

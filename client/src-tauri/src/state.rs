@@ -600,6 +600,9 @@ impl AppSyncState {
             poll_interval: Duration::from_secs(30),
             api,
             data_dir: data_dir.clone(),
+            #[cfg(target_os = "android")]
+            media_source: Arc::new(crate::mediastore::AndroidDcimMediaSource::new(app.clone())),
+            #[cfg(not(target_os = "android"))]
             media_source: Arc::new(FsMediaSource),
         };
         let engine = Arc::new(SyncEngine::open(config, Arc::new(KeepBothPrompt))?);
