@@ -552,6 +552,8 @@ pub struct ClientPrefs {
     pub app_lock_enabled: bool,
     #[serde(default)]
     pub app_lock_pin: Option<String>,
+    #[serde(default)]
+    pub enable_logs: bool,
 }
 
 fn default_true() -> bool {
@@ -565,6 +567,7 @@ impl Default for ClientPrefs {
             background_sync: true,
             app_lock_enabled: false,
             app_lock_pin: None,
+            enable_logs: false,
         }
     }
 }
@@ -643,6 +646,10 @@ impl AppSyncState {
                         .await
                     {
                         tracing::warn!(error = %e, "sync tick error");
+                        crate::client_log::write_line(
+                            &data_dir,
+                            &format!("sync tick error: {e}"),
+                        );
                     }
                 }
                 tokio::select! {

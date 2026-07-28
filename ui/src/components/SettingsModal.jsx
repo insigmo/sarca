@@ -23,6 +23,7 @@ import Access from './Access'
 import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
 import SettingsSyncPanel from './SettingsSyncPanel'
+import SettingsSwitch from './SettingsSwitch'
 import AppLockToggle from './AppLockToggle'
 import { nativeClientStore } from '../common/nativeClient'
 
@@ -49,6 +50,8 @@ const SettingsModal = () => {
 	const [cacheBytes, setCacheBytes] = createSignal(0)
 	const [sessionInfo, setSessionInfo] = createSignal({ base_url: '', email: '' })
 	const [lockEnabled, setLockEnabled] = createSignal(false)
+	const [logsEnabled, setLogsEnabled] = createSignal(false)
+	const [logsBusy, setLogsBusy] = createSignal(false)
 	const [pinDraft, setPinDraft] = createSignal('')
 	const [pinConfirm, setPinConfirm] = createSignal('')
 	const [securityMsg, setSecurityMsg] = createSignal('')
@@ -155,6 +158,9 @@ const SettingsModal = () => {
 					}),
 				)
 				.catch(() => {})
+			nativeInvoke('get_client_prefs')
+				.then((p) => setLogsEnabled(Boolean(p?.enable_logs)))
+				.catch(() => {})
 		}
 	})
 
@@ -183,6 +189,51 @@ const SettingsModal = () => {
 			addAlert('Cache cleared', 'success')
 		} catch (e) {
 			addAlert(String(e), 'error')
+		}
+	}
+
+	const setEnableLogs = async (enabled) => {
+		setLogsBusy(true)
+		try {
+			const prefs = (await nativeInvoke('get_client_prefs')) || {}
+			const next = { ...prefs, enable_logs: enabled }
+			await nativeInvoke('set_client_prefs', { prefs: next })
+			setLogsEnabled(enabled)
+		} catch (e) {
+			addAlert(String(e), 'error')
+		} finally {
+			setLogsBusy(false)
+		}
+	}
+
+	const exportLogs = async () => {
+		setLogsBusy(true)
+		try {
+			const result = await nativeInvoke('export_logs')
+			if (result?.shared) {
+				addAlert('Share sheet opened', 'success')
+				return
+			}
+			const content = String(result?.content || '')
+			const path = String(result?.path || '')
+			if (content && typeof document !== 'undefined') {
+				const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+				const url = URL.createObjectURL(blob)
+				const a = document.createElement('a')
+				a.href = url
+				a.download = 'sarca-client.log'
+				a.rel = 'noopener'
+				document.body.appendChild(a)
+				a.click()
+				a.remove()
+				URL.revokeObjectURL(url)
+			}
+			addAlert(path ? `Logs exported (${path})` : 'Logs exported', 'success')
+			setLogsEnabled(true)
+		} catch (e) {
+			addAlert(String(e), 'error')
+		} finally {
+			setLogsBusy(false)
 		}
 	}
 
@@ -606,10 +657,31 @@ const SettingsModal = () => {
 														Sarca client {about().version || '—'} ·{' '}
 														{about().platform || 'native'}
 													</p>
+												</div>
+											</div>
+											<div class="settings-toggle">
+												<span>Enable logs</span>
+												<SettingsSwitch
+													id="settings-enable-logs-switch"
+													checked={logsEnabled()}
+													disabled={logsBusy()}
+													onChange={(checked) => setEnableLogs(checked)}
+												/>
+											</div>
+											<div class="settings-account__row">
+												<div>
+													<p class="settings-account__label">Export logs</p>
 													<p class="settings-account__hint">
-														Logs: use the system log for sarca-client
+														Share a log file for debugging auto-upload
 													</p>
 												</div>
+												<Button
+													variant="outlined"
+													disabled={logsBusy()}
+													onClick={exportLogs}
+												>
+													Export logs
+												</Button>
 											</div>
 										</Show>
 										<div class="settings-account__row">

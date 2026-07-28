@@ -15,6 +15,7 @@ use crate::{
     hash::sha256_file,
     index::{mtime_ms_from_system, IndexEntry, LocalIndex},
     scheduler::BindingScheduler,
+    transfer::{TransferDirection, TransferQueue, TransferQueueSnapshot},
     types::{Binding, BindingMode, SyncStatus},
 };
 
@@ -64,6 +65,7 @@ pub struct SyncEngine {
     index: LocalIndex,
     prompt: Arc<dyn ConflictPrompt>,
     statuses: Arc<RwLock<Vec<SyncStatus>>>,
+    transfers: Arc<RwLock<TransferQueue>>,
     /// Runs enabled bindings concurrently (per-id skip-when-busy, max 2 in flight).
     scheduler: BindingScheduler,
 }
@@ -77,6 +79,7 @@ impl SyncEngine {
             index,
             prompt,
             statuses: Arc::new(RwLock::new(Vec::new())),
+            transfers: Arc::new(RwLock::new(TransferQueue::default())),
             scheduler: BindingScheduler::new(2),
         })
     }
@@ -101,6 +104,7 @@ impl SyncEngine {
     pub fn remove_binding(&self, id: &str) -> Result<()> {
         self.index.remove_binding(id)?;
         self.clear_status(id);
+        self.clear_transfers(id);
         Ok(())
     }
 
@@ -108,6 +112,7 @@ impl SyncEngine {
         self.index.set_binding_enabled(id, enabled)?;
         if !enabled {
             self.clear_status(id);
+            self.clear_transfers(id);
         }
         Ok(())
     }
@@ -124,8 +129,39 @@ impl SyncEngine {
         }
     }
 
+    fn clear_transfers(&self, id: &str) {
+        if let Ok(mut guard) = self.transfers.try_write() {
+            guard.clear_binding(id);
+        }
+    }
+
     pub async fn statuses(&self) -> Vec<SyncStatus> {
         self.statuses.read().await.clone()
+    }
+
+    pub async fn transfer_queue(&self) -> TransferQueueSnapshot {
+        self.transfers.read().await.snapshot()
+    }
+
+    async fn transfer_begin(
+        &self,
+        binding_id: &str,
+        direction: TransferDirection,
+        relative_path: &str,
+        size: Option<i64>,
+    ) -> String {
+        self.transfers
+            .write()
+            .await
+            .begin(binding_id, direction, relative_path, size)
+    }
+
+    async fn transfer_complete(&self, id: &str) {
+        self.transfers.write().await.complete(id);
+    }
+
+    async fn transfer_abandon(&self, id: &str) {
+        self.transfers.write().await.abandon(id);
     }
 
     /// Run one sync/auto-upload pass for all enabled bindings.
@@ -305,10 +341,24 @@ impl SyncEngine {
                         continue;
                     }
                 } else {
-                    self.api()
+                    let tid = self
+                        .transfer_begin(
+                            &binding.id,
+                            TransferDirection::Download,
+                            &rel,
+                            Some(entry.size),
+                        )
+                        .await;
+                    let dl = self
+                        .api()
                         .await
                         .download_to(binding.storage_id, &entry.path, &local)
-                        .await?;
+                        .await;
+                    if let Err(e) = dl {
+                        self.transfer_abandon(&tid).await;
+                        return Err(e);
+                    }
+                    self.transfer_complete(&tid).await;
                 }
                 let meta = tokio::fs::metadata(&local).await?;
                 let mtime = meta.modified().ok().map(mtime_ms_from_system).unwrap_or(0);
@@ -395,7 +445,16 @@ impl SyncEngine {
             let (parent, filename) = split_parent_name(&rel);
             let remote_parent = join_remote(&binding.remote_root, &parent);
             self.ensure_remote_parents(binding, &parent).await?;
-            self.api()
+            let tid = self
+                .transfer_begin(
+                    &binding.id,
+                    TransferDirection::Upload,
+                    &rel,
+                    Some(size),
+                )
+                .await;
+            let upload_result = self
+                .api()
                 .await
                 .upload_file(
                     binding.storage_id,
@@ -405,15 +464,19 @@ impl SyncEngine {
                     Some(mtime),
                     Some(&hash),
                 )
-                .await
-                .with_context(|| {
+                .await;
+            if let Err(e) = upload_result {
+                self.transfer_abandon(&tid).await;
+                return Err(e).with_context(|| {
                     format!(
                         "upload {} → {}/{}",
                         path.display(),
                         remote_parent,
                         filename
                     )
-                })?;
+                });
+            }
+            self.transfer_complete(&tid).await;
             self.index.upsert_entry(
                 &binding.id,
                 &IndexEntry {
@@ -524,10 +587,24 @@ impl SyncEngine {
                                 continue;
                             }
                         }
-                        self.api()
+                        let tid = self
+                            .transfer_begin(
+                                &binding.id,
+                                TransferDirection::Download,
+                                &rel,
+                                ev.size,
+                            )
+                            .await;
+                        let dl = self
+                            .api()
                             .await
                             .download_to(binding.storage_id, &ev.path, &local)
-                            .await?;
+                            .await;
+                        if let Err(e) = dl {
+                            self.transfer_abandon(&tid).await;
+                            return Err(e);
+                        }
+                        self.transfer_complete(&tid).await;
                         let meta = tokio::fs::metadata(&local).await?;
                         let mtime = meta.modified().ok().map(mtime_ms_from_system).unwrap_or(0);
                         let hash = sha256_file(&local)
