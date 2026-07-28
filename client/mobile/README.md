@@ -50,8 +50,10 @@ Manual resign:
 
 - **Camera on Android:** lists DCIM photos/videos via **MediaStore** (not a filesystem walk).
   Discovery errors surface as `last_error` instead of silent zero uploads.
+- **Desktop Camera:** path walk (follows symlink files). After each tick, Sync Settings
+  shows an honesty hint when Uploading is 0 — e.g. no media in the folder, or all
+  already uploaded — instead of a silent zero.
 - **Folder auto-upload (all platforms):** walks the picked local path with `WalkDir` as before.
-- **Desktop Camera:** same path walk as folder auto-upload.
 
 **Browse / folder picker**
 
