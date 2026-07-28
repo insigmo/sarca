@@ -35,6 +35,7 @@ const SettingsSyncPanel = (props) => {
 		app_lock_enabled: false,
 		app_lock_pin: null,
 	})
+	const [prefsLoaded, setPrefsLoaded] = createSignal(false)
 	const [localPath, setLocalPath] = createSignal('')
 	const [folderLocalPath, setFolderLocalPath] = createSignal('')
 	const [remoteRoot, setRemoteRoot] = createSignal('')
@@ -83,6 +84,7 @@ const SettingsSyncPanel = (props) => {
 					app_lock_enabled: Boolean(prefsDto.app_lock_enabled),
 					app_lock_pin: prefsDto.app_lock_pin ?? null,
 				})
+				setPrefsLoaded(true)
 			}
 			const binds = bindsResult.ok
 				? Array.isArray(bindsResult.value)
@@ -115,6 +117,30 @@ const SettingsSyncPanel = (props) => {
 	const savePrefs = async (next) => {
 		setPrefs(next)
 		await nativeInvoke('set_client_prefs', { prefs: next })
+	}
+
+	// Turning a binding on always wants background_sync enabled, but naively
+	// saving `withBackgroundSyncOn(prefs())` before the first successful
+	// `refresh()` would persist the signal's hardcoded defaults (in
+	// particular app_lock_enabled/app_lock_pin) over whatever the user
+	// actually has saved, silently disabling their app lock. Fetch a fresh
+	// base straight from native prefs whenever we haven't loaded real prefs
+	// yet, and skip the save entirely if that also fails.
+	const enableBackgroundSyncSafely = async () => {
+		if (prefsLoaded()) {
+			await savePrefs(withBackgroundSyncOn(prefs()))
+			return
+		}
+		try {
+			const fresh = await nativeInvoke('get_client_prefs')
+			if (fresh && typeof fresh === 'object') {
+				setPrefsLoaded(true)
+				await savePrefs(withBackgroundSyncOn(fresh))
+			}
+		} catch {
+			// No reliable prefs source — skip rather than risk overwriting
+			// real prefs (e.g. app lock) with defaults.
+		}
 	}
 
 	const pickFolder = async (current) => {
@@ -178,7 +204,7 @@ const SettingsSyncPanel = (props) => {
 					enabled: decision.enabled,
 				})
 				if (decision.enabled) {
-					await savePrefs(withBackgroundSyncOn(prefs()))
+					await enableBackgroundSyncSafely()
 				}
 				await refresh()
 				if (decision.enabled) kickSyncNow()
@@ -215,7 +241,7 @@ const SettingsSyncPanel = (props) => {
 					binding,
 				])
 			}
-			await savePrefs(withBackgroundSyncOn(prefs()))
+			await enableBackgroundSyncSafely()
 			await refresh()
 			kickSyncNow()
 		} catch (e) {
@@ -267,7 +293,7 @@ const SettingsSyncPanel = (props) => {
 					binding,
 				])
 			}
-			await savePrefs(withBackgroundSyncOn(prefs()))
+			await enableBackgroundSyncSafely()
 			setFolderLocalPath('')
 			await refresh()
 			kickSyncNow()
@@ -363,7 +389,7 @@ const SettingsSyncPanel = (props) => {
 											enabled: true,
 										})
 									}
-									await savePrefs(withBackgroundSyncOn(prefs()))
+									await enableBackgroundSyncSafely()
 									kickSyncNow()
 									await refresh()
 								} else {
@@ -499,6 +525,7 @@ const SettingsSyncPanel = (props) => {
 									<div class="settings-sync-panel__row">
 										<SettingsSwitch
 											id={`settings-folder-switch-${b.id}`}
+											ariaLabel={`${modeLabel(b.mode)}: ${b.local_path}`}
 											checked={b.enabled === true}
 											disabled={busy()}
 											onChange={(checked) =>

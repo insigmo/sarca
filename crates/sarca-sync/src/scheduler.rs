@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::{Arc, Mutex as StdMutex, PoisonError};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// RAII guard that removes `binding_id` from the shared in-flight map when
@@ -22,9 +22,16 @@ struct InFlightGuard {
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.in_flight.lock() {
-            guard.remove(&self.binding_id);
-        }
+        // Recover from a poisoned mutex rather than silently skipping the
+        // removal: the map's invariants (plain string keys) can't actually
+        // be broken by a panicking holder, so it's safe to keep using it —
+        // and silently skipping here would leak `binding_id` as "in
+        // flight" forever, permanently skipping that binding.
+        let mut guard = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.remove(&self.binding_id);
     }
 }
 
@@ -56,7 +63,10 @@ impl BindingScheduler {
         Fut: Future<Output = T>,
     {
         let _guard = {
-            let mut guard = self.in_flight.lock().ok()?;
+            let mut guard = self
+                .in_flight
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
             if guard.contains_key(binding_id) {
                 return None;
             }
@@ -184,6 +194,36 @@ mod tests {
         assert!(
             !map.lock().unwrap().contains_key("cam"),
             "Drop must remove the binding id from the in-flight map"
+        );
+    }
+
+    /// If a prior lock holder panicked while holding the std `Mutex`
+    /// (poisoning it), the guard's `Drop` must still recover the lock via
+    /// `PoisonError::into_inner` and remove the entry, rather than silently
+    /// leaving `binding_id` stuck "in flight" forever.
+    #[test]
+    fn in_flight_guard_removes_entry_even_when_mutex_poisoned() {
+        let map: Arc<StdMutex<HashMap<String, ()>>> = Arc::new(StdMutex::new(HashMap::new()));
+        map.lock().unwrap().insert("cam".to_string(), ());
+
+        // Poison the mutex by panicking while holding the lock.
+        let poison_map = map.clone();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = poison_map.lock().unwrap();
+            panic!("simulated poison");
+        }));
+        assert!(map.is_poisoned());
+
+        let guard = InFlightGuard {
+            in_flight: map.clone(),
+            binding_id: "cam".to_string(),
+        };
+        drop(guard);
+
+        let recovered = map.lock().unwrap_or_else(PoisonError::into_inner);
+        assert!(
+            !recovered.contains_key("cam"),
+            "poisoned mutex must still be recovered and the entry removed"
         );
     }
 }
