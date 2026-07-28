@@ -71,13 +71,12 @@ impl<'d> UsersRepository<'d> {
     }
 
     pub async fn list_all(&self) -> SarcaResult<Vec<User>> {
-        sqlx::query_as("SELECT * FROM users ORDER BY email ASC")
-            .fetch_all(self.db)
-            .await
-            .map_err(|e| {
+        sqlx::query_as("SELECT * FROM users ORDER BY email ASC").fetch_all(self.db).await.map_err(
+            |e| {
                 tracing::error!("{e}");
                 SarcaError::Unknown
-            })
+            },
+        )
     }
 
     pub async fn update_password_hash(&self, email: &str, password_hash: &str) -> SarcaResult<()> {
