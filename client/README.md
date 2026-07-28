@@ -49,6 +49,12 @@ pnpm exec tauri icon ../logo.svg
 # or: pnpm exec tauri icon public/logo.svg
 ```
 
+Desktop icons land in `src-tauri/icons/`. Android mipmaps are also written under
+`src-tauri/icons/android/` (and into `gen/android/.../res/` only if that tree
+already exists). After `tauri android init`, `scripts/patch-android-http.sh`
+copies the Sarca Android icons into the generated project so the APK does not
+ship with Tauri’s default logo.
+
 ## CI artifacts
 
 GitHub Actions workflow [`.github/workflows/client.yml`](../.github/workflows/client.yml) builds in parallel.
