@@ -46,11 +46,18 @@ Manual resign:
 2. Enable Media auto-upload and pick a Photos / Camera / Downloads folder.
 3. Sync loop uploads new/changed files only (no remote→local deletes).
 
+**Discovery**
+
+- **Camera on Android:** lists DCIM photos/videos via **MediaStore** (not a filesystem walk).
+  Discovery errors surface as `last_error` instead of silent zero uploads.
+- **Folder auto-upload (all platforms):** walks the picked local path with `WalkDir` as before.
+- **Desktop Camera:** same path walk as folder auto-upload.
+
 **Browse / folder picker**
 
 - **Desktop (Linux / Windows / macOS):** native OS folder dialog via `tauri-plugin-dialog`.
 - **Android:** SAF `ACTION_OPEN_DOCUMENT_TREE`; primary/external volumes resolve to
-  `/storage/emulated/0/...` (or `/storage/<uuid>/...`) so the sync walker can read files.
+  `/storage/emulated/0/...` (or `/storage/<uuid>/...`) so folder auto-upload can walk files.
   Typed `window.prompt` is only used if the tree URI cannot be mapped to a filesystem path.
 - **iOS:** typed path fallback (no walkable folder picker yet).
 

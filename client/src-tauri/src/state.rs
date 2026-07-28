@@ -7,8 +7,10 @@ use std::{
 
 use anyhow::Result;
 use sarca_sync::{
-    Binding, BindingMode, FsMediaSource, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig,
+    Binding, BindingMode, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig,
 };
+#[cfg(not(target_os = "android"))]
+use sarca_sync::FsMediaSource;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
 use tokio::sync::{Mutex, RwLock};
