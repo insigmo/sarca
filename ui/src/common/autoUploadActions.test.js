@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
 	cameraBinding,
 	cameraRemoteRoot,
+	displayCameraRemoteRoot,
+	needsCameraRootMigration,
 	resolveCameraToggle,
 	withBackgroundSyncOn,
 } from './autoUploadActions'
@@ -69,5 +71,28 @@ describe('cameraRemoteRoot', () => {
 	it('rejects localhost-style hostnames', () => {
 		expect(cameraRemoteRoot('localhost')).toBe('Camera/Unknown device')
 		expect(cameraRemoteRoot('127.0.0.1')).toBe('Camera/Unknown device')
+	})
+})
+
+describe('displayCameraRemoteRoot', () => {
+	it('returns null while device and platform labels are still loading', () => {
+		expect(displayCameraRemoteRoot('', '')).toBe(null)
+		expect(displayCameraRemoteRoot('  ', '')).toBe(null)
+	})
+
+	it('prefers device label over platform once either is known', () => {
+		expect(displayCameraRemoteRoot('Pixel 8', 'Android')).toBe('Camera/Pixel 8')
+		expect(displayCameraRemoteRoot('', 'Android')).toBe('Camera/Android')
+	})
+})
+
+describe('needsCameraRootMigration', () => {
+	it('flags legacy Camera and Unknown-device placeholders', () => {
+		expect(needsCameraRootMigration('Camera', 'Camera/Pixel 8')).toBe(true)
+		expect(needsCameraRootMigration('Camera/Unknown device', 'Camera/Pixel 8')).toBe(
+			true,
+		)
+		expect(needsCameraRootMigration('Camera/Pixel 8', 'Camera/Pixel 8')).toBe(false)
+		expect(needsCameraRootMigration('Camera/Old', 'Camera/Pixel 8')).toBe(false)
 	})
 })
