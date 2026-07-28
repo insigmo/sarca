@@ -1,6 +1,6 @@
 [package]
 name = "sarca-client"
-version = "0.0.72"
+version = "0.0.73"
 description = "Sarca desktop/mobile sync client"
 authors = ["Sarca"]
 edition = "2021"
