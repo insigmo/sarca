@@ -75,6 +75,12 @@ pub struct SyncEngine {
     scheduler: BindingScheduler,
 }
 
+struct PushLocalResult {
+    uploaded: usize,
+    scanned: usize,
+    pending: usize,
+}
+
 impl SyncEngine {
     pub fn open(config: SyncEngineConfig, prompt: Arc<dyn ConflictPrompt>) -> Result<Self> {
         let index_path = LocalIndex::default_path(&config.data_dir);
@@ -260,6 +266,7 @@ impl SyncEngine {
                             uploading: 0,
                             downloading: 0,
                             conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
+                            ..Default::default()
                         };
                         let mut guard = self.statuses.write().await;
                         match guard.iter_mut().find(|s| s.binding_id == binding.id) {
@@ -279,6 +286,7 @@ impl SyncEngine {
                                 uploading: 0,
                                 downloading: 0,
                                 conflicts: self.index.conflict_count(&binding.id).unwrap_or(0),
+                                ..Default::default()
                             }
                         }
                     }
@@ -336,7 +344,6 @@ impl SyncEngine {
     }
 
     async fn sync_binding(&self, binding: &Binding) -> Result<SyncStatus> {
-        let mut uploading = 0usize;
         let mut downloading = 0usize;
 
         // First-time: pull snapshot if cursor is 0 and mode is Sync.
@@ -346,7 +353,9 @@ impl SyncEngine {
         }
 
         // Push local changes (both modes).
-        uploading += self.push_local(binding).await?;
+        let push = self.push_local(binding).await?;
+        let (_scanned, pending, already_synced) =
+            crate::types::scan_counters(push.scanned, push.pending);
 
         if matches!(binding.mode, BindingMode::Sync) {
             downloading += self.pull_remote(binding, &mut cursor).await?;
@@ -357,9 +366,12 @@ impl SyncEngine {
             binding_id: binding.id.clone(),
             cursor,
             last_error: None,
-            uploading,
+            uploading: push.uploaded,
             downloading,
             conflicts: self.index.conflict_count(&binding.id)?,
+            scanned: push.scanned,
+            pending,
+            already_synced,
         })
     }
 
@@ -431,7 +443,7 @@ impl SyncEngine {
         Ok(snap.cursor)
     }
 
-    async fn push_local(&self, binding: &Binding) -> Result<usize> {
+    async fn push_local(&self, binding: &Binding) -> Result<PushLocalResult> {
         let root = PathBuf::from(&binding.local_path);
         let upload_only = binding.mode.is_upload_only();
 
@@ -442,6 +454,8 @@ impl SyncEngine {
         // any concurrent reader of `transfer_queue()` (e.g. the Sync
         // Settings UI polling progress) for the whole duration.
         let pending_candidates = filter_pending_candidates(&self.index, &binding.id, &candidates)?;
+        let scanned = candidates.len();
+        let pending_n = pending_candidates.len();
         let ephemeral_selected: std::collections::HashSet<PathBuf> = pending_candidates
             .iter()
             .filter(|c| c.ephemeral)
@@ -598,7 +612,11 @@ impl SyncEngine {
                 }
             }
         }
-        Ok(uploaded)
+        Ok(PushLocalResult {
+            uploaded,
+            scanned,
+            pending: pending_n,
+        })
     }
 
     async fn pull_remote(&self, binding: &Binding, cursor: &mut i64) -> Result<usize> {
@@ -1150,7 +1168,9 @@ mod tests {
             .unwrap();
 
         let uploaded = engine.push_local(&binding).await.unwrap();
-        assert_eq!(uploaded, 0);
+        assert_eq!(uploaded.uploaded, 0);
+        assert_eq!(uploaded.scanned, 1);
+        assert_eq!(uploaded.pending, 0);
         assert!(
             !unchanged_path.exists(),
             "ephemeral file not selected for upload must be cleaned up"
