@@ -9,6 +9,7 @@ pub mod settings;
 pub mod setup;
 pub mod shares;
 pub mod storage_manager;
+pub mod storage_purge;
 pub mod storage_workers;
 pub mod storage_workers_scheduler;
 pub mod storages;

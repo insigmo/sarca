@@ -37,7 +37,10 @@ use crate::{
             UpdateStorageSchema,
         },
     },
-    services::channel_health::ChannelHealthService,
+    services::{
+        channel_health::ChannelHealthService,
+        storage_purge::{enqueue_storage_telegram_purge_in_tx, snapshot_storage_telegram_purge},
+    },
 };
 
 fn mask_bot_token(token: &str) -> String {
@@ -361,7 +364,17 @@ impl<'d> StoragesService<'d> {
     pub async fn delete(&self, id: Uuid, user: &AuthUser) -> SarcaResult<()> {
         check_access(&self.access_repo, user.id, id, &AccessType::A).await?;
 
-        self.repo.delete_storage(id).await
+        let snapshot = snapshot_storage_telegram_purge(self.db, id).await?;
+        let mut tx = self.db.begin().await.map_err(|e| {
+            tracing::error!("[STORAGES SERVICE] failed to begin delete transaction: {e}");
+            SarcaError::Unknown
+        })?;
+        enqueue_storage_telegram_purge_in_tx(&mut tx, id, snapshot).await?;
+        self.repo.delete_storage_in_tx(&mut tx, id).await?;
+        tx.commit().await.map_err(|e| {
+            tracing::error!("[STORAGES SERVICE] failed to commit delete transaction: {e}");
+            SarcaError::Unknown
+        })
     }
 
     async fn ensure_channel_of_storage(
