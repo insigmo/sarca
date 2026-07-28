@@ -68,7 +68,9 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
     }
     let mut out = Vec::new();
     let mut walk_errors = 0usize;
-    for entry in WalkDir::new(root).follow_links(true) {
+    // Do not follow directory symlinks (can explode into huge trees). Still
+    // include symlink-*files* by resolving metadata without WalkDir::follow_links.
+    for entry in WalkDir::new(root) {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -77,10 +79,23 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
                 continue;
             }
         };
-        if !entry.file_type().is_file() {
+        let path = entry.path().to_path_buf();
+        let ft = entry.file_type();
+        let is_file = if ft.is_symlink() {
+            match std::fs::metadata(&path) {
+                Ok(m) => m.is_file(),
+                Err(e) => {
+                    warn!(path = %path.display(), error = %e, "symlink metadata error, skipping");
+                    walk_errors += 1;
+                    false
+                }
+            }
+        } else {
+            ft.is_file()
+        };
+        if !is_file {
             continue;
         }
-        let path = entry.path().to_path_buf();
         if media_only && !is_media_file(&path) {
             continue;
         }
@@ -96,7 +111,7 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
         if rel.is_empty() {
             continue;
         }
-        let meta = match entry.metadata() {
+        let meta = match std::fs::metadata(&path) {
             Ok(m) => m,
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "stat error, skipping");
