@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
+	PTR_ARM_PX,
 	PTR_THRESHOLD_PX,
 	canBeginPull,
+	isPullArmed,
 	pullDelta,
 	isHorizontalGesture,
 	shouldTriggerRefresh,
@@ -21,6 +23,13 @@ describe('pullDelta / trigger', () => {
 		expect(pullDelta({ startY: 100, currentY: 90 })).toBe(0)
 		expect(shouldTriggerRefresh(PTR_THRESHOLD_PX)).toBe(true)
 		expect(shouldTriggerRefresh(PTR_THRESHOLD_PX - 1)).toBe(false)
+	})
+})
+
+describe('isPullArmed', () => {
+	it('waits for an 8px downward deadzone before claiming the gesture', () => {
+		expect(isPullArmed(PTR_ARM_PX - 1)).toBe(false)
+		expect(isPullArmed(PTR_ARM_PX)).toBe(true)
 	})
 })
 
