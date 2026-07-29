@@ -1,17 +1,3 @@
-# Production stack: pull images + mount sarca.conf only.
-# Local binary/UI overrides: compose.dev.yml (see `task up` / `task restart`).
-volumes:
-  sarca-db-volume:
-    name: sarca-db-volume
-  sarca-work-volume:
-    name: sarca-work-volume
-  telegram-bot-api-data:
-    name: telegram-bot-api-data
-
-networks:
-  sarca-network:
-    name: sarca-network
-
 services:
   sarca:
     container_name: sarca
@@ -19,14 +5,15 @@ services:
     volumes:
       - ./sarca.conf:/sarca.conf:ro
       - sarca-work-volume:/work
-      # Local Bot API returns absolute paths under this dir; Sarca must see the same files.
       - telegram-bot-api-data:/var/lib/telegram-bot-api
     environment:
-      PORT: ${PORT:-8000}
+      PORT: ${PORT:-8001}
       DATABASE_HOST: db
       WORK_DIR: /work
     ports:
-      - "${PORT:-8000}:${PORT:-8000}"
+      - "${PORT:-8001}:${PORT:-8001}"
+    env_file:
+      - sarca.conf
     restart: unless-stopped
     depends_on:
       - db
@@ -71,3 +58,14 @@ services:
       - sarca-db-volume:/var/lib/postgresql/data
     networks:
       - sarca-network
+volumes:
+  sarca-db-volume:
+    name: sarca-db-volume
+  sarca-work-volume:
+    name: sarca-work-volume
+  telegram-bot-api-data:
+    name: telegram-bot-api-data
+
+networks:
+  sarca-network:
+    name: sarca-network

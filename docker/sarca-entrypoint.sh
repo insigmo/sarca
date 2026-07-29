@@ -4,7 +4,7 @@ set -
 
 WORK_DIR="${WORK_DIR:-/work}"
 mkdir -p "$WORK_DIR/uploads"
-# UID/GID of `nobody` on Ubuntu/Debian
+# UID/GID of `nobody` on Debian/Ubuntu
 chown -R 65534:65534 "$WORK_DIR" 2>/dev/null || chown -R nobody:nogroup "$WORK_DIR"
 
 if command -v runuser >/dev/null 2>&1; then

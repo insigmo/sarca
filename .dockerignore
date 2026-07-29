@@ -1,0 +1,23 @@
+# Context only needs docker/sarca-entrypoint.sh (release assets download in-build).
+.git
+.github
+.cursor
+.superpowers
+**/.pytest_cache
+**/node_modules
+**/target
+ui/
+client/
+sarca/
+e2e/
+runtime/
+docs/
+*.md
+compose*.yml
+Taskfile.yml
+sarca.conf
+sarca.conf.*
+.gitignore
+.dockerignore
+install.sh
+LICENSE*
