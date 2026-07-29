@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
 	enqueueThumbFetch,
+	clearThumbQueue,
 	thumbQueueStats,
 	THUMB_MAX_CONCURRENT,
 } from './thumbQueue'
@@ -49,5 +50,30 @@ describe('thumbQueue', () => {
 		await expect(
 			enqueueThumbFetch(() => Promise.resolve(1), { signal: ac.signal }),
 		).rejects.toMatchObject({ name: 'AbortError' })
+	})
+
+	it('clearThumbQueue rejects waiters and aborts in-flight', async () => {
+		let started = 0
+		/** @type {AbortSignal[]} */
+		const signals = []
+		const tasks = Array.from({ length: THUMB_MAX_CONCURRENT + 3 }, () =>
+			enqueueThumbFetch((signal) => {
+				started += 1
+				signals.push(signal)
+				return new Promise(() => {})
+			}),
+		)
+
+		await Promise.resolve()
+		await Promise.resolve()
+		expect(started).toBe(THUMB_MAX_CONCURRENT)
+		expect(thumbQueueStats().waiting).toBe(3)
+
+		clearThumbQueue()
+		expect(thumbQueueStats().waiting).toBe(0)
+		expect(signals.every((s) => s.aborted)).toBe(true)
+
+		const results = await Promise.allSettled(tasks)
+		expect(results.every((r) => r.status === 'rejected')).toBe(true)
 	})
 })

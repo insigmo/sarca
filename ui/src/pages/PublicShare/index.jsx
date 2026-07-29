@@ -145,7 +145,7 @@ const PublicShare = () => {
 			if (!el.is_file || !el.has_thumb) continue
 			const path = el.path
 			enqueueThumbFetch(
-				() => API.publicShares.thumbPublicShare(t, path),
+				(signal) => API.publicShares.thumbPublicShare(t, path, signal),
 				{ signal: ac.signal },
 			)
 				.then((blob) => {

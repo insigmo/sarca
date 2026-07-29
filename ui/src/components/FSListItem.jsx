@@ -204,7 +204,7 @@ const FSListItem = (props) => {
 
 		if (el.is_file && el.has_thumb) {
 			enqueueThumbFetch(
-				() => API.files.thumb(props.storageId, el.path),
+				(signal) => API.files.thumb(props.storageId, el.path, signal),
 				{ signal: ac.signal },
 			)
 				.then((blob) => {
