@@ -32,10 +32,8 @@ jobs:
         include:
           - arch: amd64
             platform: linux/amd64
-            dockerfile: Dockerfile.amd64
           - arch: arm64
             platform: linux/arm64
-            dockerfile: Dockerfile.arm64
 
     steps:
       - name: Checkout
@@ -52,6 +50,7 @@ jobs:
           echo "package=$(echo '${{ github.event.repository.name }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Set up QEMU
+        if: matrix.arch == 'arm64'
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
@@ -68,7 +67,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: Dockerfile
           platforms: ${{ matrix.platform }}
           push: true
           build-args: |
@@ -80,8 +79,10 @@ jobs:
             org.opencontainers.image.title=sarca
           tags: |
             ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}-${{ matrix.arch }}
+          # Inline BuildKit cache (apt + download mounts) + GHA layer cache.
           cache-from: type=gha,scope=docker-${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=docker-${{ matrix.arch }}
+          provenance: false
 
   manifest:
     needs: build_n_push
