@@ -1,16 +1,11 @@
-# Local-dev overrides for `task up` / `task restart`.
-# Requires a built binary + UI (`task binary`, `task ui`).
-# Usage is via Taskfile: docker compose -f compose.yml -f compose.dev.yml ...
 services:
   sarca:
-    # Rebuild image from this repo when developing entrypoint / packaging.
     build:
       context: .
-      dockerfile: Dockerfile.amd64
+      dockerfile: Dockerfile
       args:
         VERSION: latest
     volumes:
-      # Must be the release executable file (not a directory).
       - ./runtime/sarca:/sarca:ro
       - ./ui/dist:/ui:ro
       - ./docker/sarca-entrypoint.sh:/sarca-entrypoint.sh:ro
