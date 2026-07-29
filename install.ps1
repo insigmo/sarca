@@ -43,10 +43,160 @@ function Test-EnvHasKey {
     return [bool](Select-String -Path $Path -Pattern $pattern -Quiet)
 }
 
+function Get-EnvValue {
+    param([string]$Path, [string]$Key)
+    if (-not (Test-Path $Path)) { return "" }
+    $pattern = "^\s*$([regex]::Escape($Key))=(.*)$"
+    $match = Select-String -Path $Path -Pattern $pattern | Select-Object -First 1
+    if (-not $match) { return "" }
+    return [string]$match.Matches[0].Groups[1].Value.Trim()
+}
+
+function Set-EnvKey {
+    param([string]$Path, [string]$Key, [string]$Value)
+    $lines = @()
+    if (Test-Path $Path) {
+        $lines = Get-Content -Path $Path
+    }
+    $pattern = "^\s*$([regex]::Escape($Key))="
+    $done = $false
+    $out = foreach ($line in $lines) {
+        if ($line -match $pattern) {
+            if (-not $done) {
+                "$Key=$Value"
+                $done = $true
+            }
+        } else {
+            $line
+        }
+    }
+    if (-not $done) {
+        $out = @($out) + @("$Key=$Value")
+    }
+    Set-Content -Path $Path -Value $out -Encoding UTF8
+}
+
+function New-SecretKey {
+    $openssl = Get-Command openssl -ErrorAction SilentlyContinue
+    if ($openssl) {
+        return (& openssl rand -hex 512).Trim()
+    }
+    $bytes = New-Object byte[] 512
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try {
+        $rng.GetBytes($bytes)
+    } finally {
+        $rng.Dispose()
+    }
+    return ($bytes | ForEach-Object { $_.ToString("x2") }) -join ""
+}
+
+function Test-PlaceholderTelegram([string]$Value) {
+    switch ($Value) {
+        { $_ -in @("", "00000000", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "XXX", "xxx") } { return $true }
+        default { return $false }
+    }
+}
+
+function Test-PlaceholderSecret([string]$Value) {
+    switch ($Value) {
+        { $_ -in @("", "XXX", "xxx", "change-me", "change-me-to-a-long-random-string") } { return $true }
+        default { return $false }
+    }
+}
+
+function Test-PlaceholderEmail([string]$Value) {
+    switch ($Value) {
+        { $_ -in @("", "admin@example.com", "sarca@sarca.sarca") } { return $true }
+        default { return $false }
+    }
+}
+
+function Test-PlaceholderPassword([string]$Value) {
+    switch ($Value) {
+        { $_ -in @("", "change-me", "sarca") } { return $true }
+        default { return $false }
+    }
+}
+
+function Read-SecretHost([string]$Prompt) {
+    $secure = Read-Host $Prompt -AsSecureString
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    }
+}
+
+function Configure-Interactive {
+    param([string]$EnvFile)
+
+    $email = Get-EnvValue -Path $EnvFile -Key "SUPERUSER_EMAIL"
+    $password = Get-EnvValue -Path $EnvFile -Key "SUPERUSER_PASS"
+
+    if ((Test-PlaceholderEmail $email) -or (Test-PlaceholderPassword $password)) {
+        Write-Host ""
+        Write-Host "Bootstrap admin account (used to sign in to the web UI)"
+        Write-Host ""
+        while (Test-PlaceholderEmail $email) {
+            $email = Read-Host "SUPERUSER_EMAIL"
+            if (Test-PlaceholderEmail $email) {
+                Write-Host "email is required"
+            }
+        }
+        while (Test-PlaceholderPassword $password) {
+            $password = Read-SecretHost "SUPERUSER_PASS"
+            if (Test-PlaceholderPassword $password) {
+                Write-Host "password is required"
+            }
+        }
+        Set-EnvKey -Path $EnvFile -Key "SUPERUSER_EMAIL" -Value $email
+        Set-EnvKey -Path $EnvFile -Key "SUPERUSER_PASS" -Value $password
+    } else {
+        Write-Host "Admin credentials already set — skipping prompt"
+    }
+
+    $apiId = Get-EnvValue -Path $EnvFile -Key "TELEGRAM_API_ID"
+    $apiHash = Get-EnvValue -Path $EnvFile -Key "TELEGRAM_API_HASH"
+
+    if ((Test-PlaceholderTelegram $apiId) -or (Test-PlaceholderTelegram $apiHash)) {
+        Write-Host ""
+        Write-Host "Telegram API credentials (needed for Local Bot API / large files)"
+        Write-Host "  1. Open https://my.telegram.org and sign in"
+        Write-Host "  2. Open API development tools"
+        Write-Host "  3. Create an app if needed, then copy api_id and api_hash"
+        Write-Host ""
+        while (Test-PlaceholderTelegram $apiId) {
+            $apiId = Read-Host "TELEGRAM_API_ID"
+            if (Test-PlaceholderTelegram $apiId) {
+                Write-Host "api_id is required"
+            }
+        }
+        while (Test-PlaceholderTelegram $apiHash) {
+            $apiHash = Read-Host "TELEGRAM_API_HASH"
+            if (Test-PlaceholderTelegram $apiHash) {
+                Write-Host "api_hash is required"
+            }
+        }
+        Set-EnvKey -Path $EnvFile -Key "TELEGRAM_API_ID" -Value $apiId
+        Set-EnvKey -Path $EnvFile -Key "TELEGRAM_API_HASH" -Value $apiHash
+    } else {
+        Write-Host "Telegram API credentials already set — skipping prompt"
+    }
+
+    $secret = Get-EnvValue -Path $EnvFile -Key "SECRET_KEY"
+    if (Test-PlaceholderSecret $secret) {
+        $secret = New-SecretKey
+        Set-EnvKey -Path $EnvFile -Key "SECRET_KEY" -Value $secret
+        Write-Host "Generated SECRET_KEY (openssl rand -hex 512)"
+    }
+}
+
 function Merge-EnvDefaults {
     param(
         [string]$EnvFile,
-        [hashtable]$Defaults
+        [System.Collections.Specialized.OrderedDictionary]$Defaults
     )
     $added = $false
     foreach ($key in $Defaults.Keys) {
@@ -70,9 +220,8 @@ function Merge-EnvDefaults {
 function Write-OrMergeEnv {
     param([string]$Prefix, [string]$WorkDir)
     $envFile = Join-Path $Prefix "sarca.conf"
-    $secret = -join ((1..64) | ForEach-Object { "{0:x}" -f (Get-Random -Max 16) })
+    $secret = New-SecretKey
     $workUnix = ($WorkDir -replace '\\', '/')
-    # Ordered list for fresh installs; hashtable merge order is not critical.
     $defaultsOrdered = [ordered]@{
         PORT = "8000"
         WORKERS = "4"
@@ -104,7 +253,7 @@ function Write-OrMergeEnv {
             "$key=$($defaultsOrdered[$key])"
         }
         Set-Content -Path $envFile -Value $lines -Encoding UTF8
-        Write-Host "Wrote $envFile — edit SUPERUSER_* / SECRET_KEY / DATABASE_* before first run"
+        Write-Host "Wrote $envFile"
         return
     }
 
@@ -157,6 +306,8 @@ Set-Content -Path (Join-Path $Prefix "VERSION") -Value $Version -Encoding ASCII
 
 Migrate-LegacyEnv -Prefix $Prefix
 Write-OrMergeEnv -Prefix $Prefix -WorkDir $work
+$envFile = Join-Path $Prefix "sarca.conf"
+Configure-Interactive -EnvFile $envFile
 
 $launcherPs1 = Join-Path $Prefix "sarca.ps1"
 @"
@@ -180,15 +331,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$launcherPs1" %*
 
 Remove-Item $tmp -Recurse -Force
 
-$envFile = Join-Path $Prefix "sarca.conf"
+$port = Get-EnvValue -Path $envFile -Key "PORT"
+if ([string]::IsNullOrWhiteSpace($port)) { $port = "8000" }
+
 Write-Host ""
 Write-Host "Installed $Version."
 Write-Host "  app:      $Prefix"
 Write-Host "  version:  $(Join-Path $Prefix 'VERSION')"
 Write-Host "  launcher: $launcherCmd"
 Write-Host ""
-Write-Host "Next:"
-Write-Host "  1. Edit $envFile"
-Write-Host "  2. Ensure Postgres is reachable"
-Write-Host "  3. Run:  $launcherCmd"
-Write-Host "  4. Open http://127.0.0.1:8000"
+Write-Host "Starting Sarca (Postgres must be reachable — DATABASE_* in sarca.conf)…"
+Start-Process -FilePath $launcherCmd -WindowStyle Hidden
+Write-Host "Started."
+Write-Host "Open http://127.0.0.1:$port"
