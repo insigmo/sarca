@@ -75,6 +75,7 @@ const apiRequest = async (
 	return_response = false,
 	retried = false,
 	silent = false,
+	signal = undefined,
 ) => {
 	const { addAlert } = alertStore
 
@@ -91,6 +92,7 @@ const apiRequest = async (
 			method,
 			body: body === undefined ? undefined : JSON.stringify(body),
 			headers,
+			signal,
 		})
 
 		if (response.status === 401 && auth_token && !retried) {
@@ -104,6 +106,7 @@ const apiRequest = async (
 					return_response,
 					true,
 					silent,
+					signal,
 				)
 			}
 		}
@@ -123,6 +126,9 @@ const apiRequest = async (
 			return await response.json()
 		} catch {}
 	} catch (err) {
+		if (err?.name === 'AbortError' || signal?.aborted) {
+			throw err
+		}
 		if (!silent) {
 			addAlert(err.message, 'error')
 		}
@@ -393,6 +399,7 @@ export const publicApiRequest = async (
 	body,
 	return_response = false,
 	silent = false,
+	signal = undefined,
 ) => {
 	const { addAlert } = alertStore
 	const fullpath = `${API_BASE}${path}`
@@ -405,6 +412,7 @@ export const publicApiRequest = async (
 			body: body === undefined ? undefined : JSON.stringify(body),
 			headers,
 			credentials: 'include',
+			signal,
 		})
 
 		if (!response.ok) {
@@ -437,6 +445,9 @@ export const publicApiRequest = async (
 			return undefined
 		}
 	} catch (err) {
+		if (err?.name === 'AbortError' || signal?.aborted) {
+			throw err
+		}
 		if (!silent) {
 			addAlert(err.message || 'Request failed', 'error')
 		}
