@@ -593,15 +593,19 @@ const getInlineMediaUrl = (storage_id, path) => {
  *
  * @param {string} storage_id
  * @param {string} path
+ * @param {AbortSignal} [signal]
  * @returns {Promise<Blob>}
  */
-const thumb = async (storage_id, path) => {
+const thumb = async (storage_id, path, signal) => {
 	const response = await apiRequest(
 		`/storages/${storage_id}/files/thumb/${encodeFilePath(path)}`,
 		'get',
 		getAuthToken(),
 		undefined,
 		true,
+		false,
+		false,
+		signal,
 	)
 
 	return await response.blob()
@@ -1062,15 +1066,17 @@ const downloadPublicShareZip = async (token) => {
 /**
  * @param {string} token
  * @param {string} relPath
+ * @param {AbortSignal} [signal]
  * @returns {Promise<Blob>}
  */
-const thumbPublicShare = async (token, relPath) => {
+const thumbPublicShare = async (token, relPath, signal) => {
 	const response = await publicApiRequest(
 		publicShareFilePath(token, 'thumb', relPath),
 		'get',
 		undefined,
 		true,
 		true,
+		signal,
 	)
 	return await response.blob()
 }
