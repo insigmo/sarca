@@ -13,16 +13,38 @@ export function cameraBinding(bindings) {
 }
 
 /**
+ * Binding storage id (native uses snake_case; tolerate camelCase).
+ * @param {{ storage_id?: string, storageId?: string } | null | undefined} binding
+ * @returns {string}
+ */
+export function bindingStorageId(binding) {
+	if (!binding || typeof binding !== 'object') return ''
+	return String(binding.storage_id || binding.storageId || '').trim()
+}
+
+/**
  * Decides what should happen to the Camera auto_upload binding when the
  * user flips the switch, without performing any native calls itself.
- * @param {Array<{ id: string, mode: string, enabled?: boolean }>} bindings
+ *
+ * When enabling for a *different* Files storage than the binding's
+ * `storage_id` (e.g. old storage was deleted/recreated), returns `rebind`
+ * so callers remove the stale binding and add a fresh one — otherwise
+ * uploads keep targeting a missing storage forever while the toggle looks ON.
+ *
+ * @param {Array<{ id: string, mode: string, enabled?: boolean, storage_id?: string, storageId?: string }>} bindings
  * @param {boolean} enable
- * @returns {{ action: 'noop' } | { action: 'add' } | { action: 'set_enabled', id: string, enabled: boolean }}
+ * @param {string} [currentStorageId] Files storage currently open
+ * @returns {{ action: 'noop' } | { action: 'add' } | { action: 'rebind', id: string } | { action: 'set_enabled', id: string, enabled: boolean }}
  */
-export function resolveCameraToggle(bindings, enable) {
+export function resolveCameraToggle(bindings, enable, currentStorageId = '') {
 	const existing = cameraBinding(bindings)
+	const sid = String(currentStorageId || '').trim()
 	if (enable) {
 		if (!existing) return { action: 'add' }
+		const boundSid = bindingStorageId(existing)
+		if (sid && boundSid && sid !== boundSid) {
+			return { action: 'rebind', id: existing.id }
+		}
 		if (existing.enabled === true) return { action: 'noop' }
 		return { action: 'set_enabled', id: existing.id, enabled: true }
 	}
