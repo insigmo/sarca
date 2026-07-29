@@ -337,7 +337,12 @@ pub fn run() {
                 eprintln!("sarca_debug run-event-resumed-wake-sync");
                 // #endregion
                 let state = app_handle.state::<AppSyncState>();
-                state.request_sync_wake();
+                // Only wake when a session exists — otherwise MediaStore discovery
+                // on resume races the connect shell paint for no benefit.
+                let connected = state::load_server_config(state.data_dir()).is_connected();
+                if connected {
+                    state.request_sync_wake();
+                }
             }
             #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
             let _ = (app_handle, &event);

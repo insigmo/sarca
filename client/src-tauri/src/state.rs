@@ -646,32 +646,24 @@ impl AppSyncState {
         let mut rx = self.shutdown_tx.subscribe();
         let mut wake_rx = self.wake_tx.subscribe();
         tauri::async_runtime::spawn(async move {
+            // Let the Android activity / WebView paint before the first heavy
+            // MediaStore scan; otherwise startup looks like a black screen ANR.
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            tokio::time::sleep(Duration::from_secs(3)).await;
+
             loop {
                 // #region agent log
                 {
-                    let payload = serde_json::json!({
-                        "sessionId": "0a7dc5",
-                        "runId": "post-fix",
-                        "hypothesisId": "H4",
-                        "location": "state.rs:start_background_loop",
-                        "message": "sync-tick-begin",
-                        "data": {},
-                        "timestamp": std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_millis())
-                            .unwrap_or(0),
-                    });
-                    crate::client_log::write_line(
-                        &data_dir,
-                        &format!("debug-sync-tick-begin {payload}"),
-                    );
                     tracing::info!(target: "sarca_debug", "sync-tick-begin");
+                    eprintln!("sarca_debug sync-tick-begin");
+                    crate::client_log::write_line(&data_dir, "debug-sync-tick-begin");
                 }
                 // #endregion
                 // Pick up tokens written by the webview / sync_now without waiting
                 // for another invoke.
                 let server = load_server_config(&data_dir);
-                if server.is_connected() {
+                let connected = server.is_connected();
+                if connected {
                     engine
                         .set_credentials(server.base_url.clone(), server.access_token.clone())
                         .await;
@@ -680,7 +672,10 @@ impl AppSyncState {
                     .ok()
                     .and_then(|s| serde_json::from_str::<ClientPrefs>(&s).ok())
                     .unwrap_or_default();
-                if prefs.background_sync {
+                // Never run discovery/upload while disconnected — MediaStore
+                // listing still blocks the UI thread via the plugin bridge and
+                // cannot upload without credentials anyway.
+                if prefs.background_sync && connected {
                     let allow_auto = crate::commands::allow_auto_upload(&prefs);
                     // #region agent log
                     tracing::info!(
@@ -688,6 +683,10 @@ impl AppSyncState {
                         allow_auto,
                         wifi_only = prefs.wifi_only,
                         "sync-tick-prefs"
+                    );
+                    eprintln!(
+                        "sarca_debug sync-tick-prefs allow_auto={allow_auto} wifi_only={}",
+                        prefs.wifi_only
                     );
                     crate::client_log::write_line(
                         &data_dir,
@@ -712,12 +711,20 @@ impl AppSyncState {
                             &format!("sync tick error: {e}"),
                         );
                     }
+                } else {
+                    // #region agent log
+                    eprintln!(
+                        "sarca_debug sync-tick-skip connected={connected} background_sync={}",
+                        prefs.background_sync
+                    );
+                    // #endregion
                 }
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(30)) => {},
                     _ = wake_rx.changed() => {
                         // #region agent log
                         tracing::info!(target: "sarca_debug", "sync-loop-woken");
+                        eprintln!("sarca_debug sync-loop-woken");
                         crate::client_log::write_line(&data_dir, "debug-sync-loop-woken");
                         // #endregion
                     }
