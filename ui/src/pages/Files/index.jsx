@@ -264,52 +264,6 @@ const Files = () => {
 		}
 	}
 
-	// #region agent log
-	createEffect(() => {
-		const mode = viewMode()
-		const layer = sortedFsLayer()
-		queueMicrotask(() => {
-			const canvas = filesCanvasEl
-			const grid = canvas?.querySelector?.('.files-grid')
-			if (!canvas || mode !== 'tiles') return
-			const payload = {
-				sessionId: '0a7dc5',
-				runId: 'grid-fix',
-				hypothesisId: 'H-grid',
-				location: 'Files/index.jsx:grid-overflow',
-				message: 'files-grid-overflow-check',
-				data: {
-					itemCount: Array.isArray(layer) ? layer.length : -1,
-					canvasClientWidth: canvas.clientWidth,
-					canvasScrollWidth: canvas.scrollWidth,
-					canvasOverflowX: canvas.scrollWidth > canvas.clientWidth + 1,
-					gridClientWidth: grid?.clientWidth ?? null,
-					gridScrollWidth: grid?.scrollWidth ?? null,
-					gridOverflowX: grid
-						? grid.scrollWidth > grid.clientWidth + 1
-						: null,
-					cols: grid
-						? getComputedStyle(grid).gridTemplateColumns
-						: null,
-					mq840: window.matchMedia('(max-width: 840px)').matches,
-				},
-				timestamp: Date.now(),
-			}
-			fetch(
-				'http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',
-				{
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json',
-						'X-Debug-Session-Id': '0a7dc5',
-					},
-					body: JSON.stringify(payload),
-				},
-			).catch(() => {})
-		})
-	})
-	// #endregion
-
 	/**
 	 * @type {[import('solid-js').Accessor<null | { mode: 'copy'|'move', items: { path: string, name: string }[] }>, any]}
 	 */
@@ -606,6 +560,9 @@ const Files = () => {
 		setMarqueeBox(null)
 		marqueeGesture = null
 		setRestoreRemaining([])
+		// #region agent log
+		fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0a7dc5'},body:JSON.stringify({sessionId:'0a7dc5',runId:'folder-back',hypothesisId:'H3',location:'Files/index.jsx:params.path-effect',message:'params-path-changed',data:{path:params.path||'',decoded:decodeStoragePath(params.path||''),listMode:listMode(),fsCount:fsLayer().length,ignoringPopstate,viewerHistoryPushed,viewerOpen:Boolean(viewerFile())},timestamp:Date.now()})}).catch(()=>{})
+		// #endregion
 	})
 
 	/** Decoded current folder from the `*path` splat (router keeps it encoded). */
@@ -674,8 +631,16 @@ const Files = () => {
 	}
 
 	const fetchFSLayer = async (path = routerFolderPath()) => {
+		// #region agent log
+		const pathAtCall = path
+		const routerAtCall = typeof routerFolderPath === 'function' ? routerFolderPath() : ''
+		fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0a7dc5'},body:JSON.stringify({sessionId:'0a7dc5',runId:'folder-back',hypothesisId:'H4-H5',location:'Files/index.jsx:fetchFSLayer:start',message:'fetch-fs-layer-start',data:{pathAtCall,routerAtCall,listMode:listMode(),locPath:typeof window!=='undefined'?window.location.pathname:''},timestamp:Date.now()})}).catch(()=>{})
+		// #endregion
 		const fsLayerRes = await API.files.getFSLayer(params.id, path)
 		setFsLayer((fsLayerRes || []).filter((el) => el.name !== '..'))
+		// #region agent log
+		fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0a7dc5'},body:JSON.stringify({sessionId:'0a7dc5',runId:'folder-back',hypothesisId:'H4-H5',location:'Files/index.jsx:fetchFSLayer:done',message:'fetch-fs-layer-done',data:{pathAtCall,count:(fsLayerRes||[]).length,names:(fsLayerRes||[]).slice(0,5).map((e)=>e.name)},timestamp:Date.now()})}).catch(()=>{})
+		// #endregion
 		chrome.setIsSearching(false)
 		chrome.setSearchQuery('')
 	}
@@ -1213,8 +1178,14 @@ const Files = () => {
 	}
 
 	const onPopState = async (event) => {
+		// #region agent log
+		fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0a7dc5'},body:JSON.stringify({sessionId:'0a7dc5',runId:'folder-back',hypothesisId:'H1-H2',location:'Files/index.jsx:onPopState',message:'popstate',data:{ignoringPopstate,viewerOpen:Boolean(viewerFile()),viewerHistoryPushed,state:event.state,locPath:window.location.pathname,routerPath:routerFolderPath(),fsCount:fsLayer().length},timestamp:Date.now()})}).catch(()=>{})
+		// #endregion
 		if (ignoringPopstate) {
 			ignoringPopstate = false
+			// #region agent log
+			fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0a7dc5'},body:JSON.stringify({sessionId:'0a7dc5',runId:'folder-back',hypothesisId:'H1',location:'Files/index.jsx:onPopState',message:'popstate-ignored',data:{locPath:window.location.pathname},timestamp:Date.now()})}).catch(()=>{})
+			// #endregion
 			return
 		}
 		if (
@@ -1230,7 +1201,14 @@ const Files = () => {
 				? `${basePath}/${encodeStoragePath(currentFolderPath)}`
 				: basePath
 			if (window.location.pathname !== currentFolderLocation) {
+				// #region agent log
+				fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0a7dc5'},body:JSON.stringify({sessionId:'0a7dc5',runId:'folder-back',hypothesisId:'H2',location:'Files/index.jsx:onPopState',message:'viewer-close-with-reload',data:{currentFolderLocation,locPath:window.location.pathname},timestamp:Date.now()})}).catch(()=>{})
+				// #endregion
 				await reload()
+			} else {
+				// #region agent log
+				fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0a7dc5'},body:JSON.stringify({sessionId:'0a7dc5',runId:'folder-back',hypothesisId:'H2',location:'Files/index.jsx:onPopState',message:'viewer-close-skip-reload',data:{currentFolderLocation,locPath:window.location.pathname},timestamp:Date.now()})}).catch(()=>{})
+				// #endregion
 			}
 			return
 		}
@@ -1372,6 +1350,9 @@ const Files = () => {
 				newPath = newPath.slice(1)
 			}
 
+			// #region agent log
+			fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'0a7dc5'},body:JSON.stringify({sessionId:'0a7dc5',runId:'folder-back',hypothesisId:'H3',location:'Files/index.jsx:useBeforeLeave',message:'before-leave-fetch',data:{to:e.to,newPath,decoded:decodeStoragePath(newPath)},timestamp:Date.now()})}).catch(()=>{})
+			// #endregion
 			await fetchFSLayer(decodeStoragePath(newPath))
 		}
 	})
