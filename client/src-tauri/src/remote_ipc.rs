@@ -42,6 +42,8 @@ pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "pick_local_folder",
     "get_cache_size",
     "clear_local_cache",
+    "cache_get_preview",
+    "cache_put_preview",
     "open_sync_settings",
     "open_app",
     "disconnect",
@@ -226,6 +228,26 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let dto = commands::clear_local_cache(state.clone())?;
             serde_json::to_value(dto).map_err(|e| e.to_string())
         }
+        "cache_get_preview" => {
+            let scope = arg_str(&args, "scope", "scope")
+                .ok_or_else(|| "scope required".to_string())?;
+            let path = arg_str(&args, "path", "path").unwrap_or_default();
+            let b64 = commands::cache_get_preview(state.clone(), scope, path)?;
+            Ok(json!(b64))
+        }
+        "cache_put_preview" => {
+            let scope = arg_str(&args, "scope", "scope")
+                .ok_or_else(|| "scope required".to_string())?;
+            let path = arg_str(&args, "path", "path").unwrap_or_default();
+            let bytes_b64 = args
+                .get("bytes_b64")
+                .or_else(|| args.get("bytesB64"))
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+                .ok_or_else(|| "bytes_b64 required".to_string())?;
+            commands::cache_put_preview(state.clone(), scope, path, bytes_b64)?;
+            Ok(json!(null))
+        }
         "open_sync_settings" => {
             commands::open_sync_settings(app.clone())?;
             Ok(json!(null))
@@ -290,6 +312,8 @@ mod tests {
             "get_about",
             "get_cache_size",
             "clear_local_cache",
+            "cache_get_preview",
+            "cache_put_preview",
             "platform_label",
             "device_label",
             "set_binding_enabled",

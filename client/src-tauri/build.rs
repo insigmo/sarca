@@ -31,6 +31,8 @@ fn main() {
         "get_about",
         "get_cache_size",
         "clear_local_cache",
+        "cache_get_preview",
+        "cache_put_preview",
     ];
 
     tauri_build::try_build(

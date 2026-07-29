@@ -43,6 +43,8 @@
     "allow-is-on-wifi",
     "allow-get-about",
     "allow-get-cache-size",
-    "allow-clear-local-cache"
+    "allow-clear-local-cache",
+    "allow-cache-get-preview",
+    "allow-cache-put-preview"
   ]
 }

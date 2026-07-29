@@ -26,6 +26,7 @@ use crate::{
         access::check_access,
         channels::UploadProgressEvent,
         chunk_cache::ChunkCache,
+        preview_cache::PreviewCache,
         jwt_manager::AuthUser,
         routing::{app_state::AppState, middlewares::auth::logged_in_required},
         telegram_api::bot_api::{TelegramBotApi, is_chat_dead_error},
@@ -46,7 +47,7 @@ use crate::{
         SearchQuery,
         UploadParams,
     },
-    services::{files::FilesService, storage_workers_scheduler::StorageWorkersScheduler},
+    services::{files::FilesService, storage_workers_scheduler::StorageWorkersScheduler, thumbnails},
 };
 
 pub struct FilesRouter;
@@ -89,6 +90,7 @@ impl FilesRouter {
             "tree" => Self::tree(state, user, storage_id, path).await,
             "download" => Self::download(state, user, storage_id, path, &query.0, &headers).await,
             "thumb" => Self::thumb(state, user, storage_id, path).await,
+            "preview" => Self::preview(state, user, storage_id, path).await,
             "info" => Self::file_info_inner(state, user, storage_id, path).await,
             "search" => {
                 if let Some(search_path) = query.0.search_path {
@@ -943,6 +945,67 @@ impl FilesRouter {
         Ok((headers, bytes).into_response())
     }
 
+    async fn preview(
+        state: Arc<AppState>,
+        user: AuthUser,
+        storage_id: Uuid,
+        path: &str,
+    ) -> Result<Response, (StatusCode, String)> {
+        check_access(&AccessRepository::new(&state.db), user.id, storage_id, &AccessType::R)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
+
+        Self::preview_for_path(state, storage_id, path).await
+    }
+
+    /// Preview JPEG streaming without access check (caller must authorize).
+    pub(crate) async fn preview_for_path(
+        state: Arc<AppState>,
+        storage_id: Uuid,
+        path: &str,
+    ) -> Result<Response, (StatusCode, String)> {
+        if path.starts_with('/') || path.contains("//") {
+            return Err((StatusCode::BAD_REQUEST, SarcaError::InvalidPath.to_string()));
+        }
+
+        if !thumbnails::is_preview_image(path) {
+            return Err((
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "Preview is only available for image files".to_owned(),
+            ));
+        }
+
+        let files_repo = FilesRepository::new(&state.db);
+        let file = files_repo
+            .get_file_by_path(path, storage_id)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
+
+        let preview_cache = PreviewCache::new(&state.config.work_dir);
+        let cache_key = PreviewCache::cache_key(storage_id, path);
+
+        if let Some(bytes) = preview_cache.get(&cache_key).await {
+            if is_jpeg(&bytes) {
+                return Ok(preview_jpeg_response(bytes));
+            }
+            preview_cache.remove(&cache_key).await;
+        }
+
+        let raw = assemble_file_bytes(&state, storage_id, &file).await?;
+        let jpeg = thumbnails::generate_preview(raw).await.map_err(|e| {
+            (
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                format!("Could not encode preview: {e}"),
+            )
+        })?;
+
+        if let Err(e) = preview_cache.put(&cache_key, &jpeg).await {
+            tracing::warn!("preview cache write skipped: {e}");
+        }
+
+        Ok(preview_jpeg_response(jpeg))
+    }
+
     /// Need path with trailing slash
     async fn search(
         state: Arc<AppState>,
@@ -1130,6 +1193,90 @@ async fn download_chunk_stream_with_failover(
         }
     }
     Err(last_err)
+}
+
+/// Read all chunk bytes for a file (same Telegram path as download).
+async fn assemble_file_bytes(
+    state: &AppState,
+    storage_id: Uuid,
+    file: &crate::models::files::File,
+) -> Result<Vec<u8>, (StatusCode, String)> {
+    let files_repo = FilesRepository::new(&state.db);
+    let mut chunks =
+        files_repo.list_chunks_of_file(file.id).await.map_err(<(StatusCode, String)>::from)?;
+    chunks.sort_by_key(|c| c.position);
+
+    let file_size = file.size.max(0) as u64;
+    if file_size == 0 {
+        return Ok(Vec::new());
+    }
+
+    let chunk_size = file
+        .chunk_size_bytes
+        .filter(|&n| n > 0)
+        .map_or_else(|| state.config.default_chunk_size_bytes(), |n| n as u64);
+
+    let base_url = state.config.telegram_api_base_url.clone();
+    let rate = state.config.telegram_rate_limit;
+    let db = state.db.clone();
+    let cache = ChunkCache::new(&state.config.work_dir);
+
+    let channels =
+        ordered_active_channels(&db, storage_id).await.map_err(<(StatusCode, String)>::from)?;
+    if channels.is_empty() {
+        return Err(<(StatusCode, String)>::from(SarcaError::NoActiveChannel));
+    }
+    let candidates = resolve_chunk_candidates(&db, file.id, &channels)
+        .await
+        .map_err(<(StatusCode, String)>::from)?;
+
+    let mut out = Vec::with_capacity(file_size as usize);
+
+    for (idx, chunk) in chunks.into_iter().enumerate() {
+        let chunk_candidates = candidates.get(&chunk.position).cloned().unwrap_or_default();
+        let cached = ensure_chunk_cached(&cache, &base_url, &db, rate, storage_id, &chunk_candidates)
+            .await
+            .map_err(<(StatusCode, String)>::from)?;
+
+        let chunk_start = idx as u64 * chunk_size;
+        let remaining = file_size.saturating_sub(chunk_start);
+        let to_read = chunk_size.min(remaining) as usize;
+
+        let mut file_handle = tokio::fs::File::open(&cached)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        let mut buf = vec![0u8; to_read];
+        let mut read = 0usize;
+        while read < to_read {
+            let n = file_handle
+                .read(&mut buf[read..])
+                .await
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            read += n;
+        }
+        out.extend_from_slice(&buf[..read]);
+    }
+
+    Ok(out)
+}
+
+fn is_jpeg(bytes: &[u8]) -> bool {
+    bytes.len() >= 3 && bytes[0..3] == [0xFF, 0xD8, 0xFF]
+}
+
+fn preview_jpeg_response(bytes: Vec<u8>) -> Response {
+    let headers = AppendHeaders([
+        (header::CONTENT_TYPE, "image/jpeg".to_owned()),
+        (
+            header::CONTENT_DISPOSITION,
+            "inline; filename=\"preview.jpg\"".to_owned(),
+        ),
+        (header::CACHE_CONTROL, "private, max-age=86400".to_owned()),
+    ]);
+    (headers, bytes).into_response()
 }
 
 fn prefetch_telegram_chunk(
