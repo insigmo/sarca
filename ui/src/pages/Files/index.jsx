@@ -16,6 +16,8 @@ import Stack from '@suid/material/Stack'
 import Typography from '@suid/material/Typography'
 import MenuMUI from '@suid/material/Menu'
 import Divider from '@suid/material/Divider'
+import ListItemIcon from '@suid/material/ListItemIcon'
+import ListItemText from '@suid/material/ListItemText'
 
 import API from '../../api'
 import FSListItem from '../../components/FSListItem'
@@ -239,6 +241,7 @@ const Files = () => {
 	const [sortMenuAnchor, setSortMenuAnchor] = createSignal(null)
 	/** @type {[import('solid-js').Accessor<'tiles'|'list'>, any]} */
 	const [viewMode, setViewMode] = createSignal(readStoredViewMode())
+	const [newFabAnchor, setNewFabAnchor] = createSignal(null)
 
 	const setAndPersistViewMode = (mode) => {
 		setViewMode(mode)
@@ -2017,6 +2020,64 @@ const Files = () => {
 					onCreate={createFolder}
 					onClose={closeCreateFolderDialog}
 				/>
+
+				{/* Mobile FAB — same actions as sidebar New (CSS hides on desktop) */}
+				<button
+					type="button"
+					class="files-new-fab"
+					aria-label="New"
+					title="New"
+					aria-haspopup="menu"
+					aria-expanded={Boolean(newFabAnchor())}
+					disabled={!browseMode()}
+					onClick={(e) => {
+						if (!browseMode()) return
+						setNewFabAnchor(e.currentTarget)
+					}}
+				>
+					<FluentIcon name="add" size={26} />
+				</button>
+				<MenuMUI
+					anchorEl={newFabAnchor()}
+					open={Boolean(newFabAnchor())}
+					onClose={() => setNewFabAnchor(null)}
+					anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+					transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+				>
+					<MenuItem
+						onClick={() => {
+							setNewFabAnchor(null)
+							openCreateFolderDialog()
+						}}
+					>
+						<ListItemIcon>
+							<FluentIcon name="folderAdd" size={20} />
+						</ListItemIcon>
+						<ListItemText>Create folder</ListItemText>
+					</MenuItem>
+					<MenuItem
+						onClick={() => {
+							setNewFabAnchor(null)
+							uploadFileClickHandler()
+						}}
+					>
+						<ListItemIcon>
+							<FluentIcon name="documentArrowUp" size={20} />
+						</ListItemIcon>
+						<ListItemText>Upload file</ListItemText>
+					</MenuItem>
+					<MenuItem
+						onClick={() => {
+							setNewFabAnchor(null)
+							uploadFolderClickHandler()
+						}}
+					>
+						<ListItemIcon>
+							<FluentIcon name="folderArrowUp" size={20} />
+						</ListItemIcon>
+						<ListItemText>Upload folder</ListItemText>
+					</MenuItem>
+				</MenuMUI>
 
 				<FolderPickerDialog
 					isOpened={Boolean(folderPicker())}

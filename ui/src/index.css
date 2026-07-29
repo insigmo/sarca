@@ -1511,6 +1511,31 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	animation: sarca-fade-up 0.4s ease both;
 }
 
+.fs-grid-item__head {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	width: 100%;
+	min-width: 0;
+	order: 2;
+}
+
+/* Desktop tiles: type glyph lives in the preview; hide the compact header icon */
+.fs-grid-item__type {
+	display: none;
+	flex-shrink: 0;
+	line-height: 0;
+}
+
+.fs-grid-item__preview {
+	order: 1;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+}
+
 .fs-grid-item:hover {
 	background: var(--sarca-glass);
 	transform: translateY(-3px);
@@ -1526,6 +1551,7 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	letter-spacing: -0.01em;
 	color: var(--sarca-ink);
 	max-width: 100%;
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
@@ -2536,9 +2562,9 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	}
 
 	.files-grid {
-		/* minmax(0,1fr): long nowrap names must not inflate columns past the viewport */
-		grid-template-columns: repeat(3, minmax(0, 1fr));
-		gap: 10px 6px;
+		/* 2-up cards; minmax(0,1fr) keeps long names from overflowing */
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 10px 8px;
 		padding: 6px 0 8px;
 		width: 100%;
 		max-width: 100%;
@@ -2549,26 +2575,73 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 		min-width: 0;
 		width: 100%;
 		max-width: 100%;
-		padding: 6px 2px 4px;
-		gap: 0;
+		align-items: stretch;
+		text-align: left;
+		padding: 8px 8px 10px;
+		gap: 8px;
 		box-sizing: border-box;
 		overflow: hidden;
+		border: 1px solid var(--sarca-border);
+		border-radius: 12px;
+		background: var(--sarca-surface-solid);
+	}
+
+	.fs-grid-item:hover {
+		transform: none;
+		background: var(--sarca-surface-solid);
+	}
+
+	.fs-grid-item__head {
+		order: 1;
+		justify-content: flex-start;
+		gap: 6px;
+	}
+
+	.fs-grid-item__type {
+		display: inline-flex;
+	}
+
+	.fs-grid-item__type .file-type-icon {
+		width: 18px !important;
+		height: 18px !important;
+		min-width: 0 !important;
+		min-height: 0 !important;
 	}
 
 	.fs-grid-item__name {
-		display: none;
+		display: block;
+		flex: 1 1 auto;
+		font-size: 0.78rem;
+		font-weight: 600;
+		line-height: 1.25;
 	}
 
-	.fs-grid-item .file-type-icon {
-		/* Cap thumbs so 3 columns fit phone width (incl. canvas padding) */
-		width: min(96px, 100%) !important;
-		height: auto !important;
-		aspect-ratio: 1;
+	.fs-grid-item__preview {
+		order: 2;
+		aspect-ratio: 4 / 3;
+		border-radius: 10px;
+		overflow: hidden;
+		background: color-mix(in srgb, var(--sarca-ink) 4%, transparent);
+	}
+
+	.fs-grid-item__preview .file-type-icon {
+		width: 100% !important;
+		height: 100% !important;
 		min-width: 0 !important;
 		min-height: 0 !important;
-		max-width: 100%;
-		--file-icon-size: min(96px, 100%);
-		--file-icon-radius: 12px;
+		max-width: none;
+		border-radius: 0;
+		--file-icon-size: 100%;
+		--file-icon-radius: 0;
+	}
+
+	.fs-grid-item__preview .file-type-icon--bare {
+		width: 42% !important;
+		height: 42% !important;
+	}
+
+	.fs-grid-item__preview .file-type-icon--thumb {
+		object-fit: cover;
 	}
 
 	.files-list {
@@ -2589,12 +2662,52 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 		--file-icon-radius: 18px;
 	}
 
-	.page-header {
-		flex-wrap: wrap;
-	}
-
 	.page-header h1 {
 		font-size: 1.55rem;
+	}
+}
+
+/* Mobile New FAB — hidden on desktop */
+.files-new-fab {
+	display: none;
+}
+
+@media (max-width: 840px) {
+	.files-new-fab {
+		display: inline-flex;
+		position: fixed;
+		right: max(16px, var(--sarca-safe-right));
+		bottom: calc(20px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
+		z-index: 1100;
+		width: 56px;
+		height: 56px;
+		margin: 0;
+		padding: 0;
+		border: none;
+		border-radius: 16px;
+		align-items: center;
+		justify-content: center;
+		cursor: pointer;
+		color: #fff;
+		background: var(--sarca-accent-deep);
+		box-shadow: var(--sarca-shadow);
+		transition: transform 0.15s ease, background 0.15s ease;
+	}
+
+	.files-new-fab:hover:not(:disabled) {
+		background: var(--sarca-accent);
+		transform: scale(1.04);
+	}
+
+	.files-new-fab:disabled {
+		opacity: 0.45;
+		cursor: not-allowed;
+		box-shadow: none;
+	}
+
+	.files-new-fab:focus-visible {
+		outline: 2px solid var(--sarca-teal);
+		outline-offset: 3px;
 	}
 }
 
