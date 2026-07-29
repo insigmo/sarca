@@ -158,12 +158,187 @@ migrate_legacy_env_file() {
   fi
 }
 
+generate_secret_key() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 512
+    return
+  fi
+  echo "openssl is required to generate SECRET_KEY" >&2
+  exit 1
+}
+
+# Read a line from the controlling terminal (works under curl | bash).
+read_tty() {
+  local prompt="$1"
+  local value=""
+  if [ -r /dev/tty ]; then
+    printf '%s' "${prompt}" >/dev/tty
+    IFS= read -r value </dev/tty || true
+  else
+    printf '%s' "${prompt}" >&2
+    IFS= read -r value || true
+  fi
+  printf '%s' "${value}"
+}
+
+env_get_value() {
+  local file="$1" key="$2"
+  if [ ! -f "${file}" ]; then
+    return 0
+  fi
+  sed -n "s/^[[:space:]]*${key}=//p" "${file}" | head -1 | tr -d '\r'
+}
+
+env_set_key() {
+  local file="$1" key="$2" value="$3"
+  local tmp
+  tmp="$(mktemp)"
+  if env_has_key "${file}" "${key}"; then
+    awk -v k="${key}" -v v="${value}" '
+      BEGIN { done = 0 }
+      {
+        if ($0 ~ "^[[:space:]]*" k "=") {
+          if (!done) { print k "=" v; done = 1 }
+          next
+        }
+        print
+      }
+      END { if (!done) print k "=" v }
+    ' "${file}" >"${tmp}"
+    mv "${tmp}" "${file}"
+  else
+    rm -f "${tmp}"
+    printf '%s=%s\n' "${key}" "${value}" >>"${file}"
+  fi
+}
+
+is_placeholder_telegram_value() {
+  local value="$1"
+  case "${value}" in
+    ''|00000000|xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx|XXX|xxx) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_placeholder_secret() {
+  local value="$1"
+  case "${value}" in
+    ''|XXX|xxx|change-me|change-me-to-a-long-random-string) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_placeholder_email() {
+  local value="$1"
+  case "${value}" in
+    ''|admin@example.com|sarca@sarca.sarca) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_placeholder_password() {
+  local value="$1"
+  case "${value}" in
+    ''|change-me|sarca) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# Silent password prompt (works under curl | bash via /dev/tty).
+read_tty_secret() {
+  local prompt="$1"
+  local value=""
+  if [ -r /dev/tty ]; then
+    printf '%s' "${prompt}" >/dev/tty
+    IFS= read -rs value </dev/tty || true
+    printf '\n' >/dev/tty
+  else
+    printf '%s' "${prompt}" >&2
+    IFS= read -rs value || true
+    printf '\n' >&2
+  fi
+  printf '%s' "${value}"
+}
+
+# Prompt for admin + Telegram credentials when missing; ensure a real SECRET_KEY.
+configure_interactive() {
+  local env_file="$1"
+  local email password api_id api_hash secret
+
+  email="$(env_get_value "${env_file}" SUPERUSER_EMAIL)"
+  password="$(env_get_value "${env_file}" SUPERUSER_PASS)"
+
+  if is_placeholder_email "${email}" || is_placeholder_password "${password}"; then
+    echo
+    echo "Bootstrap admin account (used to sign in to the web UI)"
+    echo
+    while is_placeholder_email "${email}"; do
+      email="$(read_tty "SUPERUSER_EMAIL: ")"
+      if is_placeholder_email "${email}"; then
+        echo "email is required" >&2
+      fi
+    done
+    while is_placeholder_password "${password}"; do
+      password="$(read_tty_secret "SUPERUSER_PASS: ")"
+      if is_placeholder_password "${password}"; then
+        echo "password is required" >&2
+      fi
+    done
+    env_set_key "${env_file}" SUPERUSER_EMAIL "${email}"
+    env_set_key "${env_file}" SUPERUSER_PASS "${password}"
+  else
+    echo "Admin credentials already set — skipping prompt"
+  fi
+
+  api_id="$(env_get_value "${env_file}" TELEGRAM_API_ID)"
+  api_hash="$(env_get_value "${env_file}" TELEGRAM_API_HASH)"
+
+  if is_placeholder_telegram_value "${api_id}" || is_placeholder_telegram_value "${api_hash}"; then
+    echo
+    echo "Telegram API credentials (needed for Local Bot API / large files)"
+    echo "  1. Open https://my.telegram.org and sign in"
+    echo "  2. Open API development tools"
+    echo "  3. Create an app if needed, then copy api_id and api_hash"
+    echo
+    while is_placeholder_telegram_value "${api_id}"; do
+      api_id="$(read_tty "TELEGRAM_API_ID: ")"
+      if is_placeholder_telegram_value "${api_id}"; then
+        echo "api_id is required" >&2
+      fi
+    done
+    while is_placeholder_telegram_value "${api_hash}"; do
+      api_hash="$(read_tty "TELEGRAM_API_HASH: ")"
+      if is_placeholder_telegram_value "${api_hash}"; then
+        echo "api_hash is required" >&2
+      fi
+    done
+    env_set_key "${env_file}" TELEGRAM_API_ID "${api_id}"
+    env_set_key "${env_file}" TELEGRAM_API_HASH "${api_hash}"
+  else
+    echo "Telegram API credentials already set — skipping prompt"
+  fi
+
+  secret="$(env_get_value "${env_file}" SECRET_KEY)"
+  if is_placeholder_secret "${secret}"; then
+    secret="$(generate_secret_key)"
+    env_set_key "${env_file}" SECRET_KEY "${secret}"
+    echo "Generated SECRET_KEY (openssl rand -hex 512)"
+  fi
+}
+
+conf_port() {
+  local env_file="$1"
+  local port
+  port="$(env_get_value "${env_file}" PORT)"
+  echo "${port:-8000}"
+}
+
 write_or_merge_conf() {
   local dest="$1"
   migrate_legacy_env_file "${dest}"
   local env_file="${dest}/sarca.conf"
   local secret
-  secret="$(openssl rand -hex 32 2>/dev/null || echo "change-me-to-a-long-random-string")"
+  secret="$(generate_secret_key)"
 
   # Defaults for a fresh install / soft-merge on upgrade.
   set -- \
@@ -194,7 +369,7 @@ write_or_merge_conf() {
     for line in "$@"; do
       printf '%s\n' "${line}" >>"${env_file}"
     done
-    echo "Wrote ${env_file} — edit SUPERUSER_* / SECRET_KEY / DATABASE_* before first run"
+    echo "Wrote ${env_file}"
     return
   fi
 
@@ -299,6 +474,7 @@ install_binary() {
   printf '%s\n' "${ver}" >"${PREFIX}/VERSION"
 
   write_or_merge_conf "${PREFIX}"
+  configure_interactive "${PREFIX}/sarca.conf"
 
   wrapper="${BIN_DIR}/sarca"
   cat >"${wrapper}" <<EOF
@@ -318,19 +494,19 @@ EOF
   echo "  app:     ${PREFIX}"
   echo "  version: ${PREFIX}/VERSION"
   echo "  command: ${wrapper}"
-  echo
-  echo "Next:"
-  echo "  1. Edit ${PREFIX}/sarca.conf"
-  echo "  2. Ensure Postgres is reachable (DATABASE_* in sarca.conf)"
-  echo "  3. Run:  sarca"
-  echo "     (or:  ${wrapper})"
   if ! echo ":$PATH:" | grep -q ":${BIN_DIR}:"; then
     echo
     echo "Add to PATH:  export PATH=\"${BIN_DIR}:\$PATH\""
   fi
+
+  local port log_file
+  port="$(conf_port "${PREFIX}/sarca.conf")"
+  log_file="${PREFIX}/sarca.log"
   echo
-  conf_port="$(grep -E '^[[:space:]]*PORT=' "${PREFIX}/sarca.conf" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]' || true)"
-  echo "Open http://127.0.0.1:${conf_port:-8000}  (PORT from sarca.conf)"
+  echo "Starting Sarca (Postgres must be reachable — DATABASE_* in sarca.conf)…"
+  nohup "${wrapper}" >>"${log_file}" 2>&1 &
+  echo "Started (pid $!). Log: ${log_file}"
+  echo "Open http://127.0.0.1:${port}"
 }
 
 install_docker() {
@@ -359,17 +535,11 @@ install_docker() {
     merge_env_from_template "${dest}/sarca.conf" "${tmp_env}"
   else
     cp "${tmp_env}" "${dest}/sarca.conf"
-    if command -v openssl >/dev/null 2>&1; then
-      secret="$(openssl rand -hex 32)"
-      if sed --version >/dev/null 2>&1; then
-        sed -i "s/^SECRET_KEY=.*/SECRET_KEY=${secret}/" "${dest}/sarca.conf"
-      else
-        sed -i '' "s/^SECRET_KEY=.*/SECRET_KEY=${secret}/" "${dest}/sarca.conf"
-      fi
-    fi
-    echo "Wrote ${dest}/sarca.conf — set SUPERUSER_*, TELEGRAM_API_ID/HASH, SECRET_KEY"
+    echo "Wrote ${dest}/sarca.conf"
   fi
   rm -f "${tmp_env}"
+
+  configure_interactive "${dest}/sarca.conf"
 
   # Local Bot API needs a small host entrypoint (permission fix across containers).
   mkdir -p "${dest}/docker"
@@ -380,13 +550,19 @@ install_docker() {
   # Legacy: older compose.yml mounted sarca-entrypoint from the host.
   rm -f "${dest}/docker/sarca-entrypoint.sh"
 
+  need_cmd docker
+  local port
+  port="$(conf_port "${dest}/sarca.conf")"
   echo
-  echo "Next:"
-  echo "  cd ${dest}"
-  echo "  # edit sarca.conf (SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID/HASH)"
-  echo "  docker compose --env-file sarca.conf pull"
-  echo "  docker compose --env-file sarca.conf up -d"
-  echo "  open http://127.0.0.1:\${PORT:-8000}  (PORT from sarca.conf)"
+  echo "Starting Docker stack in ${dest}…"
+  (
+    cd "${dest}"
+    docker compose --env-file sarca.conf pull
+    docker compose --env-file sarca.conf up -d
+  )
+  echo
+  echo "Open http://127.0.0.1:${port}"
+  echo "Logs: docker logs -f sarca"
 }
 
 case "${MODE}" in
