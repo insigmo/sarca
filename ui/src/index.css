@@ -2536,8 +2536,39 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	}
 
 	.files-grid {
-		grid-template-columns: repeat(3, 1fr);
-		gap: 12px 8px;
+		/* minmax(0,1fr): long nowrap names must not inflate columns past the viewport */
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 10px 6px;
+		padding: 6px 0 8px;
+		width: 100%;
+		max-width: 100%;
+		box-sizing: border-box;
+	}
+
+	.fs-grid-item {
+		min-width: 0;
+		width: 100%;
+		max-width: 100%;
+		padding: 6px 2px 4px;
+		gap: 0;
+		box-sizing: border-box;
+		overflow: hidden;
+	}
+
+	.fs-grid-item__name {
+		display: none;
+	}
+
+	.fs-grid-item .file-type-icon {
+		/* Cap thumbs so 3 columns fit phone width (incl. canvas padding) */
+		width: min(96px, 100%) !important;
+		height: auto !important;
+		aspect-ratio: 1;
+		min-width: 0 !important;
+		min-height: 0 !important;
+		max-width: 100%;
+		--file-icon-size: min(96px, 100%);
+		--file-icon-radius: 12px;
 	}
 
 	.files-list {
@@ -2550,6 +2581,7 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 
 	.files-canvas {
 		--files-row: 132px;
+		overflow-x: hidden;
 	}
 
 	.file-type-icon {
