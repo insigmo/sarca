@@ -1024,6 +1024,10 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	cursor: crosshair;
 }
 
+.files-ptr-indicator {
+	display: none;
+}
+
 .files-marquee {
 	position: absolute;
 	z-index: 5;
@@ -2655,6 +2659,35 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	.files-canvas {
 		--files-row: 132px;
 		overflow-x: hidden;
+	}
+
+	.files-ptr-indicator {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		height: 0;
+		overflow: hidden;
+		color: var(--sarca-accent-deep);
+		transition: height 0.15s ease;
+		pointer-events: none;
+	}
+
+	.files-ptr-indicator--visible {
+		/* Height is set from pull px, or kept at 48px while refreshing. */
+	}
+
+	.files-ptr-indicator__icon {
+		transition: transform 0.15s ease;
+	}
+
+	.files-ptr-indicator--spin .files-ptr-indicator__icon {
+		animation: sarca-ptr-spin 0.8s linear infinite;
+	}
+
+	@keyframes sarca-ptr-spin {
+		to {
+			transform: rotate(360deg);
+		}
 	}
 
 	.file-type-icon {
