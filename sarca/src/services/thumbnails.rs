@@ -3,8 +3,7 @@ use std::{
     process::Stdio,
 };
 
-use image::{GenericImageView, imageops::FilterType};
-use image::codecs::jpeg::JpegEncoder;
+use image::{GenericImageView, codecs::jpeg::JpegEncoder, imageops::FilterType};
 use tokio::process::Command;
 
 const THUMB_MAX_EDGE: u32 = 128;
@@ -195,17 +194,38 @@ fn resize_to_jpeg(raw: &[u8], max_edge: u32, quality: u8) -> Result<Vec<u8>, Str
     let mut out = Vec::new();
     let mut cursor = std::io::Cursor::new(&mut out);
     let encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
-    resized
-        .write_with_encoder(encoder)
-        .map_err(|e| format!("encode jpeg: {e}"))?;
+    resized.write_with_encoder(encoder).map_err(|e| format!("encode jpeg: {e}"))?;
     Ok(out)
+}
+
+async fn tempfile_dir() -> Result<PathBuf, String> {
+    let dir = std::env::temp_dir().join(format!("sarca-thumb-{}", uuid::Uuid::new_v4()));
+    tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("create temp dir: {e}"))?;
+    Ok(dir)
+}
+
+async fn which(bin: &str) -> Option<PathBuf> {
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(format!("command -v {bin}"))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() { None } else { Some(PathBuf::from(path)) }
 }
 
 #[cfg(test)]
 mod tests {
+    use image::{ImageBuffer, ImageFormat, Rgb};
+
     use super::*;
-    use image::ImageFormat;
-    use image::{ImageBuffer, Rgb};
 
     fn sample_png(w: u32, h: u32) -> Vec<u8> {
         let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
@@ -241,27 +261,4 @@ mod tests {
         assert!(!is_preview_image("clip.mp4"));
         assert!(!is_preview_image("doc.pdf"));
     }
-}
-
-async fn tempfile_dir() -> Result<PathBuf, String> {
-    let dir = std::env::temp_dir().join(format!("sarca-thumb-{}", uuid::Uuid::new_v4()));
-    tokio::fs::create_dir_all(&dir).await.map_err(|e| format!("create temp dir: {e}"))?;
-    Ok(dir)
-}
-
-async fn which(bin: &str) -> Option<PathBuf> {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(format!("command -v {bin}"))
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .await
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() { None } else { Some(PathBuf::from(path)) }
 }
