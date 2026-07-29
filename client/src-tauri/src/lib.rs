@@ -332,10 +332,6 @@ pub fn run() {
             // idle until the user opens Sync settings and polls).
             #[cfg(any(target_os = "android", target_os = "ios"))]
             if let tauri::RunEvent::Resumed = event {
-                // #region agent log
-                tracing::info!(target: "sarca_debug", "run-event-resumed-wake-sync");
-                eprintln!("sarca_debug run-event-resumed-wake-sync");
-                // #endregion
                 let state = app_handle.state::<AppSyncState>();
                 // Only wake when a session exists — otherwise MediaStore discovery
                 // on resume races the connect shell paint for no benefit.

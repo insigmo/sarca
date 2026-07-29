@@ -41,6 +41,54 @@ describe('resolveCameraToggle', () => {
 			resolveCameraToggle([{ id: '1', mode: 'auto_upload', enabled: false }], true),
 		).toEqual({ action: 'set_enabled', id: '1', enabled: true })
 	})
+	it('rebinds when enabling for a different storage than the binding', () => {
+		expect(
+			resolveCameraToggle(
+				[
+					{
+						id: '1',
+						mode: 'auto_upload',
+						enabled: true,
+						storage_id: 'old-storage',
+					},
+				],
+				true,
+				'new-storage',
+			),
+		).toEqual({ action: 'rebind', id: '1' })
+	})
+	it('rebinds disabled binding when storage differs', () => {
+		expect(
+			resolveCameraToggle(
+				[
+					{
+						id: '1',
+						mode: 'auto_upload',
+						enabled: false,
+						storage_id: 'old-storage',
+					},
+				],
+				true,
+				'new-storage',
+			),
+		).toEqual({ action: 'rebind', id: '1' })
+	})
+	it('noops when already enabled on the same storage', () => {
+		expect(
+			resolveCameraToggle(
+				[
+					{
+						id: '1',
+						mode: 'auto_upload',
+						enabled: true,
+						storage_id: 'same',
+					},
+				],
+				true,
+				'same',
+			),
+		).toEqual({ action: 'noop' })
+	})
 	it('noops when already enabled', () => {
 		expect(
 			resolveCameraToggle([{ id: '1', mode: 'auto_upload', enabled: true }], true),
