@@ -249,9 +249,11 @@ const Files = () => {
 	const [newFabAnchor, setNewFabAnchor] = createSignal(null)
 	const [ptrPull, setPtrPull] = createSignal(0)
 	const [ptrRefreshing, setPtrRefreshing] = createSignal(false)
+	const [filesCanvas, setFilesCanvas] = createSignal(null)
 
 	let viewerHistoryPushed = false
 	let ignoringPopstate = false
+	let viewerFolderPath = ''
 
 	const setAndPersistViewMode = (mode) => {
 		setViewMode(mode)
@@ -716,7 +718,7 @@ const Files = () => {
 	}
 
 	createEffect(() => {
-		const el = filesCanvasEl
+		const el = filesCanvas()
 		if (!el) return
 		const detach = attachPullToRefresh(el, {
 			isEnabled: () => window.matchMedia('(max-width: 840px)').matches,
@@ -1185,12 +1187,16 @@ const Files = () => {
 
 	const reload = async () => {
 		if (window.location.pathname.startsWith(basePath)) {
-			await fetchFSLayer()
+			const path = window.location.pathname
+				.slice(basePath.length)
+				.replace(/^\/+/, '')
+			await fetchFSLayer(decodeStoragePath(path))
 		}
 	}
 
 	createEffect(() => {
 		if (viewerFile() && !viewerHistoryPushed) {
+			viewerFolderPath = routerFolderPath()
 			pushViewerHistory(window.history, window.location.href)
 			viewerHistoryPushed = true
 			return
@@ -1219,6 +1225,13 @@ const Files = () => {
 		) {
 			viewerHistoryPushed = false
 			setViewerFile(null)
+			const currentFolderPath = folderDestPath(viewerFolderPath)
+			const currentFolderLocation = currentFolderPath
+				? `${basePath}/${encodeStoragePath(currentFolderPath)}`
+				: basePath
+			if (window.location.pathname !== currentFolderLocation) {
+				await reload()
+			}
 			return
 		}
 		await reload()
@@ -1955,6 +1968,7 @@ const Files = () => {
 					fallback={<div
 						ref={(el) => {
 							filesCanvasEl = el
+							setFilesCanvas(el)
 						}}
 						class="files-canvas"
 						classList={{
