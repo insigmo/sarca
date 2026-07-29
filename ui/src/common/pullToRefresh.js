@@ -1,5 +1,6 @@
 export const PTR_THRESHOLD_PX = 64
 export const PTR_MAX_PX = 96
+export const PTR_ARM_PX = 8
 
 export function canBeginPull({ scrollTop, refreshing }) {
 	return scrollTop <= 0 && !refreshing
@@ -7,6 +8,10 @@ export function canBeginPull({ scrollTop, refreshing }) {
 
 export function pullDelta({ startY, currentY }) {
 	return Math.max(0, currentY - startY)
+}
+
+export function isPullArmed(pullPx) {
+	return pullPx >= PTR_ARM_PX
 }
 
 export function isHorizontalGesture({ startX, startY, currentX, currentY }) {
@@ -68,7 +73,7 @@ export function attachPullToRefresh(el, opts) {
 			return
 		}
 		const d = pullDelta({ startY, currentY: t.clientY })
-		if (d > 0 && el.scrollTop <= 0) {
+		if (isPullArmed(d) && el.scrollTop <= 0) {
 			pulling = true
 			if (e.cancelable) e.preventDefault()
 			setPull(d)
@@ -89,6 +94,8 @@ export function attachPullToRefresh(el, opts) {
 		setPull(PTR_THRESHOLD_PX)
 		try {
 			await opts.onRefresh()
+		} catch {
+			/* Refresh failures are handled by the refresh operation itself. */
 		} finally {
 			refreshing = false
 			opts.onRefreshingChange?.(false)
