@@ -2,6 +2,7 @@ import add24Regular from '@fluentui/svg-icons/icons/add_24_regular.svg?raw'
 import arrowDownload24Regular from '@fluentui/svg-icons/icons/arrow_download_24_regular.svg?raw'
 import arrowMove24Regular from '@fluentui/svg-icons/icons/arrow_move_24_regular.svg?raw'
 import arrowSort24Regular from '@fluentui/svg-icons/icons/arrow_sort_24_regular.svg?raw'
+import arrowSync24Regular from '@fluentui/svg-icons/icons/arrow_sync_24_regular.svg?raw'
 import arrowUndo24Regular from '@fluentui/svg-icons/icons/arrow_undo_24_regular.svg?raw'
 import arrowUp24Regular from '@fluentui/svg-icons/icons/arrow_up_24_regular.svg?raw'
 import chevronDown24Regular from '@fluentui/svg-icons/icons/chevron_down_24_regular.svg?raw'
@@ -57,6 +58,7 @@ export const fluentIcons = {
 	arrowDownload: arrowDownload24Regular,
 	arrowMove: arrowMove24Regular,
 	arrowSort: arrowSort24Regular,
+	arrowSync: arrowSync24Regular,
 	arrowUndo: arrowUndo24Regular,
 	arrowUp: arrowUp24Regular,
 	chevronDown: chevronDown24Regular,

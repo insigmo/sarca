@@ -31,6 +31,7 @@ import FilesSidebar from '../../components/FilesSidebar'
 import FluentIcon from '../../components/FluentIcon'
 import SharedLinksPanel from '../../components/SharedLinksPanel'
 import { filesChromeStore } from '../../common/filesChrome'
+import { attachPullToRefresh } from '../../common/pullToRefresh'
 import { sortFsElements, sortLabel } from '../../common/sortFs'
 import {
 	pushViewerHistory,
@@ -246,6 +247,8 @@ const Files = () => {
 	/** @type {[import('solid-js').Accessor<'tiles'|'list'>, any]} */
 	const [viewMode, setViewMode] = createSignal(readStoredViewMode())
 	const [newFabAnchor, setNewFabAnchor] = createSignal(null)
+	const [ptrPull, setPtrPull] = createSignal(0)
+	const [ptrRefreshing, setPtrRefreshing] = createSignal(false)
 
 	let viewerHistoryPushed = false
 	let ignoringPopstate = false
@@ -711,6 +714,18 @@ const Files = () => {
 			await fetchFSLayer()
 		}
 	}
+
+	createEffect(() => {
+		const el = filesCanvasEl
+		if (!el) return
+		const detach = attachPullToRefresh(el, {
+			isEnabled: () => window.matchMedia('(max-width: 840px)').matches,
+			onPullChange: setPtrPull,
+			onRefreshingChange: setPtrRefreshing,
+			onRefresh: () => refreshCurrent(),
+		})
+		onCleanup(detach)
+	})
 
 	const enterTrash = async () => {
 		setListMode('trash')
@@ -1953,6 +1968,26 @@ const Files = () => {
 						onDragLeave={onCanvasDragLeave}
 						onDrop={onCanvasDrop}
 					>
+					<div
+						class="files-ptr-indicator"
+						classList={{
+							'files-ptr-indicator--visible':
+								ptrPull() > 0 || ptrRefreshing(),
+							'files-ptr-indicator--spin': ptrRefreshing(),
+						}}
+						style={{
+							height: ptrRefreshing()
+								? '48px'
+								: ptrPull() > 0
+									? `${Math.min(96, ptrPull())}px`
+									: '0px',
+						}}
+						aria-hidden="true"
+					>
+						<span class="files-ptr-indicator__icon">
+							<FluentIcon name="arrowSync" size={22} />
+						</span>
+					</div>
 					<Show when={marqueeBox()}>
 						<div
 							class="files-marquee"
