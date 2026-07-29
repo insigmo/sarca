@@ -99,6 +99,11 @@ const callsFor = (cmd) =>
 
 beforeEach(() => {
 	pickLocalFolder.mockReset()
+	try {
+		sessionStorage.removeItem('sarca.client.cameraAutoUploadEnabled')
+	} catch {
+		// ignore
+	}
 })
 
 describe('SettingsSyncPanel', () => {
@@ -556,5 +561,124 @@ describe('SettingsSyncPanel', () => {
 		expect(
 			await findByText('5 media files found, all already uploaded'),
 		).toBeTruthy()
+	})
+
+	it('shows cached camera ON immediately while list_bindings is slow', async () => {
+		sessionStorage.setItem('sarca.client.cameraAutoUploadEnabled', '1')
+		let release
+		const gate = new Promise((resolve) => {
+			release = resolve
+		})
+		nativeInvoke.mockReset()
+		nativeInvoke.mockImplementation(async (cmd) => {
+			switch (cmd) {
+				case 'platform_label':
+					return ''
+				case 'device_label':
+					return 'Pixel 8'
+				case 'list_bindings':
+					await gate
+					return [
+						{
+							id: '1',
+							mode: 'auto_upload',
+							enabled: true,
+							local_path: '/p',
+							remote_root: 'Camera/Pixel 8',
+						},
+					]
+				case 'get_client_prefs':
+					return {
+						wifi_only: true,
+						background_sync: true,
+						app_lock_enabled: false,
+						app_lock_pin: null,
+					}
+				case 'sync_statuses':
+					return []
+				case 'sync_transfer_queue':
+					return { uploading: 0, downloading: 0, items: [] }
+				case 'default_gallery_path':
+					return '/pictures'
+				default:
+					return null
+			}
+		})
+
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		const sw = await waitFor(() => {
+			const el = container.querySelector('#settings-camera-switch')
+			expect(el).toBeTruthy()
+			return el
+		})
+		expect(sw.getAttribute('aria-checked')).toBe('true')
+		expect(sw.disabled).toBe(true)
+
+		release()
+		await waitFor(() => expect(sw.disabled).toBe(false))
+		expect(sw.getAttribute('aria-checked')).toBe('true')
+	})
+
+	it('does not flash camera OFF before slow list_bindings when cache says ON', async () => {
+		sessionStorage.setItem('sarca.client.cameraAutoUploadEnabled', '1')
+		const seen = []
+		let release
+		const gate = new Promise((resolve) => {
+			release = resolve
+		})
+		nativeInvoke.mockReset()
+		nativeInvoke.mockImplementation(async (cmd) => {
+			switch (cmd) {
+				case 'platform_label':
+					return ''
+				case 'device_label':
+					return 'Pixel 8'
+				case 'list_bindings':
+					await gate
+					return [
+						{
+							id: '1',
+							mode: 'auto_upload',
+							enabled: true,
+							local_path: '/p',
+							remote_root: 'Camera/Pixel 8',
+						},
+					]
+				case 'get_client_prefs':
+					return {
+						wifi_only: true,
+						background_sync: true,
+						app_lock_enabled: false,
+						app_lock_pin: null,
+					}
+				case 'sync_statuses':
+					await gate
+					return []
+				case 'sync_transfer_queue':
+					return { uploading: 0, downloading: 0, items: [] }
+				case 'default_gallery_path':
+					return '/pictures'
+				default:
+					return null
+			}
+		})
+
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		for (let i = 0; i < 5; i++) {
+			const sw = container.querySelector('#settings-camera-switch')
+			seen.push(sw ? sw.getAttribute('aria-checked') : 'missing')
+			await new Promise((r) => setTimeout(r, 10))
+		}
+		expect(seen.every((v) => v === 'true')).toBe(true)
+		release()
+		await waitFor(() =>
+			expect(
+				container.querySelector('#settings-camera-switch')?.disabled,
+			).toBe(false),
+		)
 	})
 })
