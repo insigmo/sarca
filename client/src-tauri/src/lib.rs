@@ -313,6 +313,8 @@ pub fn run() {
             commands::get_about,
             commands::get_cache_size,
             commands::clear_local_cache,
+            commands::cache_get_preview,
+            commands::cache_put_preview,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Sarca client")

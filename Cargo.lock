@@ -4296,6 +4296,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sqlx",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
@@ -4313,6 +4314,7 @@ version = "0.0.80"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "hostname",
  "network-interface",
  "sarca-sync",
