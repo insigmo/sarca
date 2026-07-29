@@ -17,6 +17,8 @@ import ChevronRightIcon from '@suid/icons-material/ChevronRight'
 import API from '../api'
 import { fileKind } from '../common/fileKind'
 import { convertSize } from '../common/size_converter'
+import { nativeInvoke } from '../common/nativeBridge'
+import { nativeClientStore } from '../common/nativeClient'
 import FileTypeIcon from './FileTypeIcon'
 import { alertStore } from './AlertStack'
 
@@ -56,6 +58,7 @@ const isLetterboxClick = (el, clientX, clientY) => {
  * @property {() => void} onClose
  * @property {(file: import("../api").FSElement) => void} [onNavigate]
  * @property {(path: string) => string} [resolveInlineUrl] Override authenticated inline URL (public shares)
+ * @property {(path: string) => string} [resolvePreviewUrl] Override authenticated preview URL (public shares)
  * @property {(path: string) => Promise<Blob>} [resolveDownload] Override authenticated download (public shares)
  */
 
@@ -65,6 +68,7 @@ const isLetterboxClick = (el, clientX, clientY) => {
  */
 const FileViewer = (props) => {
 	const { addAlert } = alertStore
+	const { isNative } = nativeClientStore
 	const [loading, setLoading] = createSignal(false)
 	const [firstChunkLoading, setFirstChunkLoading] = createSignal(false)
 	const [isDownloading, setIsDownloading] = createSignal(false)
@@ -156,6 +160,11 @@ const FileViewer = (props) => {
 		props.resolveInlineUrl
 			? props.resolveInlineUrl(path)
 			: API.files.getInlineMediaUrl(props.storageId, path)
+
+	const previewUrlFor = (path) =>
+		props.resolvePreviewUrl
+			? props.resolvePreviewUrl(path)
+			: API.files.getPreviewUrl(props.storageId, path)
 
 	const downloadBlobFor = (path) =>
 		props.resolveDownload
@@ -356,6 +365,60 @@ const FileViewer = (props) => {
 		if (['image', 'video', 'audio', 'pdf'].includes(k)) {
 			setLoading(false)
 			setFirstChunkLoading(k === 'video')
+			if (k === 'image') {
+				setLoading(true)
+				;(async () => {
+					try {
+						const path = file.path
+						const scope = props.storageId || 'share'
+						if (isNative()) {
+							const cachedB64 = await nativeInvoke('cache_get_preview', {
+								scope,
+								path,
+							})
+							if (typeof cachedB64 === 'string' && cachedB64.length > 0) {
+								const bin = atob(cachedB64)
+								const bytes = new Uint8Array(bin.length)
+								for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+								const blob = new Blob([bytes], { type: 'image/jpeg' })
+								objectUrl = URL.createObjectURL(blob)
+								if (!cancelled) setMediaUrl(objectUrl)
+								return
+							}
+						}
+						const url = previewUrlFor(path)
+						if (isNative()) {
+							const resp = await fetch(url, { credentials: 'include' })
+							if (!resp.ok) throw new Error('preview failed')
+							const blob = await resp.blob()
+							const buf = new Uint8Array(await blob.arrayBuffer())
+							let binary = ''
+							const chunk = 0x8000
+							for (let i = 0; i < buf.length; i += chunk) {
+								binary += String.fromCharCode(...buf.subarray(i, i + chunk))
+							}
+							await nativeInvoke('cache_put_preview', {
+								scope,
+								path,
+								bytes_b64: btoa(binary),
+							})
+							objectUrl = URL.createObjectURL(blob)
+							if (!cancelled) setMediaUrl(objectUrl)
+						} else if (!cancelled) {
+							setMediaUrl(url)
+						}
+					} catch (err) {
+						console.error(err)
+						if (!cancelled) {
+							setError('Could not open this file')
+							addAlert('Could not open this file', 'error')
+						}
+					} finally {
+						if (!cancelled) setLoading(false)
+					}
+				})()
+				return
+			}
 			setMediaUrl(inlineUrlFor(file.path))
 			if (k === 'video') scheduleHideChrome()
 			return

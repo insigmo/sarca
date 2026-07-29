@@ -49,6 +49,7 @@ const SettingsModal = () => {
 	const [trashSettingsSaving, setTrashSettingsSaving] = createSignal(false)
 	const [about, setAbout] = createSignal({ version: '', platform: '' })
 	const [cacheBytes, setCacheBytes] = createSignal(0)
+	const [cacheLimitBytes, setCacheLimitBytes] = createSignal(1_073_741_824)
 	const [sessionInfo, setSessionInfo] = createSignal({ base_url: '', email: '' })
 	const [lockEnabled, setLockEnabled] = createSignal(false)
 	const [logsEnabled, setLogsEnabled] = createSignal(false)
@@ -221,8 +222,14 @@ const SettingsModal = () => {
 				.then((a) => setAbout(a || { version: '', platform: '' }))
 				.catch(() => {})
 			nativeInvoke('get_cache_size')
-				.then((c) => setCacheBytes(Number(c?.bytes) || 0))
-				.catch(() => setCacheBytes(0))
+				.then((c) => {
+					setCacheBytes(Number(c?.bytes) || 0)
+					setCacheLimitBytes(Number(c?.limit_bytes) || 1_073_741_824)
+				})
+				.catch(() => {
+					setCacheBytes(0)
+					setCacheLimitBytes(1_073_741_824)
+				})
 			nativeInvoke('get_session')
 				.then((s) =>
 					setSessionInfo({
@@ -808,7 +815,8 @@ const SettingsModal = () => {
 												<div>
 													<p class="settings-account__label">Cache</p>
 													<p class="settings-account__hint">
-														{formatBytes(cacheBytes())} on this device
+														{formatBytes(cacheBytes())} /{' '}
+														{formatBytes(cacheLimitBytes())}
 													</p>
 												</div>
 												<Button variant="outlined" onClick={clearCache}>

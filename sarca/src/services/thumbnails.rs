@@ -3,10 +3,13 @@ use std::{
     process::Stdio,
 };
 
-use image::{ImageFormat, imageops::FilterType};
+use image::{GenericImageView, imageops::FilterType};
+use image::codecs::jpeg::JpegEncoder;
 use tokio::process::Command;
 
 const THUMB_MAX_EDGE: u32 = 128;
+pub const PREVIEW_MAX_EDGE: u32 = 1920;
+const PREVIEW_JPEG_QUALITY: u8 = 80;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThumbKind {
@@ -44,11 +47,29 @@ pub async fn generate(file_path: &Path, logical_path: &str) -> Result<Option<Vec
         },
     };
 
-    let jpeg = tokio::task::spawn_blocking(move || resize_to_jpeg(&raw))
-        .await
-        .map_err(|e| e.to_string())??;
+    let jpeg = tokio::task::spawn_blocking(move || {
+        resize_to_jpeg(&raw, THUMB_MAX_EDGE, THUMB_JPEG_QUALITY)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
 
     Ok(Some(jpeg))
+}
+
+const THUMB_JPEG_QUALITY: u8 = 75;
+
+/// Whether the logical path is a raster image we can preview-encode.
+pub fn is_preview_image(logical_path: &str) -> bool {
+    matches!(detect_kind(logical_path), Some(ThumbKind::Image))
+}
+
+/// Encode raw image bytes to a screen-sized JPEG preview.
+pub async fn generate_preview(raw: Vec<u8>) -> Result<Vec<u8>, String> {
+    tokio::task::spawn_blocking(move || {
+        resize_to_jpeg(&raw, PREVIEW_MAX_EDGE, PREVIEW_JPEG_QUALITY)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn detect_kind(logical_path: &str) -> Option<ThumbKind> {
@@ -163,13 +184,63 @@ async fn generate_pdf(file_path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn resize_to_jpeg(raw: &[u8]) -> Result<Vec<u8>, String> {
+fn resize_to_jpeg(raw: &[u8], max_edge: u32, quality: u8) -> Result<Vec<u8>, String> {
     let img = image::load_from_memory(raw).map_err(|e| format!("decode image: {e}"))?;
-    let resized = img.resize(THUMB_MAX_EDGE, THUMB_MAX_EDGE, FilterType::Triangle);
+    let (w, h) = img.dimensions();
+    let resized = if w <= max_edge && h <= max_edge {
+        img
+    } else {
+        img.resize(max_edge, max_edge, FilterType::Triangle)
+    };
     let mut out = Vec::new();
     let mut cursor = std::io::Cursor::new(&mut out);
-    resized.write_to(&mut cursor, ImageFormat::Jpeg).map_err(|e| format!("encode jpeg: {e}"))?;
+    let encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
+    resized
+        .write_with_encoder(encoder)
+        .map_err(|e| format!("encode jpeg: {e}"))?;
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::ImageFormat;
+    use image::{ImageBuffer, Rgb};
+
+    fn sample_png(w: u32, h: u32) -> Vec<u8> {
+        let img: ImageBuffer<Rgb<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(w, h, |x, y| Rgb([(x % 256) as u8, (y % 256) as u8, 128]));
+        let mut buf = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut buf), ImageFormat::Png).unwrap();
+        buf
+    }
+
+    #[test]
+    fn preview_shrinks_large_image_and_outputs_jpeg() {
+        let raw = sample_png(3000, 2000);
+        let jpeg = resize_to_jpeg(&raw, PREVIEW_MAX_EDGE, PREVIEW_JPEG_QUALITY).unwrap();
+        assert!(jpeg.starts_with(&[0xFF, 0xD8, 0xFF]));
+        let decoded = image::load_from_memory(&jpeg).unwrap();
+        assert!(decoded.width() <= PREVIEW_MAX_EDGE);
+        assert!(decoded.height() <= PREVIEW_MAX_EDGE);
+    }
+
+    #[test]
+    fn thumb_stays_small() {
+        let raw = sample_png(800, 600);
+        let jpeg = resize_to_jpeg(&raw, THUMB_MAX_EDGE, THUMB_JPEG_QUALITY).unwrap();
+        let decoded = image::load_from_memory(&jpeg).unwrap();
+        assert!(decoded.width() <= THUMB_MAX_EDGE);
+        assert!(decoded.height() <= THUMB_MAX_EDGE);
+    }
+
+    #[test]
+    fn is_preview_image_matches_extensions() {
+        assert!(is_preview_image("a.JPG"));
+        assert!(is_preview_image("dir/x.webp"));
+        assert!(!is_preview_image("clip.mp4"));
+        assert!(!is_preview_image("doc.pdf"));
+    }
 }
 
 async fn tempfile_dir() -> Result<PathBuf, String> {
