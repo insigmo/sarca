@@ -506,15 +506,26 @@ const FSListItem = (props) => {
 							</div>
 						</Show>
 
-						<FileTypeIcon
-							name={props.fsElement.name}
-							isFile={props.fsElement.is_file}
-							thumbUrl={thumbUrl()}
-							size={64}
-						/>
+						<div class="fs-grid-item__head">
+							<span class="fs-grid-item__type" aria-hidden="true">
+								<FileTypeIcon
+									name={props.fsElement.name}
+									isFile={props.fsElement.is_file}
+									size={18}
+								/>
+							</span>
+							<div class="fs-grid-item__name" title={displayName()}>
+								{displayName()}
+							</div>
+						</div>
 
-						<div class="fs-grid-item__name" title={displayName()}>
-							{displayName()}
+						<div class="fs-grid-item__preview">
+							<FileTypeIcon
+								name={props.fsElement.name}
+								isFile={props.fsElement.is_file}
+								thumbUrl={thumbUrl()}
+								size={64}
+							/>
 						</div>
 					</div>
 				}
