@@ -652,13 +652,6 @@ impl AppSyncState {
             tokio::time::sleep(Duration::from_secs(3)).await;
 
             loop {
-                // #region agent log
-                {
-                    tracing::info!(target: "sarca_debug", "sync-tick-begin");
-                    eprintln!("sarca_debug sync-tick-begin");
-                    crate::client_log::write_line(&data_dir, "debug-sync-tick-begin");
-                }
-                // #endregion
                 // Pick up tokens written by the webview / sync_now without waiting
                 // for another invoke.
                 let server = load_server_config(&data_dir);
@@ -677,25 +670,6 @@ impl AppSyncState {
                 // cannot upload without credentials anyway.
                 if prefs.background_sync && connected {
                     let allow_auto = crate::commands::allow_auto_upload(&prefs);
-                    // #region agent log
-                    tracing::info!(
-                        target: "sarca_debug",
-                        allow_auto,
-                        wifi_only = prefs.wifi_only,
-                        "sync-tick-prefs"
-                    );
-                    eprintln!(
-                        "sarca_debug sync-tick-prefs allow_auto={allow_auto} wifi_only={}",
-                        prefs.wifi_only
-                    );
-                    crate::client_log::write_line(
-                        &data_dir,
-                        &format!(
-                            "debug-sync-tick-prefs allow_auto={allow_auto} wifi_only={}",
-                            prefs.wifi_only
-                        ),
-                    );
-                    // #endregion
                     if let Err(e) = engine
                         .tick_filtered(|b| {
                             if b.mode.is_upload_only() && !allow_auto {
@@ -711,23 +685,10 @@ impl AppSyncState {
                             &format!("sync tick error: {e}"),
                         );
                     }
-                } else {
-                    // #region agent log
-                    eprintln!(
-                        "sarca_debug sync-tick-skip connected={connected} background_sync={}",
-                        prefs.background_sync
-                    );
-                    // #endregion
                 }
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(30)) => {},
-                    _ = wake_rx.changed() => {
-                        // #region agent log
-                        tracing::info!(target: "sarca_debug", "sync-loop-woken");
-                        eprintln!("sarca_debug sync-loop-woken");
-                        crate::client_log::write_line(&data_dir, "debug-sync-loop-woken");
-                        // #endregion
-                    }
+                    _ = wake_rx.changed() => {},
                     _ = rx.changed() => {
                         if *rx.borrow() {
                             break;
