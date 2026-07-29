@@ -590,6 +590,20 @@ const getInlineMediaUrl = (storage_id, path) => {
 }
 
 /**
+ * Authenticated URL for image preview JPEG (FileViewer).
+ * @param {string} storage_id
+ * @param {string} path
+ * @returns {string}
+ */
+const getPreviewUrl = (storage_id, path) => {
+	const [store] = createLocalStore()
+	const params = new URLSearchParams({
+		access_token: store.access_token || '',
+	})
+	return `${API_BASE}/storages/${storage_id}/files/preview/${encodeFilePath(path)}?${params}`
+}
+
+/**
  *
  * @param {string} storage_id
  * @param {string} path
@@ -977,7 +991,7 @@ const encodeShareRelPath = (path) => {
  * Public share file URL path. Empty relPath must NOT end with `/` —
  * Axum maps `/download` and `/download/` differently (`/` → 404).
  * @param {string} token
- * @param {'download' | 'inline' | 'thumb'} kind
+ * @param {'download' | 'inline' | 'thumb' | 'preview'} kind
  * @param {string} [relPath]
  */
 const publicShareFilePath = (token, kind, relPath = '') => {
@@ -1089,6 +1103,16 @@ const thumbPublicShare = async (token, relPath, signal) => {
  */
 const getPublicInlineMediaUrl = (token, relPath = '') => {
 	return `${API_BASE}${publicShareFilePath(token, 'inline', relPath)}`
+}
+
+/**
+ * Cookie-auth preview JPEG URL for images on a public share.
+ * @param {string} token
+ * @param {string} [relPath]
+ * @returns {string}
+ */
+const getPublicPreviewUrl = (token, relPath = '') => {
+	return `${API_BASE}${publicShareFilePath(token, 'preview', relPath)}`
 }
 
 /////////////////////////////////////////////////////////////
@@ -1337,6 +1361,7 @@ const API = {
 		getFileInfo,
 		download,
 		getInlineMediaUrl,
+		getPreviewUrl,
 		thumb,
 		deleteFile,
 		listTrash,
@@ -1371,6 +1396,7 @@ const API = {
 		downloadPublicShareZip,
 		thumbPublicShare,
 		getPublicInlineMediaUrl,
+		getPublicPreviewUrl,
 	},
 	settings: {
 		getTrashSettings,

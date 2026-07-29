@@ -46,6 +46,103 @@ pub struct AboutDto {
 #[derive(Serialize)]
 pub struct CacheDto {
     pub bytes: u64,
+    pub limit_bytes: u64,
+}
+
+fn cache_root(state: &AppSyncState) -> PathBuf {
+    state.data_dir().join("cache")
+}
+
+fn preview_cache_path(state: &AppSyncState, scope: &str, logical_path: &str) -> PathBuf {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{Hash, Hasher};
+    scope.hash(&mut h);
+    logical_path.hash(&mut h);
+    "v1-1920-q80".hash(&mut h);
+    let digest = format!("{:016x}", h.finish());
+    cache_root(state)
+        .join("preview")
+        .join(sanitize_cache_scope(scope))
+        .join(format!("{digest}.jpg"))
+}
+
+fn sanitize_cache_scope(scope: &str) -> String {
+    scope
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+struct CacheFileEntry {
+    path: PathBuf,
+    size: u64,
+    modified: std::time::SystemTime,
+}
+
+fn list_cache_files(root: &Path) -> Vec<CacheFileEntry> {
+    let mut entries = Vec::new();
+    if !root.exists() {
+        return entries;
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(read_dir) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(meta) = entry.metadata() {
+                entries.push(CacheFileEntry {
+                    path,
+                    size: meta.len(),
+                    modified: meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH),
+                });
+            }
+        }
+    }
+    entries
+}
+
+fn evict_cache_if_needed(state: &AppSyncState) -> Result<(), String> {
+    let prefs = load_prefs(state);
+    let limit = prefs.cache_limit_bytes;
+    let root = cache_root(state);
+    let mut total = dir_size(&root);
+    if total <= limit {
+        return Ok(());
+    }
+
+    let mut entries = list_cache_files(&root);
+    entries.sort_by_key(|e| e.modified);
+    let mut removed = 0u64;
+    for entry in entries {
+        if total <= limit {
+            break;
+        }
+        if fs::remove_file(&entry.path).is_ok() {
+            total = total.saturating_sub(entry.size);
+            removed = removed.saturating_add(entry.size);
+        }
+    }
+    let _ = removed;
+    Ok(())
+}
+
+fn cache_dto(state: &AppSyncState) -> CacheDto {
+    let cache = cache_root(state);
+    CacheDto {
+        bytes: if cache.exists() { dir_size(&cache) } else { 0 },
+        limit_bytes: load_prefs(state).cache_limit_bytes,
+    }
 }
 
 fn prefs_path(state: &AppSyncState) -> PathBuf {
@@ -808,24 +905,78 @@ pub fn get_about() -> AboutDto {
 
 #[tauri::command]
 pub fn get_cache_size(state: State<'_, AppSyncState>) -> Result<CacheDto, String> {
-    let cache = state.data_dir().join("cache");
-    Ok(CacheDto {
-        bytes: if cache.exists() { dir_size(&cache) } else { 0 },
-    })
+    Ok(cache_dto(&state))
 }
 
 #[tauri::command]
 pub fn clear_local_cache(state: State<'_, AppSyncState>) -> Result<CacheDto, String> {
-    let cache = state.data_dir().join("cache");
+    let cache = cache_root(&state);
     fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     remove_dir_contents(&cache)?;
-    Ok(CacheDto { bytes: 0 })
+    Ok(CacheDto {
+        bytes: 0,
+        limit_bytes: load_prefs(&state).cache_limit_bytes,
+    })
+}
+
+#[tauri::command]
+pub fn cache_get_preview(
+    state: State<'_, AppSyncState>,
+    scope: String,
+    path: String,
+) -> Result<Option<String>, String> {
+    let dest = preview_cache_path(&state, &scope, &path);
+    if !dest.is_file() {
+        return Ok(None);
+    }
+    if let Ok(f) = fs::OpenOptions::new().write(true).open(&dest) {
+        let _ = f.set_modified(std::time::SystemTime::now());
+    }
+    let bytes = fs::read(&dest).map_err(|e| e.to_string())?;
+    Ok(Some(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        bytes,
+    )))
+}
+
+#[tauri::command]
+pub fn cache_put_preview(
+    state: State<'_, AppSyncState>,
+    scope: String,
+    path: String,
+    bytes_b64: String,
+) -> Result<(), String> {
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, bytes_b64)
+        .map_err(|e| format!("invalid preview cache payload: {e}"))?;
+    let dest = preview_cache_path(&state, &scope, &path);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let tmp = dest.with_extension("tmp");
+    fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
+    if dest.is_file() {
+        let _ = fs::remove_file(&dest);
+    }
+    fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    evict_cache_if_needed(&state)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn client_prefs_default_cache_limit_one_gib() {
+        let prefs = ClientPrefs::default();
+        assert_eq!(prefs.cache_limit_bytes, 1_073_741_824);
+    }
+
+    #[test]
+    fn client_prefs_missing_cache_limit_deserializes_default() {
+        let prefs: ClientPrefs = serde_json::from_str(r#"{"wifi_only":true}"#).unwrap();
+        assert_eq!(prefs.cache_limit_bytes, 1_073_741_824);
+    }
 
     #[test]
     fn desktop_dialog_success_returns_path_not_prompt_sentinel() {

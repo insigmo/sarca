@@ -38,6 +38,8 @@ impl PublicSharesRouter {
             .route("/:token/thumb/*relpath", get(Self::thumb))
             .route("/:token/inline", get(Self::inline_root))
             .route("/:token/inline/*relpath", get(Self::inline_file))
+            .route("/:token/preview", get(Self::preview_root))
+            .route("/:token/preview/*relpath", get(Self::preview))
             .with_state(state)
     }
 
@@ -241,6 +243,36 @@ impl PublicSharesRouter {
         let link = Self::gate(&state, &token, headers).await?;
         let abs = PublicSharesService::resolve_file_path(&link, &relpath).map_err(err_response)?;
         FilesRouter::thumb_for_path(state, link.storage_id, &abs)
+            .await
+            .map_err(|(s, m)| (s, m).into_response())
+    }
+
+    async fn preview_root(
+        State(state): State<Arc<AppState>>,
+        Path(token): Path<String>,
+        headers: HeaderMap,
+    ) -> Result<Response, Response> {
+        Self::preview_inner(state, token, String::new(), &headers).await
+    }
+
+    async fn preview(
+        State(state): State<Arc<AppState>>,
+        Path((token, relpath)): Path<(String, String)>,
+        headers: HeaderMap,
+    ) -> Result<Response, Response> {
+        let relpath = percent_decode_str(&relpath).decode_utf8_lossy().to_string();
+        Self::preview_inner(state, token, relpath, &headers).await
+    }
+
+    async fn preview_inner(
+        state: Arc<AppState>,
+        token: String,
+        relpath: String,
+        headers: &HeaderMap,
+    ) -> Result<Response, Response> {
+        let link = Self::gate(&state, &token, headers).await?;
+        let abs = PublicSharesService::resolve_file_path(&link, &relpath).map_err(err_response)?;
+        FilesRouter::preview_for_path(state, link.storage_id, &abs)
             .await
             .map_err(|(s, m)| (s, m).into_response())
     }

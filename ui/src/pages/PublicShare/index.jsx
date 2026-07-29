@@ -301,6 +301,9 @@ const PublicShare = () => {
 	const resolveInlineUrl = (path) =>
 		API.publicShares.getPublicInlineMediaUrl(token(), path || '')
 
+	const resolvePreviewUrl = (path) =>
+		API.publicShares.getPublicPreviewUrl(token(), path || '')
+
 	const resolveDownload = (path) =>
 		API.publicShares.downloadPublicShare(token(), path || '')
 
@@ -549,6 +552,7 @@ const PublicShare = () => {
 				}
 				storageId=""
 				resolveInlineUrl={resolveInlineUrl}
+				resolvePreviewUrl={resolvePreviewUrl}
 				resolveDownload={resolveDownload}
 				onClose={() => setViewerFile(null)}
 				onNavigate={(file) => setViewerFile(file)}

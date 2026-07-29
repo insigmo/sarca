@@ -32,6 +32,8 @@ pub const REQUIRED_ALLOW_PERMISSIONS: &[&str] = &[
     "allow-get-about",
     "allow-get-cache-size",
     "allow-clear-local-cache",
+    "allow-cache-get-preview",
+    "allow-cache-put-preview",
 ];
 
 fn allow_perm_for_command(cmd: &str) -> String {
