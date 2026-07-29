@@ -583,6 +583,9 @@ pub struct AppSyncState {
     pub shell_url: Arc<StdMutex<Option<Url>>>,
     data_dir: PathBuf,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
+    /// Bumped to interrupt the background-loop sleep and run a tick soon
+    /// (app resume / foreground).
+    wake_tx: tokio::sync::watch::Sender<u64>,
 }
 
 impl AppSyncState {
@@ -609,6 +612,7 @@ impl AppSyncState {
         };
         let engine = Arc::new(SyncEngine::open(config, Arc::new(KeepBothPrompt))?);
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let (wake_tx, _) = tokio::sync::watch::channel(0u64);
 
         Ok(Self {
             engine,
@@ -617,6 +621,7 @@ impl AppSyncState {
             shell_url: Arc::new(StdMutex::new(None)),
             data_dir,
             shutdown_tx,
+            wake_tx,
         })
     }
 
@@ -624,12 +629,45 @@ impl AppSyncState {
         &self.data_dir
     }
 
+    /// Wake the background sync loop so the next tick runs without waiting
+    /// out the full poll interval (used on Android/iOS resume).
+    #[cfg_attr(
+        not(any(target_os = "android", target_os = "ios")),
+        allow(dead_code)
+    )]
+    pub fn request_sync_wake(&self) {
+        let next = self.wake_tx.borrow().wrapping_add(1);
+        let _ = self.wake_tx.send(next);
+    }
+
     pub fn start_background_loop(&self) {
         let engine = self.engine.clone();
         let data_dir = self.data_dir.clone();
         let mut rx = self.shutdown_tx.subscribe();
+        let mut wake_rx = self.wake_tx.subscribe();
         tauri::async_runtime::spawn(async move {
             loop {
+                // #region agent log
+                {
+                    let payload = serde_json::json!({
+                        "sessionId": "0a7dc5",
+                        "runId": "post-fix",
+                        "hypothesisId": "H4",
+                        "location": "state.rs:start_background_loop",
+                        "message": "sync-tick-begin",
+                        "data": {},
+                        "timestamp": std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis())
+                            .unwrap_or(0),
+                    });
+                    crate::client_log::write_line(
+                        &data_dir,
+                        &format!("debug-sync-tick-begin {payload}"),
+                    );
+                    tracing::info!(target: "sarca_debug", "sync-tick-begin");
+                }
+                // #endregion
                 // Pick up tokens written by the webview / sync_now without waiting
                 // for another invoke.
                 let server = load_server_config(&data_dir);
@@ -644,6 +682,21 @@ impl AppSyncState {
                     .unwrap_or_default();
                 if prefs.background_sync {
                     let allow_auto = crate::commands::allow_auto_upload(&prefs);
+                    // #region agent log
+                    tracing::info!(
+                        target: "sarca_debug",
+                        allow_auto,
+                        wifi_only = prefs.wifi_only,
+                        "sync-tick-prefs"
+                    );
+                    crate::client_log::write_line(
+                        &data_dir,
+                        &format!(
+                            "debug-sync-tick-prefs allow_auto={allow_auto} wifi_only={}",
+                            prefs.wifi_only
+                        ),
+                    );
+                    // #endregion
                     if let Err(e) = engine
                         .tick_filtered(|b| {
                             if b.mode.is_upload_only() && !allow_auto {
@@ -662,6 +715,12 @@ impl AppSyncState {
                 }
                 tokio::select! {
                     _ = tokio::time::sleep(Duration::from_secs(30)) => {},
+                    _ = wake_rx.changed() => {
+                        // #region agent log
+                        tracing::info!(target: "sarca_debug", "sync-loop-woken");
+                        crate::client_log::write_line(&data_dir, "debug-sync-loop-woken");
+                        // #endregion
+                    }
                     _ = rx.changed() => {
                         if *rx.borrow() {
                             break;
