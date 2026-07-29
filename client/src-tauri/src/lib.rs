@@ -327,8 +327,23 @@ pub fn run() {
                     focus_main_window(app_handle);
                 }
             }
-            // Non-macOS: keep the run-event callback so Builder::run stays equivalent.
-            #[cfg(not(target_os = "macos"))]
+            // Mobile: when the activity returns to foreground, wake the sync
+            // loop immediately so auto-upload does not wait up to 30s (or stay
+            // idle until the user opens Sync settings and polls).
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            if let tauri::RunEvent::Resumed = event {
+                // #region agent log
+                tracing::info!(target: "sarca_debug", "run-event-resumed-wake-sync");
+                eprintln!("sarca_debug run-event-resumed-wake-sync");
+                // #endregion
+                let state = app_handle.state::<AppSyncState>();
+                state.request_sync_wake();
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "android", target_os = "ios")))]
             let _ = (app_handle, &event);
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            {
+                let _ = &event;
+            }
         });
 }
