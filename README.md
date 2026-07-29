@@ -13,34 +13,20 @@
   <a href="https://github.com/insigmo/sarca/pkgs/container/sarca"><img alt="GHCR" src="https://img.shields.io/badge/ghcr.io-sarca-14635C?style=flat-square&logo=docker"></a>
 </p>
 
-## Features
+## What this is
 
-- Upload / download, folders, search, rename / move / copy
-- Trash with restore and retention
-- Favorites & recent files
-- Public share links (expiry, optional password)
-- Multi-user access control, multiple storages & workers
-- Setup wizard for bot + channel
-- Optional email verify and password reset
-- Native sync client (Tauri): Camera media auto-upload + one-way folder auto-upload — see [`client/`](client/). Release assets: `.AppImage` / `.deb` / `-setup.exe` / `.dmg` (not wrapped in tar.gz).
+Sarca is a personal / multi-user file cloud. Metadata lives in Postgres; file bytes are chunked and stored in Telegram via bots. The repo has two parts:
 
-## What it does
+| Part | Path | Role |
+| --- | --- | --- |
+| **Server** | `sarca/`, `ui/` | HTTP API + web UI (binary or Docker) |
+| **Clients** | `client/` | Native apps (desktop / mobile) that connect to your server |
 
-Sarca turns Telegram into a backend for a personal or multi-user file cloud:
+Needs: PostgreSQL, Telegram bots + a channel/group where the bots are admins. Docker Compose also runs Local Bot API (larger files).
 
-- Each **storage** is a separate filesystem (like a volume)
-- Files are split into chunks and uploaded to a Telegram channel/group via bots (**storage workers**)
-- Metadata lives in Postgres; the binary is small and does not need a language runtime on the host
+## Server
 
-You can use it as a personal drive, a shared team vault, or as an API similar to S3 / Nextcloud-style backends.
-
-## Requirements
-
-- **PostgreSQL**
-- Optional but recommended for large files: **Telegram Local Bot API** (included in Docker Compose)
-- Telegram bots + a channel/group where those bots are admins
-
-## Installation
+Installers ask for admin email/password and Telegram `api_id` / `api_hash` (from [my.telegram.org](https://my.telegram.org) → **API development tools**), generate `SECRET_KEY` with `openssl rand -hex 512`, write `sarca.conf`, then start the server.
 
 ### Linux / macOS (Apple Silicon)
 
@@ -48,48 +34,23 @@ You can use it as a personal drive, a shared team vault, or as an API similar to
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash
 ```
 
-1. Edit `~/.local/share/sarca/sarca.conf` (`SUPERUSER_*`, `SECRET_KEY`, `DATABASE_*`)
-2. Make sure Postgres is reachable
-3. Run:
+Binary → `~/.local/share/sarca`. Needs a reachable Postgres (`DATABASE_*` in `sarca.conf`).
 
-```sh
-sarca
-```
-
-Open http://127.0.0.1:8000
-
-### Windows (PowerShell)
+### Windows
 
 ```powershell
 irm https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.ps1 | iex
 ```
 
-Edit `%LOCALAPPDATA%\Sarca\sarca.conf`, then run `sarca.cmd` from the install folder (path is printed by the installer).
+### Docker Compose (recommended)
 
-### Docker Compose
-
-`compose.yml` is pull-only: GHCR image + Postgres + Local Bot API. It mounts `./sarca.conf` (and `./docker/telegram-bot-api-entrypoint.sh` from the installer). Secrets and Telegram credentials live in `sarca.conf`. Docker networking (`DATABASE_HOST=db`, `WORK_DIR=/work`) is set in compose. **`PORT` is read from `sarca.conf`** for both the published host port and the process listen port — always pass `--env-file sarca.conf` so Compose can interpolate it.
-
-Local binary/UI overrides live in `compose.dev.yml` and are used by `task up` / `task restart` (requires a built `runtime/sarca` **file**, not a directory).
+Postgres + Local Bot API included:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
-cd sarca
-# edit sarca.conf: SUPERUSER_*, SECRET_KEY, TELEGRAM_API_ID, TELEGRAM_API_HASH, PORT
-# keep DATABASE_USER/PASSWORD/NAME = sarca (matches compose db service)
-docker compose --env-file sarca.conf pull
-docker compose --env-file sarca.conf up -d
 ```
 
-From a git checkout on a Pi (no local build): same `docker compose --env-file sarca.conf up -d` — do **not** use `compose.dev.yml` unless you have built `runtime/sarca` + `ui/dist`.
-
-Open http://127.0.0.1:$PORT (default `8000` if unset in conf).
-
-Logs:
-
-```sh
-docker logs -f sarca
-```
+Open `http://127.0.0.1:$PORT` (default `8000`). Logs: `docker logs -f sarca`.
 
 <details>
 <summary>Build from source</summary>
@@ -115,80 +76,45 @@ set -a && . ../sarca.conf && set +a
 
 </details>
 
+## Clients
+
+Latest release assets ([releases/latest](https://github.com/insigmo/sarca/releases/latest)):
+
+| Platform | Download |
+| --- | --- |
+| Linux x86_64 | [`.deb`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_linux_amd64.deb) |
+| Linux aarch64 | [`.deb`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_linux_arm64.deb) |
+| macOS Apple Silicon | [`.dmg`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_macos_arm64.dmg) |
+| Windows x86_64 | [installer](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_windows_amd64-setup.exe) |
+| Windows ARM64 | [installer](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_windows_arm64-setup.exe) |
+| Android arm64 | [`.apk`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_android_arm64.apk) |
+
+Open the app, enter your server URL, sign in. See [`client/`](client/) for building from source.
+
 ## Usage
 
-### 1. Sign in
+1. Sign in with the admin email/password you set during install. More users: **Settings → Users**.
+2. Setup wizard (**Storages → New storage**): optional Local Bot API credentials → bot token from [@BotFather](https://t.me/BotFather) → private channel with the bot as admin → finish.
+3. Optional: **Settings → Workers** — more bot tokens on a storage for throughput.
+4. Upload / download, folders, search, trash, shares, ACLs.
 
-Open the UI and sign in with the superuser from `sarca.conf`. Additional users are created by the superuser under **Settings → Users**.
-
-### 2. Run the setup wizard
-
-On first login (no storages yet), or via **Storages → New storage**, Sarca opens a setup wizard:
-
-1. **Local Bot API (optional once):** paste `api_id` / `api_hash` from [my.telegram.org](https://my.telegram.org) for files larger than ~20 MB, or skip.
-2. **Bot:** create a bot with [@BotFather](https://t.me/BotFather) and paste the token.
-3. **Channel:** create a private channel, add the bot as admin, then use **Check channel**.
-4. Optionally detect up to 3 channels for replication, then finish — storage + worker are created together.
-
-### 3. Add more workers (optional)
-
-In **Settings → Workers**, add more bot tokens bound to a storage to raise throughput (Telegram rate-limits each bot).
-
-### 4. Upload and manage files
-
-Open the storage filesystem to:
-
-- Upload / download files
-- Create folders
-- Search, rename, move; delete moves items to trash (restore / delete forever / empty; retention setting)
-- Share access with other Sarca users (Viewer / Can edit / Admin)
-
-### Local Bot API (large files)
-
-Official Bot API caps downloads around 20 MB. With Local Bot API (compose service `telegram-bot-api`) you can use much larger chunks (up to ~2 GB per document).
-
-Files larger than the chunk size (including multi‑GB videos) are split automatically. There is no whole-file size cap in Sarca beyond disk space under `WORK_DIR` and Telegram per-document limits (~2 GB with Local Bot API). Videos default to 48 MB chunks (`TELEGRAM_VIDEO_CHUNK_SIZE_MB`).
-
-In `sarca.conf`:
-
-```env
-TELEGRAM_LOCAL_API=true
-TELEGRAM_API_BASE_URL=http://telegram-bot-api:8081
-TELEGRAM_API_ID=...
-TELEGRAM_API_HASH=...
-TELEGRAM_CHUNK_SIZE_MB=1950
-# TELEGRAM_VIDEO_CHUNK_SIZE_MB=48
-WORK_DIR=/work
-```
-
-Get `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` from https://my.telegram.org (or paste them in the setup wizard — it writes `sarca.conf` when possible; restart Local Bot API after changing credentials).
-
-## Releases
-
-Pushes to `master` automatically run e2e, bump the patch version (`v0.0.x`), update `sarca/Cargo.toml` + `ui/package.json`, and publish GitHub Release + GHCR image. You do not need to create tags or edit version fields by hand.
-
-For a minor/major bump: **Actions → Release binaries → Run workflow** and pick the bump type.
+Official Bot API ~20 MB download cap; with Local Bot API (Compose) chunks can go up to ~2 GB per document. Files larger than the chunk size are split automatically.
 
 ## Configuration
 
-See [`sarca.conf.example`](sarca.conf.example) for the full list. Important keys:
+Full list: [`sarca.conf.example`](sarca.conf.example).
 
 | Variable | Purpose |
-|---|---|
+| --- | --- |
 | `PORT` | HTTP port (default `8000`) |
 | `SUPERUSER_EMAIL` / `SUPERUSER_PASS` | Bootstrap admin |
-| `SECRET_KEY` | JWT + encryption material |
-| `DATABASE_*` | Postgres connection |
-| `TELEGRAM_*` | Bot API endpoint, rate limit, chunk size; `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` for Local Bot API |
-| `WORK_DIR` | Spool directory for uploads |
-
-## Logo
-
-Project logo placeholder: [`logo.svg`](logo.svg). Replace it with the final artwork when ready (also update `ui/src/assets/logo.svg` used by the UI).
+| `SECRET_KEY` | JWT + encryption (installer generates this) |
+| `DATABASE_*` | Postgres |
+| `TELEGRAM_API_ID` / `TELEGRAM_API_HASH` | Local Bot API ([my.telegram.org](https://my.telegram.org)) |
+| `TELEGRAM_*` | Bot API URL, rate limit, chunk size |
+| `WORK_DIR` | Upload spool directory |
 
 ## Donations
-
-If Sarca is useful to you, you can support development:
 
 **BTC**: `bc1qyd28yapuutcmfxmrpxtd835z3ds2q260jzh4v7`
 
