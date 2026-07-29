@@ -33,6 +33,10 @@ import SharedLinksPanel from '../../components/SharedLinksPanel'
 import { filesChromeStore } from '../../common/filesChrome'
 import { sortFsElements, sortLabel } from '../../common/sortFs'
 import {
+	pushViewerHistory,
+	shouldCloseViewerOnPopstate,
+} from '../../common/viewerHistory'
+import {
 	MAX_FILE_PICKER,
 	uploadQueueStore,
 } from '../../common/uploadQueue'
@@ -242,6 +246,9 @@ const Files = () => {
 	/** @type {[import('solid-js').Accessor<'tiles'|'list'>, any]} */
 	const [viewMode, setViewMode] = createSignal(readStoredViewMode())
 	const [newFabAnchor, setNewFabAnchor] = createSignal(null)
+
+	let viewerHistoryPushed = false
+	let ignoringPopstate = false
 
 	const setAndPersistViewMode = (mode) => {
 		setViewMode(mode)
@@ -1167,6 +1174,41 @@ const Files = () => {
 		}
 	}
 
+	createEffect(() => {
+		if (viewerFile() && !viewerHistoryPushed) {
+			pushViewerHistory(window.history, window.location.href)
+			viewerHistoryPushed = true
+			return
+		}
+		if (!viewerFile() && viewerHistoryPushed) {
+			ignoringPopstate = true
+			viewerHistoryPushed = false
+			history.back()
+		}
+	})
+
+	const closeViewer = () => {
+		setViewerFile(null)
+	}
+
+	const onPopState = async (event) => {
+		if (ignoringPopstate) {
+			ignoringPopstate = false
+			return
+		}
+		if (
+			shouldCloseViewerOnPopstate({
+				viewerOpen: Boolean(viewerFile()),
+				state: event.state,
+			})
+		) {
+			viewerHistoryPushed = false
+			setViewerFile(null)
+			return
+		}
+		await reload()
+	}
+
 	onMount(() => {
 		chrome.activate({
 			storageId: params.id,
@@ -1175,7 +1217,7 @@ const Files = () => {
 			onClear: clearSearch,
 		})
 		Promise.all([fetchStorage(), fetchFSLayer(), loadFavoritePaths()]).then()
-		window.addEventListener('popstate', reload, false)
+		window.addEventListener('popstate', onPopState, false)
 
 		const mobileMediaQuery = window.matchMedia('(max-width: 840px)')
 		const closeMobileNavOnDesktop = (event) => {
@@ -1290,7 +1332,7 @@ const Files = () => {
 	})
 
 	onCleanup(() => {
-		window.removeEventListener('popstate', reload, false)
+		window.removeEventListener('popstate', onPopState, false)
 		chrome.deactivate()
 	})
 
@@ -2011,7 +2053,7 @@ const Files = () => {
 					file={viewerFile()}
 					files={sortedFsLayer()}
 					storageId={params.id}
-					onClose={() => setViewerFile(null)}
+					onClose={closeViewer}
 					onNavigate={(file) => setViewerFile(file)}
 				/>
 
