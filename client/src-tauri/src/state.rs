@@ -558,6 +558,12 @@ pub struct ClientPrefs {
     pub app_lock_pin: Option<String>,
     #[serde(default)]
     pub enable_logs: bool,
+    #[serde(default = "default_cache_limit_bytes")]
+    pub cache_limit_bytes: u64,
+}
+
+fn default_cache_limit_bytes() -> u64 {
+    1_073_741_824
 }
 
 fn default_true() -> bool {
@@ -572,6 +578,7 @@ impl Default for ClientPrefs {
             app_lock_enabled: false,
             app_lock_pin: None,
             enable_logs: false,
+            cache_limit_bytes: default_cache_limit_bytes(),
         }
     }
 }
