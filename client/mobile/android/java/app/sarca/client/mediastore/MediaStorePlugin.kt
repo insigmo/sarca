@@ -23,38 +23,45 @@ import java.util.UUID
 class MediaStorePlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun listDcimMedia(invoke: Invoke) {
-    try {
-      val items = JSArray()
-      appendAll(items, queryCollection(MediaStore.Images.Media.EXTERNAL_CONTENT_URI))
-      appendAll(items, queryCollection(MediaStore.Video.Media.EXTERNAL_CONTENT_URI))
-      val ret = JSObject()
-      ret.put("items", items)
-      invoke.resolve(ret)
-    } catch (ex: SecurityException) {
-      invoke.reject(ex.message ?: "MediaStore permission denied")
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "MediaStore query failed")
-    }
+    // Heavy ContentResolver scans must not run on the Android main/UI thread —
+    // Tauri dispatches plugin commands there by default, which froze the WebView
+    // (black screen / "Sarca isn't responding") for large DCIM libraries.
+    Thread({
+      try {
+        val items = JSArray()
+        appendAll(items, queryCollection(MediaStore.Images.Media.EXTERNAL_CONTENT_URI))
+        appendAll(items, queryCollection(MediaStore.Video.Media.EXTERNAL_CONTENT_URI))
+        val ret = JSObject()
+        ret.put("items", items)
+        invoke.resolve(ret)
+      } catch (ex: SecurityException) {
+        invoke.reject(ex.message ?: "MediaStore permission denied")
+      } catch (ex: Exception) {
+        invoke.reject(ex.message ?: "MediaStore query failed")
+      }
+    }, "sarca-mediastore-list").start()
   }
 
   @Command
   fun materializeForUpload(invoke: Invoke) {
-    try {
-      val args = invoke.getArgs()
-      val uri = Uri.parse(args.getString("uri"))
-      val direct = tryDirectPath(uri)
-      val ret = JSObject()
-      if (direct != null) {
-        ret.put("path", direct)
-        ret.put("ephemeral", false)
-      } else {
-        ret.put("path", copyToUploadCache(uri))
-        ret.put("ephemeral", true)
+    Thread({
+      try {
+        val args = invoke.getArgs()
+        val uri = Uri.parse(args.getString("uri"))
+        val direct = tryDirectPath(uri)
+        val ret = JSObject()
+        if (direct != null) {
+          ret.put("path", direct)
+          ret.put("ephemeral", false)
+        } else {
+          ret.put("path", copyToUploadCache(uri))
+          ret.put("ephemeral", true)
+        }
+        invoke.resolve(ret)
+      } catch (ex: Exception) {
+        invoke.reject(ex.message ?: "materialize failed")
       }
-      invoke.resolve(ret)
-    } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "materialize failed")
-    }
+    }, "sarca-mediastore-materialize").start()
   }
 
   private fun queryCollection(collectionUri: Uri): JSArray {
