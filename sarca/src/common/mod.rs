@@ -1,11 +1,11 @@
 pub mod access;
 pub mod channels;
 pub mod chunk_cache;
-pub mod preview_cache;
 pub mod db;
 pub mod jwt_manager;
 pub mod mailer;
 pub mod password_manager;
+pub mod preview_cache;
 pub mod routing;
 pub mod telegram_api;
 pub mod types;

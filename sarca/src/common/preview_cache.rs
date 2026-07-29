@@ -138,8 +138,9 @@ impl PreviewCache {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
 
     async fn write_file(path: &Path, bytes: &[u8]) {
         tokio::fs::write(path, bytes).await.unwrap();

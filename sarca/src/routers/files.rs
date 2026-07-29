@@ -26,8 +26,8 @@ use crate::{
         access::check_access,
         channels::UploadProgressEvent,
         chunk_cache::ChunkCache,
-        preview_cache::PreviewCache,
         jwt_manager::AuthUser,
+        preview_cache::PreviewCache,
         routing::{app_state::AppState, middlewares::auth::logged_in_required},
         telegram_api::bot_api::{TelegramBotApi, is_chat_dead_error},
     },
@@ -47,7 +47,11 @@ use crate::{
         SearchQuery,
         UploadParams,
     },
-    services::{files::FilesService, storage_workers_scheduler::StorageWorkersScheduler, thumbnails},
+    services::{
+        files::FilesService,
+        storage_workers_scheduler::StorageWorkersScheduler,
+        thumbnails,
+    },
 };
 
 pub struct FilesRouter;
@@ -993,10 +997,7 @@ impl FilesRouter {
 
         let raw = assemble_file_bytes(&state, storage_id, &file).await?;
         let jpeg = thumbnails::generate_preview(raw).await.map_err(|e| {
-            (
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                format!("Could not encode preview: {e}"),
-            )
+            (StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("Could not encode preview: {e}"))
         })?;
 
         if let Err(e) = preview_cache.put(&cache_key, &jpeg).await {
@@ -1234,9 +1235,10 @@ async fn assemble_file_bytes(
 
     for (idx, chunk) in chunks.into_iter().enumerate() {
         let chunk_candidates = candidates.get(&chunk.position).cloned().unwrap_or_default();
-        let cached = ensure_chunk_cached(&cache, &base_url, &db, rate, storage_id, &chunk_candidates)
-            .await
-            .map_err(<(StatusCode, String)>::from)?;
+        let cached =
+            ensure_chunk_cached(&cache, &base_url, &db, rate, storage_id, &chunk_candidates)
+                .await
+                .map_err(<(StatusCode, String)>::from)?;
 
         let chunk_start = idx as u64 * chunk_size;
         let remaining = file_size.saturating_sub(chunk_start);
@@ -1270,10 +1272,7 @@ fn is_jpeg(bytes: &[u8]) -> bool {
 fn preview_jpeg_response(bytes: Vec<u8>) -> Response {
     let headers = AppendHeaders([
         (header::CONTENT_TYPE, "image/jpeg".to_owned()),
-        (
-            header::CONTENT_DISPOSITION,
-            "inline; filename=\"preview.jpg\"".to_owned(),
-        ),
+        (header::CONTENT_DISPOSITION, "inline; filename=\"preview.jpg\"".to_owned()),
         (header::CACHE_CONTROL, "private, max-age=86400".to_owned()),
     ]);
     (headers, bytes).into_response()
