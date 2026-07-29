@@ -26,6 +26,48 @@ import { alertStore } from './AlertStack'
 import FluentIcon from './FluentIcon'
 import SettingsSwitch from './SettingsSwitch'
 
+const CAMERA_ENABLED_CACHE_KEY = 'sarca.client.cameraAutoUploadEnabled'
+
+function readCachedCameraEnabled() {
+	try {
+		const v = sessionStorage.getItem(CAMERA_ENABLED_CACHE_KEY)
+		if (v === '1') return true
+		if (v === '0') return false
+	} catch {
+		// private mode / blocked storage
+	}
+	return null
+}
+
+function writeCachedCameraEnabled(enabled) {
+	try {
+		sessionStorage.setItem(CAMERA_ENABLED_CACHE_KEY, enabled ? '1' : '0')
+	} catch {
+		// ignore
+	}
+}
+
+// #region agent log
+function agentLog(hypothesisId, location, message, data) {
+	fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58', {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json',
+			'X-Debug-Session-Id': '0a7dc5',
+		},
+		body: JSON.stringify({
+			sessionId: '0a7dc5',
+			runId: 'post-fix',
+			hypothesisId,
+			location,
+			message,
+			data,
+			timestamp: Date.now(),
+		}),
+	}).catch(() => {})
+}
+// #endregion
+
 /**
  * Sync tab: Camera media auto-upload + manage existing folder bindings.
  * Storage is locked to the currently open Files storage.
@@ -37,6 +79,8 @@ const SettingsSyncPanel = (props) => {
 	const [platform, setPlatform] = createSignal('')
 	const [deviceLabel, setDeviceLabel] = createSignal('')
 	const [bindings, setBindings] = createSignal([])
+	const [bindingsLoaded, setBindingsLoaded] = createSignal(false)
+	const [cachedCameraOn, setCachedCameraOn] = createSignal(readCachedCameraEnabled())
 	const [statuses, setStatuses] = createSignal([])
 	const [prefs, setPrefs] = createSignal({
 		wifi_only: true,
@@ -63,7 +107,33 @@ const SettingsSyncPanel = (props) => {
 
 	// Camera row can exist while soft-disabled — never removed on toggle-off.
 	const autoBinding = () => cameraBinding(bindings())
-	const cameraOn = () => autoBinding()?.enabled === true
+	// Until the first successful list_bindings, prefer session cache so remounting
+	// Sync does not flash the empty-bindings default (OFF) while IPC is in flight.
+	const cameraOn = () => {
+		if (!bindingsLoaded()) {
+			return cachedCameraOn() === true
+		}
+		return autoBinding()?.enabled === true
+	}
+
+	const applyBindings = (raw, source) => {
+		const list = Array.isArray(raw) ? raw : []
+		const hadCache = cachedCameraOn() !== null
+		setBindings(list)
+		setBindingsLoaded(true)
+		const enabled = cameraBinding(list)?.enabled === true
+		setCachedCameraOn(enabled)
+		writeCachedCameraEnabled(enabled)
+		// #region agent log
+		agentLog('H1', 'SettingsSyncPanel.jsx:applyBindings', 'bindings-applied', {
+			source,
+			count: list.length,
+			cameraEnabled: enabled,
+			hadCache,
+		})
+		// #endregion
+		return list
+	}
 	const cameraScanHint = createMemo(() => {
 		const auto = autoBinding()
 		if (!auto) return null
@@ -155,17 +225,24 @@ const SettingsSyncPanel = (props) => {
 			// Kick labels off in parallel, but never let a slow device_label IPC
 			// block bindings — that left the auto-upload toggle looking off.
 			const labelsP = refreshLabels()
+			// Apply bindings as soon as list_bindings resolves — do not wait for
+			// sync_statuses / transfer queue (those can stall for seconds while a
+			// large upload tick holds the index), or the camera toggle flashes OFF.
+			const bindsP = nativeInvoke('list_bindings').then(
+				(v) => {
+					const list = applyBindings(v, 'list_bindings')
+					return { ok: true, value: list }
+				},
+				(e) => ({ ok: false, error: e }),
+			)
+			const prefsP = nativeInvoke('get_client_prefs').catch(() => null)
+			const statusP = nativeInvoke('sync_statuses').catch(() => [])
 			const [bindsResult, prefsDto, statusList] = await Promise.all([
-				nativeInvoke('list_bindings').then(
-					(v) => ({ ok: true, value: v }),
-					(e) => ({ ok: false, error: e }),
-				),
-				nativeInvoke('get_client_prefs').catch(() => null),
-				nativeInvoke('sync_statuses').catch(() => []),
+				bindsP,
+				prefsP,
+				statusP,
 			])
-			if (bindsResult.ok) {
-				setBindings(Array.isArray(bindsResult.value) ? bindsResult.value : [])
-			} else {
+			if (!bindsResult.ok) {
 				setMsg(String(bindsResult.error))
 			}
 			setStatuses(Array.isArray(statusList) ? statusList : [])
@@ -179,11 +256,7 @@ const SettingsSyncPanel = (props) => {
 				})
 				setPrefsLoaded(true)
 			}
-			const binds = bindsResult.ok
-				? Array.isArray(bindsResult.value)
-					? bindsResult.value
-					: []
-				: bindings()
+			const binds = bindsResult.ok ? bindsResult.value : bindings()
 			const auto = binds.find((b) => b.mode === 'auto_upload')
 			if (auto?.local_path) setLocalPath(auto.local_path)
 			else if (!localPath()) {
@@ -202,6 +275,13 @@ const SettingsSyncPanel = (props) => {
 	}
 
 	onMount(() => {
+		// #region agent log
+		agentLog('H1', 'SettingsSyncPanel.jsx:onMount', 'sync-panel-mount', {
+			cachedCameraOn: cachedCameraOn(),
+			bindingsLoaded: bindingsLoaded(),
+			cameraOn: cameraOn(),
+		})
+		// #endregion
 		refresh()
 		const id = window.setInterval(() => {
 			refresh()
@@ -446,12 +526,23 @@ const SettingsSyncPanel = (props) => {
 
 			<div class="settings-toggle">
 				<span>Enable photo and video auto-upload</span>
-				<SettingsSwitch
-					id="settings-camera-switch"
-					checked={cameraOn()}
-					disabled={busy()}
-					onChange={(checked) => setAutoUpload(checked)}
-				/>
+				<Show
+					when={bindingsLoaded() || cachedCameraOn() !== null}
+					fallback={
+						<CircularProgress
+							size={22}
+							color="secondary"
+							aria-label="Loading auto-upload state"
+						/>
+					}
+				>
+					<SettingsSwitch
+						id="settings-camera-switch"
+						checked={cameraOn()}
+						disabled={busy() || !bindingsLoaded()}
+						onChange={(checked) => setAutoUpload(checked)}
+					/>
+				</Show>
 			</div>
 
 			<Show when={autoBinding()}>
