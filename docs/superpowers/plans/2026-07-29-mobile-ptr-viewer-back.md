@@ -31,7 +31,7 @@
 | `ui/src/common/pullToRefresh.test.js` | Vitest for threshold / cancel / refresh gate |
 | `ui/src/common/viewerHistory.js` | Pure helpers: detect viewer history state; open/close stack ops |
 | `ui/src/common/viewerHistory.test.js` | Vitest for open/close/`shouldHandlePopstate` |
-| `ui/src/components/FluentIcon.jsx` | Register `arrowSync` (or `arrowClockwise`) glyph |
+| `ui/src/components/FluentIcon.jsx` | Register `arrowSync` glyph (`arrow_sync_24_regular`) |
 | `ui/src/pages/Files/index.jsx` | Wire PTR + viewer history / unified `popstate` |
 | `ui/src/index.css` | `.files-ptr-indicator` styles (mobile) |
 
@@ -389,7 +389,7 @@ EOF
 ### Task 4: Fluent refresh icon + PTR CSS + Files wiring
 
 **Files:**
-- Modify: `ui/src/components/FluentIcon.jsx` — add `arrowClockwise` from `@fluentui/svg-icons/icons/arrow_clockwise_24_regular.svg?raw`
+- Modify: `ui/src/components/FluentIcon.jsx` — add `arrowSync` from `@fluentui/svg-icons/icons/arrow_sync_24_regular.svg?raw`
 - Modify: `ui/src/index.css` — indicator styles
 - Modify: `ui/src/pages/Files/index.jsx` — attach PTR; render indicator inside `.files-canvas`
 
@@ -475,7 +475,7 @@ Render at top of canvas children:
 	aria-hidden="true"
 >
 	<span class="files-ptr-indicator__icon">
-		<FluentIcon name="arrowClockwise" size={22} />
+		<FluentIcon name="arrowSync" size={22} />
 	</span>
 </div>
 ```
