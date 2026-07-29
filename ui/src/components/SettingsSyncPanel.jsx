@@ -47,27 +47,6 @@ function writeCachedCameraEnabled(enabled) {
 	}
 }
 
-// #region agent log
-function agentLog(hypothesisId, location, message, data) {
-	fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58', {
-		method: 'POST',
-		headers: {
-			'Content-Type': 'application/json',
-			'X-Debug-Session-Id': '0a7dc5',
-		},
-		body: JSON.stringify({
-			sessionId: '0a7dc5',
-			runId: 'post-fix',
-			hypothesisId,
-			location,
-			message,
-			data,
-			timestamp: Date.now(),
-		}),
-	}).catch(() => {})
-}
-// #endregion
-
 /**
  * Sync tab: Camera media auto-upload + manage existing folder bindings.
  * Storage is locked to the currently open Files storage.
@@ -93,6 +72,7 @@ const SettingsSyncPanel = (props) => {
 	const [busy, setBusy] = createSignal(false)
 	const [msg, setMsg] = createSignal('')
 	const [cameraRootMigrateTried, setCameraRootMigrateTried] = createSignal(false)
+	const [staleStorageMigrateTried, setStaleStorageMigrateTried] = createSignal(false)
 	/** @type {import('solid-js').Accessor<'upload' | 'download' | null>} */
 	const [queueView, setQueueView] = createSignal(null)
 	const [transferSnap, setTransferSnap] = createSignal({
@@ -116,22 +96,13 @@ const SettingsSyncPanel = (props) => {
 		return autoBinding()?.enabled === true
 	}
 
-	const applyBindings = (raw, source) => {
+	const applyBindings = (raw) => {
 		const list = Array.isArray(raw) ? raw : []
-		const hadCache = cachedCameraOn() !== null
 		setBindings(list)
 		setBindingsLoaded(true)
 		const enabled = cameraBinding(list)?.enabled === true
 		setCachedCameraOn(enabled)
 		writeCachedCameraEnabled(enabled)
-		// #region agent log
-		agentLog('H1', 'SettingsSyncPanel.jsx:applyBindings', 'bindings-applied', {
-			source,
-			count: list.length,
-			cameraEnabled: enabled,
-			hadCache,
-		})
-		// #endregion
 		return list
 	}
 	const cameraScanHint = createMemo(() => {
@@ -230,7 +201,7 @@ const SettingsSyncPanel = (props) => {
 			// large upload tick holds the index), or the camera toggle flashes OFF.
 			const bindsP = nativeInvoke('list_bindings').then(
 				(v) => {
-					const list = applyBindings(v, 'list_bindings')
+					const list = applyBindings(v)
 					return { ok: true, value: list }
 				},
 				(e) => ({ ok: false, error: e }),
@@ -269,19 +240,28 @@ const SettingsSyncPanel = (props) => {
 			}
 			await labelsP
 			await maybeMigrateLegacyCameraRoot(binds)
+			await maybeMigrateStaleCameraStorage(binds)
 		} catch (e) {
 			setMsg(String(e))
 		}
 	}
 
+	const maybeMigrateStaleCameraStorage = async (liveBindings) => {
+		if (staleStorageMigrateTried()) return
+		const sid = lockedStorageId()
+		if (!sid) return
+		const decision = resolveCameraToggle(liveBindings, true, sid)
+		if (decision.action !== 'rebind') return
+		setStaleStorageMigrateTried(true)
+		try {
+			// Re-run enable path: remove stale binding + add for current storage.
+			await setAutoUpload(true)
+		} catch {
+			setStaleStorageMigrateTried(false)
+		}
+	}
+
 	onMount(() => {
-		// #region agent log
-		agentLog('H1', 'SettingsSyncPanel.jsx:onMount', 'sync-panel-mount', {
-			cachedCameraOn: cachedCameraOn(),
-			bindingsLoaded: bindingsLoaded(),
-			cameraOn: cameraOn(),
-		})
-		// #endregion
 		refresh()
 		const id = window.setInterval(() => {
 			refresh()
@@ -388,14 +368,17 @@ const SettingsSyncPanel = (props) => {
 				live = bindings()
 			}
 
-			const decision = resolveCameraToggle(live, enable)
+			const decision = resolveCameraToggle(live, enable, sid)
 
 			if (decision.action === 'noop') {
 				setBindings(live)
 				return
 			}
 
-			if (decision.action === 'set_enabled') {
+			if (decision.action === 'rebind') {
+				await nativeInvoke('remove_binding', { id: decision.id })
+				// fall through to add for current storage
+			} else if (decision.action === 'set_enabled') {
 				// Soft-disable / re-enable in place — never remove_binding, so the
 				// index and remote mapping survive a toggle-off/on cycle.
 				await nativeInvoke('set_binding_enabled', {
