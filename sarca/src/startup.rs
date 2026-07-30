@@ -8,6 +8,9 @@ use crate::{
     repositories::{storage_workers::StorageWorkersRepository, users::UsersRepository},
 };
 
+/// Current embedded schema version for fresh SQLite databases.
+pub const SCHEMA_VERSION: i64 = 1;
+
 #[inline]
 #[allow(clippy::too_many_lines)]
 pub async fn init_db(db: &SqlitePool) {
@@ -17,515 +20,339 @@ pub async fn init_db(db: &SqlitePool) {
 
     for statement in [
         "
-        CREATE TABLE IF NOT EXISTS users (
-            id            UUID         PRIMARY KEY,
-            email         VARCHAR(255) NOT NULL UNIQUE,
-            password_hash VARCHAR(255) NOT NULL
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER NOT NULL
         );
-    ",
+        ",
+        "
+        CREATE TABLE IF NOT EXISTS users (
+            id                 BLOB PRIMARY KEY NOT NULL,
+            email              TEXT NOT NULL UNIQUE,
+            password_hash      TEXT,
+            email_verified_at  TEXT
+        );
+        ",
         "
         CREATE TABLE IF NOT EXISTS storages (
-            id               UUID         PRIMARY KEY,
-            name             VARCHAR(255) NOT NULL,
-            primary_position SMALLINT     NOT NULL DEFAULT 1
+            id               BLOB PRIMARY KEY NOT NULL,
+            name             TEXT NOT NULL,
+            primary_position INTEGER NOT NULL DEFAULT 1
         );
-
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS storage_workers (
-            id         UUID         PRIMARY KEY,
-            name       VARCHAR(255) NOT NULL,
-            token      VARCHAR(255) NOT NULL UNIQUE,
-            user_id    UUID         NOT NULL REFERENCES users
-                                            ON DELETE CASCADE 
-                                            ON UPDATE CASCADE,
-            storage_id UUID         REFERENCES storages
+            id         BLOB PRIMARY KEY NOT NULL,
+            name       TEXT NOT NULL,
+            token      TEXT NOT NULL UNIQUE,
+            user_id    BLOB NOT NULL REFERENCES users(id)
+                                    ON DELETE CASCADE
+                                    ON UPDATE CASCADE,
+            storage_id BLOB REFERENCES storages(id)
         );
-
-    ",
-        "
-        DO
-        $$
-        BEGIN
-        IF NOT EXISTS (
-            SELECT *
-            FROM pg_type typ
-            INNER JOIN pg_namespace nsp ON nsp.oid = typ.typnamespace
-            WHERE nsp.nspname = current_schema() AND typ.typname = 'access_type'
-        ) THEN
-            CREATE TYPE access_type AS ENUM ('r', 'w', 'a');
-        END IF;
-        END;
-        $$;
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS access (
-            id          UUID        PRIMARY KEY,
-            user_id     UUID        NOT NULL REFERENCES users
-                                            ON DELETE CASCADE 
-                                            ON UPDATE CASCADE,
-            storage_id  UUID        NOT NULL REFERENCES storages
-                                            ON DELETE CASCADE 
-                                            ON UPDATE CASCADE,
-            access_type access_type NOT NULL,
-
+            id          BLOB PRIMARY KEY NOT NULL,
+            user_id     BLOB NOT NULL REFERENCES users(id)
+                                    ON DELETE CASCADE
+                                    ON UPDATE CASCADE,
+            storage_id  BLOB NOT NULL REFERENCES storages(id)
+                                    ON DELETE CASCADE
+                                    ON UPDATE CASCADE,
+            access_type TEXT NOT NULL CHECK (access_type IN ('r', 'w', 'a')),
             UNIQUE(user_id, storage_id)
         );
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS files (
-            id                      UUID         PRIMARY KEY,
-            path                    VARCHAR      NOT NULL,
-            size                    BigInt       NOT NULL,
-            storage_id              UUID         NOT NULL REFERENCES storages
-                                                        ON DELETE CASCADE 
-                                                        ON UPDATE CASCADE,
-            is_uploaded             bool         NOT NULL,
-            thumb_telegram_file_id  VARCHAR(255),
-
-            UNIQUE (path, storage_id)
+            id                      BLOB PRIMARY KEY NOT NULL,
+            path                    TEXT NOT NULL,
+            size                    INTEGER NOT NULL,
+            storage_id              BLOB NOT NULL REFERENCES storages(id)
+                                                    ON DELETE CASCADE
+                                                    ON UPDATE CASCADE,
+            is_uploaded             INTEGER NOT NULL,
+            thumb_telegram_file_id  TEXT,
+            chunk_size_bytes        INTEGER,
+            deleted_at              TEXT,
+            thumb_telegram_message_id INTEGER,
+            created_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
+            source_created_at       TEXT,
+            source_mtime            TEXT,
+            content_hash            TEXT
         );
-    ",
-        "
-        ALTER TABLE files
-        ADD COLUMN IF NOT EXISTS thumb_telegram_file_id VARCHAR(255);
-    ",
-        "
-        ALTER TABLE files
-        ADD COLUMN IF NOT EXISTS chunk_size_bytes BIGINT;
-    ",
-        "
-        ALTER TABLE files
-        ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
-    ",
-        "
-        ALTER TABLE files
-        ADD COLUMN IF NOT EXISTS thumb_telegram_message_id BIGINT;
-    ",
-        "
-        ALTER TABLE files
-        ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-    ",
-        "
-        ALTER TABLE files
-        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
-    ",
-        "
-        ALTER TABLE files
-        ADD COLUMN IF NOT EXISTS source_created_at TIMESTAMPTZ;
-    ",
-        "
-        ALTER TABLE files
-        ADD COLUMN IF NOT EXISTS source_mtime TIMESTAMPTZ;
-    ",
-        r#"
-        CREATE OR REPLACE FUNCTION sarca_files_touch_updated_at()
-        RETURNS TRIGGER AS $$
-        BEGIN
-          NEW.updated_at = NOW();
-          RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql;
-    "#,
-        "DROP TRIGGER IF EXISTS files_touch_updated_at ON files;",
-        r#"
-        CREATE TRIGGER files_touch_updated_at
-          BEFORE UPDATE ON files
-          FOR EACH ROW
-          EXECUTE PROCEDURE sarca_files_touch_updated_at();
-    "#,
-        r#"
-        DO $$
-        BEGIN
-          IF EXISTS (
-            SELECT 1 FROM pg_constraint
-            WHERE conname = 'files_path_storage_id_key'
-          ) THEN
-            ALTER TABLE files DROP CONSTRAINT files_path_storage_id_key;
-          END IF;
-        END $$;
-    "#,
+        ",
         "
         CREATE UNIQUE INDEX IF NOT EXISTS files_path_storage_id_alive_uidx
           ON files (path, storage_id)
           WHERE deleted_at IS NULL;
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS app_settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
-    ",
+        ",
         "
         INSERT INTO app_settings (key, value)
         VALUES ('trash_retention_days', '30')
         ON CONFLICT (key) DO NOTHING;
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS file_chunks (
-            id       UUID     PRIMARY KEY,
-            file_id  UUID     NOT NULL REFERENCES files 
-                                    ON DELETE CASCADE 
+            id       BLOB PRIMARY KEY NOT NULL,
+            file_id  BLOB NOT NULL REFERENCES files(id)
+                                    ON DELETE CASCADE
                                     ON UPDATE CASCADE,
-            position SmallInt NOT NULL
+            position INTEGER NOT NULL
         );
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS storage_workers_usages (
-            id                 UUID      PRIMARY KEY,
-            storage_worker_id  UUID      NOT NULL REFERENCES storage_workers
-                                                ON DELETE CASCADE 
+            id                 BLOB PRIMARY KEY NOT NULL,
+            storage_worker_id  BLOB NOT NULL REFERENCES storage_workers(id)
+                                                ON DELETE CASCADE
                                                 ON UPDATE CASCADE,
-            dt                 TIMESTAMP DEFAULT NOW()
+            dt                 TEXT DEFAULT (datetime('now'))
         );
-    ",
-        r#"
-        CREATE OR REPLACE FUNCTION public.regexp_quote(IN TEXT)
-            RETURNS TEXT
-            LANGUAGE plpgsql
-            STABLE
-        AS $$
-            /*******************************************************************************
-            * Function Name: regexp_quote
-            * In-coming Param:
-            *   The string to decoded and convert into a set of text arrays.
-            * Returns:
-            *   This function produces a TEXT that can be used as a regular expression
-            *   pattern that would match the input as if it were a literal pattern.
-            * Description:
-            *   Takes in a TEXT in and escapes all of the necessary characters so that
-            *   the output can be used as a regular expression to match the input as if
-            *   it were a literal pattern.
-            * Source: https://cwestblog.com/2012/07/10/postgresql-escape-regular-expressions/ * 
-            *     The original one doesn't work anymore.
-            ******************************************************************************/
-        BEGIN
-            RETURN REGEXP_REPLACE($1, '([\.\+\*\?\^\$\(\)\[\]\{\}\|\\])', '\\\1', 'g');
-        END;
-        $$;
-    "#,
-        // --- multi-chat storage replication ---
+        ",
         "
         CREATE TABLE IF NOT EXISTS storage_channels (
-            id         UUID         PRIMARY KEY,
-            storage_id UUID         NOT NULL REFERENCES storages
-                                            ON DELETE CASCADE
-                                            ON UPDATE CASCADE,
-            position   SMALLINT     NOT NULL CHECK (position BETWEEN 1 AND 3),
-            chat_id    BigInt       NOT NULL UNIQUE,
-            name       VARCHAR(255) NOT NULL,
-            status     VARCHAR(16)  NOT NULL DEFAULT 'active',
-
+            id         BLOB PRIMARY KEY NOT NULL,
+            storage_id BLOB NOT NULL REFERENCES storages(id)
+                                    ON DELETE CASCADE
+                                    ON UPDATE CASCADE,
+            position   INTEGER NOT NULL CHECK (position BETWEEN 1 AND 3),
+            chat_id    INTEGER NOT NULL UNIQUE,
+            name       TEXT NOT NULL,
+            status     TEXT NOT NULL DEFAULT 'active',
             UNIQUE(storage_id, position)
         );
-    ",
-        "
-        ALTER TABLE storages
-        ADD COLUMN IF NOT EXISTS primary_position SMALLINT NOT NULL DEFAULT 1;
-    ",
-        // Migrate legacy `storages.chat_id` (1 chat per storage) into a position=1 channel,
-        // then drop the column. Idempotent: only runs while the column still exists.
-        "
-        DO
-        $$
-        BEGIN
-        IF EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_schema = current_schema()
-              AND table_name = 'storages'
-              AND column_name = 'chat_id'
-        ) THEN
-            INSERT INTO storage_channels (id, storage_id, position, chat_id, name, status)
-            SELECT gen_random_uuid(), s.id, 1, s.chat_id, s.name, 'active'
-            FROM storages s
-            WHERE NOT EXISTS (
-                SELECT 1 FROM storage_channels sc WHERE sc.storage_id = s.id
-            );
-
-            ALTER TABLE storages DROP COLUMN chat_id;
-        END IF;
-        END;
-        $$;
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS chunk_replicas (
-            id                  UUID        PRIMARY KEY,
-            chunk_id            UUID        NOT NULL REFERENCES file_chunks
+            id                  BLOB PRIMARY KEY NOT NULL,
+            chunk_id            BLOB NOT NULL REFERENCES file_chunks(id)
                                                     ON DELETE CASCADE
                                                     ON UPDATE CASCADE,
-            channel_id          UUID        NOT NULL REFERENCES storage_channels
+            channel_id          BLOB NOT NULL REFERENCES storage_channels(id)
                                                     ON DELETE CASCADE
                                                     ON UPDATE CASCADE,
-            telegram_file_id    VARCHAR(255),
-            telegram_message_id BigInt,
-            status              VARCHAR(16) NOT NULL DEFAULT 'pending',
-
+            telegram_file_id    TEXT,
+            telegram_message_id INTEGER,
+            status              TEXT NOT NULL DEFAULT 'pending',
             UNIQUE(chunk_id, channel_id)
         );
-    ",
-        // Migrate legacy `file_chunks.telegram_file_id` into a replica on the storage's
-        // primary channel, then drop the column. Idempotent: only runs while it exists.
-        "
-        DO
-        $$
-        BEGIN
-        IF EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_schema = current_schema()
-              AND table_name = 'file_chunks'
-              AND column_name = 'telegram_file_id'
-        ) THEN
-            INSERT INTO chunk_replicas (id, chunk_id, channel_id, telegram_file_id, \
-         telegram_message_id, status)
-            SELECT gen_random_uuid(), fc.id, sc.id, fc.telegram_file_id, NULL, 'uploaded'
-            FROM file_chunks fc
-            JOIN files f ON f.id = fc.file_id
-            JOIN storages s ON s.id = f.storage_id
-            JOIN storage_channels sc ON sc.storage_id = s.id AND sc.position = s.primary_position
-            WHERE NOT EXISTS (
-                SELECT 1 FROM chunk_replicas cr WHERE cr.chunk_id = fc.id AND cr.channel_id = sc.id
-            );
-
-            ALTER TABLE file_chunks DROP COLUMN telegram_file_id;
-        END IF;
-        END;
-        $$;
-    ",
-        // --- favorites + recent (Wave 2) ---
+        ",
         "
         CREATE TABLE IF NOT EXISTS favorites (
-            user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            storage_id UUID NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
-            file_id    UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            user_id    BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            storage_id BLOB NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
+            file_id    BLOB NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, file_id)
         );
-    ",
+        ",
         "
         CREATE INDEX IF NOT EXISTS favorites_user_storage_idx
           ON favorites (user_id, storage_id);
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS recent_files (
-            user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            storage_id  UUID NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
-            file_id     UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-            viewed_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            user_id     BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            storage_id  BLOB NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
+            file_id     BLOB NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+            viewed_at   TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (user_id, file_id)
         );
-    ",
+        ",
         "
         CREATE INDEX IF NOT EXISTS recent_user_storage_viewed_idx
           ON recent_files (user_id, storage_id, viewed_at DESC);
-    ",
-        // --- public share links (Wave 3) ---
+        ",
         "
         CREATE TABLE IF NOT EXISTS share_links (
-            id            UUID PRIMARY KEY,
+            id            BLOB PRIMARY KEY NOT NULL,
             token         TEXT NOT NULL UNIQUE,
-            storage_id    UUID NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
+            storage_id    BLOB NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
             path          TEXT NOT NULL,
-            created_by    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            expires_at    TIMESTAMPTZ NULL,
-            password_hash TEXT NULL,
-            revoked_at    TIMESTAMPTZ NULL
+            created_by    BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            expires_at    TEXT,
+            password_hash TEXT,
+            revoked_at    TEXT
         );
-    ",
+        ",
         "
         CREATE INDEX IF NOT EXISTS share_links_storage_path_idx
           ON share_links (storage_id, path);
-    ",
+        ",
         "
         CREATE INDEX IF NOT EXISTS share_links_created_by_idx
           ON share_links (created_by);
-    ",
-        // --- auth: email verify / password reset ---
-        // Add email_verified_at only once; backfill existing users as verified.
-        r#"
-        DO $$
-        BEGIN
-          IF NOT EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_schema = current_schema()
-              AND table_name = 'users'
-              AND column_name = 'email_verified_at'
-          ) THEN
-            ALTER TABLE users ADD COLUMN email_verified_at TIMESTAMPTZ;
-            UPDATE users SET email_verified_at = NOW() WHERE email_verified_at IS NULL;
-          END IF;
-        END $$;
-    "#,
-        "
-        ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS email_tokens (
-            id         UUID PRIMARY KEY,
-            user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            id         BLOB PRIMARY KEY NOT NULL,
+            user_id    BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
             purpose    TEXT NOT NULL,
             token_hash TEXT NOT NULL UNIQUE,
-            expires_at TIMESTAMPTZ NOT NULL,
-            used_at    TIMESTAMPTZ NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            expires_at TEXT NOT NULL,
+            used_at    TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now'))
         );
-    ",
+        ",
         "
         CREATE INDEX IF NOT EXISTS email_tokens_user_purpose_idx
           ON email_tokens (user_id, purpose);
-    ",
-        "
-        DROP TABLE IF EXISTS oauth_accounts;
-    ",
-        "
-        ALTER TABLE files
-        ADD COLUMN IF NOT EXISTS content_hash TEXT;
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS file_sync_events (
-            id            BIGSERIAL PRIMARY KEY,
-            storage_id    UUID NOT NULL REFERENCES storages ON DELETE CASCADE,
-            file_id       UUID,
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            storage_id    BLOB NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
+            file_id       BLOB,
             path          TEXT NOT NULL,
             op            TEXT NOT NULL CHECK (op IN ('upsert', 'delete')),
-            size          BIGINT,
-            is_file       BOOLEAN NOT NULL DEFAULT TRUE,
+            size          INTEGER,
+            is_file       INTEGER NOT NULL DEFAULT 1,
             content_hash  TEXT,
-            source_mtime  TIMESTAMPTZ,
-            created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            source_mtime  TEXT,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now'))
         );
-    ",
+        ",
         "
         CREATE INDEX IF NOT EXISTS file_sync_events_storage_id_id_idx
           ON file_sync_events (storage_id, id);
-    ",
-        r#"
-        CREATE OR REPLACE FUNCTION sarca_files_sync_event()
-        RETURNS TRIGGER AS $$
-        DECLARE
-          is_folder BOOLEAN;
-          should_upsert BOOLEAN;
-        BEGIN
-          IF TG_OP = 'DELETE' THEN
-            -- Skip when the parent storage is already gone (ON DELETE CASCADE from
-            -- storages). Inserting a sync event would violate file_sync_events_storage_id_fkey
-            -- and abort the whole storage delete.
-            IF EXISTS (SELECT 1 FROM storages WHERE id = OLD.storage_id) THEN
-              INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
-              VALUES (
-                OLD.storage_id, OLD.id, OLD.path, 'delete', OLD.size,
-                RIGHT(OLD.path, 1) <> '/', OLD.content_hash, OLD.source_mtime
-              );
-            END IF;
-            RETURN OLD;
-          END IF;
-
-          is_folder := RIGHT(NEW.path, 1) = '/';
-          should_upsert := NEW.deleted_at IS NULL AND (NEW.is_uploaded OR is_folder);
-
-          IF TG_OP = 'INSERT' THEN
-            IF should_upsert THEN
-              INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
-              VALUES (
-                NEW.storage_id, NEW.id, NEW.path, 'upsert', NEW.size,
-                NOT is_folder, NEW.content_hash, NEW.source_mtime
-              );
-            END IF;
-            RETURN NEW;
-          END IF;
-
-          -- UPDATE
-          IF OLD.path IS DISTINCT FROM NEW.path THEN
-            INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
-            VALUES (
-              OLD.storage_id, OLD.id, OLD.path, 'delete', OLD.size,
-              RIGHT(OLD.path, 1) <> '/', OLD.content_hash, OLD.source_mtime
-            );
-            IF should_upsert THEN
-              INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
-              VALUES (
-                NEW.storage_id, NEW.id, NEW.path, 'upsert', NEW.size,
-                NOT is_folder, NEW.content_hash, NEW.source_mtime
-              );
-            END IF;
-            RETURN NEW;
-          END IF;
-
-          IF NEW.deleted_at IS NOT NULL AND OLD.deleted_at IS NULL THEN
-            INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
-            VALUES (
-              NEW.storage_id, NEW.id, NEW.path, 'delete', NEW.size,
-              NOT is_folder, NEW.content_hash, NEW.source_mtime
-            );
-            RETURN NEW;
-          END IF;
-
-          IF should_upsert AND (
-            OLD.deleted_at IS NOT NULL
-            OR OLD.is_uploaded IS DISTINCT FROM NEW.is_uploaded
-            OR OLD.size IS DISTINCT FROM NEW.size
-            OR OLD.content_hash IS DISTINCT FROM NEW.content_hash
-            OR OLD.source_mtime IS DISTINCT FROM NEW.source_mtime
-          ) THEN
-            INSERT INTO file_sync_events (storage_id, file_id, path, op, size, is_file, content_hash, source_mtime)
-            VALUES (
-              NEW.storage_id, NEW.id, NEW.path, 'upsert', NEW.size,
-              NOT is_folder, NEW.content_hash, NEW.source_mtime
-            );
-          END IF;
-
-          RETURN NEW;
-        END;
-        $$ LANGUAGE plpgsql;
-    "#,
-        "DROP TRIGGER IF EXISTS files_sync_event ON files;",
-        r#"
-        CREATE TRIGGER files_sync_event
-          AFTER INSERT OR UPDATE OR DELETE ON files
-          FOR EACH ROW
-          EXECUTE PROCEDURE sarca_files_sync_event();
-    "#,
-        // --- durable Telegram purge after storage delete ---
+        ",
         "
         CREATE TABLE IF NOT EXISTS storage_purge_jobs (
-            id           UUID PRIMARY KEY,
-            storage_id   UUID NOT NULL,
+            id           BLOB PRIMARY KEY NOT NULL,
+            storage_id   BLOB NOT NULL,
             bot_token    TEXT NOT NULL,
-            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            completed_at TIMESTAMPTZ NULL
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            completed_at TEXT
         );
-    ",
+        ",
         "
         CREATE TABLE IF NOT EXISTS storage_purge_messages (
-            id           BIGSERIAL PRIMARY KEY,
-            job_id       UUID NOT NULL REFERENCES storage_purge_jobs(id) ON DELETE CASCADE,
-            chat_id      BIGINT NOT NULL,
-            message_id   BIGINT NOT NULL,
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id       BLOB NOT NULL REFERENCES storage_purge_jobs(id) ON DELETE CASCADE,
+            chat_id      INTEGER NOT NULL,
+            message_id   INTEGER NOT NULL,
             status       TEXT NOT NULL DEFAULT 'pending'
-                         CONSTRAINT storage_purge_messages_status_check
                          CHECK (status IN ('pending', 'in_progress', 'done', 'failed')),
-            attempts     INT NOT NULL DEFAULT 0,
+            attempts     INTEGER NOT NULL DEFAULT 0,
             last_error   TEXT,
-            updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
             UNIQUE (job_id, chat_id, message_id)
         );
-    ",
-        "
-        ALTER TABLE storage_purge_messages
-          DROP CONSTRAINT IF EXISTS storage_purge_messages_status_check;
-    ",
-        "
-        ALTER TABLE storage_purge_messages
-          ADD CONSTRAINT storage_purge_messages_status_check
-          CHECK (status IN ('pending', 'in_progress', 'done', 'failed'));
-    ",
+        ",
         "
         CREATE INDEX IF NOT EXISTS storage_purge_messages_pending_idx
           ON storage_purge_messages (status, id)
           WHERE status = 'pending';
-    ",
+        ",
+        // updated_at touch
+        "DROP TRIGGER IF EXISTS files_touch_updated_at;",
+        r#"
+        CREATE TRIGGER files_touch_updated_at
+          AFTER UPDATE ON files
+          FOR EACH ROW
+          WHEN NEW.updated_at IS OLD.updated_at
+        BEGIN
+          UPDATE files SET updated_at = datetime('now') WHERE id = NEW.id;
+        END;
+        "#,
+        // sync-event triggers (SQLite: separate INSERT/UPDATE/DELETE)
+        "DROP TRIGGER IF EXISTS files_sync_event_insert;",
+        "DROP TRIGGER IF EXISTS files_sync_event_update;",
+        "DROP TRIGGER IF EXISTS files_sync_event_delete;",
+        r#"
+        CREATE TRIGGER files_sync_event_insert
+          AFTER INSERT ON files
+          FOR EACH ROW
+          WHEN NEW.deleted_at IS NULL
+           AND (NEW.is_uploaded OR substr(NEW.path, -1, 1) = '/')
+        BEGIN
+          INSERT INTO file_sync_events (
+            storage_id, file_id, path, op, size, is_file, content_hash, source_mtime
+          ) VALUES (
+            NEW.storage_id, NEW.id, NEW.path, 'upsert', NEW.size,
+            CASE WHEN substr(NEW.path, -1, 1) = '/' THEN 0 ELSE 1 END,
+            NEW.content_hash, NEW.source_mtime
+          );
+        END;
+        "#,
+        r#"
+        CREATE TRIGGER files_sync_event_delete
+          AFTER DELETE ON files
+          FOR EACH ROW
+          WHEN EXISTS (SELECT 1 FROM storages WHERE id = OLD.storage_id)
+        BEGIN
+          INSERT INTO file_sync_events (
+            storage_id, file_id, path, op, size, is_file, content_hash, source_mtime
+          ) VALUES (
+            OLD.storage_id, OLD.id, OLD.path, 'delete', OLD.size,
+            CASE WHEN substr(OLD.path, -1, 1) = '/' THEN 0 ELSE 1 END,
+            OLD.content_hash, OLD.source_mtime
+          );
+        END;
+        "#,
+        r#"
+        CREATE TRIGGER files_sync_event_update
+          AFTER UPDATE ON files
+          FOR EACH ROW
+        BEGIN
+          -- path rename: delete old + maybe upsert new
+          INSERT INTO file_sync_events (
+            storage_id, file_id, path, op, size, is_file, content_hash, source_mtime
+          )
+          SELECT OLD.storage_id, OLD.id, OLD.path, 'delete', OLD.size,
+                 CASE WHEN substr(OLD.path, -1, 1) = '/' THEN 0 ELSE 1 END,
+                 OLD.content_hash, OLD.source_mtime
+          WHERE OLD.path IS NOT NEW.path;
+
+          INSERT INTO file_sync_events (
+            storage_id, file_id, path, op, size, is_file, content_hash, source_mtime
+          )
+          SELECT NEW.storage_id, NEW.id, NEW.path, 'upsert', NEW.size,
+                 CASE WHEN substr(NEW.path, -1, 1) = '/' THEN 0 ELSE 1 END,
+                 NEW.content_hash, NEW.source_mtime
+          WHERE OLD.path IS NOT NEW.path
+            AND NEW.deleted_at IS NULL
+            AND (NEW.is_uploaded OR substr(NEW.path, -1, 1) = '/');
+
+          -- soft-delete
+          INSERT INTO file_sync_events (
+            storage_id, file_id, path, op, size, is_file, content_hash, source_mtime
+          )
+          SELECT NEW.storage_id, NEW.id, NEW.path, 'delete', NEW.size,
+                 CASE WHEN substr(NEW.path, -1, 1) = '/' THEN 0 ELSE 1 END,
+                 NEW.content_hash, NEW.source_mtime
+          WHERE OLD.path IS NEW.path
+            AND NEW.deleted_at IS NOT NULL
+            AND OLD.deleted_at IS NULL;
+
+          -- upsert on content/upload/restore changes (same path)
+          INSERT INTO file_sync_events (
+            storage_id, file_id, path, op, size, is_file, content_hash, source_mtime
+          )
+          SELECT NEW.storage_id, NEW.id, NEW.path, 'upsert', NEW.size,
+                 CASE WHEN substr(NEW.path, -1, 1) = '/' THEN 0 ELSE 1 END,
+                 NEW.content_hash, NEW.source_mtime
+          WHERE OLD.path IS NEW.path
+            AND NEW.deleted_at IS NULL
+            AND (NEW.is_uploaded OR substr(NEW.path, -1, 1) = '/')
+            AND (
+              OLD.deleted_at IS NOT NULL
+              OR OLD.is_uploaded IS NOT NEW.is_uploaded
+              OR OLD.size IS NOT NEW.size
+              OR OLD.content_hash IS NOT NEW.content_hash
+              OR OLD.source_mtime IS NOT NEW.source_mtime
+            );
+        END;
+        "#,
     ] {
         sqlx::query(statement)
             .execute(&mut *transaction)
@@ -533,6 +360,18 @@ pub async fn init_db(db: &SqlitePool) {
             .inspect_err(|_e| {
                 tracing::error!("error during initing database with query:\n{statement}");
             })
+            .unwrap();
+    }
+
+    let version_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_version")
+        .fetch_one(&mut *transaction)
+        .await
+        .unwrap();
+    if version_count == 0 {
+        sqlx::query("INSERT INTO schema_version (version) VALUES (?)")
+            .bind(SCHEMA_VERSION)
+            .execute(&mut *transaction)
+            .await
             .unwrap();
     }
 
@@ -574,5 +413,39 @@ pub async fn create_superuser(db: &SqlitePool, config: &Config) {
         _ => {
             panic!("can't create superuser; terminating process")
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::common::db::pool::get_pool;
+
+    #[tokio::test]
+    async fn init_db_creates_schema_on_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+        let v: i64 = sqlx::query_scalar("SELECT version FROM schema_version LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        init_db(&pool).await; // idempotent
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM schema_version")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+        let tables: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('users','files','chunk_replicas','file_sync_events')",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(tables, 4);
     }
 }
