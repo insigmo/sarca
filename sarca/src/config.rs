@@ -1,12 +1,24 @@
-use std::{env, str::FromStr};
+use std::{env, net::SocketAddr, str::FromStr};
 
-use super::errors::{SarcaError, SarcaResult};
+use super::{
+    errors::{SarcaError, SarcaResult},
+    tls::{parse_tls_identity, TlsIdentity, TlsError},
+};
 
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Path to the `SQLite` metadata database file.
     pub sqlite_path: String,
     pub port: u16,
+    /// HTTPS listen address (HTTP/3 UDP + TLS TCP); dev default high port.
+    pub https_addr: SocketAddr,
+    /// ACME http-01 + redirect listener; dev default high port.
+    pub acme_http_addr: SocketAddr,
+    /// Certificate identity hostname (domain or IP); unset until install/ACME.
+    pub tls_hostname: Option<String>,
+    pub acme_directory: String,
+    /// Directory for ACME account + issued PEM material.
+    pub certs_dir: String,
     pub workers: u16,
     pub channel_capacity: u16,
     pub superuser_email: String,
@@ -50,11 +62,35 @@ impl Config {
         format!("{}/sarca.sqlite", work_dir.trim_end_matches('/'))
     }
 
+    /// Default PEM store: `certs/` inside `WORK_DIR`.
+    pub fn default_certs_dir(work_dir: &str) -> String {
+        format!("{}/certs", work_dir.trim_end_matches('/'))
+    }
+
+    /// Parsed TLS identity when `TLS_HOSTNAME` is set.
+    pub fn tls_identity(&self) -> Result<Option<TlsIdentity>, TlsError> {
+        match self.tls_hostname.as_deref() {
+            Some(host) => parse_tls_identity(host).map(Some),
+            None => Ok(None),
+        }
+    }
+
     pub fn new() -> SarcaResult<Self> {
         let work_dir: String = Self::get_env_var_with_default("WORK_DIR", "work".to_owned())?;
         let sqlite_path = Self::get_optional_env_var("SQLITE_PATH")
             .unwrap_or_else(|| Self::default_sqlite_path(&work_dir));
         let port = Self::get_env_var("PORT")?;
+        let https_addr =
+            Self::get_env_var_with_default("HTTPS_ADDR", "0.0.0.0:8443".parse().expect("valid addr"))?;
+        let acme_http_addr =
+            Self::get_env_var_with_default("ACME_HTTP_ADDR", "0.0.0.0:8080".parse().expect("valid addr"))?;
+        let tls_hostname = Self::get_optional_env_var("TLS_HOSTNAME");
+        let acme_directory = Self::get_env_var_with_default(
+            "ACME_DIRECTORY",
+            "https://acme-v02.api.letsencrypt.org/directory".to_owned(),
+        )?;
+        let certs_dir = Self::get_optional_env_var("CERTS_DIR")
+            .unwrap_or_else(|| Self::default_certs_dir(&work_dir));
         let workers = Self::get_env_var("WORKERS")?;
         let channel_capacity = Self::get_env_var("CHANNEL_CAPACITY")?;
         let superuser_email = Self::get_env_var("SUPERUSER_EMAIL")?;
@@ -84,6 +120,11 @@ impl Config {
         Ok(Self {
             sqlite_path,
             port,
+            https_addr,
+            acme_http_addr,
+            tls_hostname,
+            acme_directory,
+            certs_dir,
             workers,
             channel_capacity,
             superuser_email,
@@ -234,6 +275,32 @@ mod tests {
         let cfg = Config::new().unwrap();
         assert!(cfg.telegram_video_chunk_size_mb <= 20);
         assert!(cfg.telegram_chunk_size_mb <= 20);
+        clear_required();
+    }
+
+    #[test]
+    fn tls_addrs_and_certs_dir_defaults_for_dev() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        let cfg = Config::new().unwrap();
+        assert_eq!(cfg.https_addr, "0.0.0.0:8443".parse().unwrap());
+        assert_eq!(cfg.acme_http_addr, "0.0.0.0:8080".parse().unwrap());
+        assert_eq!(cfg.certs_dir, "work/certs");
+        assert!(cfg.acme_directory.contains("letsencrypt.org"));
+        assert!(cfg.tls_hostname.is_none());
+        clear_required();
+    }
+
+    #[test]
+    fn tls_hostname_parses_to_identity() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        env::set_var("TLS_HOSTNAME", "203.0.113.10");
+        let cfg = Config::new().unwrap();
+        let id = cfg.tls_identity().unwrap().unwrap();
+        assert!(matches!(id, TlsIdentity::Ip(_)));
         clear_required();
     }
 }
