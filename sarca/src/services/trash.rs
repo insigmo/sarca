@@ -145,9 +145,11 @@ async fn live_conflict_at(
     Ok(false)
 }
 
-/// Hard-delete file metadata (and path-based share links), then best-effort
-/// Telegram `deleteMessage` only for messages no longer referenced by any
-/// remaining chunk replica or file thumb (including trashed files).
+/// Hard-delete file metadata and unreferenced Telegram messages.
+///
+/// Clears path-based share links, then best-effort Telegram `deleteMessage`
+/// only for messages no longer referenced by any remaining chunk replica or
+/// file thumb (including trashed files).
 ///
 /// Telegram GC runs in a background task so HTTP handlers (empty trash /
 /// delete forever) return after the DB purge and are not cancelled mid-GC.

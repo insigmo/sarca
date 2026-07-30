@@ -12,12 +12,14 @@ use axum::{
     routing::get,
 };
 use h3_quinn::quinn;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer};
-use rustls::ServerConfig;
 use hyper_util::service::TowerToHyperService;
+use rustls::{
+    ServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer},
+};
 use tokio_rustls::TlsAcceptor;
 
-use super::{CertStore, TlsIdentity, TlsError};
+use super::{CertStore, TlsError, TlsIdentity};
 
 /// In-memory ACME http-01 challenge tokens (`token` → key authorization).
 pub type ChallengeStore = Arc<RwLock<std::collections::HashMap<String, String>>>;
@@ -75,12 +77,20 @@ fn generate_self_signed_pem(
     subject_alt_names.sort_unstable();
     subject_alt_names.dedup();
 
-    let cert = rcgen::generate_simple_self_signed(subject_alt_names).map_err(|_| TlsError::CertGen)?;
+    let cert =
+        rcgen::generate_simple_self_signed(subject_alt_names).map_err(|_| TlsError::CertGen)?;
     let cert_pem = cert.cert.pem();
     let key_pem = cert.key_pair.serialize_pem();
     let key = PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
     let cert_chain = vec![CertificateDer::from(cert.cert)];
-    Ok((cert_pem, key_pem, TlsMaterial { cert_chain, key }))
+    Ok((
+        cert_pem,
+        key_pem,
+        TlsMaterial {
+            cert_chain,
+            key,
+        },
+    ))
 }
 
 pub fn parse_pem_material(cert_pem: &str, key_pem: &str) -> Result<TlsMaterial, TlsError> {
@@ -98,18 +108,20 @@ pub fn parse_pem_material(cert_pem: &str, key_pem: &str) -> Result<TlsMaterial, 
         return Err(TlsError::InvalidPem);
     }
 
-    Ok(TlsMaterial { cert_chain: certs, key })
+    Ok(TlsMaterial {
+        cert_chain: certs,
+        key,
+    })
 }
 
 pub fn build_rustls_config(material: &TlsMaterial, alpn: &[&[u8]]) -> Arc<ServerConfig> {
-    let mut config = ServerConfig::builder_with_provider(Arc::new(
-        rustls::crypto::ring::default_provider(),
-    ))
-    .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
-    .expect("protocols")
-    .with_no_client_auth()
-    .with_single_cert(material.cert_chain.clone(), material.key.clone_key())
-    .expect("valid tls material");
+    let mut config =
+        ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+            .expect("protocols")
+            .with_no_client_auth()
+            .with_single_cert(material.cert_chain.clone(), material.key.clone_key())
+            .expect("valid tls material");
     config.alpn_protocols = alpn.iter().map(|p| (*p).to_vec()).collect();
     config.max_early_data_size = u32::MAX;
     Arc::new(config)
@@ -121,9 +133,7 @@ pub fn build_quinn_config(rustls: Arc<ServerConfig>) -> quinn::ServerConfig {
     ));
     server_config.migration(true);
     let transport = Arc::get_mut(&mut server_config.transport).expect("transport config");
-    transport
-        .max_concurrent_bidi_streams(256u32.into())
-        .max_concurrent_uni_streams(256u32.into());
+    transport.max_concurrent_bidi_streams(256u32.into()).max_concurrent_uni_streams(256u32.into());
     server_config
 }
 
@@ -178,25 +188,24 @@ pub fn acme_router(challenges: ChallengeStore, https_redirect_base: String) -> R
                 let challenges = challenges.clone();
                 async move {
                     let map = challenges.read().expect("challenge lock");
-                    match map.get(&token) {
-                        Some(body) => Response::builder()
-                            .status(StatusCode::OK)
-                            .header("content-type", "text/plain")
-                            .body(Body::from(body.clone()))
-                            .unwrap(),
-                        None => StatusCode::NOT_FOUND.into_response(),
-                    }
+                    map.get(&token).map_or_else(
+                        || StatusCode::NOT_FOUND.into_response(),
+                        |body| {
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "text/plain")
+                                .body(Body::from(body.clone()))
+                                .unwrap()
+                        },
+                    )
                 }
             }),
         )
         .fallback(move |req: Request<Body>| {
             let base = https_redirect_base.clone();
             async move {
-                let path_and_query = req
-                    .uri()
-                    .path_and_query()
-                    .map(|pq| pq.as_str())
-                    .unwrap_or("/");
+                let path_and_query =
+                    req.uri().path_and_query().map_or("/", axum::http::uri::PathAndQuery::as_str);
                 let target = format!("{base}{path_and_query}");
                 Response::builder()
                     .status(StatusCode::MOVED_PERMANENTLY)
