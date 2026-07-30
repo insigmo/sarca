@@ -368,47 +368,139 @@ const FileViewer = (props) => {
 			if (k === 'image') {
 				setLoading(true)
 				;(async () => {
+					const path = file.path
+					const scope = props.storageId || 'share'
+					const url = previewUrlFor(path)
+					// #region agent log
+					const __dbg = (message, hypothesisId, data = {}) => {
+						fetch(
+							'http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',
+							{
+								method: 'POST',
+								headers: {
+									'Content-Type': 'application/json',
+									'X-Debug-Session-Id': '4d2da0',
+								},
+								body: JSON.stringify({
+									sessionId: '4d2da0',
+									runId: 'client-preview',
+									hypothesisId,
+									location: 'FileViewer.jsx:image-open',
+									message,
+									data: { native: Boolean(isNative()), path, ...data },
+									timestamp: Date.now(),
+								}),
+							},
+						).catch(() => {})
+					}
+					// #endregion
 					try {
-						const path = file.path
-						const scope = props.storageId || 'share'
 						if (isNative()) {
-							const cachedB64 = await nativeInvoke('cache_get_preview', {
-								scope,
-								path,
-							})
-							if (typeof cachedB64 === 'string' && cachedB64.length > 0) {
-								const bin = atob(cachedB64)
-								const bytes = new Uint8Array(bin.length)
-								for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
-								const blob = new Blob([bytes], { type: 'image/jpeg' })
+							// Cache read is best-effort: bridge/ACL failures must not block open.
+							try {
+								const cachedB64 = await nativeInvoke('cache_get_preview', {
+									scope,
+									path,
+								})
+								if (typeof cachedB64 === 'string' && cachedB64.length > 0) {
+									const bin = atob(cachedB64)
+									const bytes = new Uint8Array(bin.length)
+									for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+									const blob = new Blob([bytes], { type: 'image/jpeg' })
+									objectUrl = URL.createObjectURL(blob)
+									if (!cancelled) setMediaUrl(objectUrl)
+									// #region agent log
+									__dbg('cache_hit', 'A', { bytes: bytes.length })
+									// #endregion
+									return
+								}
+								// #region agent log
+								__dbg('cache_miss', 'A', {})
+								// #endregion
+							} catch (cacheGetErr) {
+								// #region agent log
+								__dbg('cache_get_failed', 'A', {
+									err: String(cacheGetErr?.message || cacheGetErr),
+								})
+								// #endregion
+							}
+							try {
+								const resp = await fetch(url, { credentials: 'include' })
+								// #region agent log
+								__dbg('preview_fetch', 'D', {
+									ok: resp.ok,
+									status: resp.status,
+									ct: resp.headers.get('content-type'),
+								})
+								// #endregion
+								if (!resp.ok) throw new Error(`preview failed (${resp.status})`)
+								const blob = await resp.blob()
+								// Prefer FileReader — avoids WebKit RangeError from
+								// String.fromCharCode(...largeTypedArray) and btoa limits.
+								let bytesB64 = ''
+								try {
+									bytesB64 = await new Promise((resolve, reject) => {
+										const reader = new FileReader()
+										reader.onload = () => {
+											const dataUrl = String(reader.result || '')
+											const comma = dataUrl.indexOf(',')
+											resolve(comma >= 0 ? dataUrl.slice(comma + 1) : '')
+										}
+										reader.onerror = () =>
+											reject(reader.error || new Error('FileReader failed'))
+										reader.readAsDataURL(blob)
+									})
+								} catch (encErr) {
+									// #region agent log
+									__dbg('b64_encode_failed', 'C', {
+										err: String(encErr?.message || encErr),
+									})
+									// #endregion
+								}
+								if (bytesB64) {
+									try {
+										await nativeInvoke('cache_put_preview', {
+											scope,
+											path,
+											bytes_b64: bytesB64,
+										})
+										// #region agent log
+										__dbg('cache_put_ok', 'B', { b64len: bytesB64.length })
+										// #endregion
+									} catch (cachePutErr) {
+										// #region agent log
+										__dbg('cache_put_failed', 'B', {
+											err: String(cachePutErr?.message || cachePutErr),
+										})
+										// #endregion
+									}
+								}
 								objectUrl = URL.createObjectURL(blob)
 								if (!cancelled) setMediaUrl(objectUrl)
+								// #region agent log
+								__dbg('preview_blob_shown', 'B', { blobSize: blob.size })
+								// #endregion
+								return
+							} catch (fetchErr) {
+								// #region agent log
+								__dbg('preview_fetch_failed_fallback_url', 'D', {
+									err: String(fetchErr?.message || fetchErr),
+								})
+								// #endregion
+								// Last resort: same as browser — <img src=preview?access_token=…>
+								if (!cancelled) setMediaUrl(url)
 								return
 							}
 						}
-						const url = previewUrlFor(path)
-						if (isNative()) {
-							const resp = await fetch(url, { credentials: 'include' })
-							if (!resp.ok) throw new Error('preview failed')
-							const blob = await resp.blob()
-							const buf = new Uint8Array(await blob.arrayBuffer())
-							let binary = ''
-							const chunk = 0x8000
-							for (let i = 0; i < buf.length; i += chunk) {
-								binary += String.fromCharCode(...buf.subarray(i, i + chunk))
-							}
-							await nativeInvoke('cache_put_preview', {
-								scope,
-								path,
-								bytes_b64: btoa(binary),
-							})
-							objectUrl = URL.createObjectURL(blob)
-							if (!cancelled) setMediaUrl(objectUrl)
-						} else if (!cancelled) {
-							setMediaUrl(url)
-						}
+						if (!cancelled) setMediaUrl(url)
+						// #region agent log
+						__dbg('browser_preview_url', 'E', {})
+						// #endregion
 					} catch (err) {
 						console.error(err)
+						// #region agent log
+						__dbg('preview_fatal', 'E', { err: String(err?.message || err) })
+						// #endregion
 						if (!cancelled) {
 							setError('Could not open this file')
 							addAlert('Could not open this file', 'error')
@@ -812,6 +904,31 @@ const FileViewer = (props) => {
 									class="file-viewer__image"
 									src={mediaUrl()}
 									alt={props.file.name}
+									onError={() => {
+										// #region agent log
+										fetch(
+											'http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',
+											{
+												method: 'POST',
+												headers: {
+													'Content-Type': 'application/json',
+													'X-Debug-Session-Id': '4d2da0',
+												},
+												body: JSON.stringify({
+													sessionId: '4d2da0',
+													runId: 'client-preview',
+													hypothesisId: 'D',
+													location: 'FileViewer.jsx:img-onError',
+													message: 'img_element_error',
+													data: { urlPrefix: String(mediaUrl() || '').slice(0, 80) },
+													timestamp: Date.now(),
+												}),
+											},
+										).catch(() => {})
+										// #endregion
+										setError('Could not open this file')
+										addAlert('Could not open this file', 'error')
+									}}
 									onClick={(e) => {
 										if (isLetterboxClick(e.currentTarget, e.clientX, e.clientY)) {
 											props.onClose()

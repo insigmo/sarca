@@ -481,7 +481,62 @@ pub const OPEN_SYNC_JS: &str = r#"
     }
     return invokeOnce(cmd, payload);
   }
-  window.__sarcaInvoke = __sarcaInvoke;
+  // Preview disk cache must never block opening images. cache_put payloads are
+  // large base64 JPEGs — navigation IPC puts them in a URL and hits length /
+  // timeout limits on WebKitGTK, which used to surface as "Could not open this file".
+  window.__sarcaInvoke = function(cmd, args){
+    if (cmd === 'cache_get_preview') {
+      return __sarcaInvoke(cmd, args).catch(function(){ return null; });
+    }
+    if (cmd === 'cache_put_preview') {
+      function putViaTauri(){
+        try {
+          if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {
+            return window.__TAURI_INTERNALS__.invoke(cmd, args || {});
+          }
+        } catch (_) {}
+        return Promise.reject(new Error('Tauri invoke unavailable'));
+      }
+      return putViaTauri().catch(function(tauriErr){
+        if (!__sarcaIsBridgeError(tauriErr)) throw tauriErr;
+        return __sarcaFetchInvoke(cmd, args || {});
+      }).catch(function(err){
+        try {
+          fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{
+            method:'POST',
+            headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4d2da0'},
+            body:JSON.stringify({
+              sessionId:'4d2da0',
+              runId:'client-preview',
+              hypothesisId:'B',
+              location:'state.rs:__sarcaInvoke',
+              message:'cache_put_preview_soft_fail',
+              data:{err:String((err&&err.message)||err)},
+              timestamp:Date.now()
+            })
+          }).catch(function(){});
+        } catch (_) {}
+        return null;
+      });
+    }
+    return __sarcaInvoke(cmd, args);
+  };
+  // Guard WebKit RangeError from String.fromCharCode(...largeTypedArray) used by
+  // older FileViewer preview→base64 encoding before cache_put_preview.
+  (function(){
+    var orig = String.fromCharCode;
+    String.fromCharCode = function(){
+      var n = arguments.length;
+      if (n <= 8192) return orig.apply(null, arguments);
+      var out = '';
+      for (var i = 0; i < n; i += 8192) {
+        var end = i + 8192 < n ? i + 8192 : n;
+        var chunk = Array.prototype.slice.call(arguments, i, end);
+        out += orig.apply(null, chunk);
+      }
+      return out;
+    };
+  })();
   // After website login, push tokens into native Sync state (and keep them fresh).
   // Shell Connect no longer POSTs /api/auth/login — tokens appear in localStorage.
   (function __sarcaWatchSession(){
