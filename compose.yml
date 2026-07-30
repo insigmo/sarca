@@ -1,3 +1,5 @@
+# Optional Docker deploy — single Sarca container (SQLite + in-process TLS/ACME).
+# Binary install is the primary path; see install.sh (default) or install.sh --docker.
 services:
   sarca:
     container_name: sarca
@@ -8,43 +10,16 @@ services:
       - sarca-work-volume:/work
     entrypoint: ["/bin/sh", "/sarca-entrypoint.sh"]
     environment:
-      PORT: ${PORT:-8001}
-      DATABASE_HOST: db
       WORK_DIR: /work
     ports:
-      - "${PORT:-8001}:${PORT:-8001}"
+      - "${PORT:-8000}:${PORT:-8000}"
+      - "443:443"
+      - "443:443/udp"
+      - "80:80"
     env_file:
       - sarca.conf
     restart: unless-stopped
-    depends_on:
-      - db
-    networks:
-      - sarca-network
 
-  db:
-    container_name: sarca_db
-    image: postgres:15.0-alpine
-    # Keep in sync with DATABASE_* in sarca.conf (example defaults).
-    environment:
-      POSTGRES_USER: sarca
-      POSTGRES_PASSWORD: sarca
-      POSTGRES_DB: sarca
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready --username=sarca --dbname=sarca"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    volumes:
-      - sarca-db-volume:/var/lib/postgresql/data
-    networks:
-      - sarca-network
 volumes:
-  sarca-db-volume:
-    name: sarca-db-volume
   sarca-work-volume:
     name: sarca-work-volume
-
-networks:
-  sarca-network:
-    name: sarca-network
