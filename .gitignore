@@ -37,6 +37,8 @@ client/src-tauri/gen/
 docs/
 
 .idea/
+.vscode/
+.superpowers/
 .tmp/
 .cursor/
 # Git worktrees (local)
