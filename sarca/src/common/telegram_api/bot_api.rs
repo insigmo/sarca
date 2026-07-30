@@ -39,7 +39,7 @@ const BASE_BACKOFF_MS: u64 = 200;
 /// Honor Telegram's `retry_after` up to this per wait (don't truncate short).
 const MAX_FLOOD_WAIT_SECS: u64 = 900;
 /// Soft pace between successful sends (~0.45 msg/s). Telegram FAQ is ~1/s; stay
-/// conservative so Local Bot API / multi-chunk uploads don't trip flood control.
+/// conservative so multi-chunk uploads don't trip flood control.
 const MIN_SEND_GAP: Duration = Duration::from_millis(2200);
 /// Elevated inter-send gap while a token is in a recent flood window.
 const MIN_SEND_GAP_AFTER_FLOOD: Duration = Duration::from_secs(3);
@@ -150,7 +150,7 @@ impl<'t> TelegramBotApi<'t> {
 
     /// Seconds to wait for a Telegram flood-control response, if any.
     ///
-    /// Official API uses HTTP 429; Local Bot API often answers with HTTP 400 and
+    /// Official API uses HTTP 429; some responses use HTTP 400 with
     /// `description: "Bad Request: too Many Requests: retry after N"`.
     fn flood_wait_secs(status: reqwest::StatusCode, body: &str) -> Option<u64> {
         let code = status.as_u16();
@@ -259,8 +259,7 @@ impl<'t> TelegramBotApi<'t> {
         BASE_BACKOFF_MS.saturating_mul(2u64.saturating_pow(attempt)).min(30_000)
     }
 
-    /// Retry network errors, HTTP 5xx, and Telegram flood waits (including HTTP 400
-    /// "too Many Requests: retry after N" from Local Bot API).
+    /// Retry network errors, HTTP 5xx, and Telegram flood waits.
     ///
     /// Flood waits retry indefinitely. Pass `permit` for upload paths so pacing
     /// adapts after floods.
@@ -289,7 +288,7 @@ impl<'t> TelegramBotApi<'t> {
                     if let Some(wait_secs) = Self::flood_wait_secs(status, &body) {
                         flood_tries += 1;
                         flood_waited_secs = flood_waited_secs.saturating_add(wait_secs);
-                        // Expected path under Local Bot API — warn once, then retry quietly.
+                        // Expected path under rate limit — warn once, then retry quietly.
                         if flood_tries == 1 {
                             tracing::warn!(
                                 "[TELEGRAM API] {op} flood wait {wait_secs}s (will retry \
@@ -416,12 +415,10 @@ impl<'t> TelegramBotApi<'t> {
             })
         );
 
-        let outcome = UploadOutcome {
+        Ok(UploadOutcome {
             file_id: result.result.document.file_id,
             message_id: result.result.message_id,
-        };
-        self.cleanup_local_bot_api_copy(&outcome.file_id, storage_id).await;
-        Ok(outcome)
+        })
     }
 
     /// Build the streaming multipart form for one upload attempt of `upload_file_part`.
@@ -488,8 +485,7 @@ impl<'t> TelegramBotApi<'t> {
                 return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
             }
             let form = Self::build_upload_part_form(file_path, req).await?;
-            // Bound connect time; large local-API chunks have no total timeout — cancel
-            // via progress.closed() when the NDJSON client disconnects.
+            // Bound connect time; cancel via progress.closed() when the NDJSON client disconnects.
             let client = reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(30))
                 .build()
@@ -516,7 +512,7 @@ impl<'t> TelegramBotApi<'t> {
                     if let Some(wait_secs) = Self::flood_wait_secs(status, &body) {
                         flood_tries += 1;
                         flood_waited_secs = flood_waited_secs.saturating_add(wait_secs);
-                        // Expected path under Local Bot API — warn once, then retry quietly.
+                        // Expected path under rate limit — warn once, then retry quietly.
                         if flood_tries == 1 {
                             tracing::warn!(
                                 "[TELEGRAM API] upload_file_part flood wait {wait_secs}s (will \
@@ -652,210 +648,10 @@ impl<'t> TelegramBotApi<'t> {
             })
         );
 
-        let outcome = UploadOutcome {
+        Ok(UploadOutcome {
             file_id: result.result.document.file_id,
             message_id: result.result.message_id,
-        };
-        self.cleanup_local_bot_api_copy(&outcome.file_id, req.storage_id).await;
-        Ok(outcome)
-    }
-
-    /// After Local Bot API accepts an upload it keeps a disk copy under `documents/`.
-    /// Resolve that path via `getFile` and delete it — durable bytes already live in Telegram.
-    async fn cleanup_local_bot_api_copy(&self, telegram_file_id: &str, storage_id: Uuid) {
-        let Ok(token) = self.scheduler.get_token(storage_id).await else {
-            return;
-        };
-        let url = self.build_url("", "getFile", &token);
-        let body = match reqwest::Client::new()
-            .get(&url)
-            .query(&[("file_id", telegram_file_id)])
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                match resp.error_for_status() {
-                    Ok(ok) => {
-                        match ok.json::<DownloadBodySchema>().await {
-                            Ok(body) => body,
-                            Err(_) => return,
-                        }
-                    },
-                    Err(_) => return,
-                }
-            },
-            Err(_) => return,
-        };
-        if body.result.file_path.starts_with('/') {
-            maybe_remove_local_bot_api_file(&body.result.file_path).await;
-        }
-    }
-
-    /// Local Bot API writes files as owner-only briefly; entrypoint chmod loops
-    /// open them for Sarca (`nobody`). Retry `PermissionDenied` / `NotFound` so downloads
-    /// don't fail in that race window.
-    async fn open_local_bot_api_file(path: &str) -> SarcaResult<tokio::fs::File> {
-        const ATTEMPTS: u32 = 12;
-        const DELAY_MS: u64 = 250;
-
-        let mut last_err: Option<std::io::Error> = None;
-        for attempt in 1..=ATTEMPTS {
-            match tokio::fs::File::open(path).await {
-                Ok(file) => {
-                    // #region agent log
-                    let _ = Self::agent_debug_log(
-                        "B",
-                        "bot_api.rs:open_local_bot_api_file",
-                        "local open ok",
-                        &json!({ "attempt": attempt, "path_prefix": path.get(..48).unwrap_or(path) }),
-                    );
-                    // #endregion
-                    return Ok(file);
-                },
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::NotFound
-                    ) =>
-                {
-                    tracing::warn!(
-                        "[TELEGRAM API] local file open attempt {attempt}/{ATTEMPTS} path={} \
-                         err={e}",
-                        path
-                    );
-                    // #region agent log
-                    if attempt == 1 || attempt == ATTEMPTS {
-                        let _ = Self::agent_debug_log(
-                            "B",
-                            "bot_api.rs:open_local_bot_api_file",
-                            "local open retry",
-                            &json!({
-                                "attempt": attempt,
-                                "kind": format!("{:?}", e.kind()),
-                                "path_prefix": path.get(..64).unwrap_or(path)
-                            }),
-                        );
-                    }
-                    // #endregion
-                    // PermissionDenied is usually a sticky mode bit; don't burn the full
-                    // retry budget before the HTTP fallback in callers can run.
-                    if e.kind() == std::io::ErrorKind::PermissionDenied && attempt >= 3 {
-                        return Err(SarcaError::TelegramAPIError(format!(
-                            "Failed to open local bot api file: {e}"
-                        )));
-                    }
-                    last_err = Some(e);
-                    tokio::time::sleep(Duration::from_millis(DELAY_MS)).await;
-                },
-                Err(e) => {
-                    tracing::error!("[TELEGRAM API] local file open failed path={} err={e}", path);
-                    return Err(SarcaError::TelegramAPIError(format!(
-                        "Failed to open local bot api file: {e}"
-                    )));
-                },
-            }
-        }
-
-        let e = last_err.expect("at least one permission/not-found error");
-        tracing::error!(
-            "[TELEGRAM API] local file open failed path={} err={e} after {ATTEMPTS} attempts. \
-             Ensure telegram-bot-api-data is mounted and world-readable.",
-            path
-        );
-        Err(SarcaError::TelegramAPIError(format!("Failed to open local bot api file: {e}")))
-    }
-
-    /// Best-effort NDJSON debug line under `WORK_DIR` (nobody-writable after entrypoint chown).
-    fn agent_debug_log(
-        hypothesis_id: &str,
-        location: &str,
-        message: &str,
-        data: &serde_json::Value,
-    ) -> std::io::Result<()> {
-        use std::io::Write;
-        let work = std::env::var("WORK_DIR").unwrap_or_else(|_| "/work".into());
-        let path = std::path::Path::new(&work).join("agent-debug.ndjson");
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-        let line = json!({
-            "sessionId": "4d2da0",
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-            "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis())
-        });
-        writeln!(f, "{line}")
-    }
-
-    /// When the absolute local path is not readable by this process, ask the Local Bot API
-    /// HTTP `/file/bot…` endpoint (runs as the bot-api user) to stream the bytes instead.
-    async fn download_local_path_via_http(
-        &self,
-        absolute_path: &str,
-        token: &str,
-    ) -> SarcaResult<Vec<u8>> {
-        let relative = absolute_path.trim_start_matches('/');
-        let url = self.build_url("file/", relative, token);
-        let masked = Self::mask_url(&url);
-        tracing::warn!(
-            "[TELEGRAM API] falling back to HTTP file download after local open failure url={}",
-            masked
-        );
-        // #region agent log
-        let _ = Self::agent_debug_log(
-            "C",
-            "bot_api.rs:download_local_path_via_http",
-            "http fallback",
-            &json!({ "masked": masked }),
-        );
-        // #endregion
-        let response = Self::send_with_retries("download/file-fallback", None, || {
-            reqwest::Client::new().get(&url).send()
         })
-        .await?;
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(SarcaError::TelegramAPIError(format!(
-                "HTTP fallback download failed {status}: {error_body}"
-            )));
-        }
-        Ok(response.bytes().await.map(|b| b.to_vec())?)
-    }
-
-    async fn download_local_path_via_http_stream(
-        &self,
-        absolute_path: &str,
-        token: &str,
-    ) -> SarcaResult<Pin<Box<dyn Stream<Item = Result<tokio_util::bytes::Bytes, SarcaError>> + Send>>>
-    {
-        let relative = absolute_path.trim_start_matches('/');
-        let url = self.build_url("file/", relative, token);
-        let masked = Self::mask_url(&url);
-        tracing::warn!(
-            "[TELEGRAM API] falling back to HTTP file stream after local open failure url={}",
-            masked
-        );
-        // #region agent log
-        let _ = Self::agent_debug_log(
-            "C",
-            "bot_api.rs:download_local_path_via_http_stream",
-            "http stream fallback",
-            &json!({ "masked": masked }),
-        );
-        // #endregion
-        let response = reqwest::Client::new().get(url).send().await?.error_for_status()?;
-        let stream = response.bytes_stream().map(|res| res.map_err(SarcaError::from));
-        Ok(Box::pin(stream))
-    }
-
-    async fn read_local_bot_api_file(path: &str) -> SarcaResult<Vec<u8>> {
-        let mut file = Self::open_local_bot_api_file(path).await?;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes).await.map_err(|e| {
-            SarcaError::TelegramAPIError(format!("Failed to read local bot api file: {e}"))
-        })?;
-        Ok(bytes)
     }
 
     pub async fn download(&self, telegram_file_id: &str, storage_id: Uuid) -> SarcaResult<Vec<u8>> {
@@ -906,35 +702,6 @@ impl<'t> TelegramBotApi<'t> {
             })
         );
 
-        // Local Bot API (`--local`) returns an absolute filesystem path. That path
-        // lives on the telegram-bot-api data volume (must be mounted into Sarca).
-        if body.result.file_path.starts_with('/') {
-            if !body.result.file_path.starts_with(LOCAL_BOT_API_DATA_PREFIX) {
-                return Err(SarcaError::TelegramAPIError(
-                    "Unexpected local file_path from telegram-bot-api".to_string(),
-                ));
-            }
-
-            let path = body.result.file_path;
-            match Self::read_local_bot_api_file(&path).await {
-                Ok(bytes) => {
-                    maybe_remove_local_bot_api_file(&path).await;
-                    return Ok(bytes);
-                },
-                Err(local_err) => {
-                    tracing::warn!(
-                        "[TELEGRAM API] local read failed, trying HTTP fallback: {local_err}"
-                    );
-                    let token = self.scheduler.get_token(storage_id).await?;
-                    let bytes = self.download_local_path_via_http(&path, &token).await?;
-                    maybe_remove_local_bot_api_file(&path).await;
-                    return Ok(bytes);
-                },
-            }
-        }
-
-        // downloading the file itself
-        let token = self.scheduler.get_token(storage_id).await?;
         let url = self.build_url("file/", &body.result.file_path, &token);
         let masked_url = Self::mask_url(&url);
 
@@ -1003,41 +770,6 @@ impl<'t> TelegramBotApi<'t> {
             .json()
             .await?;
 
-        // Local Bot API (`--local`) returns an absolute filesystem path.
-        if body.result.file_path.starts_with('/') {
-            if !body.result.file_path.starts_with(LOCAL_BOT_API_DATA_PREFIX) {
-                return Err(SarcaError::TelegramAPIError(
-                    "Unexpected local file_path from telegram-bot-api".to_string(),
-                ));
-            }
-
-            let path = body.result.file_path;
-            match Self::open_local_bot_api_file(&path).await {
-                Ok(file) => {
-                    let stream = ReaderStream::new(file).map(|res| {
-                        res.map_err(|e| {
-                            SarcaError::TelegramAPIError(format!(
-                                "Failed to read local bot api file: {e}"
-                            ))
-                        })
-                    });
-                    return Ok(Box::pin(CleanupLocalFileStream {
-                        inner: stream,
-                        path: Some(path),
-                    }));
-                },
-                Err(local_err) => {
-                    tracing::warn!(
-                        "[TELEGRAM API] local stream open failed, trying HTTP fallback: {local_err}"
-                    );
-                    let token = self.scheduler.get_token(storage_id).await?;
-                    return self.download_local_path_via_http_stream(&path, &token).await;
-                },
-            }
-        }
-
-        // downloading the file itself
-        let token = self.scheduler.get_token(storage_id).await?;
         let url = self.build_url("file/", &body.result.file_path, &token);
 
         let response = reqwest::Client::new().get(url).send().await?.error_for_status()?;
@@ -1229,144 +961,6 @@ pub fn is_chat_dead_error(err: &SarcaError) -> bool {
         "member list is inaccessible",
     ];
     DEAD_MARKERS.iter().any(|marker| msg.contains(marker))
-}
-
-const LOCAL_BOT_API_DATA_PREFIX: &str = "/var/lib/telegram-bot-api/";
-
-/// Absolute path under Local Bot API `documents/` that is safe for Sarca to delete
-/// after upload/download. Rejects `/temp/`, path traversal, and anything outside the
-/// standard data dir (see tdlib/telegram-bot-api#303).
-fn is_deletable_local_bot_api_file(path: &str) -> bool {
-    use std::path::{Component, Path};
-
-    let path = Path::new(path);
-    if !path.is_absolute() {
-        return false;
-    }
-    if path.components().any(|c| matches!(c, Component::ParentDir)) {
-        return false;
-    }
-
-    // Prefer `components()` over `iter()`: on Unix, `iter()` yields a leading empty
-    // OsStr for absolute paths which shifts every index.
-    let parts: Vec<&str> = path
-        .components()
-        .filter_map(|c| {
-            match c {
-                Component::Normal(s) => s.to_str(),
-                _ => None,
-            }
-        })
-        .collect();
-    // var, lib, telegram-bot-api, <bot>, documents, <file>
-    if parts.len() < 6 {
-        return false;
-    }
-    if parts[0] != "var" || parts[1] != "lib" || parts[2] != "telegram-bot-api" {
-        return false;
-    }
-    if parts[3].is_empty() || parts[4] != "documents" {
-        return false;
-    }
-    // Require at least one filename under documents/ (not the directory itself).
-    parts[5..].iter().any(|p| !p.is_empty())
-}
-
-/// Best-effort delete of a Local Bot API `documents/` file after Sarca is done with it.
-async fn maybe_remove_local_bot_api_file(path: &str) {
-    if !is_deletable_local_bot_api_file(path) {
-        return;
-    }
-    match tokio::fs::remove_file(path).await {
-        Ok(()) => {
-            tracing::debug!("[TELEGRAM API] removed local bot-api document {path}");
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-        Err(e) => {
-            tracing::warn!("[TELEGRAM API] failed to remove local bot-api document {path}: {e}");
-        },
-    }
-}
-
-/// Stream wrapper that unlinks a Local Bot API documents file when dropped (after the
-/// reader finishes or the client cancels).
-struct CleanupLocalFileStream<S> {
-    inner: S,
-    path: Option<String>,
-}
-
-impl<S: Stream + Unpin> Stream for CleanupLocalFileStream<S> {
-    type Item = S::Item;
-
-    fn poll_next(
-        mut self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        Pin::new(&mut self.inner).poll_next(cx)
-    }
-}
-
-impl<S> Drop for CleanupLocalFileStream<S> {
-    fn drop(&mut self) {
-        let Some(path) = self.path.take() else {
-            return;
-        };
-        if !is_deletable_local_bot_api_file(&path) {
-            return;
-        }
-        match std::fs::remove_file(&path) {
-            Ok(()) => {
-                tracing::debug!("[TELEGRAM API] removed local bot-api document {path}");
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {},
-            Err(e) => {
-                tracing::warn!(
-                    "[TELEGRAM API] failed to remove local bot-api document {path}: {e}"
-                );
-            },
-        }
-    }
-}
-
-#[cfg(test)]
-mod local_bot_api_cleanup_tests {
-    use super::is_deletable_local_bot_api_file;
-
-    #[test]
-    fn accepts_documents_file() {
-        assert!(is_deletable_local_bot_api_file(
-            "/var/lib/telegram-bot-api/123:AAtoken/documents/file_23"
-        ));
-    }
-
-    #[test]
-    fn rejects_temp_file() {
-        assert!(!is_deletable_local_bot_api_file("/var/lib/telegram-bot-api/123:AAtoken/temp/38"));
-    }
-
-    #[test]
-    fn rejects_path_traversal() {
-        assert!(!is_deletable_local_bot_api_file(
-            "/var/lib/telegram-bot-api/123:AAtoken/documents/../../temp/x"
-        ));
-        assert!(!is_deletable_local_bot_api_file("/var/lib/telegram-bot-api/../etc/passwd"));
-    }
-
-    #[test]
-    fn rejects_outside_prefix() {
-        assert!(!is_deletable_local_bot_api_file("/tmp/file_23"));
-        assert!(!is_deletable_local_bot_api_file("documents/file_23"));
-    }
-
-    #[test]
-    fn rejects_documents_directory_itself() {
-        assert!(!is_deletable_local_bot_api_file(
-            "/var/lib/telegram-bot-api/123:AAtoken/documents"
-        ));
-        assert!(!is_deletable_local_bot_api_file(
-            "/var/lib/telegram-bot-api/123:AAtoken/documents/"
-        ));
-    }
 }
 
 #[cfg(test)]

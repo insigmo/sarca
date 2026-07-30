@@ -157,34 +157,6 @@ function Configure-Interactive {
         Write-Host "Admin credentials already set — skipping prompt"
     }
 
-    $apiId = Get-EnvValue -Path $EnvFile -Key "TELEGRAM_API_ID"
-    $apiHash = Get-EnvValue -Path $EnvFile -Key "TELEGRAM_API_HASH"
-
-    if ((Test-PlaceholderTelegram $apiId) -or (Test-PlaceholderTelegram $apiHash)) {
-        Write-Host ""
-        Write-Host "Telegram API credentials (needed for Local Bot API / large files)"
-        Write-Host "  1. Open https://my.telegram.org and sign in"
-        Write-Host "  2. Open API development tools"
-        Write-Host "  3. Create an app if needed, then copy api_id and api_hash"
-        Write-Host ""
-        while (Test-PlaceholderTelegram $apiId) {
-            $apiId = Read-Host "TELEGRAM_API_ID"
-            if (Test-PlaceholderTelegram $apiId) {
-                Write-Host "api_id is required"
-            }
-        }
-        while (Test-PlaceholderTelegram $apiHash) {
-            $apiHash = Read-Host "TELEGRAM_API_HASH"
-            if (Test-PlaceholderTelegram $apiHash) {
-                Write-Host "api_hash is required"
-            }
-        }
-        Set-EnvKey -Path $EnvFile -Key "TELEGRAM_API_ID" -Value $apiId
-        Set-EnvKey -Path $EnvFile -Key "TELEGRAM_API_HASH" -Value $apiHash
-    } else {
-        Write-Host "Telegram API credentials already set — skipping prompt"
-    }
-
     $secret = Get-EnvValue -Path $EnvFile -Key "SECRET_KEY"
     if (Test-PlaceholderSecret $secret) {
         $secret = New-SecretKey
@@ -231,16 +203,11 @@ function Write-OrMergeEnv {
         ACCESS_TOKEN_EXPIRE_IN_SECS = "1800"
         REFRESH_TOKEN_EXPIRE_IN_DAYS = "14"
         SECRET_KEY = $secret
-        TELEGRAM_LOCAL_API = "false"
         TELEGRAM_API_BASE_URL = "https://api.telegram.org"
         TELEGRAM_RATE_LIMIT = "18"
         TELEGRAM_CHUNK_SIZE_MB = "20"
+        TELEGRAM_VIDEO_CHUNK_SIZE_MB = "20"
         WORK_DIR = $workUnix
-        TELEGRAM_BOT_TOKEN = ""
-        TELEGRAM_CHANNEL_ID = ""
-        STORAGE_NAME = ""
-        TELEGRAM_API_ID = ""
-        TELEGRAM_API_HASH = ""
         DATABASE_USER = "sarca"
         DATABASE_PASSWORD = "sarca"
         DATABASE_NAME = "sarca"
