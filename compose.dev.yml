@@ -2,7 +2,7 @@ services:
   sarca:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile
       args:
         VERSION: latest
     volumes:
