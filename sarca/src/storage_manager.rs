@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use crate::{
     common::channels::{
@@ -15,12 +15,12 @@ use crate::{
 
 pub struct StorageManager {
     rx: StorageManagerListener,
-    db: PgPool,
+    db: SqlitePool,
     config: Config,
 }
 
 impl StorageManager {
-    pub fn new(rx: StorageManagerListener, db: PgPool, config: Config) -> Self {
+    pub fn new(rx: StorageManagerListener, db: SqlitePool, config: Config) -> Self {
         Self {
             rx,
             db,

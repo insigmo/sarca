@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{QueryBuilder, SqlitePool};
 use uuid::Uuid;
 
 use crate::{
+    common::db::sql::push_uuid_list,
     errors::{SarcaError, SarcaResult},
     models::share_links::ShareLink,
 };
@@ -10,11 +11,11 @@ use crate::{
 pub const TABLE: &str = "share_links";
 
 pub struct ShareLinksRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> ShareLinksRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
@@ -176,15 +177,14 @@ impl<'d> ShareLinksRepository<'d> {
         if file_ids.is_empty() {
             return Ok(0);
         }
-        let res = sqlx::query(
+        let mut builder = QueryBuilder::new(
             format!(
                 "
                 DELETE FROM {TABLE} sl
                 WHERE EXISTS (
                     SELECT 1
                     FROM files f
-                    WHERE f.id = ANY($1)
-                      AND f.storage_id = sl.storage_id
+                    WHERE f.storage_id = sl.storage_id
                       AND (
                         sl.path = f.path
                         OR (
@@ -192,15 +192,14 @@ impl<'d> ShareLinksRepository<'d> {
                           AND (sl.path = f.path OR sl.path LIKE f.path || '%')
                         )
                       )
-                )
-                "
+                      AND f.id IN ("
             )
             .as_str(),
-        )
-        .bind(file_ids)
-        .execute(self.db)
-        .await
-        .map_err(|e| {
+        );
+        push_uuid_list(&mut builder, file_ids);
+        builder.push("))");
+
+        let res = builder.build().execute(self.db).await.map_err(|e| {
             tracing::error!("{e}");
             SarcaError::Unknown
         })?;
