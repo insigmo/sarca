@@ -20,7 +20,9 @@ path = "src/main.rs"
 # Only allow lints that are impractical for this Axum/SQL architecture.
 [lints.rust]
 unsafe_code = "forbid"
-missing_debug_implementations = "warn"
+# Application crate shared by the binary and integration tests — not a public API.
+# Requiring Debug on every exported type is noise after introducing [lib].
+missing_debug_implementations = "allow"
 rust_2018_idioms = { level = "warn", priority = -1 }
 
 [lints.clippy]
@@ -43,6 +45,11 @@ cast_possible_wrap = "allow"
 # Axum handler signatures stay `async` for uniformity even without await.
 unused_async = "allow"
 # Large request buffers / zip builders.
+# Application lib surface (binary + integration tests): pedantic docs/must_use noise.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
 large_stack_frames = "allow"
 # Keep statement order readable next to SQL / match arms.
 items_after_statements = "allow"

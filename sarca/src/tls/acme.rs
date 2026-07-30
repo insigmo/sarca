@@ -1,12 +1,17 @@
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use chrono::{DateTime, Utc};
 use instant_acme::{
-    Account, AccountCredentials, ChallengeType, Identifier, NewAccount, NewOrder, RetryPolicy,
+    Account,
+    AccountCredentials,
+    ChallengeType,
+    Identifier,
+    NewAccount,
+    NewOrder,
+    RetryPolicy,
 };
 use thiserror::Error;
 
@@ -22,11 +27,12 @@ pub const SHORTLIVED_PROFILE: &str = "shortlived";
 const ACCOUNT_FILE: &str = "acme-account.json";
 
 /// Register an http-01 challenge response for `token`.
-pub fn register_challenge(store: &AcmeChallengeStore, token: impl Into<String>, authorization: impl Into<String>) {
-    store
-        .write()
-        .expect("challenge lock")
-        .insert(token.into(), authorization.into());
+pub fn register_challenge(
+    store: &AcmeChallengeStore,
+    token: impl Into<String>,
+    authorization: impl Into<String>,
+) {
+    store.write().expect("challenge lock").insert(token.into(), authorization.into());
 }
 
 /// ACME certificate issuer (real http-01 client wired when `TLS_HOSTNAME` is set).
@@ -55,7 +61,13 @@ impl AcmeConfig {
         challenges: AcmeChallengeStore,
         account_path: PathBuf,
     ) -> Self {
-        Self { directory, http_addr, identity, challenges, account_path }
+        Self {
+            directory,
+            http_addr,
+            identity,
+            challenges,
+            account_path,
+        }
     }
 }
 
@@ -88,10 +100,10 @@ pub fn acme_enabled(config: &Config) -> bool {
     if config.acme_directory.trim().is_empty() {
         return false;
     }
-    match std::env::var("SARCA_ACME").ok().as_deref() {
-        Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO") => false,
-        _ => true,
-    }
+    !matches!(
+        std::env::var("SARCA_ACME").ok().as_deref(),
+        Some("0" | "false" | "FALSE" | "no" | "NO")
+    )
 }
 
 /// Convert [`TlsIdentity`] to an instant-acme [`Identifier`].
@@ -115,7 +127,9 @@ pub struct InstantAcmeIssuer {
 
 impl InstantAcmeIssuer {
     pub fn new(config: AcmeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+        }
     }
 
     pub fn from_parts(
@@ -172,7 +186,9 @@ pub struct StubAcmeIssuer {
 
 impl StubAcmeIssuer {
     pub fn new(config: AcmeConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+        }
     }
 }
 
@@ -233,7 +249,11 @@ pub async fn issue_certificate(
 
     let not_after = super::renew::parse_not_after(&cert_pem)?;
 
-    Ok(IssuedCertificate { cert_pem, key_pem, not_after })
+    Ok(IssuedCertificate {
+        cert_pem,
+        key_pem,
+        not_after,
+    })
 }
 
 async fn new_order_with_profile(
@@ -303,7 +323,8 @@ mod tests {
 
     fn test_config() -> AcmeConfig {
         let identity = TlsIdentity::Dns("example.com".into());
-        let challenges = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+        let challenges =
+            std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
         AcmeConfig::new(
             "https://acme-staging-v02.api.letsencrypt.org/directory".into(),
             SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8080),

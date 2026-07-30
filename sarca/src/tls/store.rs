@@ -11,7 +11,9 @@ pub struct CertStore {
 
 impl CertStore {
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: dir.into(),
+        }
     }
 
     pub fn dir(&self) -> &Path {
@@ -69,8 +71,14 @@ mod tests {
         assert!(store.load_cert().await.unwrap().is_none());
         assert!(store.load_key().await.unwrap().is_none());
 
-        store.save_cert("-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n").await.unwrap();
-        store.save_key("-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n").await.unwrap();
+        store
+            .save_cert("-----BEGIN CERTIFICATE-----\ncert\n-----END CERTIFICATE-----\n")
+            .await
+            .unwrap();
+        store
+            .save_key("-----BEGIN PRIVATE KEY-----\nkey\n-----END PRIVATE KEY-----\n")
+            .await
+            .unwrap();
 
         assert!(store.cert_path().exists());
         assert!(store.key_path().exists());

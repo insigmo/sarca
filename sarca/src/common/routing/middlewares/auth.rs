@@ -2,12 +2,11 @@ use std::sync::Arc;
 
 use axum::{
     extract::State,
-    http::{Request, header::AUTHORIZATION},
+    http::{Request, StatusCode, header::AUTHORIZATION},
     middleware::Next,
     response::Response,
 };
 use percent_encoding::percent_decode_str;
-use axum::http::StatusCode;
 
 use crate::{
     common::{
@@ -37,7 +36,10 @@ pub async fn logged_in_required(
     Ok(next.run(req).await)
 }
 
-fn authenticate_request(req: &Request<axum::body::Body>, secret_key: &str) -> SarcaResult<AuthUser> {
+fn authenticate_request(
+    req: &Request<axum::body::Body>,
+    secret_key: &str,
+) -> SarcaResult<AuthUser> {
     if let Some(token) = bearer_token(req) {
         return JWTManager::validate(&token, secret_key);
     }
