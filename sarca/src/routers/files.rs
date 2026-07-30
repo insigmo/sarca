@@ -66,7 +66,7 @@ impl FilesRouter {
             .route("/rename", post(Self::rename))
             .route("/move", post(Self::move_to))
             .route("/copy", post(Self::copy_to))
-            .route("/*path", get(Self::dynamic_get).delete(Self::delete))
+            .route("/{*path}", get(Self::dynamic_get).delete(Self::delete))
             .layer(DefaultBodyLimit::disable())
             .route_layer(middleware::from_fn_with_state(state, logged_in_required))
     }
