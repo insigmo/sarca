@@ -105,8 +105,8 @@ tasks:
       - task: up
 
   db:reset:
-    desc: Wipe all Postgres data (DROP SCHEMA) and restart Sarca to recreate schema+superuser
-    prompt: Wipe ALL Sarca DB data in Docker Postgres? This cannot be undone.
+    desc: Delete SQLite database file and restart Sarca to recreate schema+superuser
+    prompt: Wipe ALL Sarca SQLite data? This cannot be undone.
     cmds:
       - chmod +x "{{.ROOT_DIR}}/scripts/db-reset.sh"
       - "{{.ROOT_DIR}}/scripts/db-reset.sh"

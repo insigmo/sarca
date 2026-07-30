@@ -11,20 +11,6 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_USER: sarca
-          POSTGRES_PASSWORD: sarca
-          POSTGRES_DB: sarca
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U sarca -d sarca"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
 
     env:
       PORT: "8000"
@@ -40,11 +26,8 @@ jobs:
       TELEGRAM_CHUNK_SIZE_MB: "20"
       TELEGRAM_VIDEO_CHUNK_SIZE_MB: "20"
       WORK_DIR: ${{ github.workspace }}/work
-      DATABASE_USER: sarca
-      DATABASE_PASSWORD: sarca
-      DATABASE_NAME: sarca
-      DATABASE_HOST: 127.0.0.1
-      DATABASE_PORT: "5432"
+      SQLITE_PATH: ${{ github.workspace }}/runtime/sarca.sqlite
+      SARCA_PLAIN_HTTP: "1"
       SARCA_BASE_URL: http://127.0.0.1:8000
       CARGO_TERM_COLOR: always
 
@@ -122,11 +105,8 @@ jobs:
             echo "TELEGRAM_CHUNK_SIZE_MB=${TELEGRAM_CHUNK_SIZE_MB}"
             echo "TELEGRAM_VIDEO_CHUNK_SIZE_MB=${TELEGRAM_VIDEO_CHUNK_SIZE_MB}"
             echo "WORK_DIR=${WORK_DIR}"
-            echo "DATABASE_USER=${DATABASE_USER}"
-            echo "DATABASE_PASSWORD=${DATABASE_PASSWORD}"
-            echo "DATABASE_NAME=${DATABASE_NAME}"
-            echo "DATABASE_HOST=${DATABASE_HOST}"
-            echo "DATABASE_PORT=${DATABASE_PORT}"
+            echo "SQLITE_PATH=${SQLITE_PATH}"
+            echo "SARCA_PLAIN_HTTP=${SARCA_PLAIN_HTTP}"
           } > runtime/sarca.conf
 
       - name: Start server

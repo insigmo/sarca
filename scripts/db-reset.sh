@@ -1,51 +1,63 @@
 #!/usr/bin/env bash
-# Wipe all application data in Docker Postgres (sarca DB), then restart Sarca
+# Wipe SQLite metadata (delete database file), then restart Sarca
 # so init_db + create_superuser recreate an empty schema.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-COMPOSE=(docker compose --env-file sarca.conf)
-
-if ! "${COMPOSE[@]}" ps --status running --services 2>/dev/null | grep -qx db; then
-  echo "error: db service is not running — start the stack first (task up)" >&2
+CONF="${ROOT}/sarca.conf"
+if [ ! -f "${CONF}" ]; then
+  echo "error: ${CONF} not found" >&2
   exit 1
 fi
 
-echo "WARNING: dropping ALL tables in Postgres (sarca)…"
-"${COMPOSE[@]}" stop sarca >/dev/null
+env_get() {
+  sed -n "s/^[[:space:]]*$1=//p" "${CONF}" | head -1 | tr -d '\r'
+}
 
-"${COMPOSE[@]}" exec -T db psql -U sarca -d sarca -v ON_ERROR_STOP=1 <<'SQL'
-SELECT pg_terminate_backend(pid)
-FROM pg_stat_activity
-WHERE datname = current_database()
-  AND pid <> pg_backend_pid();
+WORK_DIR="$(env_get WORK_DIR)"
+WORK_DIR="${WORK_DIR:-${ROOT}/work}"
+SQLITE_PATH="$(env_get SQLITE_PATH)"
+SQLITE_PATH="${SQLITE_PATH:-${WORK_DIR}/sarca.sqlite}"
 
-DROP SCHEMA public CASCADE;
-CREATE SCHEMA public;
-GRANT ALL ON SCHEMA public TO sarca;
-GRANT ALL ON SCHEMA public TO public;
-SQL
+if [ ! -f "${SQLITE_PATH}" ] && [ ! -f "${SQLITE_PATH}-wal" ] && [ ! -f "${SQLITE_PATH}-shm" ]; then
+  echo "No SQLite database at ${SQLITE_PATH} — nothing to wipe."
+  exit 0
+fi
 
-echo "Schema wiped. Starting Sarca to recreate tables + superuser…"
-"${COMPOSE[@]}" start sarca >/dev/null
+COMPOSE=(docker compose -f compose.yml -f compose.dev.yml --env-file sarca.conf)
+using_docker=0
+if "${COMPOSE[@]}" ps --status running --services 2>/dev/null | grep -qx sarca; then
+  using_docker=1
+  echo "Stopping Sarca container…"
+  "${COMPOSE[@]}" stop sarca >/dev/null
+fi
 
-# Wait until Sarca is accepting HTTP again (schema init finishes at listen).
-PORT="$(grep -E '^[[:space:]]*PORT=' sarca.conf 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"
-PORT="${PORT:-8000}"
-ok=0
-for _ in $(seq 1 60); do
-  if curl -sf -o /dev/null "http://127.0.0.1:${PORT}/"; then
-    ok=1
-    break
+echo "WARNING: deleting SQLite database at ${SQLITE_PATH}…"
+rm -f "${SQLITE_PATH}" "${SQLITE_PATH}-wal" "${SQLITE_PATH}-shm"
+
+if [ "${using_docker}" -eq 1 ]; then
+  echo "Starting Sarca to recreate schema + superuser…"
+  "${COMPOSE[@]}" start sarca >/dev/null
+
+  PORT="$(env_get PORT)"
+  PORT="${PORT:-8000}"
+  ok=0
+  for _ in $(seq 1 60); do
+    if curl -sf -o /dev/null "http://127.0.0.1:${PORT}/"; then
+      ok=1
+      break
+    fi
+    sleep 0.5
+  done
+
+  if [[ "$ok" -ne 1 ]]; then
+    echo "error: Sarca did not become ready on :${PORT} — check: docker logs sarca" >&2
+    exit 1
   fi
-  sleep 0.5
-done
-
-if [[ "$ok" -ne 1 ]]; then
-  echo "error: Sarca did not become ready on :${PORT} — check: docker logs sarca" >&2
-  exit 1
+else
+  echo "DB file removed. Restart Sarca to recreate schema + superuser."
 fi
 
 echo "DB reset complete (empty schema + superuser from sarca.conf)."
