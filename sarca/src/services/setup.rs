@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use crate::{
     common::{
@@ -34,7 +34,7 @@ use crate::{
 };
 
 pub struct SetupService<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
     telegram_base_url: &'d str,
     rate_limit: u8,
     settings: AppSettingsRepository<'d>,
@@ -42,7 +42,7 @@ pub struct SetupService<'d> {
 }
 
 impl<'d> SetupService<'d> {
-    pub fn new(db: &'d PgPool, telegram_base_url: &'d str, rate_limit: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, telegram_base_url: &'d str, rate_limit: u8) -> Self {
         Self {
             db,
             telegram_base_url,

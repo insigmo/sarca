@@ -1,9 +1,7 @@
-use std::time::Duration;
-
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use crate::{
-    common::{db::pool::get_pool, password_manager::PasswordManager},
+    common::password_manager::PasswordManager,
     config::Config,
     errors::SarcaError,
     models::users::InDBUser,
@@ -11,39 +9,8 @@ use crate::{
 };
 
 #[inline]
-pub async fn create_db(
-    dsn: &str,
-    dbname: &str,
-    max_connection: u32,
-    timeout: Duration,
-) -> Result<(), String> {
-    let db = get_pool(dsn, max_connection, timeout).await?;
-
-    tracing::debug!("creating database");
-
-    let result = sqlx::query(format!("CREATE DATABASE {dbname}").as_str()).execute(&db).await;
-
-    match &result {
-        Ok(_) => {
-            tracing::debug!("created database");
-            Ok(())
-        },
-        Err(sqlx::Error::Database(dbe)) => {
-            if let Some(code) = dbe.code() {
-                if code == "42P04" {
-                    tracing::debug!("database already exists; skipping");
-                    return Ok(());
-                }
-            }
-            Err(format!("create database failed: {dbe}"))
-        },
-        Err(e) => Err(format!("create database failed: {e}")),
-    }
-}
-
-#[inline]
 #[allow(clippy::too_many_lines)]
-pub async fn init_db(db: &PgPool) {
+pub async fn init_db(db: &SqlitePool) {
     tracing::debug!("initing database");
 
     let mut transaction = db.begin().await.unwrap();
@@ -574,7 +541,7 @@ pub async fn init_db(db: &PgPool) {
 
 /// Remove storage workers that were never bound to a storage (legacy orphans).
 #[inline]
-pub async fn delete_orphan_storage_workers(db: &PgPool) {
+pub async fn delete_orphan_storage_workers(db: &SqlitePool) {
     match StorageWorkersRepository::new(db).delete_orphans().await {
         Ok(0) => {},
         Ok(n) => tracing::info!("deleted {n} orphan storage worker(s) without storage_id"),
@@ -583,7 +550,7 @@ pub async fn delete_orphan_storage_workers(db: &PgPool) {
 }
 
 #[inline]
-pub async fn create_superuser(db: &PgPool, config: &Config) {
+pub async fn create_superuser(db: &SqlitePool, config: &Config) {
     let password_hash = PasswordManager::generate(&config.superuser_pass).unwrap();
     let mut user = InDBUser::new_password(config.superuser_email.clone(), password_hash.clone());
     user.email_verified_at = Some(chrono::Utc::now());

@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -11,11 +11,11 @@ const STORAGE_WORKERS_TABLE: &str = "storage_workers";
 const STORAGE_WORKERS_USAGES_TABLE: &str = "storage_workers_usages";
 
 pub struct StorageWorkersRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> StorageWorkersRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }

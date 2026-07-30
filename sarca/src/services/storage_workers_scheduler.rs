@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tokio::time::sleep;
 use uuid::Uuid;
 
@@ -16,7 +16,7 @@ pub struct StorageWorkersScheduler<'d> {
 }
 
 impl<'d> StorageWorkersScheduler<'d> {
-    pub fn new(db: &'d PgPool, rate: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, rate: u8) -> Self {
         let repo = StorageWorkersRepository::new(db);
         Self {
             repo,

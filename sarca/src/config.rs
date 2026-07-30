@@ -4,9 +4,8 @@ use super::errors::{SarcaError, SarcaResult};
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub db_uri: String,
-    pub db_uri_without_dbname: String,
-    pub db_name: String,
+    /// Path to the `SQLite` metadata database file.
+    pub sqlite_path: String,
     pub port: u16,
     pub workers: u16,
     pub channel_capacity: u16,
@@ -50,16 +49,15 @@ impl Config {
         self.smtp_host.is_some()
     }
 
+    /// Default `SQLite` file location: `sarca.sqlite` inside `WORK_DIR`.
+    pub fn default_sqlite_path(work_dir: &str) -> String {
+        format!("{}/sarca.sqlite", work_dir.trim_end_matches('/'))
+    }
+
     pub fn new() -> SarcaResult<Self> {
-        let db_user: String = Self::get_env_var("DATABASE_USER")?;
-        let db_password: String = Self::get_env_var("DATABASE_PASSWORD")?;
-        let db_name: String = Self::get_env_var("DATABASE_NAME")?;
-        let db_host: String = Self::get_env_var("DATABASE_HOST")?;
-        let db_port: String = Self::get_env_var("DATABASE_PORT")?;
-        let db_uri =
-            { format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}") };
-        let db_uri_without_dbname =
-            { format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}") };
+        let work_dir: String = Self::get_env_var_with_default("WORK_DIR", "work".to_owned())?;
+        let sqlite_path = Self::get_optional_env_var("SQLITE_PATH")
+            .unwrap_or_else(|| Self::default_sqlite_path(&work_dir));
         let port = Self::get_env_var("PORT")?;
         let workers = Self::get_env_var("WORKERS")?;
         let channel_capacity = Self::get_env_var("CHANNEL_CAPACITY")?;
@@ -81,8 +79,6 @@ impl Config {
             )?
         };
         let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 18)?;
-
-        let work_dir = Self::get_env_var_with_default("WORK_DIR", "work".to_owned())?;
 
         let default_chunk_mb = if telegram_api_base_url.contains("api.telegram.org") {
             20
@@ -106,9 +102,7 @@ impl Config {
         let smtp_tls = Self::get_env_var_with_default("SMTP_TLS", "starttls".to_owned())?;
 
         Ok(Self {
-            db_uri,
-            db_uri_without_dbname,
-            db_name,
+            sqlite_path,
             port,
             workers,
             channel_capacity,
@@ -186,11 +180,7 @@ mod tests {
 
     fn clear_required() {
         for k in [
-            "DATABASE_USER",
-            "DATABASE_PASSWORD",
-            "DATABASE_NAME",
-            "DATABASE_HOST",
-            "DATABASE_PORT",
+            "SQLITE_PATH",
             "PORT",
             "WORKERS",
             "CHANNEL_CAPACITY",
@@ -211,11 +201,6 @@ mod tests {
     }
 
     fn set_required() {
-        env::set_var("DATABASE_USER", "sarca");
-        env::set_var("DATABASE_PASSWORD", "sarca");
-        env::set_var("DATABASE_NAME", "sarca");
-        env::set_var("DATABASE_HOST", "127.0.0.1");
-        env::set_var("DATABASE_PORT", "5432");
         env::set_var("PORT", "8001");
         env::set_var("WORKERS", "2");
         env::set_var("CHANNEL_CAPACITY", "8");
@@ -227,13 +212,30 @@ mod tests {
     }
 
     #[test]
+    fn default_sqlite_path_sits_beside_work_dir() {
+        assert_eq!(Config::default_sqlite_path("work"), "work/sarca.sqlite");
+        assert!(Config::default_sqlite_path("/var/lib/sarca/work").ends_with("sarca.sqlite"));
+    }
+
+    #[test]
+    fn sqlite_path_from_env_overrides_default() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        env::set_var("SQLITE_PATH", "/tmp/custom.sqlite");
+        let cfg = Config::new().unwrap();
+        assert_eq!(cfg.sqlite_path, "/tmp/custom.sqlite");
+        clear_required();
+    }
+
+    #[test]
     fn loads_port_from_env() {
         let _g = ENV_LOCK.lock().unwrap();
         clear_required();
         set_required();
         let cfg = Config::new().unwrap();
         assert_eq!(cfg.port, 8001);
-        assert!(cfg.db_uri.contains("127.0.0.1:5432/sarca"));
+        assert_eq!(cfg.sqlite_path, "work/sarca.sqlite");
         clear_required();
     }
 

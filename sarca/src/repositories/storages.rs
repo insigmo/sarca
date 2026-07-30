@@ -1,4 +1,4 @@
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -11,11 +11,11 @@ use crate::{
 pub const TABLE: &str = "storages";
 
 pub struct StoragesRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> StoragesRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
@@ -160,7 +160,7 @@ impl<'d> StoragesRepository<'d> {
     /// Delete a storage and its dependent rows within an existing transaction.
     pub async fn delete_storage_in_tx(
         &self,
-        tx: &mut Transaction<'_, Postgres>,
+        tx: &mut Transaction<'_, Sqlite>,
         storage_id: Uuid,
     ) -> SarcaResult<()> {
         // storage_workers.storage_id has no ON DELETE; detach first

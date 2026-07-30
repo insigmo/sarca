@@ -18,7 +18,7 @@ use crate::{
         storage_purge::StoragePurgeService,
         trash_purge::TrashPurgeService,
     },
-    startup::{create_db, create_superuser, delete_orphan_storage_workers, init_db},
+    startup::{create_superuser, delete_orphan_storage_workers, init_db},
     storage_manager::StorageManager,
 };
 
@@ -66,17 +66,12 @@ async fn main() {
     let db_timeout = Duration::from_secs(10);
     let (tx, rx) = mpsc::channel::<ClientMessage>(config.channel_capacity.into());
 
-    eprintln!("connecting to Postgres…");
-    create_db(&config.db_uri_without_dbname, &config.db_name, config.workers.into(), db_timeout)
-        .await
-        .unwrap_or_else(|e| {
-            die(format!("{e}\nhint: check DATABASE_* in sarca.conf and that Postgres is running"))
-        });
-
-    let db =
-        get_pool(&config.db_uri, config.workers.into(), db_timeout).await.unwrap_or_else(|e| {
-            die(format!("{e}\nhint: check DATABASE_* in sarca.conf and that Postgres is running"))
-        });
+    eprintln!("opening SQLite database at {}…", config.sqlite_path);
+    let db = get_pool(&config.sqlite_path, config.workers.into(), db_timeout).await.unwrap_or_else(
+        |e| {
+            die(format!("{e}\nhint: check SQLITE_PATH in sarca.conf and its directory permissions"))
+        },
+    );
     eprintln!("database ok");
 
     eprintln!("initializing schema…");
@@ -113,64 +108,43 @@ async fn main() {
     create_superuser(&db, &config).await;
     let config_copy = config.clone();
     let workers = config.workers;
+
+    // One SQLite pool is shared by the HTTP router and every background worker;
+    // SQLite serializes writers, so extra pools would only add lock contention.
+    let manager_db = db.clone();
     tokio::spawn(async move {
-        match get_pool(&config_copy.db_uri, workers.into(), db_timeout).await {
-            Ok(db) => {
-                let mut manager = StorageManager::new(rx, db, config_copy);
-                tracing::debug!("running manager");
-                manager.run().await;
-            },
-            Err(e) => tracing::error!("storage manager db pool failed: {e}"),
-        }
+        let mut manager = StorageManager::new(rx, manager_db, config_copy);
+        tracing::debug!("running manager");
+        manager.run().await;
     });
 
-    match get_pool(&config.db_uri, workers.into(), db_timeout).await {
-        Ok(db) => {
-            ReplicationService::spawn_loop(
-                db,
-                config.telegram_api_base_url.clone(),
-                config.telegram_rate_limit,
-                Duration::from_secs(10),
-            );
-        },
-        Err(e) => tracing::error!("replication worker db pool failed: {e}"),
-    }
+    ReplicationService::spawn_loop(
+        db.clone(),
+        config.telegram_api_base_url.clone(),
+        config.telegram_rate_limit,
+        Duration::from_secs(10),
+    );
 
-    match get_pool(&config.db_uri, workers.into(), db_timeout).await {
-        Ok(db) => {
-            ChannelHealthService::spawn_loop(
-                db,
-                config.telegram_api_base_url.clone(),
-                config.telegram_rate_limit,
-                Duration::from_mins(30),
-            );
-        },
-        Err(e) => tracing::error!("channel health scheduler db pool failed: {e}"),
-    }
+    ChannelHealthService::spawn_loop(
+        db.clone(),
+        config.telegram_api_base_url.clone(),
+        config.telegram_rate_limit,
+        Duration::from_mins(30),
+    );
 
-    match get_pool(&config.db_uri, workers.into(), db_timeout).await {
-        Ok(db) => {
-            TrashPurgeService::spawn_loop(
-                db,
-                config.telegram_api_base_url.clone(),
-                config.telegram_rate_limit,
-                Duration::from_mins(10),
-            );
-        },
-        Err(e) => tracing::error!("trash purge scheduler db pool failed: {e}"),
-    }
+    TrashPurgeService::spawn_loop(
+        db.clone(),
+        config.telegram_api_base_url.clone(),
+        config.telegram_rate_limit,
+        Duration::from_mins(10),
+    );
 
-    match get_pool(&config.db_uri, workers.into(), db_timeout).await {
-        Ok(db) => {
-            StoragePurgeService::spawn_loop(
-                db,
-                config.telegram_api_base_url.clone(),
-                config.telegram_rate_limit,
-                Duration::from_secs(5),
-            );
-        },
-        Err(e) => tracing::error!("storage purge scheduler db pool failed: {e}"),
-    }
+    StoragePurgeService::spawn_loop(
+        db.clone(),
+        config.telegram_api_base_url.clone(),
+        config.telegram_rate_limit,
+        Duration::from_secs(5),
+    );
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
     let app_state = AppState::new(db, config, tx);

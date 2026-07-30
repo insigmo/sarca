@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use super::storage_workers_scheduler::StorageWorkersScheduler;
 use crate::{
@@ -30,7 +30,7 @@ impl ChannelHealthService {
 
     /// Probe every active channel via `getChat`; mark dead ones and rotate away any
     /// storage's primary position that pointed at a channel that just died.
-    pub async fn run_once(db: &PgPool, base_url: &str, rate_limit: u8) {
+    pub async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u8) {
         let channels_repo = StorageChannelsRepository::new(db);
         let storages_repo = StoragesRepository::new(db);
 
@@ -114,7 +114,12 @@ impl ChannelHealthService {
     }
 
     /// Spawn a background loop that health-checks every channel on a fixed interval.
-    pub fn spawn_loop(db: PgPool, base_url: String, rate_limit: u8, interval: std::time::Duration) {
+    pub fn spawn_loop(
+        db: SqlitePool,
+        base_url: String,
+        rate_limit: u8,
+        interval: std::time::Duration,
+    ) {
         tokio::spawn(async move {
             loop {
                 Self::run_once(&db, &base_url, rate_limit).await;

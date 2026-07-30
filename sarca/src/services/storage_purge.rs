@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -23,7 +23,7 @@ const FAILED_BATCH_DELAY: Duration = Duration::from_secs(1);
 pub struct StoragePurgeService;
 
 impl StoragePurgeService {
-    pub fn spawn_loop(db: PgPool, base_url: String, rate_limit: u8, idle: Duration) {
+    pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u8, idle: Duration) {
         tokio::spawn(async move {
             loop {
                 Self::run_once(&db, &base_url, rate_limit, idle).await;
@@ -31,7 +31,7 @@ impl StoragePurgeService {
         });
     }
 
-    async fn run_once(db: &PgPool, base_url: &str, rate_limit: u8, idle: Duration) {
+    async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u8, idle: Duration) {
         let repo = StoragePurgeRepository::new(db);
         if let Err(e) = repo.requeue_stale_in_progress(IN_PROGRESS_LEASE).await {
             tracing::warn!("[STORAGE PURGE] failed to requeue stale in-progress messages: {e}");
@@ -101,7 +101,7 @@ impl StoragePurgeService {
 /// Snapshot this storage's Telegram messages and token before deleting its rows.
 /// A missing bot is logged but deliberately does not prevent deletion.
 pub async fn snapshot_storage_telegram_purge(
-    db: &PgPool,
+    db: &SqlitePool,
     storage_id: Uuid,
 ) -> SarcaResult<Option<(String, Vec<(i64, i64)>)>> {
     let mut messages =
@@ -128,7 +128,7 @@ pub async fn snapshot_storage_telegram_purge(
 
 /// Enqueue a previously captured Telegram snapshot in the caller's transaction.
 pub async fn enqueue_storage_telegram_purge_in_tx(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut Transaction<'_, Sqlite>,
     storage_id: Uuid,
     snapshot: Option<(String, Vec<(i64, i64)>)>,
 ) -> SarcaResult<()> {

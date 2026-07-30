@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -19,7 +19,7 @@ pub struct RecentService<'d> {
 }
 
 impl<'d> RecentService<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             recent: RecentFilesRepository::new(db),
             files: FilesRepository::new(db),

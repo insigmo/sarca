@@ -1,10 +1,10 @@
 use std::path::Path;
 
-use sqlx::{PgPool, QueryBuilder};
+use sqlx::{QueryBuilder, SqlitePool};
 use uuid::Uuid;
 
 use crate::{
-    common::db::errors::map_not_found,
+    common::db::{errors::map_not_found, sql::push_uuid_list},
     errors::{SarcaError, SarcaResult},
     models::{
         file_chunks::{FileChunk, FileChunkWithReplica},
@@ -17,11 +17,11 @@ pub const CHUNKS_TABLE: &str = "file_chunks";
 
 /// General repo for files and chunks since they share common logic
 pub struct FilesRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> FilesRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
@@ -446,25 +446,25 @@ impl<'d> FilesRepository<'d> {
         }
         // Thumb is uploaded to the primary channel at upload time; try all storage
         // channels so purge still works if primary later rotated.
-        let rows: Vec<(i64, Option<i64>, Uuid)> = sqlx::query_as(
+        let mut builder = QueryBuilder::new(
             format!(
                 "
                 SELECT DISTINCT sc.chat_id, f.thumb_telegram_message_id, f.storage_id
                 FROM {FILES_TABLE} f
                 JOIN storage_channels sc ON sc.storage_id = f.storage_id
-                WHERE f.id = ANY($1)
-                  AND f.thumb_telegram_message_id IS NOT NULL
-                "
+                WHERE f.thumb_telegram_message_id IS NOT NULL
+                  AND f.id IN ("
             )
             .as_str(),
-        )
-        .bind(file_ids)
-        .fetch_all(self.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("{e}");
-            SarcaError::Unknown
-        })?;
+        );
+        push_uuid_list(&mut builder, file_ids);
+        builder.push(")");
+
+        let rows: Vec<(i64, Option<i64>, Uuid)> =
+            builder.build_query_as().fetch_all(self.db).await.map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
 
         Ok(rows
             .into_iter()
@@ -885,14 +885,13 @@ impl<'d> FilesRepository<'d> {
         if ids.is_empty() {
             return Ok(());
         }
-        sqlx::query(&format!("DELETE FROM {FILES_TABLE} WHERE id = ANY($1)"))
-            .bind(ids)
-            .execute(self.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
-            })?;
+        let mut builder = QueryBuilder::new(format!("DELETE FROM {FILES_TABLE} WHERE id IN ("));
+        push_uuid_list(&mut builder, ids);
+        builder.push(")");
+        builder.build().execute(self.db).await.map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
         Ok(())
     }
 

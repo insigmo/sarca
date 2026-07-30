@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use super::storage_workers_scheduler::StorageWorkersScheduler;
@@ -58,13 +58,13 @@ pub struct StoragesService<'d> {
     access_repo: AccessRepository<'d>,
     channels_repo: StorageChannelsRepository<'d>,
     replicas_repo: ChunkReplicasRepository<'d>,
-    db: &'d PgPool,
+    db: &'d SqlitePool,
     telegram_baseurl: &'d str,
     rate_limit: u8,
 }
 
 impl<'d> StoragesService<'d> {
-    pub fn new(db: &'d PgPool, telegram_baseurl: &'d str, rate_limit: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, telegram_baseurl: &'d str, rate_limit: u8) -> Self {
         Self {
             repo: StoragesRepository::new(db),
             access_repo: AccessRepository::new(db),
