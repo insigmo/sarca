@@ -3,12 +3,16 @@ mod renew;
 mod serve;
 mod store;
 
-pub use acme::{AcmeConfig, AcmeChallengeStore, AcmeIssuer, StubAcmeIssuer, register_challenge};
-pub use renew::renew_at;
+pub use acme::{
+    acme_enabled, identity_to_identifier, save_issued, AcmeConfig, AcmeChallengeStore, AcmeError,
+    AcmeIssuer, InstantAcmeIssuer, IssuedCertificate, StubAcmeIssuer, register_challenge,
+    SHORTLIVED_PROFILE,
+};
+pub use renew::{parse_not_after, renew_at, spawn_renewal_task};
 pub use serve::{
     ChallengeStore, TlsMaterial, TlsRuntime, acme_router, build_quinn_config, build_rustls_config,
     generate_self_signed, install_crypto_provider, load_or_generate_material, new_runtime,
-    parse_pem_material, serve_dual_tls,
+    parse_pem_material, serve_dual_tls, spawn_acme_http_listener,
 };
 pub use store::CertStore;
 
