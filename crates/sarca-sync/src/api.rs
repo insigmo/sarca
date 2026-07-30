@@ -1,9 +1,10 @@
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use reqwest::{
     multipart::{Form, Part},
-    Client,
+    Client, Response, Version,
 };
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
@@ -11,6 +12,11 @@ use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use crate::types::{ChangelogResponse, SnapshotResponse};
+
+/// Whether the sync client was built to prefer HTTP/3 (reqwest `http3` + `reqwest_unstable`).
+pub const HTTP3_PREFERRED: bool = cfg!(all(feature = "http3-client", reqwest_unstable));
+
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoginResponse {
@@ -40,7 +46,8 @@ pub struct SarcaApi {
 impl SarcaApi {
     pub fn new(base_url: impl Into<String>, access_token: impl Into<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: build_http_client(DEFAULT_HTTP_TIMEOUT)
+                .expect("failed to create HTTP client"),
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             access_token: access_token.into(),
         }
@@ -79,19 +86,18 @@ impl SarcaApi {
         password: impl AsRef<str>,
     ) -> Result<LoginResponse> {
         let base = normalize_server_url(base_url.as_ref())?;
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
-            .build()
-            .context("failed to create HTTP client")?;
+        let client = build_http_client(DEFAULT_HTTP_TIMEOUT)?;
         let url = format!("{base}/api/auth/login");
-        let resp = match client
-            .post(&url)
-            .json(&serde_json::json!({
-                "email": email.as_ref(),
-                "password": password.as_ref(),
-            }))
-            .send()
-            .await
+        let resp = match send_preferring_h3(&client, "POST", &url, |version| {
+            client
+                .post(&url)
+                .version(version)
+                .json(&serde_json::json!({
+                    "email": email.as_ref(),
+                    "password": password.as_ref(),
+                }))
+        })
+        .await
         {
             Ok(resp) => resp,
             Err(err) => {
@@ -136,17 +142,16 @@ impl SarcaApi {
         if refresh.is_empty() {
             bail!("Missing refresh token — sign in again");
         }
-        let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(20))
-            .build()
-            .context("failed to create HTTP client")?;
+        let client = build_http_client(DEFAULT_HTTP_TIMEOUT)?;
         let url = format!("{base}/api/auth/refresh");
-        let resp = client
-            .post(&url)
-            .json(&serde_json::json!({ "refresh_token": refresh }))
-            .send()
-            .await
-            .context("token refresh request failed")?;
+        let resp = send_preferring_h3(&client, "POST", &url, |version| {
+            client
+                .post(&url)
+                .version(version)
+                .json(&serde_json::json!({ "refresh_token": refresh }))
+        })
+        .await
+        .context("token refresh request failed")?;
         if !resp.status().is_success() {
             let status = resp.status();
             bail!("token refresh failed: {status}");
@@ -158,12 +163,26 @@ impl SarcaApi {
         req.bearer_auth(&self.access_token)
     }
 
+    async fn send_authed(
+        &self,
+        method: &'static str,
+        url: &str,
+        build: impl Fn(&Client, Version) -> reqwest::RequestBuilder,
+    ) -> Result<Response> {
+        send_preferring_h3(&self.client, method, url, |version| {
+            self.auth(build(&self.client, version))
+        })
+        .await
+        .map_err(Into::into)
+    }
+
     pub async fn list_storages(&self) -> Result<Vec<StorageSummary>> {
         self.require_access_token()?;
         let url = format!("{}/api/storages", self.base_url);
         let resp = self
-            .auth(self.client.get(url))
-            .send()
+            .send_authed("GET", &url, |client, version| {
+                client.get(&url).version(version)
+            })
             .await?
             .error_for_status()?;
         let body: StoragesResponse = resp.json().await.context("invalid storages response")?;
@@ -173,8 +192,9 @@ impl SarcaApi {
     pub async fn snapshot(&self, storage_id: Uuid) -> Result<SnapshotResponse> {
         let url = format!("{}/api/storages/{storage_id}/sync/snapshot", self.base_url);
         let resp = self
-            .auth(self.client.get(url))
-            .send()
+            .send_authed("GET", &url, |client, version| {
+                client.get(&url).version(version)
+            })
             .await?
             .error_for_status()?;
         Ok(resp.json().await?)
@@ -191,8 +211,9 @@ impl SarcaApi {
             self.base_url
         );
         let resp = self
-            .auth(self.client.get(url))
-            .send()
+            .send_authed("GET", &url, |client, version| {
+                client.get(&url).version(version)
+            })
             .await?
             .error_for_status()?;
         Ok(resp.json().await?)
@@ -214,8 +235,9 @@ impl SarcaApi {
             self.base_url
         );
         let resp = self
-            .auth(self.client.get(url))
-            .send()
+            .send_authed("GET", &url, |client, version| {
+                client.get(&url).version(version)
+            })
             .await?
             .error_for_status()?;
         if let Some(parent) = dest.parent() {
@@ -238,7 +260,11 @@ impl SarcaApi {
             "{}/api/storages/{storage_id}/files/{encoded}",
             self.base_url
         );
-        let resp = self.auth(self.client.delete(url)).send().await?;
+        let resp = self
+            .send_authed("DELETE", &url, |client, version| {
+                client.delete(&url).version(version)
+            })
+            .await?;
         if !resp.status().is_success() && resp.status().as_u16() != 404 {
             bail!("delete failed: {}", resp.status());
         }
@@ -254,30 +280,88 @@ impl SarcaApi {
         mtime_ms: Option<i64>,
         content_hash: Option<&str>,
     ) -> Result<()> {
-        let file = File::open(local_path).await?;
-        let meta = file.metadata().await?;
-        let stream = ReaderStream::new(file);
-        let body = reqwest::Body::wrap_stream(stream);
-        let part = Part::stream_with_length(body, meta.len())
-            .file_name(filename.to_owned())
-            .mime_str("application/octet-stream")?;
-
-        let mut form = Form::new()
-            .text("path", parent_path.to_owned())
-            .text("filename", filename.to_owned())
-            .part("file", part);
-        if let Some(ms) = mtime_ms {
-            form = form.text("mtime", ms.to_string());
-        }
-        if let Some(hash) = content_hash {
-            form = form.text("content_hash", hash.to_owned());
-        }
-
+        self.require_access_token()?;
         let url = format!("{}/api/storages/{storage_id}/files/upload", self.base_url);
-        let resp = self
-            .auth(self.client.post(url).multipart(form))
-            .send()
-            .await?;
+        let h3_version = preferred_request_version(&url);
+
+        async fn build_upload(
+            api: &SarcaApi,
+            url: &str,
+            version: Version,
+            parent_path: &str,
+            filename: &str,
+            local_path: &Path,
+            mtime_ms: Option<i64>,
+            content_hash: Option<&str>,
+        ) -> Result<reqwest::RequestBuilder> {
+            let file = File::open(local_path).await?;
+            let meta = file.metadata().await?;
+            let stream = ReaderStream::new(file);
+            let body = reqwest::Body::wrap_stream(stream);
+            let part = Part::stream_with_length(body, meta.len())
+                .file_name(filename.to_owned())
+                .mime_str("application/octet-stream")?;
+            let mut form = Form::new()
+                .text("path", parent_path.to_owned())
+                .text("filename", filename.to_owned())
+                .part("file", part);
+            if let Some(ms) = mtime_ms {
+                form = form.text("mtime", ms.to_string());
+            }
+            if let Some(hash) = content_hash {
+                form = form.text("content_hash", hash.to_owned());
+            }
+            Ok(api.auth(
+                api.client
+                    .post(url)
+                    .version(version)
+                    .multipart(form),
+            ))
+        }
+
+        let resp = match build_upload(
+            self,
+            &url,
+            h3_version,
+            parent_path,
+            filename,
+            local_path,
+            mtime_ms,
+            content_hash,
+        )
+        .await?
+        .send()
+        .await
+        {
+            Ok(resp) => {
+                log_response_protocol("POST", &url, resp.version());
+                resp
+            }
+            Err(err) if should_fallback_from_h3(&url, h3_version, &err) => {
+                tracing::debug!(
+                    method = "POST",
+                    url = %url,
+                    error = %err,
+                    "HTTP/3 upload failed, falling back to TCP HTTPS"
+                );
+                let resp = build_upload(
+                    self,
+                    &url,
+                    Version::HTTP_11,
+                    parent_path,
+                    filename,
+                    local_path,
+                    mtime_ms,
+                    content_hash,
+                )
+                .await?
+                .send()
+                .await?;
+                log_response_protocol("POST", &url, resp.version());
+                resp
+            }
+            Err(err) => return Err(err.into()),
+        };
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -303,7 +387,11 @@ impl SarcaApi {
             "path": parent,
             "folder_name": folder_name,
         });
-        let resp = self.auth(self.client.post(url).json(&body)).send().await?;
+        let resp = self
+            .send_authed("POST", &url, |client, version| {
+                client.post(&url).version(version).json(&body)
+            })
+            .await?;
         if !resp.status().is_success() && resp.status().as_u16() != 409 {
             let status = resp.status();
             let detail = resp.text().await.unwrap_or_default();
@@ -314,6 +402,83 @@ impl SarcaApi {
         }
         Ok(())
     }
+}
+
+/// Build the shared HTTP client used by sync API calls.
+///
+/// With the default `http3-client` feature, reqwest is compiled with HTTP/3 support.
+/// HTTPS requests prefer QUIC first; [`send_preferring_h3`] retries over TCP on failure.
+pub fn build_http_client(timeout: Duration) -> Result<Client> {
+    Client::builder()
+        .timeout(timeout)
+        .build()
+        .context("failed to create HTTP client")
+}
+
+/// Request HTTP version for a URL when HTTP/3 preference is enabled.
+pub fn preferred_request_version(url: &str) -> Version {
+    if HTTP3_PREFERRED && url.starts_with("https://") {
+        Version::HTTP_3
+    } else {
+        Version::HTTP_11
+    }
+}
+
+fn should_fallback_from_h3(url: &str, attempted: Version, err: &reqwest::Error) -> bool {
+    HTTP3_PREFERRED
+        && url.starts_with("https://")
+        && attempted == Version::HTTP_3
+        && (err.is_connect() || err.is_timeout() || err.is_request())
+}
+
+fn format_http_version(version: Version) -> &'static str {
+    match version {
+        Version::HTTP_3 => "HTTP/3",
+        Version::HTTP_2 => "HTTP/2",
+        Version::HTTP_11 => "HTTP/1.1",
+        Version::HTTP_10 => "HTTP/1.0",
+        Version::HTTP_09 => "HTTP/0.9",
+        _ => "HTTP/?",
+    }
+}
+
+fn log_response_protocol(method: &str, url: &str, version: Version) {
+    tracing::debug!(
+        method = method,
+        url = url,
+        protocol = format_http_version(version),
+        "sarca-sync HTTP response"
+    );
+}
+
+async fn send_preferring_h3(
+    _client: &Client,
+    method: &'static str,
+    url: &str,
+    build: impl Fn(Version) -> reqwest::RequestBuilder,
+) -> Result<Response, reqwest::Error> {
+    let preferred = preferred_request_version(url);
+    if preferred == Version::HTTP_3 {
+        match build(Version::HTTP_3).send().await {
+            Ok(resp) => {
+                log_response_protocol(method, url, resp.version());
+                return Ok(resp);
+            }
+            Err(err) if should_fallback_from_h3(url, Version::HTTP_3, &err) => {
+                tracing::debug!(
+                    method = method,
+                    url = url,
+                    error = %err,
+                    "HTTP/3 unavailable, falling back to TCP HTTPS"
+                );
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    let resp = build(Version::HTTP_11).send().await?;
+    log_response_protocol(method, url, resp.version());
+    Ok(resp)
 }
 
 /// Build `Authorization: Bearer …` value, or `None` when the token is empty.
@@ -381,6 +546,31 @@ pub fn normalize_server_url(raw: &str) -> Result<String> {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn http3_preference_enabled_in_default_build() {
+        assert!(
+            HTTP3_PREFERRED,
+            "default build should compile HTTP/3 preference (http3-client + reqwest_unstable)"
+        );
+    }
+
+    #[test]
+    fn preferred_request_version_selects_h3_for_https() {
+        assert_eq!(
+            preferred_request_version("https://sarca.example.com"),
+            Version::HTTP_3
+        );
+        assert_eq!(
+            preferred_request_version("http://127.0.0.1:8001"),
+            Version::HTTP_11
+        );
+    }
+
+    #[test]
+    fn build_http_client_succeeds_with_h3_config() {
+        build_http_client(Duration::from_secs(5)).expect("HTTP client builder should succeed");
+    }
 
     #[test]
     fn normalizes_bare_host_to_http() {
