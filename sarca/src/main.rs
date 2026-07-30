@@ -1,4 +1,5 @@
 use std::{
+    env,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::Path,
     sync::Arc,
@@ -8,8 +9,9 @@ use std::{
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use crate::{
+use sarca::{
     common::{channels::ClientMessage, db::pool::get_pool, routing::app_state::AppState},
+    conf,
     config::Config,
     server::Server,
     services::{
@@ -20,21 +22,11 @@ use crate::{
     },
     startup::{create_superuser, delete_orphan_storage_workers, init_db},
     storage_manager::StorageManager,
+    tls::{
+        AcmeConfig, CertStore, StubAcmeIssuer, install_crypto_provider, load_or_generate_material,
+        new_runtime,
+    },
 };
-
-mod common;
-mod conf;
-mod config;
-mod errors;
-mod models;
-mod repositories;
-mod routers;
-mod schemas;
-mod server;
-mod services;
-mod startup;
-mod storage_manager;
-mod tls;
 
 fn die(msg: impl std::fmt::Display) -> ! {
     eprintln!("error: {msg}");
@@ -43,7 +35,7 @@ fn die(msg: impl std::fmt::Display) -> ! {
 
 #[tokio::main]
 async fn main() {
-    // Load sarca.conf (or migrate legacy .env) before reading Config.
+    install_crypto_provider();
     conf::load_sarca_conf();
 
     let config = Config::new().unwrap_or_else(|e| die(format!("failed to load config: {e}")));
@@ -79,10 +71,10 @@ async fn main() {
     init_db(&db).await;
     delete_orphan_storage_workers(&db).await;
 
-    match crate::repositories::files::FilesRepository::new(&db).list_stale_upload_ids().await {
+    match sarca::repositories::files::FilesRepository::new(&db).list_stale_upload_ids().await {
         Ok(ids) if !ids.is_empty() => {
             let n = ids.len();
-            match crate::services::trash::purge_file_ids(
+            match sarca::services::trash::purge_file_ids(
                 &db,
                 &config.telegram_api_base_url,
                 config.telegram_rate_limit,
@@ -98,7 +90,6 @@ async fn main() {
         Err(e) => tracing::warn!("stale upload cleanup failed: {e}"),
     }
 
-    // Leftover *.upload spools cannot belong to a live request after restart.
     match cleanup_upload_spool(&config.work_dir).await {
         Ok(0) => {},
         Ok(n) => tracing::info!("removed {n} leftover upload spool file(s) under WORK_DIR"),
@@ -110,8 +101,6 @@ async fn main() {
     let config_copy = config.clone();
     let workers = config.workers;
 
-    // One SQLite pool is shared by the HTTP router and every background worker;
-    // SQLite serializes writers, so extra pools would only add lock contention.
     let manager_db = db.clone();
     tokio::spawn(async move {
         let mut manager = StorageManager::new(rx, manager_db, config_copy);
@@ -147,14 +136,66 @@ async fn main() {
         Duration::from_secs(5),
     );
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
-    let app_state = AppState::new(db, config, tx);
+    let app_state = AppState::new(db, config.clone(), tx);
     let server = Server::build_server(workers.into(), Arc::new(app_state));
-    server.run(&addr).await;
+
+    let plain_http = env::var("SARCA_PLAIN_HTTP").ok().is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+    let cert_store = CertStore::new(&config.certs_dir);
+    cert_store.ensure_dir().await.unwrap_or_else(|e| die(format!("failed to create CERTS_DIR: {e}")));
+    let has_certs = cert_store.load_cert().await.ok().flatten().is_some()
+        && cert_store.load_key().await.ok().flatten().is_some();
+    let tls_mode = !plain_http && (config.tls_hostname.is_some() || has_certs);
+
+    if tls_mode {
+        let identity = config.tls_identity().unwrap_or_else(|e| die(format!("invalid TLS_HOSTNAME: {e}")));
+        let material = load_or_generate_material(&cert_store, identity.as_ref())
+            .await
+            .unwrap_or_else(|e| die(format!("failed to load TLS material: {e}")));
+
+        let https_base = config
+            .tls_hostname
+            .as_ref()
+            .map(|h| format!("https://{h}"))
+            .unwrap_or_else(|| format!("https://127.0.0.1:{}", config.https_addr.port()));
+
+        let runtime = new_runtime(
+            config.https_addr,
+            config.acme_http_addr,
+            &material,
+            https_base.clone(),
+        );
+
+        if let Some(id) = identity {
+            let _issuer = StubAcmeIssuer::new(AcmeConfig::new(
+                config.acme_directory.clone(),
+                config.acme_http_addr,
+                id,
+                runtime.challenges.clone(),
+            ));
+            tracing::info!(
+                "ACME issuer stub ready (directory={}, http={})",
+                config.acme_directory,
+                config.acme_http_addr
+            );
+        }
+
+        tracing::info!(
+            "TLS mode: HTTPS {} (TCP+H3), ACME http://{}",
+            config.https_addr,
+            config.acme_http_addr
+        );
+        server.run_tls(runtime).await;
+    } else {
+        if plain_http {
+            tracing::info!("SARCA_PLAIN_HTTP=1 — plain HTTP on PORT (dev/e2e escape hatch)");
+        } else {
+            tracing::info!("no TLS_HOSTNAME or certs — plain HTTP on PORT");
+        }
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
+        server.run(&addr).await;
+    }
 }
 
-/// Remove leftover `*.upload` spool files under `WORK_DIR/uploads`.
-/// After a process restart no in-flight multipart can own them.
 async fn cleanup_upload_spool(work_dir: &str) -> std::io::Result<usize> {
     let dir = Path::new(work_dir).join("uploads");
     let mut rd = match tokio::fs::read_dir(&dir).await {

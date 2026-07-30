@@ -1,9 +1,15 @@
 mod acme;
 mod renew;
+mod serve;
 mod store;
 
-pub use acme::{AcmeConfig, AcmeIssuer};
+pub use acme::{AcmeConfig, AcmeChallengeStore, AcmeIssuer, StubAcmeIssuer, register_challenge};
 pub use renew::renew_at;
+pub use serve::{
+    ChallengeStore, TlsMaterial, TlsRuntime, acme_router, build_quinn_config, build_rustls_config,
+    generate_self_signed, install_crypto_provider, load_or_generate_material, new_runtime,
+    parse_pem_material, serve_dual_tls,
+};
 pub use store::CertStore;
 
 use std::net::IpAddr;
@@ -23,6 +29,14 @@ pub enum TlsError {
     EmptyHostname,
     #[error("TLS_HOSTNAME is invalid")]
     InvalidHostname,
+    #[error("cannot generate self-signed cert without TLS_HOSTNAME")]
+    NoIdentityForSelfSigned,
+    #[error("failed to generate certificate")]
+    CertGen,
+    #[error("invalid PEM certificate or key")]
+    InvalidPem,
+    #[error("io error: {0}")]
+    Io(String),
 }
 
 /// Parse `TLS_HOSTNAME` — dotted IP → [`TlsIdentity::Ip`], otherwise DNS.
