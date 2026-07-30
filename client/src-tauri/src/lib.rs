@@ -264,12 +264,18 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     // Let the activity settle before system permission dialogs.
                     tokio::time::sleep(Duration::from_millis(600)).await;
-                    if let Err(e) = startup::ensure_runtime_access(&handle).await {
-                        tracing::warn!(error = %e, "android runtime access prompt failed");
-                        client_log::write_line(
-                            handle.state::<AppSyncState>().data_dir(),
-                            &format!("ensure_runtime_access failed: {e}"),
-                        );
+                    match startup::ensure_runtime_access(&handle).await {
+                        Ok(()) => {
+                            // First background tick may have raced the dialog; re-scan now.
+                            handle.state::<AppSyncState>().request_sync_wake();
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "android runtime access prompt failed");
+                            client_log::write_line(
+                                handle.state::<AppSyncState>().data_dir(),
+                                &format!("ensure_runtime_access failed: {e}"),
+                            );
+                        }
                     }
                 });
             }

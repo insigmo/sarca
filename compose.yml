@@ -4,8 +4,10 @@ services:
     image: ghcr.io/insigmo/sarca:latest
     volumes:
       - ./sarca.conf:/sarca.conf:ro
+      - ./docker/sarca-entrypoint.sh:/sarca-entrypoint.sh:ro
       - sarca-work-volume:/work
       - telegram-bot-api-data:/var/lib/telegram-bot-api
+    entrypoint: ["/bin/sh", "/sarca-entrypoint.sh"]
     environment:
       PORT: ${PORT:-8001}
       DATABASE_HOST: db
