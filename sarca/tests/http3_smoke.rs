@@ -54,13 +54,14 @@ async fn tcp_https_and_acme_challenge_serve_health() {
         acme_addr,
         &material,
         format!("https://127.0.0.1:{}", https_addr.port()),
+        Default::default(),
     );
 
     register_challenge(&runtime.challenges, "test-token", "test-key-auth");
 
     let router = Server::health_router();
     let server_task = tokio::spawn(async move {
-        serve_dual_tls(router, std::path::PathBuf::from("/dev/null"), runtime).await;
+        serve_dual_tls(router, std::path::PathBuf::from("/dev/null"), runtime, None).await;
     });
 
     sleep(Duration::from_millis(200)).await;
@@ -112,11 +113,12 @@ async fn h3_serves_health_when_endpoint_accepts() {
         acme_addr,
         &material,
         format!("https://127.0.0.1:{}", https_addr.port()),
+        Default::default(),
     );
 
     let router = Server::health_router();
     let server_task = tokio::spawn(async move {
-        serve_dual_tls(router, std::path::PathBuf::from("/dev/null"), runtime).await;
+        serve_dual_tls(router, std::path::PathBuf::from("/dev/null"), runtime, None).await;
     });
 
     sleep(Duration::from_millis(300)).await;

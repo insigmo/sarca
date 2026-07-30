@@ -132,17 +132,42 @@ pub fn new_runtime(
     acme_addr: SocketAddr,
     material: &TlsMaterial,
     https_redirect_base: String,
+    challenges: ChallengeStore,
 ) -> TlsRuntime {
     let tcp = build_rustls_config(material, TCP_ALPN);
     let quic = build_rustls_config(material, QUIC_ALPN);
     TlsRuntime {
         https_addr,
         acme_addr,
-        challenges: ChallengeStore::default(),
+        challenges,
         https_redirect_base,
         server_config: Arc::new(RwLock::new(tcp)),
         quinn_config: build_quinn_config(quic),
     }
+}
+
+impl TlsRuntime {
+    /// Hot-reload the TCP TLS certificate chain. QUIC/HTTP/3 requires a process restart.
+    pub fn reload_tcp_material(&self, material: &TlsMaterial) {
+        let tcp = build_rustls_config(material, TCP_ALPN);
+        *self.server_config.write().expect("tls lock") = tcp;
+        tracing::info!("TCP TLS certificate hot-reloaded");
+        tracing::warn!("HTTP/3 (QUIC) requires process restart to pick up renewed certificate");
+    }
+}
+
+/// Start the ACME http-01 + redirect listener (shared challenge store).
+pub fn spawn_acme_http_listener(
+    acme_addr: SocketAddr,
+    challenges: ChallengeStore,
+    https_redirect_base: String,
+) -> tokio::task::JoinHandle<()> {
+    let router = acme_router(challenges, https_redirect_base);
+    tokio::spawn(async move {
+        if let Err(e) = serve_acme_http(acme_addr, router).await {
+            tracing::error!("ACME HTTP listener failed: {e}");
+        }
+    })
 }
 
 pub fn acme_router(challenges: ChallengeStore, https_redirect_base: String) -> Router {
@@ -189,7 +214,12 @@ pub fn install_crypto_provider() {
 }
 
 /// Serve Axum over TCP TLS, QUIC HTTP/3, and ACME/redirect port concurrently.
-pub async fn serve_dual_tls(router: Router, ui_dir: std::path::PathBuf, runtime: TlsRuntime) {
+pub async fn serve_dual_tls(
+    router: Router,
+    ui_dir: std::path::PathBuf,
+    runtime: TlsRuntime,
+    acme_task: Option<tokio::task::JoinHandle<()>>,
+) {
     let tcp_router = router.clone();
     let h3_router = router;
     let acme_router = acme_router(runtime.challenges.clone(), runtime.https_redirect_base.clone());
@@ -221,10 +251,12 @@ pub async fn serve_dual_tls(router: Router, ui_dir: std::path::PathBuf, runtime:
         }
     });
 
-    let acme_task = tokio::spawn(async move {
-        if let Err(e) = serve_acme_http(acme_addr, acme_router).await {
-            tracing::error!("ACME HTTP listener failed: {e}");
-        }
+    let acme_task = acme_task.unwrap_or_else(|| {
+        tokio::spawn(async move {
+            if let Err(e) = serve_acme_http(acme_addr, acme_router).await {
+                tracing::error!("ACME HTTP listener failed: {e}");
+            }
+        })
     });
 
     let _ = tokio::join!(tcp_task, h3_task, acme_task);
@@ -242,7 +274,7 @@ async fn serve_tcp_tls(
         let (stream, remote) = listener.accept().await?;
         let tls_cfg = cfg.read().expect("tls lock").clone();
         let acceptor = TlsAcceptor::from(tls_cfg);
-        let mut router = router.clone();
+        let router = router.clone();
         tokio::spawn(async move {
             match acceptor.accept(stream).await {
                 Ok(tls_stream) => {

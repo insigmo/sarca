@@ -23,8 +23,9 @@ use sarca::{
     startup::{create_superuser, delete_orphan_storage_workers, init_db},
     storage_manager::StorageManager,
     tls::{
-        AcmeConfig, CertStore, StubAcmeIssuer, install_crypto_provider, load_or_generate_material,
-        new_runtime,
+        acme_enabled, ChallengeStore, CertStore, InstantAcmeIssuer, install_crypto_provider,
+        load_or_generate_material, new_runtime, save_issued, spawn_acme_http_listener,
+        spawn_renewal_task,
     },
 };
 
@@ -148,9 +149,6 @@ async fn main() {
 
     if tls_mode {
         let identity = config.tls_identity().unwrap_or_else(|e| die(format!("invalid TLS_HOSTNAME: {e}")));
-        let material = load_or_generate_material(&cert_store, identity.as_ref())
-            .await
-            .unwrap_or_else(|e| die(format!("failed to load TLS material: {e}")));
 
         let https_base = config
             .tls_hostname
@@ -158,25 +156,72 @@ async fn main() {
             .map(|h| format!("https://{h}"))
             .unwrap_or_else(|| format!("https://127.0.0.1:{}", config.https_addr.port()));
 
+        let challenges = ChallengeStore::default();
+        let acme_task = spawn_acme_http_listener(
+            config.acme_http_addr,
+            challenges.clone(),
+            https_base.clone(),
+        );
+
+        // Give the ACME listener time to bind before http-01 validation.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        if acme_enabled(&config) {
+            if let Some(ref id) = identity {
+                let issuer = InstantAcmeIssuer::from_parts(
+                    config.acme_directory.clone(),
+                    config.acme_http_addr,
+                    id.clone(),
+                    challenges.clone(),
+                    &cert_store,
+                );
+                match issuer.issue().await {
+                    Ok(issued) => {
+                        save_issued(&cert_store, &issued)
+                            .await
+                            .unwrap_or_else(|e| die(format!("failed to save ACME certificate: {e}")));
+                        tracing::info!(
+                            "ACME certificate issued (not_after={})",
+                            issued.not_after
+                        );
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            "ACME issuance failed ({e}); falling back to stored or self-signed certificate"
+                        );
+                    },
+                }
+            }
+        } else {
+            tracing::info!("ACME disabled (SARCA_ACME=0 or empty ACME_DIRECTORY); using stored/self-signed TLS");
+        }
+
+        let material = load_or_generate_material(&cert_store, identity.as_ref())
+            .await
+            .unwrap_or_else(|e| die(format!("failed to load TLS material: {e}")));
+
         let runtime = new_runtime(
             config.https_addr,
             config.acme_http_addr,
             &material,
-            https_base.clone(),
+            https_base,
+            challenges,
         );
 
-        if let Some(id) = identity {
-            let _issuer = StubAcmeIssuer::new(AcmeConfig::new(
-                config.acme_directory.clone(),
-                config.acme_http_addr,
-                id,
-                runtime.challenges.clone(),
-            ));
-            tracing::info!(
-                "ACME issuer stub ready (directory={}, http={})",
-                config.acme_directory,
-                config.acme_http_addr
-            );
+        if acme_enabled(&config) {
+            if let Some(id) = identity {
+                spawn_renewal_task(
+                    InstantAcmeIssuer::from_parts(
+                        config.acme_directory.clone(),
+                        config.acme_http_addr,
+                        id,
+                        runtime.challenges.clone(),
+                        &cert_store,
+                    ),
+                    cert_store.clone(),
+                    runtime.clone(),
+                );
+            }
         }
 
         tracing::info!(
@@ -184,7 +229,7 @@ async fn main() {
             config.https_addr,
             config.acme_http_addr
         );
-        server.run_tls(runtime).await;
+        server.run_tls(runtime, Some(acme_task)).await;
     } else {
         if plain_http {
             tracing::info!("SARCA_PLAIN_HTTP=1 — plain HTTP on PORT (dev/e2e escape hatch)");
