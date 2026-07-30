@@ -214,19 +214,50 @@ impl<R: Runtime> AndroidDcimMediaSource<R> {
     }
 }
 
-/// True when `local_path` looks like a DCIM root — the only place MediaStore
-/// can see files a raw filesystem walk cannot (scoped-storage `content://`
-/// entries). AutoUpload bindings pointed elsewhere (e.g. a user-picked
-/// non-DCIM folder) must fall back to a plain walk instead: MediaStore only
-/// indexes DCIM, so treating any AutoUpload binding as MediaStore-backed
-/// would silently show zero files for those.
+/// True when `local_path` is DCIM itself or lives under a DCIM subfolder
+/// (e.g. `.../DCIM/Camera`) — the only place MediaStore can see files a raw
+/// filesystem walk cannot (scoped-storage `content://` entries). AutoUpload
+/// bindings pointed elsewhere (e.g. a user-picked non-DCIM folder) must fall
+/// back to a plain walk instead: MediaStore only indexes DCIM, so treating
+/// any AutoUpload binding as MediaStore-backed would silently show zero
+/// files for those.
 #[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn is_dcim_local_path(local_path: &str) -> bool {
+    dcim_path_segments(local_path).is_some()
+}
+
+/// Splits `local_path` into (nothing) when it doesn't contain a `DCIM` path
+/// segment, or `Some(subfolder)` when it does — `subfolder` is empty for the
+/// DCIM root itself, or the path underneath it (e.g. `Camera`,
+/// `Camera/2024`) for a binding rooted at a DCIM subfolder.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn dcim_path_segments(local_path: &str) -> Option<String> {
     let trimmed = local_path.trim().trim_end_matches('/');
     if trimmed.is_empty() {
-        return false;
+        return None;
     }
-    trimmed == "/storage/emulated/0/DCIM" || trimmed.rsplit('/').next() == Some("DCIM")
+    let segments: Vec<&str> = trimmed.split('/').filter(|s| !s.is_empty()).collect();
+    let idx = segments.iter().position(|&s| s == "DCIM")?;
+    Some(segments[idx + 1..].join("/"))
+}
+
+/// Restricts MediaStore results to a DCIM subfolder binding (e.g.
+/// `DCIM/Camera`) so a Camera-only binding doesn't upload the whole DCIM
+/// tree (Screenshots, WhatsApp, etc.). No-op when the binding is rooted at
+/// DCIM itself.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn filter_to_dcim_subfolder(
+    candidates: Vec<LocalCandidate>,
+    local_path: &str,
+) -> Vec<LocalCandidate> {
+    let Some(subfolder) = dcim_path_segments(local_path).filter(|s| !s.is_empty()) else {
+        return candidates;
+    };
+    let prefix = format!("{subfolder}/");
+    candidates
+        .into_iter()
+        .filter(|c| c.relative_path.starts_with(&prefix))
+        .collect()
 }
 
 #[async_trait]
@@ -236,7 +267,8 @@ impl<R: Runtime> LocalMediaSource for AndroidDcimMediaSource<R> {
         #[cfg(target_os = "android")]
         {
             if media_only && is_dcim_local_path(&binding.local_path) {
-                return self.list_dcim_via_mediastore().await;
+                let candidates = self.list_dcim_via_mediastore().await?;
+                return Ok(filter_to_dcim_subfolder(candidates, &binding.local_path));
             }
         }
         // FolderUpload/Sync, an AutoUpload binding not rooted at DCIM, and
@@ -265,9 +297,65 @@ mod tests {
         assert!(is_dcim_local_path("/storage/emulated/0/DCIM/"));
         assert!(is_dcim_local_path("/sdcard/DCIM"));
         assert!(is_dcim_local_path("DCIM"));
-        assert!(!is_dcim_local_path("/storage/emulated/0/DCIM/Camera"));
+        // Subfolders under DCIM (e.g. Camera) are scoped-storage-only too —
+        // a raw filesystem walk sees nothing there, so these must also route
+        // through MediaStore rather than falling through to WalkDir.
+        assert!(is_dcim_local_path("/storage/emulated/0/DCIM/Camera"));
+        assert!(is_dcim_local_path("/storage/emulated/0/DCIM/Camera/"));
+        assert!(is_dcim_local_path("/sdcard/DCIM/Camera/2024"));
         assert!(!is_dcim_local_path("/storage/emulated/0/Pictures"));
         assert!(!is_dcim_local_path(""));
         assert!(!is_dcim_local_path("/storage/emulated/0/Download"));
+        // A folder that merely starts with "DCIM" as a substring (not a full
+        // path segment) must not match.
+        assert!(!is_dcim_local_path("/storage/emulated/0/DCIMBackup"));
+    }
+
+    #[test]
+    fn dcim_path_segments_extracts_subfolder() {
+        assert_eq!(
+            dcim_path_segments("/storage/emulated/0/DCIM").as_deref(),
+            Some("")
+        );
+        assert_eq!(
+            dcim_path_segments("/storage/emulated/0/DCIM/Camera").as_deref(),
+            Some("Camera")
+        );
+        assert_eq!(
+            dcim_path_segments("/storage/emulated/0/DCIM/Camera/2024/").as_deref(),
+            Some("Camera/2024")
+        );
+        assert_eq!(dcim_path_segments("/storage/emulated/0/Pictures"), None);
+    }
+
+    fn candidate(relative_path: &str) -> LocalCandidate {
+        LocalCandidate {
+            relative_path: relative_path.to_string(),
+            absolute_path: std::path::PathBuf::from("/tmp").join(relative_path),
+            size: 1,
+            mtime_ms: 0,
+            ephemeral: false,
+        }
+    }
+
+    #[test]
+    fn filter_to_dcim_subfolder_keeps_everything_at_dcim_root() {
+        let candidates = vec![candidate("Camera/a.jpg"), candidate("Screenshots/b.jpg")];
+        let filtered =
+            filter_to_dcim_subfolder(candidates.clone(), "/storage/emulated/0/DCIM");
+        assert_eq!(filtered.len(), candidates.len());
+    }
+
+    #[test]
+    fn filter_to_dcim_subfolder_restricts_to_camera_only() {
+        let candidates = vec![
+            candidate("Camera/a.jpg"),
+            candidate("Screenshots/b.jpg"),
+            candidate("Camera/nested/c.jpg"),
+        ];
+        let filtered =
+            filter_to_dcim_subfolder(candidates, "/storage/emulated/0/DCIM/Camera");
+        let paths: Vec<_> = filtered.iter().map(|c| c.relative_path.as_str()).collect();
+        assert_eq!(paths, vec!["Camera/a.jpg", "Camera/nested/c.jpg"]);
     }
 }

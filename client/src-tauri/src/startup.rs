@@ -51,7 +51,8 @@ pub async fn ensure_runtime_access<R: Runtime>(app: &tauri::AppHandle<R>) -> Res
         let result = handle.run_mobile_plugin::<serde_json::Value>("ensureRuntimeAccess", ());
         let _ = tx.send(result);
     });
-    match tokio::time::timeout(std::time::Duration::from_secs(30), rx).await {
+    // User may take a while on the system permission dialog; do not race the grant.
+    match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
         Ok(Ok(Ok(_))) => Ok(()),
         Ok(Ok(Err(e))) => Err(e.to_string()),
         Ok(Err(e)) => Err(e.to_string()),
