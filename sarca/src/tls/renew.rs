@@ -1,15 +1,14 @@
-use std::{
-    io::Cursor,
-    time::Duration,
-};
+use std::{io::Cursor, time::Duration};
 
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use tracing::Instrument;
 use x509_parser::prelude::FromDer;
 
 use super::{
+    CertStore,
+    TlsRuntime,
     acme::{self, InstantAcmeIssuer, IssuedCertificate, save_issued},
-    parse_pem_material, CertStore, TlsRuntime,
+    parse_pem_material,
 };
 
 /// Schedule certificate renewal one day before `notAfter` (LE short-lived profile).
@@ -32,11 +31,7 @@ pub fn parse_not_after(cert_pem: &str) -> Result<DateTime<Utc>, acme::AcmeError>
 }
 
 /// Background task: sleep until [`renew_at`], re-issue via ACME, hot-reload TCP TLS.
-pub fn spawn_renewal_task(
-    issuer: InstantAcmeIssuer,
-    cert_store: CertStore,
-    runtime: TlsRuntime,
-) {
+pub fn spawn_renewal_task(issuer: InstantAcmeIssuer, cert_store: CertStore, runtime: TlsRuntime) {
     tokio::spawn(
         async move {
             loop {
@@ -45,17 +40,15 @@ pub fn spawn_renewal_task(
                     _ => None,
                 };
 
-                let Some(renew_at_time) = sleep_until else {
-                    tokio::time::sleep(Duration::from_secs(3600)).await;
+                let Some(due_at) = sleep_until else {
+                    tokio::time::sleep(Duration::from_hours(1)).await;
                     continue;
                 };
 
                 let now = Utc::now();
-                if renew_at_time > now {
-                    let delay = (renew_at_time - now)
-                        .to_std()
-                        .unwrap_or_else(|_| Duration::from_secs(60));
-                    tracing::info!("ACME renewal scheduled at {renew_at_time}");
+                if due_at > now {
+                    let delay = (due_at - now).to_std().unwrap_or_else(|_| Duration::from_mins(1));
+                    tracing::info!("ACME renewal scheduled at {due_at}");
                     tokio::time::sleep(delay).await;
                 }
 
@@ -65,7 +58,7 @@ pub fn spawn_renewal_task(
                     Err(e) => tracing::error!("ACME renewal failed: {e}"),
                 }
 
-                tokio::time::sleep(Duration::from_secs(300)).await;
+                tokio::time::sleep(Duration::from_mins(5)).await;
             }
         }
         .instrument(tracing::info_span!("acme_renewal")),
@@ -77,14 +70,18 @@ async fn renew_once(
     cert_store: &CertStore,
     runtime: &TlsRuntime,
 ) -> Result<(), acme::AcmeError> {
-    let issued = issuer.issue().await?;
-    save_issued(cert_store, &issued).await?;
-    apply_renewed_material(runtime, &issued)?;
+    let bundle = issuer.issue().await?;
+    save_issued(cert_store, &bundle).await?;
+    apply_renewed_material(runtime, &bundle)?;
     Ok(())
 }
 
-fn apply_renewed_material(runtime: &TlsRuntime, issued: &IssuedCertificate) -> Result<(), acme::AcmeError> {
-    let material = parse_pem_material(&issued.cert_pem, &issued.key_pem).map_err(|_| acme::AcmeError::InvalidCert)?;
+fn apply_renewed_material(
+    runtime: &TlsRuntime,
+    issued: &IssuedCertificate,
+) -> Result<(), acme::AcmeError> {
+    let material = parse_pem_material(&issued.cert_pem, &issued.key_pem)
+        .map_err(|_| acme::AcmeError::InvalidCert)?;
     runtime.reload_tcp_material(&material);
     Ok(())
 }

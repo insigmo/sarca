@@ -3,21 +3,39 @@ mod renew;
 mod serve;
 mod store;
 
+use std::net::IpAddr;
+
 pub use acme::{
-    acme_enabled, identity_to_identifier, save_issued, AcmeConfig, AcmeChallengeStore, AcmeError,
-    AcmeIssuer, InstantAcmeIssuer, IssuedCertificate, StubAcmeIssuer, register_challenge,
+    AcmeChallengeStore,
+    AcmeConfig,
+    AcmeError,
+    AcmeIssuer,
+    InstantAcmeIssuer,
+    IssuedCertificate,
     SHORTLIVED_PROFILE,
+    StubAcmeIssuer,
+    acme_enabled,
+    identity_to_identifier,
+    register_challenge,
+    save_issued,
 };
 pub use renew::{parse_not_after, renew_at, spawn_renewal_task};
 pub use serve::{
-    ChallengeStore, TlsMaterial, TlsRuntime, acme_router, build_quinn_config, build_rustls_config,
-    generate_self_signed, install_crypto_provider, load_or_generate_material, new_runtime,
-    parse_pem_material, serve_dual_tls, spawn_acme_http_listener,
+    ChallengeStore,
+    TlsMaterial,
+    TlsRuntime,
+    acme_router,
+    build_quinn_config,
+    build_rustls_config,
+    generate_self_signed,
+    install_crypto_provider,
+    load_or_generate_material,
+    new_runtime,
+    parse_pem_material,
+    serve_dual_tls,
+    spawn_acme_http_listener,
 };
 pub use store::CertStore;
-
-use std::net::IpAddr;
-
 use thiserror::Error;
 
 /// TLS certificate identity: DNS name or IP address (LE short-lived SAN).
@@ -79,7 +97,10 @@ mod tests {
     #[test]
     fn parse_ipv6_hostname() {
         let id = parse_tls_identity("2001:db8::1").unwrap();
-        assert_eq!(id, TlsIdentity::Ip(IpAddr::V6(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1))));
+        assert_eq!(
+            id,
+            TlsIdentity::Ip(IpAddr::V6(Ipv6Addr::new(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1)))
+        );
     }
 
     #[test]

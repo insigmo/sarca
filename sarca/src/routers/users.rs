@@ -5,11 +5,11 @@ use axum::{
     Json,
     Router,
     extract::State,
+    http::StatusCode,
     middleware,
     response::IntoResponse,
     routing::get,
 };
-use axum::http::StatusCode;
 
 use crate::{
     common::{

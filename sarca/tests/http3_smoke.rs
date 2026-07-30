@@ -54,7 +54,7 @@ async fn tcp_https_and_acme_challenge_serve_health() {
         acme_addr,
         &material,
         format!("https://127.0.0.1:{}", https_addr.port()),
-        Default::default(),
+        std::sync::Arc::default(),
     );
 
     register_challenge(&runtime.challenges, "test-token", "test-key-auth");
@@ -69,15 +69,10 @@ async fn tcp_https_and_acme_challenge_serve_health() {
     let body = get_tcp_https(&format!("https://127.0.0.1:{}/health", https_addr.port())).await;
     assert_eq!(body, "ok");
 
-    let acme_client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .unwrap();
+    let acme_client =
+        reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
     let challenge = acme_client
-        .get(format!(
-            "http://127.0.0.1:{}/.well-known/acme-challenge/test-token",
-            acme_addr.port()
-        ))
+        .get(format!("http://127.0.0.1:{}/.well-known/acme-challenge/test-token", acme_addr.port()))
         .send()
         .await
         .unwrap()
@@ -86,19 +81,10 @@ async fn tcp_https_and_acme_challenge_serve_health() {
         .unwrap();
     assert_eq!(challenge, "test-key-auth");
 
-    let redirect = acme_client
-        .get(format!("http://127.0.0.1:{}/foo", acme_addr.port()))
-        .send()
-        .await
-        .unwrap();
+    let redirect =
+        acme_client.get(format!("http://127.0.0.1:{}/foo", acme_addr.port())).send().await.unwrap();
     assert_eq!(redirect.status(), reqwest::StatusCode::MOVED_PERMANENTLY);
-    assert!(redirect
-        .headers()
-        .get("location")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .starts_with("https://"));
+    assert!(redirect.headers().get("location").unwrap().to_str().unwrap().starts_with("https://"));
 
     server_task.abort();
 }
@@ -113,7 +99,7 @@ async fn h3_serves_health_when_endpoint_accepts() {
         acme_addr,
         &material,
         format!("https://127.0.0.1:{}", https_addr.port()),
-        Default::default(),
+        std::sync::Arc::default(),
     );
 
     let router = Server::health_router();
@@ -135,9 +121,11 @@ async fn h3_serves_health_when_endpoint_accepts() {
 
 async fn h3_get(url: &str) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     use h3_quinn::quinn;
-    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-    use rustls::ClientConfig;
+    use rustls::{
+        ClientConfig,
+        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+        pki_types::{CertificateDer, ServerName, UnixTime},
+    };
 
     #[derive(Debug)]
     struct SkipVerifier;
@@ -188,19 +176,18 @@ async fn h3_get(url: &str) -> Result<String, Box<dyn std::error::Error + Send + 
         .with_custom_certificate_verifier(Arc::new(SkipVerifier))
         .with_no_client_auth();
 
-    let mut endpoint = quinn::Endpoint::client(format!("127.0.0.1:0").parse()?)?;
+    let endpoint = quinn::Endpoint::client("127.0.0.1:0".parse()?)?;
     let conn = endpoint
         .connect_with(
-            quinn::ClientConfig::new(Arc::new(
-                quinn::crypto::rustls::QuicClientConfig::try_from(Arc::new(cfg))?,
-            )),
+            quinn::ClientConfig::new(Arc::new(quinn::crypto::rustls::QuicClientConfig::try_from(
+                Arc::new(cfg),
+            )?)),
             format!("{host}:{port}").parse()?,
             host,
         )?
         .await?;
 
-    let (mut conn, mut send_request) =
-        h3::client::new(h3_quinn::Connection::new(conn)).await?;
+    let (mut conn, mut send_request) = h3::client::new(h3_quinn::Connection::new(conn)).await?;
     let conn_task = tokio::spawn(async move {
         let _ = conn.wait_idle().await;
     });

@@ -68,13 +68,10 @@ impl<'d> StoragePurgeRepository<'d> {
             SarcaError::Unknown
         })?;
 
-        sqlx::query("BEGIN IMMEDIATE")
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| {
-                tracing::error!("storage purge claim_pending begin: {e}");
-                SarcaError::Unknown
-            })?;
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await.map_err(|e| {
+            tracing::error!("storage purge claim_pending begin: {e}");
+            SarcaError::Unknown
+        })?;
 
         let result = async {
             let ids: Vec<(i64,)> = sqlx::query_as(
