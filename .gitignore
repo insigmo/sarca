@@ -34,9 +34,7 @@ client/dist/
 client/src-tauri/gen/
 
 # Local docs override; tracked specs live under docs/superpowers
-docs/*
-!docs/superpowers/
-!docs/superpowers/**
+docs/superpowers/**
 
 .idea/
 .vscode/
