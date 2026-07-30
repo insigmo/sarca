@@ -23,6 +23,7 @@ use crate::{
         storages::StoragesRouter,
         users::UsersRouter,
     },
+    tls::{TlsRuntime, serve_dual_tls},
 };
 
 pub struct Server {
@@ -91,8 +92,9 @@ impl Server {
             .layer(app_cors)
     }
 
+    /// Plain HTTP on `PORT` (e2e / dev when `SARCA_PLAIN_HTTP=1` or no TLS config).
     pub async fn run(self, addr: &SocketAddr) {
-        let listener = std::net::TcpListener::bind(addr).unwrap_or_else(|e| {
+        let listener = tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| {
             eprintln!();
             eprintln!("error: cannot bind to {addr}: {e}");
             eprintln!(
@@ -103,7 +105,6 @@ impl Server {
             );
             std::process::exit(1);
         });
-        listener.set_nonblocking(true).expect("failed to set nonblocking on listener");
 
         let public = format!("http://127.0.0.1:{}", addr.port());
         eprintln!();
@@ -117,11 +118,18 @@ impl Server {
         eprintln!();
         tracing::info!("listening on {public} (bound to {addr})");
 
-        axum::Server::from_tcp(listener)
-            .expect("failed to create HTTP server from listener")
-            .serve(self.router.into_make_service())
-            .await
-            .unwrap();
+        axum::serve(listener, self.router).await.unwrap();
+    }
+
+    /// HTTP/3 (UDP) + TCP HTTPS on `HTTPS_ADDR`, ACME http-01 + redirect on `ACME_HTTP_ADDR`.
+    pub async fn run_tls(self, runtime: TlsRuntime) {
+        let ui_dir = self.ui_dir.clone();
+        serve_dual_tls(self.router, ui_dir, runtime).await;
+    }
+
+    /// Minimal health router for TLS integration tests (no UI directory required).
+    pub fn health_router() -> Router {
+        Router::new().route("/health", axum::routing::get(|| async { "ok" }))
     }
 }
 
