@@ -707,7 +707,7 @@ impl<'t> TelegramBotApi<'t> {
                         "B",
                         "bot_api.rs:open_local_bot_api_file",
                         "local open ok",
-                        json!({ "attempt": attempt, "path_prefix": path.get(..48).unwrap_or(path) }),
+                        &json!({ "attempt": attempt, "path_prefix": path.get(..48).unwrap_or(path) }),
                     );
                     // #endregion
                     return Ok(file);
@@ -729,7 +729,7 @@ impl<'t> TelegramBotApi<'t> {
                             "B",
                             "bot_api.rs:open_local_bot_api_file",
                             "local open retry",
-                            json!({
+                            &json!({
                                 "attempt": attempt,
                                 "kind": format!("{:?}", e.kind()),
                                 "path_prefix": path.get(..64).unwrap_or(path)
@@ -765,12 +765,12 @@ impl<'t> TelegramBotApi<'t> {
         Err(SarcaError::TelegramAPIError(format!("Failed to open local bot api file: {e}")))
     }
 
-    /// Best-effort NDJSON debug line under WORK_DIR (nobody-writable after entrypoint chown).
+    /// Best-effort NDJSON debug line under `WORK_DIR` (nobody-writable after entrypoint chown).
     fn agent_debug_log(
         hypothesis_id: &str,
         location: &str,
         message: &str,
-        data: serde_json::Value,
+        data: &serde_json::Value,
     ) -> std::io::Result<()> {
         use std::io::Write;
         let work = std::env::var("WORK_DIR").unwrap_or_else(|_| "/work".into());
@@ -782,7 +782,7 @@ impl<'t> TelegramBotApi<'t> {
             "location": location,
             "message": message,
             "data": data,
-            "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+            "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis())
         });
         writeln!(f, "{line}")
     }
@@ -806,7 +806,7 @@ impl<'t> TelegramBotApi<'t> {
             "C",
             "bot_api.rs:download_local_path_via_http",
             "http fallback",
-            json!({ "masked": masked }),
+            &json!({ "masked": masked }),
         );
         // #endregion
         let response = Self::send_with_retries("download/file-fallback", None, || {
@@ -841,7 +841,7 @@ impl<'t> TelegramBotApi<'t> {
             "C",
             "bot_api.rs:download_local_path_via_http_stream",
             "http stream fallback",
-            json!({ "masked": masked }),
+            &json!({ "masked": masked }),
         );
         // #endregion
         let response = reqwest::Client::new().get(url).send().await?.error_for_status()?;
