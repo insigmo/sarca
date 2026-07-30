@@ -215,6 +215,13 @@ mod tests {
             "TELEGRAM_CHUNK_SIZE_MB",
             "TELEGRAM_VIDEO_CHUNK_SIZE_MB",
             "WORK_DIR",
+            "HTTPS_ADDR",
+            "ACME_HTTP_ADDR",
+            "TLS_HOSTNAME",
+            "ACME_DIRECTORY",
+            "CERTS_DIR",
+            "SARCA_PLAIN_HTTP",
+            "SARCA_ACME",
         ] {
             env::remove_var(k);
         }
