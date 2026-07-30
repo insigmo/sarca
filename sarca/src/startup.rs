@@ -8,7 +8,7 @@ use crate::{
     repositories::{storage_workers::StorageWorkersRepository, users::UsersRepository},
 };
 
-/// Current embedded schema version for fresh SQLite databases.
+/// Current embedded schema version for fresh `SQLite` databases (`schema_version`).
 pub const SCHEMA_VERSION: i64 = 1;
 
 #[inline]

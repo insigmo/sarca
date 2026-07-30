@@ -6,9 +6,6 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::mpsc;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
 use sarca::{
     common::{channels::ClientMessage, db::pool::get_pool, routing::app_state::AppState},
     conf,
@@ -23,11 +20,20 @@ use sarca::{
     startup::{create_superuser, delete_orphan_storage_workers, init_db},
     storage_manager::StorageManager,
     tls::{
-        acme_enabled, ChallengeStore, CertStore, InstantAcmeIssuer, install_crypto_provider,
-        load_or_generate_material, new_runtime, save_issued, spawn_acme_http_listener,
+        CertStore,
+        ChallengeStore,
+        InstantAcmeIssuer,
+        acme_enabled,
+        install_crypto_provider,
+        load_or_generate_material,
+        new_runtime,
+        save_issued,
+        spawn_acme_http_listener,
         spawn_renewal_task,
     },
 };
+use tokio::sync::mpsc;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn die(msg: impl std::fmt::Display) -> ! {
     eprintln!("error: {msg}");
@@ -140,28 +146,30 @@ async fn main() {
     let app_state = AppState::new(db, config.clone(), tx);
     let server = Server::build_server(workers.into(), Arc::new(app_state));
 
-    let plain_http = env::var("SARCA_PLAIN_HTTP").ok().is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+    let plain_http = env::var("SARCA_PLAIN_HTTP")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let cert_store = CertStore::new(&config.certs_dir);
-    cert_store.ensure_dir().await.unwrap_or_else(|e| die(format!("failed to create CERTS_DIR: {e}")));
+    cert_store
+        .ensure_dir()
+        .await
+        .unwrap_or_else(|e| die(format!("failed to create CERTS_DIR: {e}")));
     let has_certs = cert_store.load_cert().await.ok().flatten().is_some()
         && cert_store.load_key().await.ok().flatten().is_some();
     let tls_mode = !plain_http && (config.tls_hostname.is_some() || has_certs);
 
     if tls_mode {
-        let identity = config.tls_identity().unwrap_or_else(|e| die(format!("invalid TLS_HOSTNAME: {e}")));
+        let identity =
+            config.tls_identity().unwrap_or_else(|e| die(format!("invalid TLS_HOSTNAME: {e}")));
 
-        let https_base = config
-            .tls_hostname
-            .as_ref()
-            .map(|h| format!("https://{h}"))
-            .unwrap_or_else(|| format!("https://127.0.0.1:{}", config.https_addr.port()));
+        let https_base = config.tls_hostname.as_ref().map_or_else(
+            || format!("https://127.0.0.1:{}", config.https_addr.port()),
+            |h| format!("https://{h}"),
+        );
 
         let challenges = ChallengeStore::default();
-        let acme_task = spawn_acme_http_listener(
-            config.acme_http_addr,
-            challenges.clone(),
-            https_base.clone(),
-        );
+        let acme_task =
+            spawn_acme_http_listener(config.acme_http_addr, challenges.clone(), https_base.clone());
 
         // Give the ACME listener time to bind before http-01 validation.
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -176,14 +184,11 @@ async fn main() {
                     &cert_store,
                 );
                 match issuer.issue().await {
-                    Ok(issued) => {
-                        save_issued(&cert_store, &issued)
-                            .await
-                            .unwrap_or_else(|e| die(format!("failed to save ACME certificate: {e}")));
-                        tracing::info!(
-                            "ACME certificate issued (not_after={})",
-                            issued.not_after
-                        );
+                    Ok(bundle) => {
+                        save_issued(&cert_store, &bundle).await.unwrap_or_else(|e| {
+                            die(format!("failed to save ACME certificate: {e}"))
+                        });
+                        tracing::info!("ACME certificate issued (not_after={})", bundle.not_after);
                     },
                     Err(e) => {
                         tracing::warn!(
@@ -193,7 +198,9 @@ async fn main() {
                 }
             }
         } else {
-            tracing::info!("ACME disabled (SARCA_ACME=0 or empty ACME_DIRECTORY); using stored/self-signed TLS");
+            tracing::info!(
+                "ACME disabled (SARCA_ACME=0 or empty ACME_DIRECTORY); using stored/self-signed TLS"
+            );
         }
 
         let material = load_or_generate_material(&cert_store, identity.as_ref())
