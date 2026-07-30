@@ -1,27 +1,118 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
-use sqlx::{PgPool, QueryBuilder};
+use chrono::{Duration as ChronoDuration, Utc};
+use sqlx::{QueryBuilder, SqlitePool};
 use uuid::Uuid;
 
 use crate::{
-    common::db::errors::map_not_found,
+    common::db::{errors::map_not_found, sql::push_uuid_list},
     errors::{SarcaError, SarcaResult},
     models::{
         file_chunks::{FileChunk, FileChunkWithReplica},
-        files::{DBFSElement, FSElement, File, InFile, SearchFSElement},
+        files::{FSElement, File, InFile, SearchFSElement},
     },
 };
 
 pub const FILES_TABLE: &str = "files";
 pub const CHUNKS_TABLE: &str = "file_chunks";
 
+fn next_segment<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    let rest = if prefix.is_empty() {
+        path
+    } else if let Some(stripped) = path.strip_prefix(prefix) {
+        stripped
+    } else {
+        return None;
+    };
+    rest.split('/').next().filter(|segment| !segment.is_empty())
+}
+
+fn pick_duplicate_path(path_with_stem: &str, suffix: &str, existing: &[String]) -> String {
+    let base = format!("{path_with_stem}{suffix}");
+    if !existing.iter().any(|path| path == &base) {
+        return base;
+    }
+
+    if existing.len() == 1 {
+        return format!("{path_with_stem} (1){suffix}");
+    }
+
+    let number_start = path_with_stem.len() + 2;
+    let mut indices: Vec<i64> = existing
+        .iter()
+        .filter(|path| *path != &base)
+        .filter_map(|path| {
+            if path.len() <= number_start + suffix.len() + 1 {
+                return None;
+            }
+            let number_end = path.len() - suffix.len() - 1;
+            path[number_start..number_end].parse().ok().filter(|index| *index > 0)
+        })
+        .collect();
+    indices.sort_unstable();
+
+    let mut prev = 0i64;
+    for index in indices {
+        if prev != index - 1 {
+            return format!("{path_with_stem} ({next}){suffix}", next = prev + 1);
+        }
+        prev = index;
+    }
+    format!("{path_with_stem} ({next}){suffix}", next = prev + 1)
+}
+
+fn aggregate_dir_listing(
+    rows: Vec<(String, i64, Option<String>)>,
+    prefix: &str,
+) -> Vec<FSElement> {
+    #[derive(Default)]
+    struct Acc {
+        is_file: bool,
+        file_size: i64,
+        folder_size_sum: i64,
+        has_thumb: bool,
+    }
+
+    let mut entries: HashMap<String, Acc> = HashMap::new();
+
+    for (path, size, thumb_telegram_file_id) in rows {
+        let Some(name) = next_segment(&path, prefix).map(str::to_owned) else {
+            continue;
+        };
+        let entry_path = format!("{prefix}{name}");
+        let acc = entries.entry(name.clone()).or_default();
+
+        if entry_path == path {
+            acc.is_file = true;
+            acc.file_size = size;
+            acc.has_thumb = thumb_telegram_file_id.is_some();
+        } else {
+            acc.folder_size_sum += size;
+        }
+    }
+
+    entries
+        .into_iter()
+        .map(|(name, acc)| {
+            let path = format!("{prefix}{name}");
+            FSElement {
+                path,
+                name,
+                is_file: acc.is_file,
+                size: if acc.is_file { acc.file_size } else { acc.folder_size_sum },
+                has_thumb: acc.has_thumb,
+            }
+        })
+        .collect()
+}
+
 /// General repo for files and chunks since they share common logic
 pub struct FilesRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> FilesRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
@@ -100,78 +191,63 @@ impl<'d> FilesRepository<'d> {
             (splited_path.join("/"), suffix)
         };
 
-        let chars_to_skip = path_with_stem.len() + 3; // if the name is `kek` then it's gonna be a len of `kek (` + 1
-        let skip_chars_from_back = chars_to_skip + suffix.len();
-
-        // https://www.db-fiddle.com/f/i6XCvTSi5cpAVu5AAfiNqm/16
-        sqlx::query_as(
+        let candidates: Vec<(String,)> = sqlx::query_as(
             format!(
                 r#"
-                INSERT INTO files (path, storage_id, id, size, is_uploaded, chunk_size_bytes, source_created_at, source_mtime, content_hash)
-                WITH f AS (
-                    SELECT path
-                    FROM {FILES_TABLE}
-                    WHERE storage_id = $3 AND deleted_at IS NULL AND path ~ ('^(' || regexp_quote($1) || regexp_quote($2) || '|' || regexp_quote($1) || ' \(\d+\)' || regexp_quote($2) || ')$')
-                    ORDER BY path DESC
-                )
-                SELECT
-                    CASE
-                        WHEN NOT EXISTS(
-                            SELECT path
-                            FROM f
-                            WHERE path = $1 || $2
-                        ) THEN $1 || $2
-                        ELSE
-                            CASE
-                                WHEN COUNT(f) > 1 THEN (
-                                    WITH cte AS (
-                                        SELECT *
-                                        FROM (
-                                            SELECT SUBSTRING(f.path, {chars_to_skip}, LENGTH(f.path) - {skip_chars_from_back})::numeric AS i
-                                            FROM f
-                                            WHERE f.path != $1 || $2
-                                        ) AS n
-                                        WHERE i > 0
-                                        ORDER BY i
-                                    )
-                                    SELECT $1 || ' (' || COALESCE(t.next_i, (
-                                        SELECT cte.i + 1
-                                        FROM cte
-                                        ORDER BY cte.i DESC
-                                        LIMIT 1
-                                    )) || ')' || $2
-                                    FROM cte
-                                    FULL OUTER JOIN (
-                                        SELECT prev_i + 1 AS next_i
-                                        FROM (
-                                            SELECT LAG(i, 1, 0) OVER() AS prev_i, i
-                                            FROM cte
-                                        ) t
-                                        WHERE prev_i != t.i - 1
-                                        LIMIT 1
-                                    ) t ON cte.i = t.next_i
-                                    LIMIT 1
-                                )
-                                WHEN COUNT(f) = 1 THEN $1 || ' (1)' || $2
-                                ELSE $1 || $2
-                            END
-                    END,
-                    $3,
-                    $4,
-                    $5,
-                    false,
-                    $6,
-                    $7,
-                    $8,
-                    $9
-                FROM f
-                RETURNING *;
-            "#
+                SELECT path
+                FROM {FILES_TABLE}
+                WHERE storage_id = $1
+                  AND deleted_at IS NULL
+                  AND (path = $2 || $3 OR path LIKE $2 || ' (%)' || $3)
+                "#
             )
             .as_str(),
         )
+        .bind(in_obj.storage_id)
         .bind(&path_with_stem)
         .bind(&suffix)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+
+        let base_path = format!("{path_with_stem}{suffix}");
+        let matching: Vec<String> = candidates
+            .into_iter()
+            .map(|(path,)| path)
+            .filter(|path| {
+                if path == &base_path {
+                    return true;
+                }
+                if !path.starts_with(&path_with_stem) || !path.ends_with(&suffix) {
+                    return false;
+                }
+                let middle = &path[path_with_stem.len()..path.len() - suffix.len()];
+                middle.starts_with(" (")
+                    && middle.ends_with(')')
+                    && middle[2..middle.len() - 1].chars().all(|ch| ch.is_ascii_digit())
+                    && !middle[2..middle.len() - 1].is_empty()
+            })
+            .collect();
+
+        let final_path = pick_duplicate_path(&path_with_stem, &suffix, &matching);
+
+        sqlx::query_as(
+            format!(
+                r#"
+                INSERT INTO {FILES_TABLE} (
+                    path, storage_id, id, size, is_uploaded, chunk_size_bytes,
+                    source_created_at, source_mtime, content_hash
+                )
+                VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8)
+                RETURNING *
+                "#
+            )
+            .as_str(),
+        )
+        .bind(&final_path)
         .bind(in_obj.storage_id)
         .bind(id)
         .bind(in_obj.size)
@@ -242,59 +318,26 @@ impl<'d> FilesRepository<'d> {
     ///
     /// `prefix` must be without leading and trailing slashes
     pub async fn list_dir(&self, storage_id: Uuid, prefix: &str) -> SarcaResult<Vec<FSElement>> {
-        let query = {
-            let adding_to_position = usize::from(!prefix.is_empty()) + 1;
-            let split_position = prefix.matches('/').count() + adding_to_position;
-            let split_part = format!("SPLIT_PART(path, '/', {split_position})");
-            let path_filter = if prefix.is_empty() { "" } else { "AND path LIKE $1 || '%'" };
-
-            format!(
-                "
-                SELECT
-                    DISTINCT {split_part} AS name,
-                    $1 || {split_part} = path AS is_file,
-                    CASE
-                        WHEN $1 || {split_part} = path THEN size
-                        ELSE (SELECT SUM(size) FROM {FILES_TABLE} WHERE deleted_at IS NULL AND \
-                 path LIKE $1 || {split_part} || '/' || '%')::BigInt
-                    END AS size,
-                    CASE
-                        WHEN $1 || {split_part} = path THEN (thumb_telegram_file_id IS NOT NULL)
-                        ELSE false
-                    END AS has_thumb
-                FROM {FILES_TABLE}
-                WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NULL AND \
-                 {split_part} <> '';
-            "
-            )
-        };
-
         let prefix = if prefix.is_empty() { prefix.to_string() } else { format!("{prefix}/") };
+        let path_filter = if prefix.is_empty() { String::new() } else { "AND path LIKE $1 || '%'".to_string() };
 
-        let fs_layer = sqlx::query_as::<_, DBFSElement>(&query)
-            .bind(&prefix)
-            .bind(storage_id)
-            .fetch_all(self.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
-            })?;
-        let fs_layer = fs_layer
-            .into_iter()
-            .map(|el| {
-                let path = format!("{prefix}{}", el.name);
-                FSElement {
-                    path,
-                    name: el.name,
-                    is_file: el.is_file,
-                    size: el.size,
-                    has_thumb: el.has_thumb,
-                }
-            })
-            .collect();
+        let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(&format!(
+            "
+            SELECT path, size, thumb_telegram_file_id
+            FROM {FILES_TABLE}
+            WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NULL
+            "
+        ))
+        .bind(&prefix)
+        .bind(storage_id)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
 
-        Ok(fs_layer)
+        Ok(aggregate_dir_listing(rows, &prefix))
     }
 
     pub async fn search(
@@ -309,7 +352,7 @@ impl<'d> FilesRepository<'d> {
                     path,
                     path NOT LIKE '%/' AS is_file
                 FROM {FILES_TABLE}
-                WHERE storage_id = $1 AND deleted_at IS NULL AND path ILIKE $2 || '%' || $3 || '%'
+                WHERE storage_id = $1 AND deleted_at IS NULL AND lower(path) LIKE lower($2) || '%' || lower($3) || '%'
             "
             )
             .as_str(),
@@ -349,7 +392,7 @@ impl<'d> FilesRepository<'d> {
         let row: (i64,) = sqlx::query_as(
             format!(
                 "
-                SELECT COALESCE(SUM(size), 0)::BigInt
+                SELECT COALESCE(SUM(size), 0)
                 FROM {FILES_TABLE}
                 WHERE storage_id = $1
                   AND is_uploaded
@@ -446,25 +489,25 @@ impl<'d> FilesRepository<'d> {
         }
         // Thumb is uploaded to the primary channel at upload time; try all storage
         // channels so purge still works if primary later rotated.
-        let rows: Vec<(i64, Option<i64>, Uuid)> = sqlx::query_as(
+        let mut builder = QueryBuilder::new(
             format!(
                 "
                 SELECT DISTINCT sc.chat_id, f.thumb_telegram_message_id, f.storage_id
                 FROM {FILES_TABLE} f
                 JOIN storage_channels sc ON sc.storage_id = f.storage_id
-                WHERE f.id = ANY($1)
-                  AND f.thumb_telegram_message_id IS NOT NULL
-                "
+                WHERE f.thumb_telegram_message_id IS NOT NULL
+                  AND f.id IN ("
             )
             .as_str(),
-        )
-        .bind(file_ids)
-        .fetch_all(self.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("{e}");
-            SarcaError::Unknown
-        })?;
+        );
+        push_uuid_list(&mut builder, file_ids);
+        builder.push(")");
+
+        let rows: Vec<(i64, Option<i64>, Uuid)> =
+            builder.build_query_as().fetch_all(self.db).await.map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
 
         Ok(rows
             .into_iter()
@@ -589,7 +632,7 @@ impl<'d> FilesRepository<'d> {
             sqlx::query(&format!(
                 "
                 UPDATE {FILES_TABLE}
-                SET deleted_at = NOW()
+                SET deleted_at = datetime('now')
                 WHERE storage_id = $1 AND deleted_at IS NULL AND path = $2;
                 "
             ))
@@ -603,7 +646,7 @@ impl<'d> FilesRepository<'d> {
             sqlx::query(&format!(
                 "
                 UPDATE {FILES_TABLE}
-                SET deleted_at = NOW()
+                SET deleted_at = datetime('now')
                 WHERE storage_id = $1
                   AND deleted_at IS NULL
                   AND (path = $2 OR path LIKE $2 || '%');
@@ -700,7 +743,7 @@ impl<'d> FilesRepository<'d> {
             sqlx::query(&format!(
                 "
                 UPDATE {FILES_TABLE}
-                SET path = $1 || SUBSTRING(path FROM {skip} + 1)
+                SET path = $1 || substr(path, {skip} + 1)
                 WHERE storage_id = $2
                   {deleted_filter}
                   AND (path = $3 OR path LIKE $3 || '%')
@@ -732,59 +775,26 @@ impl<'d> FilesRepository<'d> {
 
     /// Directory listing for trashed items under `prefix` (without leading/trailing slashes).
     pub async fn list_trash(&self, storage_id: Uuid, prefix: &str) -> SarcaResult<Vec<FSElement>> {
-        let query = {
-            let adding_to_position = usize::from(!prefix.is_empty()) + 1;
-            let split_position = prefix.matches('/').count() + adding_to_position;
-            let split_part = format!("SPLIT_PART(path, '/', {split_position})");
-            let path_filter = if prefix.is_empty() { "" } else { "AND path LIKE $1 || '%'" };
-
-            format!(
-                "
-                SELECT
-                    DISTINCT {split_part} AS name,
-                    $1 || {split_part} = path AS is_file,
-                    CASE
-                        WHEN $1 || {split_part} = path THEN size
-                        ELSE (SELECT SUM(size) FROM {FILES_TABLE} WHERE deleted_at IS NOT NULL AND \
-                 path LIKE $1 || {split_part} || '/' || '%')::BigInt
-                    END AS size,
-                    CASE
-                        WHEN $1 || {split_part} = path THEN (thumb_telegram_file_id IS NOT NULL)
-                        ELSE false
-                    END AS has_thumb
-                FROM {FILES_TABLE}
-                WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NOT NULL AND \
-                 {split_part} <> '';
-            "
-            )
-        };
-
         let prefix = if prefix.is_empty() { prefix.to_string() } else { format!("{prefix}/") };
+        let path_filter = if prefix.is_empty() { String::new() } else { "AND path LIKE $1 || '%'".to_string() };
 
-        let fs_layer = sqlx::query_as::<_, DBFSElement>(&query)
-            .bind(&prefix)
-            .bind(storage_id)
-            .fetch_all(self.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
-            })?;
-        let fs_layer = fs_layer
-            .into_iter()
-            .map(|el| {
-                let path = format!("{prefix}{}", el.name);
-                FSElement {
-                    path,
-                    name: el.name,
-                    is_file: el.is_file,
-                    size: el.size,
-                    has_thumb: el.has_thumb,
-                }
-            })
-            .collect();
+        let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(&format!(
+            "
+            SELECT path, size, thumb_telegram_file_id
+            FROM {FILES_TABLE}
+            WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NOT NULL
+            "
+        ))
+        .bind(&prefix)
+        .bind(storage_id)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
 
-        Ok(fs_layer)
+        Ok(aggregate_dir_listing(rows, &prefix))
     }
 
     /// Resolve trashed file ids matching a path or folder prefix.
@@ -864,14 +874,15 @@ impl<'d> FilesRepository<'d> {
         &self,
         older_than_days: i32,
     ) -> SarcaResult<Vec<(Uuid, Uuid)>> {
+        let cutoff = Utc::now() - ChronoDuration::days(i64::from(older_than_days));
         let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(&format!(
             "
             SELECT id, storage_id FROM {FILES_TABLE}
             WHERE deleted_at IS NOT NULL
-              AND deleted_at < NOW() - ($1::text || ' days')::interval
+              AND deleted_at < $1
             "
         ))
-        .bind(older_than_days)
+        .bind(cutoff)
         .fetch_all(self.db)
         .await
         .map_err(|e| {
@@ -885,14 +896,13 @@ impl<'d> FilesRepository<'d> {
         if ids.is_empty() {
             return Ok(());
         }
-        sqlx::query(&format!("DELETE FROM {FILES_TABLE} WHERE id = ANY($1)"))
-            .bind(ids)
-            .execute(self.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
-            })?;
+        let mut builder = QueryBuilder::new(format!("DELETE FROM {FILES_TABLE} WHERE id IN ("));
+        push_uuid_list(&mut builder, ids);
+        builder.push(")");
+        builder.build().execute(self.db).await.map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
         Ok(())
     }
 

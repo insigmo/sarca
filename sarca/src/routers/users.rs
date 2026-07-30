@@ -9,7 +9,7 @@ use axum::{
     response::IntoResponse,
     routing::get,
 };
-use reqwest::StatusCode;
+use axum::http::StatusCode;
 
 use crate::{
     common::{

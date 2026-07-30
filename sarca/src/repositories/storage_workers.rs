@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -11,11 +11,11 @@ const STORAGE_WORKERS_TABLE: &str = "storage_workers";
 const STORAGE_WORKERS_USAGES_TABLE: &str = "storage_workers_usages";
 
 pub struct StorageWorkersRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> StorageWorkersRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
@@ -243,7 +243,7 @@ impl<'d> StorageWorkersRepository<'d> {
         sqlx::query(&format!(
             "
             DELETE FROM {STORAGE_WORKERS_USAGES_TABLE}
-            WHERE dt < NOW() - INTERVAL '1 minute';
+            WHERE dt < datetime('now', '-1 minute');
             "
         ))
         .execute(&mut *transaction)

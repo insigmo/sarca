@@ -8,7 +8,7 @@ use axum::{
     middleware,
     routing::{get, post},
 };
-use reqwest::StatusCode;
+use axum::http::StatusCode;
 use serde::Deserialize;
 
 use crate::{

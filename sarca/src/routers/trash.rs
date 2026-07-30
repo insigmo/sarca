@@ -20,12 +20,11 @@ use crate::{
 pub struct TrashRouter;
 
 impl TrashRouter {
-    pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>, axum::body::Body> {
+    pub fn get_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
             .route("/", get(Self::list).delete(Self::empty))
             .route("/restore", post(Self::restore))
             .route("/*path", delete(Self::delete_forever))
-            .with_state(state)
     }
 
     fn service(state: &AppState) -> TrashService<'_> {

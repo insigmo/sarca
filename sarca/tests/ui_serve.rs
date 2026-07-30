@@ -7,6 +7,7 @@ use axum::{
     body::Body,
     http::{HeaderValue, Request, StatusCode, header::CACHE_CONTROL},
 };
+use http_body_util::BodyExt;
 use tower::{ServiceBuilder, ServiceExt};
 use tower_http::{
     services::{ServeDir, ServeFile},
@@ -52,7 +53,7 @@ async fn root_returns_index_html() {
         res.headers().get(CACHE_CONTROL).map(HeaderValue::as_bytes),
         Some(b"no-cache".as_slice())
     );
-    let body = hyper::body::to_bytes(res.into_body()).await.unwrap();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
     let text = String::from_utf8(body.to_vec()).unwrap();
     assert!(text.contains("<!doctype html>") || text.contains("<html"));
     let _ = fs::remove_dir_all(ui.parent().unwrap());
@@ -71,7 +72,7 @@ async fn spa_fallback_serves_index() {
         res.headers().get(CACHE_CONTROL).map(HeaderValue::as_bytes),
         Some(b"no-cache".as_slice())
     );
-    let body = hyper::body::to_bytes(res.into_body()).await.unwrap();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
     assert!(String::from_utf8_lossy(&body).contains("app.js"));
     let _ = fs::remove_dir_all(ui.parent().unwrap());
 }
@@ -89,7 +90,7 @@ async fn assets_are_served() {
         res.headers().get(CACHE_CONTROL).map(HeaderValue::as_bytes),
         Some(b"public, max-age=31536000, immutable".as_slice())
     );
-    let body = hyper::body::to_bytes(res.into_body()).await.unwrap();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&body[..], b"console.log('ok')");
     let _ = fs::remove_dir_all(ui.parent().unwrap());
 }

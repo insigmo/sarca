@@ -4,35 +4,9 @@ use uuid::Uuid;
 use crate::common::types::ChatId;
 
 #[derive(Debug, Serialize)]
-#[allow(clippy::struct_excessive_bools)]
 pub struct SetupStatusSchema {
     pub has_storages: bool,
-    pub uses_local_api: bool,
-    pub local_api_ready: bool,
-    pub local_api_skipped: bool,
-    /// Show Phase A when true.
-    pub needs_local_api_phase: bool,
     pub conf_writable: bool,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LocalApiCredentialsSchema {
-    pub api_id: String,
-    pub api_hash: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct LocalApiSaveResultSchema {
-    pub saved_to_settings: bool,
-    pub saved_to_conf: bool,
-    pub restart_hint: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct LocalApiVerifySchema {
-    pub ok: bool,
-    pub uses_local_api: bool,
-    pub message: String,
 }
 
 #[derive(Debug, Deserialize)]
