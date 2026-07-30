@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, Utc};
 use sha2::{Digest, Sha256};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -27,7 +27,7 @@ pub struct AuthService<'d> {
 }
 
 impl<'d> AuthService<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             repo: UsersRepository::new(db),
             tokens: EmailTokensRepository::new(db),

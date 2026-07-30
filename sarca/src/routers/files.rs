@@ -5,16 +5,15 @@ use axum::{
     Extension,
     Json,
     Router,
-    body::{Bytes, StreamBody},
+    body::{Body, Bytes},
     extract::{DefaultBodyLimit, Multipart, Path as RoutePath, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     middleware,
     response::{AppendHeaders, IntoResponse, Response},
     routing::{get, post},
 };
 use futures::{Stream, StreamExt};
 use percent_encoding::percent_decode_str;
-use reqwest::header;
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::mpsc,
@@ -60,7 +59,7 @@ impl FilesRouter {
     /// Max total uncompressed size of files packed into a folder ZIP.
     const MAX_FOLDER_ZIP_BYTES: i64 = 10 * 1024 * 1024 * 1024;
 
-    pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>, axum::body::Body> {
+    pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
             .route("/create_folder", post(Self::create_folder))
             .route("/upload", post(Self::upload))
@@ -70,7 +69,6 @@ impl FilesRouter {
             .route("/*path", get(Self::dynamic_get).delete(Self::delete))
             .layer(DefaultBodyLimit::disable())
             .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required))
-            .with_state(state)
     }
 
     fn service(state: &AppState) -> FilesService<'_> {
@@ -440,7 +438,7 @@ impl FilesRouter {
         let mut response = (
             StatusCode::CREATED,
             [(header::CONTENT_TYPE, "application/x-ndjson")],
-            StreamBody::new(stream),
+            Body::from_stream(stream),
         )
             .into_response();
         // Discourage reverse proxies / CDNs from buffering NDJSON progress lines.
@@ -590,7 +588,7 @@ impl FilesRouter {
 
         // Empty file
         if file_size == 0 {
-            let body = StreamBody::new(futures::stream::empty::<Result<Bytes, io::Error>>());
+            let body = Body::from_stream(futures::stream::empty::<Result<Bytes, io::Error>>());
             let mut response = body.into_response();
             *response.status_mut() = StatusCode::OK;
             let headers_mut = response.headers_mut();
@@ -709,7 +707,7 @@ impl FilesRouter {
         };
 
         let stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(stream);
-        let body = StreamBody::new(stream);
+        let body = Body::from_stream(stream);
 
         let mut response = (body).into_response();
         *response.status_mut() = status;
@@ -888,7 +886,7 @@ impl FilesRouter {
         };
 
         let stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(stream);
-        let body = StreamBody::new(stream);
+        let body = Body::from_stream(stream);
 
         let disposition = content_disposition_value("attachment", &format!("{folder_name}.zip"));
         let mut response = body.into_response();
@@ -1107,7 +1105,7 @@ type ChunkCandidates = HashMap<i16, Vec<(String, Uuid)>>;
 /// Active channels of a storage, ordered by download priority: current primary first,
 /// then the rest by position. Empty if the storage has no active channel.
 async fn ordered_active_channels(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     storage_id: Uuid,
 ) -> SarcaResult<Vec<StorageChannel>> {
     let storage = StoragesRepository::new(db).get_by_id(storage_id).await?;
@@ -1126,7 +1124,7 @@ async fn ordered_active_channels(
 /// For every chunk position of `file_id`, collect the `telegram_file_id` + `channel_id` of
 /// each active channel that already has it replicated, ordered by channel priority.
 async fn resolve_chunk_candidates(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     file_id: Uuid,
     channels: &[StorageChannel],
 ) -> SarcaResult<ChunkCandidates> {
@@ -1146,7 +1144,7 @@ async fn resolve_chunk_candidates(
 async fn ensure_chunk_cached(
     cache: &ChunkCache,
     base_url: &str,
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     rate: u8,
     storage_id: Uuid,
     candidates: &[(String, Uuid)],
@@ -1173,7 +1171,7 @@ async fn ensure_chunk_cached(
 /// folder downloads, which don't benefit from the on-disk chunk cache).
 async fn download_chunk_stream_with_failover(
     base_url: &str,
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     rate: u8,
     storage_id: Uuid,
     candidates: &[(String, Uuid)],
@@ -1281,7 +1279,7 @@ fn preview_jpeg_response(bytes: Vec<u8>) -> Response {
 fn prefetch_telegram_chunk(
     cache: ChunkCache,
     base_url: String,
-    db: sqlx::PgPool,
+    db: sqlx::SqlitePool,
     rate: u8,
     storage_id: Uuid,
     telegram_file_id: String,

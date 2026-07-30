@@ -1122,36 +1122,12 @@ const getPublicPreviewUrl = (token, relPath = '') => {
 /**
  * @typedef {Object} SetupStatus
  * @property {boolean} has_storages
- * @property {boolean} uses_local_api
- * @property {boolean} local_api_ready
- * @property {boolean} local_api_skipped
- * @property {boolean} needs_local_api_phase
  * @property {boolean} conf_writable
  */
 
 /** @returns {Promise<SetupStatus>} */
 const getSetupStatus = async () => {
 	return await apiRequest('/setup/status', 'get', getAuthToken())
-}
-
-/**
- * @param {string} api_id
- * @param {string} api_hash
- */
-const saveLocalApi = async (api_id, api_hash) => {
-	return await apiRequest('/setup/local-api', 'post', getAuthToken(), {
-		api_id,
-		api_hash,
-	})
-}
-
-/** @returns {Promise<{ ok: boolean, uses_local_api: boolean, message: string }>} */
-const verifyLocalApi = async () => {
-	return await apiRequest('/setup/local-api/verify', 'post', getAuthToken())
-}
-
-const skipLocalApi = async () => {
-	return await apiRequest('/setup/local-api/skip', 'post', getAuthToken())
 }
 
 /**
@@ -1404,9 +1380,6 @@ const API = {
 	},
 	setup: {
 		getSetupStatus,
-		saveLocalApi,
-		verifyLocalApi,
-		skipLocalApi,
 		validateBot,
 		pollChannel,
 		setupCreateStorage,
