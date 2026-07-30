@@ -795,6 +795,17 @@ pub async fn sync_now(
     binding_id: Option<String>,
 ) -> Result<(), String> {
     let _ = ensure_sync_session(&app, &state).await;
+    // Re-check (and, if needed, re-prompt for) media permission before every
+    // manual sync: the app-startup prompt is fire-and-forget from the
+    // caller's perspective, so a user who taps "Sync now" while the system
+    // dialog is still up (or was previously dismissed) gets another chance
+    // here instead of silently scanning zero files.
+    #[cfg(target_os = "android")]
+    {
+        if let Err(e) = crate::startup::ensure_runtime_access(&app).await {
+            tracing::warn!(error = %e, "ensure_runtime_access before sync_now failed");
+        }
+    }
     let prefs = load_prefs(&state);
     let allow_auto = allow_auto_upload(&prefs);
     let allow = |b: &Binding| {
