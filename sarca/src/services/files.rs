@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -41,14 +41,14 @@ pub struct FilesService<'d> {
     replicas_repo: ChunkReplicasRepository<'d>,
     storage_workers_repo: StorageWorkersRepository<'d>,
     access_repo: AccessRepository<'d>,
-    db: &'d PgPool,
+    db: &'d SqlitePool,
     base_url: &'d str,
     rate_limit: u8,
     tx: ClientSender,
 }
 
 impl<'d> FilesService<'d> {
-    pub fn new(db: &'d PgPool, tx: ClientSender, base_url: &'d str, rate_limit: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, tx: ClientSender, base_url: &'d str, rate_limit: u8) -> Self {
         let repo = FilesRepository::new(db);
         let replicas_repo = ChunkReplicasRepository::new(db);
         let storage_workers_repo = StorageWorkersRepository::new(db);

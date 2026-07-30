@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -17,13 +17,13 @@ use crate::{
 pub struct TrashService<'d> {
     files_repo: FilesRepository<'d>,
     access_repo: AccessRepository<'d>,
-    db: &'d PgPool,
+    db: &'d SqlitePool,
     base_url: &'d str,
     rate_limit: u8,
 }
 
 impl<'d> TrashService<'d> {
-    pub fn new(db: &'d PgPool, base_url: &'d str, rate_limit: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, base_url: &'d str, rate_limit: u8) -> Self {
         Self {
             files_repo: FilesRepository::new(db),
             access_repo: AccessRepository::new(db),
@@ -153,7 +153,7 @@ async fn live_conflict_at(
 /// delete forever) return after the DB purge and are not cancelled mid-GC.
 /// Soft-delete must not call this.
 pub async fn purge_file_ids(
-    db: &PgPool,
+    db: &SqlitePool,
     base_url: &str,
     rate_limit: u8,
     ids: &[Uuid],
@@ -202,7 +202,7 @@ pub async fn purge_file_ids(
 }
 
 async fn gc_telegram_messages(
-    db: &PgPool,
+    db: &SqlitePool,
     base_url: &str,
     rate_limit: u8,
     messages: Vec<(i64, i64, Uuid)>,

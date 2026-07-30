@@ -1,8 +1,8 @@
-use sqlx::{PgPool, QueryBuilder};
+use sqlx::{QueryBuilder, SqlitePool};
 use uuid::Uuid;
 
 use crate::{
-    common::types::ChatId,
+    common::{db::sql::push_uuid_list, types::ChatId},
     errors::{SarcaError, SarcaResult},
     models::chunk_replicas::{
         ChunkReplica,
@@ -34,11 +34,11 @@ pub struct SourceReplica {
 }
 
 pub struct ChunkReplicasRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> ChunkReplicasRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
@@ -269,26 +269,26 @@ impl<'d> ChunkReplicasRepository<'d> {
         if file_ids.is_empty() {
             return Ok(vec![]);
         }
-        let rows: Vec<(ChatId, Option<i64>, Uuid)> = sqlx::query_as(
+        let mut builder = QueryBuilder::new(
             format!(
                 "
                 SELECT DISTINCT sc.chat_id, cr.telegram_message_id, sc.storage_id
                 FROM {TABLE} cr
                 JOIN file_chunks fc ON fc.id = cr.chunk_id
                 JOIN storage_channels sc ON sc.id = cr.channel_id
-                WHERE fc.file_id = ANY($1)
-                  AND cr.telegram_message_id IS NOT NULL
-                "
+                WHERE cr.telegram_message_id IS NOT NULL
+                  AND fc.file_id IN ("
             )
             .as_str(),
-        )
-        .bind(file_ids)
-        .fetch_all(self.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("{e}");
-            SarcaError::Unknown
-        })?;
+        );
+        push_uuid_list(&mut builder, file_ids);
+        builder.push(")");
+
+        let rows: Vec<(ChatId, Option<i64>, Uuid)> =
+            builder.build_query_as().fetch_all(self.db).await.map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
 
         Ok(rows
             .into_iter()
