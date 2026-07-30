@@ -34,6 +34,7 @@ mod server;
 mod services;
 mod startup;
 mod storage_manager;
+mod tls;
 
 fn die(msg: impl std::fmt::Display) -> ! {
     eprintln!("error: {msg}");
