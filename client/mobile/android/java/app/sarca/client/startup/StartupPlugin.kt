@@ -8,9 +8,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import app.tauri.annotation.Command
+import app.tauri.annotation.PermissionCallback
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
@@ -24,9 +24,41 @@ import app.tauri.plugin.Plugin
 class StartupPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
   fun ensureRuntimeAccess(invoke: Invoke) {
-    requestMediaPermissions()
+    // Fire-and-forget: the battery-opt exemption is a nice-to-have and must
+    // never block the media-permission wait below — callers (the Rust side,
+    // and in turn the first sync tick) rely on this command not resolving
+    // until the user has actually answered the media permission prompt.
     requestIgnoreBatteryOptimizations()
+
+    val missing =
+      mediaPermissions().filter {
+        ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
+      }
+    if (missing.isEmpty()) {
+      invoke.resolve(JSObject())
+      return
+    }
+    // Uses Tauri's permission-request plumbing (backed by
+    // registerForActivityResult under the hood) so the invoke only resolves
+    // once the system dialog has been answered — either granted or denied.
+    handle!!.requestPermissions(invoke, missing.toTypedArray(), "onMediaPermissionResult")
+  }
+
+  @PermissionCallback
+  fun onMediaPermissionResult(invoke: Invoke) {
     invoke.resolve(JSObject())
+  }
+
+  /** Non-prompting check of current media permission state. */
+  @Command
+  fun hasMediaPermission(invoke: Invoke) {
+    val granted =
+      mediaPermissions().all {
+        ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED
+      }
+    val ret = JSObject()
+    ret.put("granted", granted)
+    invoke.resolve(ret)
   }
 
   @Command
@@ -78,15 +110,6 @@ class StartupPlugin(private val activity: Activity) : Plugin(activity) {
     }
   }
 
-  private fun requestMediaPermissions() {
-    val missing =
-      mediaPermissions().filter {
-        ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
-      }
-    if (missing.isEmpty()) return
-    ActivityCompat.requestPermissions(activity, missing.toTypedArray(), REQ_MEDIA)
-  }
-
   private fun requestIgnoreBatteryOptimizations() {
     try {
       val pm = activity.getSystemService(PowerManager::class.java) ?: return
@@ -104,9 +127,5 @@ class StartupPlugin(private val activity: Activity) : Plugin(activity) {
         // ignore — user can still change this in system settings
       }
     }
-  }
-
-  companion object {
-    private const val REQ_MEDIA = 0x5A01
   }
 }
