@@ -2,13 +2,12 @@ use std::sync::Arc;
 
 use axum::{
     extract::State,
-    headers::{Authorization, HeaderMapExt, authorization::Bearer},
-    http::Request,
+    http::{Request, header::AUTHORIZATION},
     middleware::Next,
     response::Response,
 };
 use percent_encoding::percent_decode_str;
-use reqwest::StatusCode;
+use axum::http::StatusCode;
 
 use crate::{
     common::{
@@ -21,18 +20,14 @@ use crate::{
 
 /// Middleware that requires to be logged in.
 /// Accepts `Authorization: Bearer …` or `?access_token=` (for `<video>` / `<img>` / `<iframe>`).
-pub async fn logged_in_required<B>(
+pub async fn logged_in_required(
     State(state): State<Arc<AppState>>,
-    mut req: Request<B>,
-    next: Next<B>,
+    mut req: Request<axum::body::Body>,
+    next: Next,
 ) -> Result<Response, (StatusCode, String)> {
     let auth_user = authenticate_request(&req, &state.config.secret_key)
         .map_err(<(StatusCode, String)>::from)?;
 
-    // A signature-valid token can still name a user that no longer exists (the row was
-    // dropped, e.g. by a db reset). Such a session is not merely empty — it silently
-    // owns nothing, so listings look empty and writes fail deep in access checks.
-    // Reject it here so the client refreshes and gets a token bound to a live row.
     let user = UsersRepository::new(&state.db)
         .get_by_id(auth_user.id)
         .await
@@ -42,9 +37,9 @@ pub async fn logged_in_required<B>(
     Ok(next.run(req).await)
 }
 
-fn authenticate_request<B>(req: &Request<B>, secret_key: &str) -> SarcaResult<AuthUser> {
-    if let Some(auth_header) = req.headers().typed_get::<Authorization<Bearer>>() {
-        return JWTManager::validate(auth_header.token(), secret_key);
+fn authenticate_request(req: &Request<axum::body::Body>, secret_key: &str) -> SarcaResult<AuthUser> {
+    if let Some(token) = bearer_token(req) {
+        return JWTManager::validate(&token, secret_key);
     }
 
     if let Some(query) = req.uri().query() {
@@ -62,4 +57,12 @@ fn authenticate_request<B>(req: &Request<B>, secret_key: &str) -> SarcaResult<Au
     }
 
     Err(SarcaError::NotAuthenticated)
+}
+
+fn bearer_token(req: &Request<axum::body::Body>) -> Option<String> {
+    req.headers()
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .map(str::to_owned)
 }
