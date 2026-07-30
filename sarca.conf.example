@@ -21,12 +21,27 @@ TELEGRAM_VIDEO_CHUNK_SIZE_MB=20
 # Where Sarca spools uploads before sending to Telegram
 WORK_DIR=/work
 
-# Must match compose db service (POSTGRES_*) when using Docker Compose.
-DATABASE_USER=sarca
-DATABASE_PASSWORD=sarca
-DATABASE_NAME=sarca
-DATABASE_HOST=db
-DATABASE_PORT=5432
+# SQLite metadata database (WAL mode). Default: {WORK_DIR}/sarca.sqlite
+SQLITE_PATH=/work/sarca.sqlite
+
+# --- TLS / ACME (Let's Encrypt short-lived) ---
+# Public domain or IP for certificate identity. Unset = plain HTTP on PORT only.
+TLS_HOSTNAME=
+
+# HTTPS listen address (HTTP/3 UDP + TLS TCP). Production: 0.0.0.0:443
+HTTPS_ADDR=0.0.0.0:443
+
+# ACME http-01 + redirect to HTTPS. Production: 0.0.0.0:80
+ACME_HTTP_ADDR=0.0.0.0:80
+
+# PEM store for ACME account + issued certs. Default: {WORK_DIR}/certs
+CERTS_DIR=/work/certs
+
+# ACME directory URL (Let's Encrypt production by default)
+ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory
+
+# Dev/e2e only: skip TLS and serve plain HTTP on PORT
+# SARCA_PLAIN_HTTP=1
 
 # --- Auth: email verify / password reset ---
 # Public base URL used in email links
