@@ -83,9 +83,9 @@ impl<'d> RecentFilesRepository<'d> {
             format!(
                 "
                 INSERT INTO {TABLE} (user_id, storage_id, file_id, viewed_at)
-                VALUES ($1, $2, $3, NOW())
+                VALUES ($1, $2, $3, datetime('now'))
                 ON CONFLICT (user_id, file_id) DO UPDATE
-                  SET viewed_at = NOW(),
+                  SET viewed_at = datetime('now'),
                       storage_id = EXCLUDED.storage_id
                 "
             )
