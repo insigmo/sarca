@@ -22,14 +22,10 @@ pub struct Config {
     /// Where to spool uploads and other temporary data.
     pub work_dir: String,
 
-    /// Max size of a single Telegram document chunk.
-    ///
-    /// - Official Bot API has a practical 20MB download limitation via `getFile`.
-    /// - Local Bot API can handle up to ~2GB per upload, so chunk size can be much larger.
+    /// Max size of a single Telegram document chunk (official Bot API ≤20 MB).
     pub telegram_chunk_size_mb: u32,
 
-    /// Chunk size for video uploads (smaller → progressive Range playback sooner).
-    /// Default 48 MB. Non-video files use `telegram_chunk_size_mb`.
+    /// Chunk size for video uploads (≤20 MB; smaller chunks → progressive Range playback sooner).
     pub telegram_video_chunk_size_mb: u32,
 
     /// Public base URL for email links (verify / reset).
@@ -66,30 +62,14 @@ impl Config {
         let access_token_expire_in_secs = Self::get_env_var("ACCESS_TOKEN_EXPIRE_IN_SECS")?;
         let refresh_token_expire_in_days = Self::get_env_var("REFRESH_TOKEN_EXPIRE_IN_DAYS")?;
         let secret_key = Self::get_env_var("SECRET_KEY")?;
-        let telegram_local_api: bool = Self::get_env_var_with_default("TELEGRAM_LOCAL_API", false)?;
-        let telegram_api_base_url: String = if telegram_local_api {
-            Self::get_env_var_with_default(
-                "TELEGRAM_API_BASE_URL",
-                "http://127.0.0.1:8081".to_owned(),
-            )?
-        } else {
-            Self::get_env_var_with_default(
-                "TELEGRAM_API_BASE_URL",
-                "https://api.telegram.org".to_owned(),
-            )?
-        };
+        let telegram_api_base_url = Self::get_env_var_with_default(
+            "TELEGRAM_API_BASE_URL",
+            "https://api.telegram.org".to_owned(),
+        )?;
         let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 18)?;
-
-        let default_chunk_mb = if telegram_api_base_url.contains("api.telegram.org") {
-            20
-        } else {
-            // stay under the 2GB limit with some headroom
-            1950
-        };
-        let telegram_chunk_size_mb =
-            Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", default_chunk_mb)?;
+        let telegram_chunk_size_mb = Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", 20u32)?;
         let telegram_video_chunk_size_mb =
-            Self::get_env_var_with_default("TELEGRAM_VIDEO_CHUNK_SIZE_MB", 48u32)?;
+            Self::get_env_var_with_default("TELEGRAM_VIDEO_CHUNK_SIZE_MB", 20u32)?;
 
         let public_base_url =
             Self::get_env_var_with_default("PUBLIC_BASE_URL", format!("http://127.0.0.1:{port}"))?;
@@ -189,7 +169,6 @@ mod tests {
             "ACCESS_TOKEN_EXPIRE_IN_SECS",
             "REFRESH_TOKEN_EXPIRE_IN_DAYS",
             "SECRET_KEY",
-            "TELEGRAM_LOCAL_API",
             "TELEGRAM_API_BASE_URL",
             "TELEGRAM_RATE_LIMIT",
             "TELEGRAM_CHUNK_SIZE_MB",
@@ -245,5 +224,16 @@ mod tests {
         clear_required();
         let err = Config::new().unwrap_err();
         assert!(matches!(err, SarcaError::EnvConfigLoadingError(_)));
+    }
+
+    #[test]
+    fn video_chunk_default_capped_at_20() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        let cfg = Config::new().unwrap();
+        assert!(cfg.telegram_video_chunk_size_mb <= 20);
+        assert!(cfg.telegram_chunk_size_mb <= 20);
+        clear_required();
     }
 }

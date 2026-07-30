@@ -35,10 +35,10 @@ jobs:
       ACCESS_TOKEN_EXPIRE_IN_SECS: "1800"
       REFRESH_TOKEN_EXPIRE_IN_DAYS: "14"
       SECRET_KEY: e2e-secret-key-for-ci-only-not-production
-      TELEGRAM_LOCAL_API: "false"
       TELEGRAM_API_BASE_URL: https://api.telegram.org
       TELEGRAM_RATE_LIMIT: "18"
       TELEGRAM_CHUNK_SIZE_MB: "20"
+      TELEGRAM_VIDEO_CHUNK_SIZE_MB: "20"
       WORK_DIR: ${{ github.workspace }}/work
       DATABASE_USER: sarca
       DATABASE_PASSWORD: sarca
@@ -117,10 +117,10 @@ jobs:
             echo "ACCESS_TOKEN_EXPIRE_IN_SECS=${ACCESS_TOKEN_EXPIRE_IN_SECS}"
             echo "REFRESH_TOKEN_EXPIRE_IN_DAYS=${REFRESH_TOKEN_EXPIRE_IN_DAYS}"
             echo "SECRET_KEY=${SECRET_KEY}"
-            echo "TELEGRAM_LOCAL_API=${TELEGRAM_LOCAL_API}"
             echo "TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL}"
             echo "TELEGRAM_RATE_LIMIT=${TELEGRAM_RATE_LIMIT}"
             echo "TELEGRAM_CHUNK_SIZE_MB=${TELEGRAM_CHUNK_SIZE_MB}"
+            echo "TELEGRAM_VIDEO_CHUNK_SIZE_MB=${TELEGRAM_VIDEO_CHUNK_SIZE_MB}"
             echo "WORK_DIR=${WORK_DIR}"
             echo "DATABASE_USER=${DATABASE_USER}"
             echo "DATABASE_PASSWORD=${DATABASE_PASSWORD}"

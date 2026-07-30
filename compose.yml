@@ -6,7 +6,6 @@ services:
       - ./sarca.conf:/sarca.conf:ro
       - ./docker/sarca-entrypoint.sh:/sarca-entrypoint.sh:ro
       - sarca-work-volume:/work
-      - telegram-bot-api-data:/var/lib/telegram-bot-api
     entrypoint: ["/bin/sh", "/sarca-entrypoint.sh"]
     environment:
       PORT: ${PORT:-8001}
@@ -19,26 +18,6 @@ services:
     restart: unless-stopped
     depends_on:
       - db
-      - telegram-bot-api
-    networks:
-      - sarca-network
-
-  telegram-bot-api:
-    container_name: telegram-bot-api
-    image: aiogram/telegram-bot-api:latest
-    volumes:
-      - ./sarca.conf:/sarca.conf:ro
-      - ./docker/telegram-bot-api-entrypoint.sh:/sarca-telegram-entrypoint.sh:ro
-      - telegram-bot-api-data:/var/lib/telegram-bot-api
-    env_file:
-      - sarca.conf
-    environment:
-      # Official Local Bot API flag (sarca.conf uses TELEGRAM_LOCAL_API for the app).
-      TELEGRAM_LOCAL: "1"
-    entrypoint: ["/bin/sh", "/sarca-telegram-entrypoint.sh"]
-    restart: unless-stopped
-    ports:
-      - "8081:8081"
     networks:
       - sarca-network
 
@@ -65,8 +44,6 @@ volumes:
     name: sarca-db-volume
   sarca-work-volume:
     name: sarca-work-volume
-  telegram-bot-api-data:
-    name: telegram-bot-api-data
 
 networks:
   sarca-network:

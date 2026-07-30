@@ -58,7 +58,7 @@ impl<'d> StoragesRepository<'d> {
                 SELECT
                     s.*,
                     COUNT(f.id) AS files_amount,
-                    COALESCE(SUM(f.size), 0)::BigInt as size,
+                    COALESCE(SUM(f.size), 0) as size,
                     EXISTS(
                         SELECT 1 FROM storage_channels sc
                         WHERE sc.storage_id = s.id AND sc.status = 'dead'
