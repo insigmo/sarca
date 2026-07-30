@@ -263,7 +263,7 @@ read_tty_secret() {
 # Prompt for admin + Telegram credentials when missing; ensure a real SECRET_KEY.
 configure_interactive() {
   local env_file="$1"
-  local email password api_id api_hash secret
+  local email password secret
 
   email="$(env_get_value "${env_file}" SUPERUSER_EMAIL)"
   password="$(env_get_value "${env_file}" SUPERUSER_PASS)"
@@ -288,34 +288,6 @@ configure_interactive() {
     env_set_key "${env_file}" SUPERUSER_PASS "${password}"
   else
     echo "Admin credentials already set — skipping prompt"
-  fi
-
-  api_id="$(env_get_value "${env_file}" TELEGRAM_API_ID)"
-  api_hash="$(env_get_value "${env_file}" TELEGRAM_API_HASH)"
-
-  if is_placeholder_telegram_value "${api_id}" || is_placeholder_telegram_value "${api_hash}"; then
-    echo
-    echo "Telegram API credentials (needed for Local Bot API / large files)"
-    echo "  1. Open https://my.telegram.org and sign in"
-    echo "  2. Open API development tools"
-    echo "  3. Create an app if needed, then copy api_id and api_hash"
-    echo
-    while is_placeholder_telegram_value "${api_id}"; do
-      api_id="$(read_tty "TELEGRAM_API_ID: ")"
-      if is_placeholder_telegram_value "${api_id}"; then
-        echo "api_id is required" >&2
-      fi
-    done
-    while is_placeholder_telegram_value "${api_hash}"; do
-      api_hash="$(read_tty "TELEGRAM_API_HASH: ")"
-      if is_placeholder_telegram_value "${api_hash}"; then
-        echo "api_hash is required" >&2
-      fi
-    done
-    env_set_key "${env_file}" TELEGRAM_API_ID "${api_id}"
-    env_set_key "${env_file}" TELEGRAM_API_HASH "${api_hash}"
-  else
-    echo "Telegram API credentials already set — skipping prompt"
   fi
 
   secret="$(env_get_value "${env_file}" SECRET_KEY)"
@@ -350,13 +322,11 @@ write_or_merge_conf() {
     "ACCESS_TOKEN_EXPIRE_IN_SECS=1800" \
     "REFRESH_TOKEN_EXPIRE_IN_DAYS=14" \
     "SECRET_KEY=${secret}" \
-    "TELEGRAM_LOCAL_API=false" \
     "TELEGRAM_API_BASE_URL=https://api.telegram.org" \
     "TELEGRAM_RATE_LIMIT=18" \
     "TELEGRAM_CHUNK_SIZE_MB=20" \
+    "TELEGRAM_VIDEO_CHUNK_SIZE_MB=20" \
     "WORK_DIR=${dest}/work" \
-    "TELEGRAM_API_ID=" \
-    "TELEGRAM_API_HASH=" \
     "DATABASE_USER=sarca" \
     "DATABASE_PASSWORD=sarca" \
     "DATABASE_NAME=sarca" \
@@ -541,12 +511,6 @@ install_docker() {
 
   configure_interactive "${dest}/sarca.conf"
 
-  # Local Bot API needs a small host entrypoint (permission fix across containers).
-  mkdir -p "${dest}/docker"
-  curl -fsSL -H "Cache-Control: no-cache" \
-    "${RAW}/docker/telegram-bot-api-entrypoint.sh" \
-    -o "${dest}/docker/telegram-bot-api-entrypoint.sh"
-  chmod +x "${dest}/docker/telegram-bot-api-entrypoint.sh"
   # Legacy: older compose.yml mounted sarca-entrypoint from the host.
   rm -f "${dest}/docker/sarca-entrypoint.sh"
 

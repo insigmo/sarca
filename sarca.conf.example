@@ -8,26 +8,18 @@ REFRESH_TOKEN_EXPIRE_IN_DAYS=14
 SECRET_KEY=XXX
 
 # --- Telegram integration ---
-# If TELEGRAM_LOCAL_API=true, the server will talk to the Local Telegram Bot API
-# (telegram-bot-api container) and can upload/download much larger chunks.
-TELEGRAM_LOCAL_API=true
-TELEGRAM_API_BASE_URL=http://telegram-bot-api:8081
+TELEGRAM_API_BASE_URL=https://api.telegram.org
 
 # Requests per minute per bot (scheduler enforces this via DB)
 TELEGRAM_RATE_LIMIT=18
 
-# Chunk size (MB). For local Bot API you can go up to ~1950 per document.
+# Chunk size (MB). Official Bot API supports up to 20 MB per document.
 # Files larger than this are split into multiple Telegram documents.
-TELEGRAM_CHUNK_SIZE_MB=1950
-# Videos use smaller chunks (default 48) so Range playback can start sooner.
-# TELEGRAM_VIDEO_CHUNK_SIZE_MB=48
+TELEGRAM_CHUNK_SIZE_MB=20
+TELEGRAM_VIDEO_CHUNK_SIZE_MB=20
 
 # Where Sarca spools uploads before sending to Telegram
 WORK_DIR=/work
-
-# Credentials from https://my.telegram.org (needed for the telegram-bot-api container)
-TELEGRAM_API_ID=00000000
-TELEGRAM_API_HASH=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 # Must match compose db service (POSTGRES_*) when using Docker Compose.
 DATABASE_USER=sarca
