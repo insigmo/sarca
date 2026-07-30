@@ -24,7 +24,7 @@ impl TrashRouter {
         Router::new()
             .route("/", get(Self::list).delete(Self::empty))
             .route("/restore", post(Self::restore))
-            .route("/*path", delete(Self::delete_forever))
+            .route("/{*path}", delete(Self::delete_forever))
     }
 
     fn service(state: &AppState) -> TrashService<'_> {

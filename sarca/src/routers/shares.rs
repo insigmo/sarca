@@ -23,7 +23,7 @@ impl SharesRouter {
     pub fn get_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
             .route("/", get(Self::list).post(Self::create))
-            .route("/:share_id", delete(Self::revoke))
+            .route("/{share_id}", delete(Self::revoke))
     }
 
     fn service(state: &AppState) -> SharesService<'_> {

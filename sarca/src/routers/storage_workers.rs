@@ -32,7 +32,7 @@ impl StorageWorkersRouter {
         Router::new()
             .route("/", get(Self::list).post(Self::create))
             .route("/has_workers", get(Self::has_storages_workers))
-            .route("/:id", delete(Self::delete))
+            .route("/{id}", delete(Self::delete))
             .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required))
             .with_state(state)
     }
