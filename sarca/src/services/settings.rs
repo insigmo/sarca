@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use crate::{
     errors::SarcaResult,
@@ -11,7 +11,7 @@ pub struct SettingsService<'d> {
 }
 
 impl<'d> SettingsService<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             repo: AppSettingsRepository::new(db),
         }

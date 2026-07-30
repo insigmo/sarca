@@ -1,60 +1,88 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{
+    SqlitePool,
+    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
+};
 
-pub async fn get_pool(dsn: &str, max_connection: u32, timeout: Duration) -> Result<PgPool, String> {
-    let connect =
-        PgPoolOptions::new().max_connections(max_connection).acquire_timeout(timeout).connect(dsn);
+/// How long `SQLite` waits for a competing writer before returning `SQLITE_BUSY`.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Open (creating if needed) the `SQLite` metadata database at `path`.
+///
+/// Every pooled connection gets `foreign_keys=ON`, `journal_mode=WAL` and a
+/// `busy_timeout`, so concurrent HTTP handlers and background workers can share
+/// one pool without tripping over the single writer lock.
+pub async fn get_pool(
+    path: &str,
+    max_connection: u32,
+    timeout: Duration,
+) -> Result<SqlitePool, String> {
+    create_parent_dir(path).await?;
+
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(BUSY_TIMEOUT);
+
+    let connect = SqlitePoolOptions::new()
+        .max_connections(max_connection.max(1))
+        .acquire_timeout(timeout)
+        .connect_with(options);
 
     match tokio::time::timeout(timeout, connect).await {
         Ok(Ok(db)) => {
             tracing::debug!("established connection with database");
             Ok(db)
         },
-        Ok(Err(e)) => Err(format!("database connection failed ({}): {e}", mask_dsn(dsn))),
+        Ok(Err(e)) => Err(format!("database connection failed ({path}): {e}")),
         Err(_) => {
-            Err(format!(
-                "database connection timed out after {}s ({})",
-                timeout.as_secs(),
-                mask_dsn(dsn)
-            ))
+            Err(format!("database connection timed out after {}s ({path})", timeout.as_secs()))
         },
     }
 }
 
-/// Hide password in <postgres://user:pass@host/db> for logs.
-pub fn mask_dsn(dsn: &str) -> String {
-    // postgres://user:password@host:port/db
-    if let Some(scheme_sep) = dsn.find("://") {
-        let scheme = &dsn[..scheme_sep + 3];
-        let rest = &dsn[scheme_sep + 3..];
-        if let Some(at) = rest.find('@') {
-            let creds = &rest[..at];
-            let host = &rest[at..];
-            if let Some(colon) = creds.find(':') {
-                let user = &creds[..colon];
-                return format!("{scheme}{user}:***{host}");
-            }
-        }
+async fn create_parent_dir(path: &str) -> Result<(), String> {
+    let Some(parent) = Path::new(path).parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
     }
-    dsn.to_string()
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|e| format!("failed to create database directory {}: {e}", parent.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn masks_password() {
-        assert_eq!(
-            mask_dsn("postgres://sarca:secret@127.0.0.1:5432/sarca"),
-            "postgres://sarca:***@127.0.0.1:5432/sarca"
-        );
-    }
+    #[tokio::test]
+    async fn creates_file_and_applies_pragmas() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("sarca.sqlite");
+        let path_str = path.to_str().unwrap();
 
-    #[test]
-    fn leaves_dsn_without_password() {
-        let dsn = "postgres://127.0.0.1/sarca";
-        assert_eq!(mask_dsn(dsn), dsn);
+        let pool = get_pool(path_str, 4, Duration::from_secs(5)).await.unwrap();
+
+        assert!(path.exists(), "database file should be created");
+
+        let journal_mode: String =
+            sqlx::query_scalar("PRAGMA journal_mode").fetch_one(&pool).await.unwrap();
+        assert_eq!(journal_mode.to_lowercase(), "wal");
+
+        let foreign_keys: i64 =
+            sqlx::query_scalar("PRAGMA foreign_keys").fetch_one(&pool).await.unwrap();
+        assert_eq!(foreign_keys, 1);
+
+        let busy_timeout: i64 =
+            sqlx::query_scalar("PRAGMA busy_timeout").fetch_one(&pool).await.unwrap();
+        assert_eq!(busy_timeout, BUSY_TIMEOUT.as_millis() as i64);
+
+        pool.close().await;
     }
 }

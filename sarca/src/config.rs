@@ -1,13 +1,24 @@
-use std::{env, str::FromStr};
+use std::{env, net::SocketAddr, str::FromStr};
 
-use super::errors::{SarcaError, SarcaResult};
+use super::{
+    errors::{SarcaError, SarcaResult},
+    tls::{parse_tls_identity, TlsIdentity, TlsError},
+};
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    pub db_uri: String,
-    pub db_uri_without_dbname: String,
-    pub db_name: String,
+    /// Path to the `SQLite` metadata database file.
+    pub sqlite_path: String,
     pub port: u16,
+    /// HTTPS listen address (HTTP/3 UDP + TLS TCP); dev default high port.
+    pub https_addr: SocketAddr,
+    /// ACME http-01 + redirect listener; dev default high port.
+    pub acme_http_addr: SocketAddr,
+    /// Certificate identity hostname (domain or IP); unset until install/ACME.
+    pub tls_hostname: Option<String>,
+    pub acme_directory: String,
+    /// Directory for ACME account + issued PEM material.
+    pub certs_dir: String,
     pub workers: u16,
     pub channel_capacity: u16,
     pub superuser_email: String,
@@ -23,14 +34,10 @@ pub struct Config {
     /// Where to spool uploads and other temporary data.
     pub work_dir: String,
 
-    /// Max size of a single Telegram document chunk.
-    ///
-    /// - Official Bot API has a practical 20MB download limitation via `getFile`.
-    /// - Local Bot API can handle up to ~2GB per upload, so chunk size can be much larger.
+    /// Max size of a single Telegram document chunk (official Bot API ≤20 MB).
     pub telegram_chunk_size_mb: u32,
 
-    /// Chunk size for video uploads (smaller → progressive Range playback sooner).
-    /// Default 48 MB. Non-video files use `telegram_chunk_size_mb`.
+    /// Chunk size for video uploads (≤20 MB; smaller chunks → progressive Range playback sooner).
     pub telegram_video_chunk_size_mb: u32,
 
     /// Public base URL for email links (verify / reset).
@@ -50,17 +57,40 @@ impl Config {
         self.smtp_host.is_some()
     }
 
+    /// Default `SQLite` file location: `sarca.sqlite` inside `WORK_DIR`.
+    pub fn default_sqlite_path(work_dir: &str) -> String {
+        format!("{}/sarca.sqlite", work_dir.trim_end_matches('/'))
+    }
+
+    /// Default PEM store: `certs/` inside `WORK_DIR`.
+    pub fn default_certs_dir(work_dir: &str) -> String {
+        format!("{}/certs", work_dir.trim_end_matches('/'))
+    }
+
+    /// Parsed TLS identity when `TLS_HOSTNAME` is set.
+    pub fn tls_identity(&self) -> Result<Option<TlsIdentity>, TlsError> {
+        match self.tls_hostname.as_deref() {
+            Some(host) => parse_tls_identity(host).map(Some),
+            None => Ok(None),
+        }
+    }
+
     pub fn new() -> SarcaResult<Self> {
-        let db_user: String = Self::get_env_var("DATABASE_USER")?;
-        let db_password: String = Self::get_env_var("DATABASE_PASSWORD")?;
-        let db_name: String = Self::get_env_var("DATABASE_NAME")?;
-        let db_host: String = Self::get_env_var("DATABASE_HOST")?;
-        let db_port: String = Self::get_env_var("DATABASE_PORT")?;
-        let db_uri =
-            { format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}") };
-        let db_uri_without_dbname =
-            { format!("postgres://{db_user}:{db_password}@{db_host}:{db_port}") };
+        let work_dir: String = Self::get_env_var_with_default("WORK_DIR", "work".to_owned())?;
+        let sqlite_path = Self::get_optional_env_var("SQLITE_PATH")
+            .unwrap_or_else(|| Self::default_sqlite_path(&work_dir));
         let port = Self::get_env_var("PORT")?;
+        let https_addr =
+            Self::get_env_var_with_default("HTTPS_ADDR", "0.0.0.0:8443".parse().expect("valid addr"))?;
+        let acme_http_addr =
+            Self::get_env_var_with_default("ACME_HTTP_ADDR", "0.0.0.0:8080".parse().expect("valid addr"))?;
+        let tls_hostname = Self::get_optional_env_var("TLS_HOSTNAME");
+        let acme_directory = Self::get_env_var_with_default(
+            "ACME_DIRECTORY",
+            "https://acme-v02.api.letsencrypt.org/directory".to_owned(),
+        )?;
+        let certs_dir = Self::get_optional_env_var("CERTS_DIR")
+            .unwrap_or_else(|| Self::default_certs_dir(&work_dir));
         let workers = Self::get_env_var("WORKERS")?;
         let channel_capacity = Self::get_env_var("CHANNEL_CAPACITY")?;
         let superuser_email = Self::get_env_var("SUPERUSER_EMAIL")?;
@@ -68,32 +98,14 @@ impl Config {
         let access_token_expire_in_secs = Self::get_env_var("ACCESS_TOKEN_EXPIRE_IN_SECS")?;
         let refresh_token_expire_in_days = Self::get_env_var("REFRESH_TOKEN_EXPIRE_IN_DAYS")?;
         let secret_key = Self::get_env_var("SECRET_KEY")?;
-        let telegram_local_api: bool = Self::get_env_var_with_default("TELEGRAM_LOCAL_API", false)?;
-        let telegram_api_base_url: String = if telegram_local_api {
-            Self::get_env_var_with_default(
-                "TELEGRAM_API_BASE_URL",
-                "http://127.0.0.1:8081".to_owned(),
-            )?
-        } else {
-            Self::get_env_var_with_default(
-                "TELEGRAM_API_BASE_URL",
-                "https://api.telegram.org".to_owned(),
-            )?
-        };
+        let telegram_api_base_url = Self::get_env_var_with_default(
+            "TELEGRAM_API_BASE_URL",
+            "https://api.telegram.org".to_owned(),
+        )?;
         let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 18)?;
-
-        let work_dir = Self::get_env_var_with_default("WORK_DIR", "work".to_owned())?;
-
-        let default_chunk_mb = if telegram_api_base_url.contains("api.telegram.org") {
-            20
-        } else {
-            // stay under the 2GB limit with some headroom
-            1950
-        };
-        let telegram_chunk_size_mb =
-            Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", default_chunk_mb)?;
+        let telegram_chunk_size_mb = Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", 20u32)?;
         let telegram_video_chunk_size_mb =
-            Self::get_env_var_with_default("TELEGRAM_VIDEO_CHUNK_SIZE_MB", 48u32)?;
+            Self::get_env_var_with_default("TELEGRAM_VIDEO_CHUNK_SIZE_MB", 20u32)?;
 
         let public_base_url =
             Self::get_env_var_with_default("PUBLIC_BASE_URL", format!("http://127.0.0.1:{port}"))?;
@@ -106,10 +118,13 @@ impl Config {
         let smtp_tls = Self::get_env_var_with_default("SMTP_TLS", "starttls".to_owned())?;
 
         Ok(Self {
-            db_uri,
-            db_uri_without_dbname,
-            db_name,
+            sqlite_path,
             port,
+            https_addr,
+            acme_http_addr,
+            tls_hostname,
+            acme_directory,
+            certs_dir,
             workers,
             channel_capacity,
             superuser_email,
@@ -186,11 +201,7 @@ mod tests {
 
     fn clear_required() {
         for k in [
-            "DATABASE_USER",
-            "DATABASE_PASSWORD",
-            "DATABASE_NAME",
-            "DATABASE_HOST",
-            "DATABASE_PORT",
+            "SQLITE_PATH",
             "PORT",
             "WORKERS",
             "CHANNEL_CAPACITY",
@@ -199,23 +210,24 @@ mod tests {
             "ACCESS_TOKEN_EXPIRE_IN_SECS",
             "REFRESH_TOKEN_EXPIRE_IN_DAYS",
             "SECRET_KEY",
-            "TELEGRAM_LOCAL_API",
             "TELEGRAM_API_BASE_URL",
             "TELEGRAM_RATE_LIMIT",
             "TELEGRAM_CHUNK_SIZE_MB",
             "TELEGRAM_VIDEO_CHUNK_SIZE_MB",
             "WORK_DIR",
+            "HTTPS_ADDR",
+            "ACME_HTTP_ADDR",
+            "TLS_HOSTNAME",
+            "ACME_DIRECTORY",
+            "CERTS_DIR",
+            "SARCA_PLAIN_HTTP",
+            "SARCA_ACME",
         ] {
             env::remove_var(k);
         }
     }
 
     fn set_required() {
-        env::set_var("DATABASE_USER", "sarca");
-        env::set_var("DATABASE_PASSWORD", "sarca");
-        env::set_var("DATABASE_NAME", "sarca");
-        env::set_var("DATABASE_HOST", "127.0.0.1");
-        env::set_var("DATABASE_PORT", "5432");
         env::set_var("PORT", "8001");
         env::set_var("WORKERS", "2");
         env::set_var("CHANNEL_CAPACITY", "8");
@@ -227,13 +239,30 @@ mod tests {
     }
 
     #[test]
+    fn default_sqlite_path_sits_beside_work_dir() {
+        assert_eq!(Config::default_sqlite_path("work"), "work/sarca.sqlite");
+        assert!(Config::default_sqlite_path("/var/lib/sarca/work").ends_with("sarca.sqlite"));
+    }
+
+    #[test]
+    fn sqlite_path_from_env_overrides_default() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        env::set_var("SQLITE_PATH", "/tmp/custom.sqlite");
+        let cfg = Config::new().unwrap();
+        assert_eq!(cfg.sqlite_path, "/tmp/custom.sqlite");
+        clear_required();
+    }
+
+    #[test]
     fn loads_port_from_env() {
         let _g = ENV_LOCK.lock().unwrap();
         clear_required();
         set_required();
         let cfg = Config::new().unwrap();
         assert_eq!(cfg.port, 8001);
-        assert!(cfg.db_uri.contains("127.0.0.1:5432/sarca"));
+        assert_eq!(cfg.sqlite_path, "work/sarca.sqlite");
         clear_required();
     }
 
@@ -243,5 +272,42 @@ mod tests {
         clear_required();
         let err = Config::new().unwrap_err();
         assert!(matches!(err, SarcaError::EnvConfigLoadingError(_)));
+    }
+
+    #[test]
+    fn video_chunk_default_capped_at_20() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        let cfg = Config::new().unwrap();
+        assert!(cfg.telegram_video_chunk_size_mb <= 20);
+        assert!(cfg.telegram_chunk_size_mb <= 20);
+        clear_required();
+    }
+
+    #[test]
+    fn tls_addrs_and_certs_dir_defaults_for_dev() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        let cfg = Config::new().unwrap();
+        assert_eq!(cfg.https_addr, "0.0.0.0:8443".parse().unwrap());
+        assert_eq!(cfg.acme_http_addr, "0.0.0.0:8080".parse().unwrap());
+        assert_eq!(cfg.certs_dir, "work/certs");
+        assert!(cfg.acme_directory.contains("letsencrypt.org"));
+        assert!(cfg.tls_hostname.is_none());
+        clear_required();
+    }
+
+    #[test]
+    fn tls_hostname_parses_to_identity() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        env::set_var("TLS_HOSTNAME", "203.0.113.10");
+        let cfg = Config::new().unwrap();
+        let id = cfg.tls_identity().unwrap().unwrap();
+        assert!(matches!(id, TlsIdentity::Ip(_)));
+        clear_required();
     }
 }

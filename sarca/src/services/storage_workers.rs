@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -18,7 +18,7 @@ pub struct StorageWorkersService<'d> {
 }
 
 impl<'d> StorageWorkersService<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         let repo = StorageWorkersRepository::new(db);
         let access_repo = AccessRepository::new(db);
         Self {
