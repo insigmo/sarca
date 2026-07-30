@@ -213,12 +213,13 @@ impl<'d> StorageWorkersRepository<'d> {
     pub async fn delete_orphans(&self) -> SarcaResult<u64> {
         let result = sqlx::query(&format!(
             "
-            DELETE FROM {STORAGE_WORKERS_TABLE} sw
-            WHERE sw.storage_id IS NULL
+            DELETE FROM {STORAGE_WORKERS_TABLE}
+            WHERE storage_id IS NULL
               AND NOT EXISTS (
                 SELECT 1
                 FROM storage_purge_jobs spj
-                WHERE spj.completed_at IS NULL AND spj.bot_token = sw.token
+                WHERE spj.completed_at IS NULL
+                  AND spj.bot_token = {STORAGE_WORKERS_TABLE}.token
               )
             "
         ))
