@@ -1107,7 +1107,7 @@ type ChunkCandidates = HashMap<i16, Vec<(String, Uuid)>>;
 /// Active channels of a storage, ordered by download priority: current primary first,
 /// then the rest by position. Empty if the storage has no active channel.
 async fn ordered_active_channels(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     storage_id: Uuid,
 ) -> SarcaResult<Vec<StorageChannel>> {
     let storage = StoragesRepository::new(db).get_by_id(storage_id).await?;
@@ -1126,7 +1126,7 @@ async fn ordered_active_channels(
 /// For every chunk position of `file_id`, collect the `telegram_file_id` + `channel_id` of
 /// each active channel that already has it replicated, ordered by channel priority.
 async fn resolve_chunk_candidates(
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     file_id: Uuid,
     channels: &[StorageChannel],
 ) -> SarcaResult<ChunkCandidates> {
@@ -1146,7 +1146,7 @@ async fn resolve_chunk_candidates(
 async fn ensure_chunk_cached(
     cache: &ChunkCache,
     base_url: &str,
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     rate: u8,
     storage_id: Uuid,
     candidates: &[(String, Uuid)],
@@ -1173,7 +1173,7 @@ async fn ensure_chunk_cached(
 /// folder downloads, which don't benefit from the on-disk chunk cache).
 async fn download_chunk_stream_with_failover(
     base_url: &str,
-    db: &sqlx::PgPool,
+    db: &sqlx::SqlitePool,
     rate: u8,
     storage_id: Uuid,
     candidates: &[(String, Uuid)],
@@ -1281,7 +1281,7 @@ fn preview_jpeg_response(bytes: Vec<u8>) -> Response {
 fn prefetch_telegram_chunk(
     cache: ChunkCache,
     base_url: String,
-    db: sqlx::PgPool,
+    db: sqlx::SqlitePool,
     rate: u8,
     storage_id: Uuid,
     telegram_file_id: String,

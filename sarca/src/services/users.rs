@@ -1,5 +1,5 @@
 use chrono::Utc;
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use crate::{
     common::{jwt_manager::AuthUser, password_manager::PasswordManager},
@@ -15,7 +15,7 @@ pub struct UsersService<'d> {
 }
 
 impl<'d> UsersService<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             repo: UsersRepository::new(db),
         }
