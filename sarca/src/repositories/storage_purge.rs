@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
+use sqlx::{QueryBuilder, Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -9,18 +9,18 @@ use crate::{
 };
 
 pub struct StoragePurgeRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> StoragePurgeRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
     }
 
     pub async fn enqueue_in_tx(
-        tx: &mut Transaction<'_, Postgres>,
+        tx: &mut Transaction<'_, Sqlite>,
         job_id: Uuid,
         storage_id: Uuid,
         bot_token: &str,

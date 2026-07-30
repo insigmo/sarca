@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -10,11 +10,11 @@ use crate::{
 };
 
 pub struct SyncService<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> SyncService<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }

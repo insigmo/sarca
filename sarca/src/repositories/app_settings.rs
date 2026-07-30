@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 
 use crate::errors::{SarcaError, SarcaResult};
 
@@ -13,11 +13,11 @@ pub const TELEGRAM_API_HASH_KEY: &str = "telegram_api_hash";
 pub const LOCAL_API_SKIPPED_KEY: &str = "local_api_skipped";
 
 pub struct AppSettingsRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> AppSettingsRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
