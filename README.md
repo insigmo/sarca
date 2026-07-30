@@ -15,18 +15,18 @@
 
 ## What this is
 
-Sarca is a personal / multi-user file cloud. Metadata lives in Postgres; file bytes are chunked and stored in Telegram via bots. The repo has two parts:
+Sarca is a personal / multi-user file cloud. Metadata lives in SQLite; file bytes are chunked and stored in Telegram via bots. The repo has two parts:
 
 | Part | Path | Role |
 | --- | --- | --- |
 | **Server** | `sarca/`, `ui/` | HTTP API + web UI (binary or Docker) |
 | **Clients** | `client/` | Native apps (desktop / mobile) that connect to your server |
 
-Needs: PostgreSQL, Telegram bots + a channel/group where the bots are admins.
+Needs: Telegram bots + a channel/group where the bots are admins. For production TLS, open firewall ports **80/tcp** (ACME), **443/tcp** (HTTPS), and **443/udp** (HTTP/3).
 
 ## Server
 
-Installers ask for admin email/password, generate `SECRET_KEY` with `openssl rand -hex 512`, write `sarca.conf`, then start the server.
+Installers ask for admin email/password, generate `SECRET_KEY` with `openssl rand -hex 512`, prompt for a public domain (or detect your IP for ACME), write `sarca.conf`, then start the server.
 
 ### Linux / macOS (Apple Silicon)
 
@@ -34,7 +34,7 @@ Installers ask for admin email/password, generate `SECRET_KEY` with `openssl ran
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash
 ```
 
-Binary → `~/.local/share/sarca`. Needs a reachable Postgres (`DATABASE_*` in `sarca.conf`).
+Binary → `~/.local/share/sarca`. SQLite database and certs live under `work/` beside the binary.
 
 ### Windows
 
@@ -42,20 +42,20 @@ Binary → `~/.local/share/sarca`. Needs a reachable Postgres (`DATABASE_*` in `
 irm https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.ps1 | iex
 ```
 
-### Docker Compose (recommended)
+### Docker Compose (optional)
 
-Postgres included:
+Single-container deploy (SQLite + in-process TLS/ACME):
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
 ```
 
-Open `http://127.0.0.1:$PORT` (default `8000`). Logs: `docker logs -f sarca`.
+Open `https://your-domain` when `TLS_HOSTNAME` is set, otherwise `http://127.0.0.1:$PORT` (default `8000`). Logs: `docker logs -f sarca`.
 
 <details>
 <summary>Build from source</summary>
 
-Needs Cargo, Node.js, pnpm, and Postgres.
+Needs Cargo and Node.js/pnpm.
 
 ```sh
 git clone https://github.com/insigmo/sarca.git
@@ -73,6 +73,8 @@ cd run
 set -a && . ../sarca.conf && set +a
 ./sarca
 ```
+
+For local dev without TLS, set `SARCA_PLAIN_HTTP=1` in `sarca.conf`.
 
 </details>
 
@@ -106,12 +108,15 @@ Full list: [`sarca.conf.example`](sarca.conf.example).
 
 | Variable | Purpose |
 | --- | --- |
-| `PORT` | HTTP port (default `8000`) |
+| `PORT` | Plain HTTP port (default `8000`; dev/e2e when `SARCA_PLAIN_HTTP=1`) |
 | `SUPERUSER_EMAIL` / `SUPERUSER_PASS` | Bootstrap admin |
 | `SECRET_KEY` | JWT + encryption (installer generates this) |
-| `DATABASE_*` | Postgres |
+| `SQLITE_PATH` | SQLite metadata database (default `{WORK_DIR}/sarca.sqlite`) |
+| `TLS_HOSTNAME` | Public domain or IP for ACME certificate |
+| `HTTPS_ADDR` / `ACME_HTTP_ADDR` | HTTPS (443) and ACME (80) listen addresses |
+| `CERTS_DIR` | PEM store for issued certificates |
 | `TELEGRAM_*` | Bot API URL, rate limit, chunk size (≤20 MB) |
-| `WORK_DIR` | Upload spool directory |
+| `WORK_DIR` | Upload spool + SQLite + certs directory |
 
 ## Donations
 

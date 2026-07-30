@@ -14,7 +14,7 @@ usage() {
 Usage: install.sh [--docker] [--version vX.Y.Z] [--prefix DIR]
 
   (default)  Download the matching release archive and install binary + UI
-  --docker   Download compose.yml + telegram entrypoint + sarca.conf into ./sarca (or \$PREFIX)
+  --docker   Download compose.yml + sarca.conf into ./sarca (or \$PREFIX)
 
 Env:
   SARCA_REPO     GitHub repo (default: ${REPO})
@@ -167,6 +167,18 @@ generate_secret_key() {
   exit 1
 }
 
+detect_external_ip() {
+  local ip url
+  for url in "https://api.ipify.org" "https://ifconfig.me/ip" "https://icanhazip.com"; do
+    ip="$(curl -fsSL --max-time 5 "${url}" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ -n "${ip}" ]; then
+      echo "${ip}"
+      return 0
+    fi
+  done
+  echo ""
+}
+
 # Read a line from the controlling terminal (works under curl | bash).
 read_tty() {
   local prompt="$1"
@@ -298,6 +310,39 @@ configure_interactive() {
   fi
 }
 
+# Prompt for public domain or detect external IP for ACME TLS identity.
+configure_tls() {
+  local env_file="$1"
+  local hostname detected
+
+  hostname="$(env_get_value "${env_file}" TLS_HOSTNAME)"
+  if [ -n "${hostname}" ]; then
+    echo "TLS_HOSTNAME already set to ${hostname} — skipping prompt"
+    return 0
+  fi
+
+  echo
+  echo "TLS / ACME (Let's Encrypt short-lived certificates)"
+  echo "Enter your public domain name, or press Enter to use this server's public IP."
+  detected="$(detect_external_ip)"
+  if [ -n "${detected}" ]; then
+    echo "Detected public IP: ${detected}"
+  fi
+
+  hostname="$(read_tty "TLS_HOSTNAME [${detected:-none}]: ")"
+  if [ -z "${hostname}" ]; then
+    if [ -n "${detected}" ]; then
+      hostname="${detected}"
+    else
+      echo "No TLS_HOSTNAME set — Sarca will serve plain HTTP on PORT until configured."
+      return 0
+    fi
+  fi
+
+  env_set_key "${env_file}" TLS_HOSTNAME "${hostname}"
+  echo "Set TLS_HOSTNAME=${hostname}"
+}
+
 conf_port() {
   local env_file="$1"
   local port
@@ -327,11 +372,10 @@ write_or_merge_conf() {
     "TELEGRAM_CHUNK_SIZE_MB=20" \
     "TELEGRAM_VIDEO_CHUNK_SIZE_MB=20" \
     "WORK_DIR=${dest}/work" \
-    "DATABASE_USER=sarca" \
-    "DATABASE_PASSWORD=sarca" \
-    "DATABASE_NAME=sarca" \
-    "DATABASE_HOST=127.0.0.1" \
-    "DATABASE_PORT=5432"
+    "SQLITE_PATH=${dest}/work/sarca.sqlite" \
+    "HTTPS_ADDR=0.0.0.0:443" \
+    "ACME_HTTP_ADDR=0.0.0.0:80" \
+    "CERTS_DIR=${dest}/work/certs"
 
   if [ ! -f "${env_file}" ]; then
     local line
@@ -445,6 +489,7 @@ install_binary() {
 
   write_or_merge_conf "${PREFIX}"
   configure_interactive "${PREFIX}/sarca.conf"
+  configure_tls "${PREFIX}/sarca.conf"
 
   wrapper="${BIN_DIR}/sarca"
   cat >"${wrapper}" <<EOF
@@ -469,14 +514,22 @@ EOF
     echo "Add to PATH:  export PATH=\"${BIN_DIR}:\$PATH\""
   fi
 
-  local port log_file
+  local port log_file tls_host open_url
   port="$(conf_port "${PREFIX}/sarca.conf")"
+  tls_host="$(env_get_value "${PREFIX}/sarca.conf" TLS_HOSTNAME)"
   log_file="${PREFIX}/sarca.log"
   echo
-  echo "Starting Sarca (Postgres must be reachable — DATABASE_* in sarca.conf)…"
+  echo "Starting Sarca…"
   nohup "${wrapper}" >>"${log_file}" 2>&1 &
   echo "Started (pid $!). Log: ${log_file}"
-  echo "Open http://127.0.0.1:${port}"
+  if [ -n "${tls_host}" ]; then
+    open_url="https://${tls_host}"
+    echo "Open ${open_url} (HTTPS + HTTP/3)"
+    echo "Ensure firewall allows: 80/tcp (ACME), 443/tcp (HTTPS), 443/udp (HTTP/3)"
+  else
+    open_url="http://127.0.0.1:${port}"
+    echo "Open ${open_url}"
+  fi
 }
 
 install_docker() {
@@ -510,13 +563,15 @@ install_docker() {
   rm -f "${tmp_env}"
 
   configure_interactive "${dest}/sarca.conf"
+  configure_tls "${dest}/sarca.conf"
 
   # Legacy: older compose.yml mounted sarca-entrypoint from the host.
   rm -f "${dest}/docker/sarca-entrypoint.sh"
 
   need_cmd docker
-  local port
+  local port tls_host
   port="$(conf_port "${dest}/sarca.conf")"
+  tls_host="$(env_get_value "${dest}/sarca.conf" TLS_HOSTNAME)"
   echo
   echo "Starting Docker stack in ${dest}…"
   (
@@ -525,7 +580,12 @@ install_docker() {
     docker compose --env-file sarca.conf up -d
   )
   echo
-  echo "Open http://127.0.0.1:${port}"
+  if [ -n "${tls_host}" ]; then
+    echo "Open https://${tls_host} (HTTPS + HTTP/3)"
+    echo "Ensure firewall allows: 80/tcp (ACME), 443/tcp (HTTPS), 443/udp (HTTP/3)"
+  else
+    echo "Open http://127.0.0.1:${port}"
+  fi
   echo "Logs: docker logs -f sarca"
 }
 
