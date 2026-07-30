@@ -9,6 +9,13 @@ readme = "../README.md"
 keywords = ["storage", "telegram", "self-hosted"]
 categories = ["web-programming"]
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "sarca"
+path = "src/main.rs"
+
 # Strict Clippy: all + pedantic + nursery + cargo as deny.
 # Only allow lints that are impractical for this Axum/SQL architecture.
 [lints.rust]
@@ -44,10 +51,24 @@ struct_field_names = "allow"
 
 [dependencies]
 # routing
-axum = { version = "0.6.20", features = ["headers", "tracing", "multipart"] }
+axum = { version = "0.8", features = ["macros", "multipart"] }
 mime_guess = "2.0.4"
-tower = { version = "0.4.13", features = ["limit", "util"], default-features = false }
-tower-http = { version = "0.4.4", features = ["fs", "trace", "cors", "set-header"], default-features = false }
+tower = { version = "0.5", features = ["limit", "util"], default-features = false }
+tower-http = { version = "0.6", features = ["fs", "trace", "cors", "set-header"], default-features = false }
+
+# TLS / HTTP/3
+quinn = "0.11"
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+h3-axum = "0.2"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+tokio-rustls = "0.26"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "service"] }
+rcgen = "0.13"
+instant-acme = { version = "0.8", default-features = false, features = ["hyper-rustls", "ring"] }
+x509-parser = "0.17"
 
 # serialization/deserialization
 serde = { version = "1.0.189", features = ["derive"] }
@@ -70,7 +91,7 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 
 # others
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "tls-rustls", "sqlite", "uuid", "chrono"] }
 thiserror = "1.0.50"
 uuid = { version = "1.5.0", features = ["serde", "v4"] }
 
@@ -86,5 +107,14 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 
 [dev-dependencies]
-hyper = { version = "0.14", default-features = false, features = ["client"] }
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+http = "1"
+http-body-util = "0.1"
+bytes = "1"
+tower = { version = "0.5", features = ["util"] }
+rcgen = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+quinn = "0.11"
 tempfile = "3"

@@ -20,11 +20,10 @@ use crate::{
 pub struct FavoritesRouter;
 
 impl FavoritesRouter {
-    pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>, axum::body::Body> {
+    pub fn get_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
             .route("/", get(Self::list).put(Self::add))
             .route("/*path", delete(Self::remove))
-            .with_state(state)
     }
 
     fn service(state: &AppState) -> FavoritesService<'_> {

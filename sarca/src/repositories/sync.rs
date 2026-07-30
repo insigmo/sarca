@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -7,11 +7,11 @@ use crate::{
 };
 
 pub struct SyncRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> SyncRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
@@ -66,14 +66,14 @@ impl<'d> SyncRepository<'d> {
               id AS file_id,
               path,
               size,
-              (RIGHT(path, 1) <> '/') AS is_file,
+              (substr(path, -1, 1) <> '/') AS is_file,
               content_hash,
               source_mtime,
               updated_at
             FROM files
             WHERE storage_id = $1
               AND deleted_at IS NULL
-              AND (is_uploaded OR RIGHT(path, 1) = '/')
+              AND (is_uploaded OR substr(path, -1, 1) = '/')
             ORDER BY path ASC
             "#,
         )

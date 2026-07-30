@@ -1,0 +1,374 @@
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+use chrono::{DateTime, Utc};
+use instant_acme::{
+    Account, AccountCredentials, ChallengeType, Identifier, NewAccount, NewOrder, RetryPolicy,
+};
+use thiserror::Error;
+
+use super::{CertStore, ChallengeStore, TlsIdentity};
+use crate::config::Config;
+
+/// Shared in-memory ACME http-01 challenge tokens.
+pub type AcmeChallengeStore = ChallengeStore;
+
+/// Let's Encrypt short-lived certificate profile (6-day lifetime).
+pub const SHORTLIVED_PROFILE: &str = "shortlived";
+
+const ACCOUNT_FILE: &str = "acme-account.json";
+
+/// Register an http-01 challenge response for `token`.
+pub fn register_challenge(store: &AcmeChallengeStore, token: impl Into<String>, authorization: impl Into<String>) {
+    store
+        .write()
+        .expect("challenge lock")
+        .insert(token.into(), authorization.into());
+}
+
+/// ACME certificate issuer (real http-01 client wired when `TLS_HOSTNAME` is set).
+pub trait AcmeIssuer: Send + Sync {
+    fn directory_url(&self) -> &str;
+    fn identity(&self) -> &TlsIdentity;
+    fn http_addr(&self) -> SocketAddr;
+    fn challenges(&self) -> &AcmeChallengeStore;
+}
+
+/// Configuration for in-process ACME certificate issuance.
+#[derive(Debug, Clone)]
+pub struct AcmeConfig {
+    pub directory: String,
+    pub http_addr: SocketAddr,
+    pub identity: TlsIdentity,
+    pub challenges: AcmeChallengeStore,
+    pub account_path: PathBuf,
+}
+
+impl AcmeConfig {
+    pub fn new(
+        directory: String,
+        http_addr: SocketAddr,
+        identity: TlsIdentity,
+        challenges: AcmeChallengeStore,
+        account_path: PathBuf,
+    ) -> Self {
+        Self { directory, http_addr, identity, challenges, account_path }
+    }
+}
+
+/// Result of a successful ACME certificate issuance.
+#[derive(Debug, Clone)]
+pub struct IssuedCertificate {
+    pub cert_pem: String,
+    pub key_pem: String,
+    pub not_after: DateTime<Utc>,
+}
+
+#[derive(Debug, Error)]
+pub enum AcmeError {
+    #[error("ACME client error: {0}")]
+    Client(#[from] instant_acme::Error),
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("serde error: {0}")]
+    Serde(#[from] serde_json::Error),
+    #[error("no http-01 challenge offered for identifier")]
+    NoHttp01Challenge,
+    #[error("invalid issued certificate")]
+    InvalidCert,
+    #[error("ACME directory URL is empty")]
+    EmptyDirectory,
+}
+
+/// Whether in-process ACME issuance is enabled (`SARCA_ACME=0` or empty directory disables it).
+pub fn acme_enabled(config: &Config) -> bool {
+    if config.acme_directory.trim().is_empty() {
+        return false;
+    }
+    match std::env::var("SARCA_ACME").ok().as_deref() {
+        Some("0") | Some("false") | Some("FALSE") | Some("no") | Some("NO") => false,
+        _ => true,
+    }
+}
+
+/// Convert [`TlsIdentity`] to an instant-acme [`Identifier`].
+pub fn identity_to_identifier(identity: &TlsIdentity) -> Identifier {
+    match identity {
+        TlsIdentity::Dns(name) => Identifier::Dns(name.clone()),
+        TlsIdentity::Ip(ip) => Identifier::Ip(*ip),
+    }
+}
+
+/// Path for persisted ACME account credentials inside a cert store directory.
+pub fn account_credentials_path(certs_dir: impl AsRef<Path>) -> PathBuf {
+    certs_dir.as_ref().join(ACCOUNT_FILE)
+}
+
+/// In-process ACME issuer using instant-acme (http-01 via the shared challenge store).
+#[derive(Debug, Clone)]
+pub struct InstantAcmeIssuer {
+    config: AcmeConfig,
+}
+
+impl InstantAcmeIssuer {
+    pub fn new(config: AcmeConfig) -> Self {
+        Self { config }
+    }
+
+    pub fn from_parts(
+        directory: String,
+        http_addr: SocketAddr,
+        identity: TlsIdentity,
+        challenges: AcmeChallengeStore,
+        cert_store: &CertStore,
+    ) -> Self {
+        Self::new(AcmeConfig::new(
+            directory,
+            http_addr,
+            identity,
+            challenges,
+            account_credentials_path(cert_store.dir()),
+        ))
+    }
+
+    /// Request and finalize a certificate from the configured ACME directory.
+    pub async fn issue(&self) -> Result<IssuedCertificate, AcmeError> {
+        issue_certificate(
+            &self.config.directory,
+            &self.config.identity,
+            &self.config.challenges,
+            &self.config.account_path,
+        )
+        .await
+    }
+}
+
+impl AcmeIssuer for InstantAcmeIssuer {
+    fn directory_url(&self) -> &str {
+        &self.config.directory
+    }
+
+    fn identity(&self) -> &TlsIdentity {
+        &self.config.identity
+    }
+
+    fn http_addr(&self) -> SocketAddr {
+        self.config.http_addr
+    }
+
+    fn challenges(&self) -> &AcmeChallengeStore {
+        &self.config.challenges
+    }
+}
+
+/// Stub issuer: exposes config and challenge store for tests.
+#[derive(Debug, Clone)]
+pub struct StubAcmeIssuer {
+    config: AcmeConfig,
+}
+
+impl StubAcmeIssuer {
+    pub fn new(config: AcmeConfig) -> Self {
+        Self { config }
+    }
+}
+
+impl AcmeIssuer for StubAcmeIssuer {
+    fn directory_url(&self) -> &str {
+        &self.config.directory
+    }
+
+    fn identity(&self) -> &TlsIdentity {
+        &self.config.identity
+    }
+
+    fn http_addr(&self) -> SocketAddr {
+        self.config.http_addr
+    }
+
+    fn challenges(&self) -> &AcmeChallengeStore {
+        &self.config.challenges
+    }
+}
+
+/// Issue a certificate via ACME http-01 and return PEM material plus `notAfter`.
+pub async fn issue_certificate(
+    directory: &str,
+    identity: &TlsIdentity,
+    challenges: &AcmeChallengeStore,
+    account_path: &Path,
+) -> Result<IssuedCertificate, AcmeError> {
+    if directory.trim().is_empty() {
+        return Err(AcmeError::EmptyDirectory);
+    }
+
+    let builder = Account::builder()?;
+
+    let account = load_or_create_account(builder, directory, account_path).await?;
+
+    let identifiers = [identity_to_identifier(identity)];
+    let mut order = new_order_with_profile(&account, &identifiers).await?;
+
+    let mut authorizations = order.authorizations();
+    while let Some(result) = authorizations.next().await {
+        let mut authz = result?;
+        let Some(mut challenge) = authz.challenge(ChallengeType::Http01) else {
+            return Err(AcmeError::NoHttp01Challenge);
+        };
+
+        let token = challenge.token.clone();
+        let key_auth = challenge.key_authorization();
+        register_challenge(challenges, token, key_auth.as_str().to_owned());
+        challenge.set_ready().await?;
+    }
+
+    order.poll_ready(&RetryPolicy::default()).await?;
+    let key_pem = order.finalize().await?;
+    let cert_pem = order.poll_certificate(&RetryPolicy::default()).await?;
+
+    challenges.write().expect("challenge lock").clear();
+
+    let not_after = super::renew::parse_not_after(&cert_pem)?;
+
+    Ok(IssuedCertificate { cert_pem, key_pem, not_after })
+}
+
+async fn new_order_with_profile(
+    account: &Account,
+    identifiers: &[Identifier],
+) -> Result<instant_acme::Order, AcmeError> {
+    let with_profile = NewOrder::new(identifiers).profile(SHORTLIVED_PROFILE);
+    match account.new_order(&with_profile).await {
+        Ok(order) => {
+            tracing::info!("ACME order created with profile={SHORTLIVED_PROFILE}");
+            Ok(order)
+        },
+        Err(e) => {
+            tracing::warn!(
+                "ACME shortlived profile unavailable ({e}); requesting default certificate lifetime"
+            );
+            Ok(account.new_order(&NewOrder::new(identifiers)).await?)
+        },
+    }
+}
+
+async fn load_or_create_account(
+    builder: instant_acme::AccountBuilder,
+    directory: &str,
+    account_path: &Path,
+) -> Result<Account, AcmeError> {
+    if account_path.is_file() {
+        let json = tokio::fs::read_to_string(account_path).await?;
+        let credentials: AccountCredentials = serde_json::from_str(&json)?;
+        return builder.from_credentials(credentials).await.map_err(AcmeError::from);
+    }
+
+    let (account, credentials) = builder
+        .create(
+            &NewAccount {
+                contact: &[],
+                terms_of_service_agreed: true,
+                only_return_existing: false,
+            },
+            directory.to_owned(),
+            None,
+        )
+        .await?;
+
+    if let Some(parent) = account_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let json = serde_json::to_string_pretty(&credentials)?;
+    tokio::fs::write(account_path, json).await?;
+    tracing::info!("ACME account created and saved to {}", account_path.display());
+
+    Ok(account)
+}
+
+/// Persist issued PEM material to a cert store.
+pub async fn save_issued(store: &CertStore, issued: &IssuedCertificate) -> Result<(), AcmeError> {
+    store.save_cert(&issued.cert_pem).await?;
+    store.save_key(&issued.key_pem).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{IpAddr, Ipv4Addr};
+
+    use super::*;
+
+    fn test_config() -> AcmeConfig {
+        let identity = TlsIdentity::Dns("example.com".into());
+        let challenges = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+        AcmeConfig::new(
+            "https://acme-staging-v02.api.letsencrypt.org/directory".into(),
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8080),
+            identity,
+            challenges,
+            PathBuf::from("/tmp/acme-account.json"),
+        )
+    }
+
+    #[test]
+    fn stub_issuer_exposes_config() {
+        let config = test_config();
+        let issuer = StubAcmeIssuer::new(config);
+        assert!(issuer.directory_url().contains("letsencrypt"));
+        assert_eq!(issuer.http_addr().port(), 8080);
+        assert!(matches!(issuer.identity(), TlsIdentity::Dns(h) if h == "example.com"));
+        register_challenge(issuer.challenges(), "tok", "auth");
+        assert_eq!(
+            issuer.challenges().read().unwrap().get("tok").map(String::as_str),
+            Some("auth")
+        );
+    }
+
+    #[test]
+    fn identity_to_identifier_dns_and_ip() {
+        assert_eq!(
+            identity_to_identifier(&TlsIdentity::Dns("example.com".into())),
+            Identifier::Dns("example.com".into())
+        );
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+        assert_eq!(identity_to_identifier(&TlsIdentity::Ip(ip)), Identifier::Ip(ip));
+    }
+
+    #[test]
+    fn acme_enabled_respects_env_and_directory() {
+        use std::sync::Mutex;
+
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+        let _g = ENV_LOCK.lock().unwrap();
+        std::env::set_var("PORT", "8001");
+        std::env::set_var("WORKERS", "2");
+        std::env::set_var("CHANNEL_CAPACITY", "8");
+        std::env::set_var("SUPERUSER_EMAIL", "a@b.c");
+        std::env::set_var("SUPERUSER_PASS", "pass");
+        std::env::set_var("ACCESS_TOKEN_EXPIRE_IN_SECS", "1800");
+        std::env::set_var("REFRESH_TOKEN_EXPIRE_IN_DAYS", "14");
+        std::env::set_var("SECRET_KEY", "secret");
+
+        let mut cfg = crate::config::Config::new().expect("config");
+        cfg.acme_directory = "https://acme-v02.api.letsencrypt.org/directory".into();
+        assert!(acme_enabled(&cfg));
+
+        std::env::set_var("SARCA_ACME", "0");
+        assert!(!acme_enabled(&cfg));
+        std::env::remove_var("SARCA_ACME");
+
+        cfg.acme_directory.clear();
+        assert!(!acme_enabled(&cfg));
+    }
+
+    #[test]
+    fn instant_issuer_implements_trait() {
+        let issuer = InstantAcmeIssuer::new(test_config());
+        assert!(issuer.directory_url().contains("letsencrypt"));
+        assert_eq!(issuer.http_addr().port(), 8080);
+    }
+}

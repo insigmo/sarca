@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use sqlx::{PgPool, Postgres, QueryBuilder, Transaction};
+use chrono::{Duration as ChronoDuration, Utc};
+use sqlx::{QueryBuilder, Sqlite, SqlitePool, Transaction};
 use uuid::Uuid;
 
 use crate::{
@@ -9,18 +10,18 @@ use crate::{
 };
 
 pub struct StoragePurgeRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> StoragePurgeRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
     }
 
     pub async fn enqueue_in_tx(
-        tx: &mut Transaction<'_, Postgres>,
+        tx: &mut Transaction<'_, Sqlite>,
         job_id: Uuid,
         storage_id: Uuid,
         bot_token: &str,
@@ -62,44 +63,107 @@ impl<'d> StoragePurgeRepository<'d> {
     }
 
     pub async fn claim_pending(&self, limit: i64) -> SarcaResult<Vec<ClaimedPurgeMessage>> {
-        sqlx::query_as(
-            r#"
-            WITH cte AS (
-              SELECT m.id
-              FROM storage_purge_messages m
-              JOIN storage_purge_jobs j ON j.id = m.job_id
-              WHERE m.status = 'pending' AND j.completed_at IS NULL
-              ORDER BY m.id
-              FOR UPDATE OF m SKIP LOCKED
-              LIMIT $1
-            )
-            UPDATE storage_purge_messages m
-            SET status = 'in_progress', attempts = m.attempts + 1, updated_at = NOW()
-            FROM cte, storage_purge_jobs j
-            WHERE m.id = cte.id AND j.id = m.job_id
-            RETURNING m.id, m.job_id, m.chat_id, m.message_id, j.bot_token, m.attempts
-            "#,
-        )
-        .bind(limit)
-        .fetch_all(self.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("storage purge claim_pending: {e}");
+        let mut conn = self.db.acquire().await.map_err(|e| {
+            tracing::error!("storage purge claim_pending acquire: {e}");
             SarcaError::Unknown
-        })
+        })?;
+
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *conn)
+            .await
+            .map_err(|e| {
+                tracing::error!("storage purge claim_pending begin: {e}");
+                SarcaError::Unknown
+            })?;
+
+        let result = async {
+            let ids: Vec<(i64,)> = sqlx::query_as(
+                r#"
+                SELECT m.id
+                FROM storage_purge_messages m
+                JOIN storage_purge_jobs j ON j.id = m.job_id
+                WHERE m.status = 'pending' AND j.completed_at IS NULL
+                ORDER BY m.id
+                LIMIT $1
+                "#,
+            )
+            .bind(limit)
+            .fetch_all(&mut *conn)
+            .await
+            .map_err(|e| {
+                tracing::error!("storage purge claim_pending select: {e}");
+                SarcaError::Unknown
+            })?;
+
+            if ids.is_empty() {
+                return Ok(vec![]);
+            }
+
+            let id_list: Vec<i64> = ids.into_iter().map(|(id,)| id).collect();
+
+            let mut update = QueryBuilder::new(
+                "UPDATE storage_purge_messages SET status = 'in_progress', attempts = attempts + 1, updated_at = datetime('now') WHERE id IN (",
+            );
+            update.push_values(id_list.iter(), |mut q, id| {
+                q.push_bind(id);
+            });
+            update.push(")");
+            update.build().execute(&mut *conn).await.map_err(|e| {
+                tracing::error!("storage purge claim_pending update: {e}");
+                SarcaError::Unknown
+            })?;
+
+            let mut fetch = QueryBuilder::new(
+                r#"
+                SELECT m.id, m.job_id, m.chat_id, m.message_id, j.bot_token, m.attempts
+                FROM storage_purge_messages m
+                JOIN storage_purge_jobs j ON j.id = m.job_id
+                WHERE m.id IN (
+                "#,
+            );
+            fetch.push_values(id_list.iter(), |mut q, id| {
+                q.push_bind(id);
+            });
+            fetch.push(")");
+
+            fetch
+                .build_query_as::<ClaimedPurgeMessage>()
+                .fetch_all(&mut *conn)
+                .await
+                .map_err(|e| {
+                    tracing::error!("storage purge claim_pending fetch: {e}");
+                    SarcaError::Unknown
+                })
+        }
+        .await;
+
+        match result {
+            Ok(rows) => {
+                sqlx::query("COMMIT").execute(&mut *conn).await.map_err(|e| {
+                    tracing::error!("storage purge claim_pending commit: {e}");
+                    SarcaError::Unknown
+                })?;
+                Ok(rows)
+            },
+            Err(e) => {
+                let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                Err(e)
+            },
+        }
     }
 
     pub async fn requeue_stale_in_progress(&self, older_than: Duration) -> SarcaResult<u64> {
-        let older_than_seconds = i64::try_from(older_than.as_secs()).unwrap_or(i64::MAX);
+        let cutoff = Utc::now()
+            - ChronoDuration::from_std(older_than).unwrap_or(ChronoDuration::seconds(i64::MAX));
         let result = sqlx::query(
             r#"
             UPDATE storage_purge_messages
-            SET status = 'pending', updated_at = NOW()
+            SET status = 'pending', updated_at = datetime('now')
             WHERE status = 'in_progress'
-              AND updated_at < NOW() - ($1 * INTERVAL '1 second')
+              AND updated_at < $1
             "#,
         )
-        .bind(older_than_seconds)
+        .bind(cutoff)
         .execute(self.db)
         .await
         .map_err(|e| {
@@ -113,7 +177,7 @@ impl<'d> StoragePurgeRepository<'d> {
         sqlx::query(
             r#"
             UPDATE storage_purge_messages
-            SET status = 'done', last_error = NULL, updated_at = NOW()
+            SET status = 'done', last_error = NULL, updated_at = datetime('now')
             WHERE id = $1
             "#,
         )
@@ -131,7 +195,7 @@ impl<'d> StoragePurgeRepository<'d> {
         sqlx::query(
             r#"
             UPDATE storage_purge_messages
-            SET status = 'pending', last_error = $2, updated_at = NOW()
+            SET status = 'pending', last_error = $2, updated_at = datetime('now')
             WHERE id = $1
             "#,
         )
@@ -150,7 +214,7 @@ impl<'d> StoragePurgeRepository<'d> {
         sqlx::query(
             r#"
             UPDATE storage_purge_messages
-            SET status = 'failed', last_error = $2, updated_at = NOW()
+            SET status = 'failed', last_error = $2, updated_at = datetime('now')
             WHERE id = $1
             "#,
         )
@@ -169,7 +233,7 @@ impl<'d> StoragePurgeRepository<'d> {
         let result = sqlx::query(
             r#"
             UPDATE storage_purge_jobs j
-            SET completed_at = NOW()
+            SET completed_at = datetime('now')
             WHERE j.completed_at IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM storage_purge_messages m

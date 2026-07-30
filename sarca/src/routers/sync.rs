@@ -18,11 +18,10 @@ use crate::{
 pub struct SyncRouter;
 
 impl SyncRouter {
-    pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>, axum::body::Body> {
+    pub fn get_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
             .route("/changelog", get(Self::changelog))
             .route("/snapshot", get(Self::snapshot))
-            .with_state(state)
     }
 
     async fn changelog(

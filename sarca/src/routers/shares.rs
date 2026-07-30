@@ -20,11 +20,10 @@ use crate::{
 pub struct SharesRouter;
 
 impl SharesRouter {
-    pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>, axum::body::Body> {
+    pub fn get_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
             .route("/", get(Self::list).post(Self::create))
             .route("/:share_id", delete(Self::revoke))
-            .with_state(state)
     }
 
     fn service(state: &AppState) -> SharesService<'_> {
