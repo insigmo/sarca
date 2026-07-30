@@ -86,5 +86,4 @@ COPY --link --from=ffmpeg --chmod=755 /out/ffmpeg /usr/local/bin/ffmpeg
 COPY --link --chmod=755 docker/sarca-entrypoint.sh /sarca-entrypoint.sh
 
 WORKDIR /
-USER nobody
 ENTRYPOINT ["/sarca-entrypoint.sh"]
