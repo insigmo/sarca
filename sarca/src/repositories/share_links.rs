@@ -104,7 +104,7 @@ impl<'d> ShareLinksRepository<'d> {
             format!(
                 "
                 UPDATE {TABLE}
-                SET revoked_at = COALESCE(revoked_at, NOW())
+                SET revoked_at = COALESCE(revoked_at, datetime('now'))
                 WHERE id = $1 AND storage_id = $2
                 "
             )
@@ -180,24 +180,27 @@ impl<'d> ShareLinksRepository<'d> {
         let mut builder = QueryBuilder::new(
             format!(
                 "
-                DELETE FROM {TABLE} sl
-                WHERE EXISTS (
-                    SELECT 1
-                    FROM files f
-                    WHERE f.storage_id = sl.storage_id
-                      AND (
-                        sl.path = f.path
-                        OR (
-                          RIGHT(f.path, 1) = '/'
-                          AND (sl.path = f.path OR sl.path LIKE f.path || '%')
-                        )
-                      )
-                      AND f.id IN ("
+                DELETE FROM {TABLE}
+                WHERE id IN (
+                    SELECT sl.id
+                    FROM {TABLE} sl
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM files f
+                        WHERE f.storage_id = sl.storage_id
+                          AND (
+                            sl.path = f.path
+                            OR (
+                              substr(f.path, -1, 1) = '/'
+                              AND (sl.path = f.path OR sl.path LIKE f.path || '%')
+                            )
+                          )
+                          AND f.id IN ("
             )
             .as_str(),
         );
         push_uuid_list(&mut builder, file_ids);
-        builder.push("))");
+        builder.push(")))");
 
         let res = builder.build().execute(self.db).await.map_err(|e| {
             tracing::error!("{e}");
@@ -229,7 +232,7 @@ impl<'d> ShareLinksRepository<'d> {
                 format!(
                     "
                     UPDATE {TABLE}
-                    SET path = $1 || SUBSTRING(path FROM {skip} + 1)
+                    SET path = $1 || substr(path, {skip} + 1)
                     WHERE storage_id = $2
                       AND (path = $3 OR path LIKE $3 || '%')
                     "
@@ -276,7 +279,7 @@ impl<'d> ShareLinksRepository<'d> {
                 format!(
                     "
                     UPDATE {TABLE}
-                    SET path = $1 || SUBSTRING(path FROM {skip} + 1)
+                    SET path = $1 || substr(path, {skip} + 1)
                     WHERE storage_id = $2
                       AND (path = $3 OR path LIKE $3 || '%')
                     "

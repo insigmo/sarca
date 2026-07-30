@@ -243,7 +243,7 @@ impl<'d> StorageWorkersRepository<'d> {
         sqlx::query(&format!(
             "
             DELETE FROM {STORAGE_WORKERS_USAGES_TABLE}
-            WHERE dt < NOW() - INTERVAL '1 minute';
+            WHERE dt < datetime('now', '-1 minute');
             "
         ))
         .execute(&mut *transaction)
