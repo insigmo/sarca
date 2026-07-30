@@ -122,9 +122,13 @@ impl Server {
     }
 
     /// HTTP/3 (UDP) + TCP HTTPS on `HTTPS_ADDR`, ACME http-01 + redirect on `ACME_HTTP_ADDR`.
-    pub async fn run_tls(self, runtime: TlsRuntime) {
+    pub async fn run_tls(
+        self,
+        runtime: TlsRuntime,
+        acme_task: Option<tokio::task::JoinHandle<()>>,
+    ) {
         let ui_dir = self.ui_dir.clone();
-        serve_dual_tls(self.router, ui_dir, runtime).await;
+        serve_dual_tls(self.router, ui_dir, runtime, acme_task).await;
     }
 
     /// Minimal health router for TLS integration tests (no UI directory required).

@@ -67,6 +67,8 @@ tokio-rustls = "0.26"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "service"] }
 rcgen = "0.13"
+instant-acme = { version = "0.8", default-features = false, features = ["hyper-rustls", "ring"] }
+x509-parser = "0.17"
 
 # serialization/deserialization
 serde = { version = "1.0.189", features = ["derive"] }
