@@ -50,9 +50,8 @@ impl<'d> AccessRepository<'d> {
                 "
                 INSERT INTO {TABLE} (id, user_id, storage_id, access_type)
                 VALUES ($1, $2, $3, $4)
-                ON CONFLICT ON CONSTRAINT access_user_id_storage_id_key
-                DO
-                    UPDATE SET access_type = $4;
+                ON CONFLICT (user_id, storage_id) DO UPDATE
+                    SET access_type = excluded.access_type;
             "
             )
             .as_str(),
@@ -103,9 +102,8 @@ impl<'d> AccessRepository<'d> {
                 SELECT $1, u.id, $3, $4
                 FROM users u
                 WHERE u.email = $2
-                ON CONFLICT ON CONSTRAINT access_user_id_storage_id_key
-                DO
-                    UPDATE SET access_type = $4;
+                ON CONFLICT (user_id, storage_id) DO UPDATE
+                    SET access_type = excluded.access_type;
             "
             )
             .as_str(),
