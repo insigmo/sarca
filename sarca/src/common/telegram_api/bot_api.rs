@@ -691,17 +691,27 @@ impl<'t> TelegramBotApi<'t> {
         }
     }
 
-    /// Local Bot API writes files as owner-only briefly; our entrypoint chmod loop
-    /// opens them for Sarca (`nobody`). Retry `PermissionDenied` / `NotFound` so downloads
+    /// Local Bot API writes files as owner-only briefly; entrypoint chmod loops
+    /// open them for Sarca (`nobody`). Retry `PermissionDenied` / `NotFound` so downloads
     /// don't fail in that race window.
     async fn open_local_bot_api_file(path: &str) -> SarcaResult<tokio::fs::File> {
-        const ATTEMPTS: u32 = 25;
-        const DELAY_MS: u64 = 200;
+        const ATTEMPTS: u32 = 12;
+        const DELAY_MS: u64 = 250;
 
         let mut last_err: Option<std::io::Error> = None;
         for attempt in 1..=ATTEMPTS {
             match tokio::fs::File::open(path).await {
-                Ok(file) => return Ok(file),
+                Ok(file) => {
+                    // #region agent log
+                    let _ = Self::agent_debug_log(
+                        "B",
+                        "bot_api.rs:open_local_bot_api_file",
+                        "local open ok",
+                        json!({ "attempt": attempt, "path_prefix": path.get(..48).unwrap_or(path) }),
+                    );
+                    // #endregion
+                    return Ok(file);
+                },
                 Err(e)
                     if matches!(
                         e.kind(),
@@ -713,6 +723,27 @@ impl<'t> TelegramBotApi<'t> {
                          err={e}",
                         path
                     );
+                    // #region agent log
+                    if attempt == 1 || attempt == ATTEMPTS {
+                        let _ = Self::agent_debug_log(
+                            "B",
+                            "bot_api.rs:open_local_bot_api_file",
+                            "local open retry",
+                            json!({
+                                "attempt": attempt,
+                                "kind": format!("{:?}", e.kind()),
+                                "path_prefix": path.get(..64).unwrap_or(path)
+                            }),
+                        );
+                    }
+                    // #endregion
+                    // PermissionDenied is usually a sticky mode bit; don't burn the full
+                    // retry budget before the HTTP fallback in callers can run.
+                    if e.kind() == std::io::ErrorKind::PermissionDenied && attempt >= 3 {
+                        return Err(SarcaError::TelegramAPIError(format!(
+                            "Failed to open local bot api file: {e}"
+                        )));
+                    }
                     last_err = Some(e);
                     tokio::time::sleep(Duration::from_millis(DELAY_MS)).await;
                 },
@@ -732,6 +763,90 @@ impl<'t> TelegramBotApi<'t> {
             path
         );
         Err(SarcaError::TelegramAPIError(format!("Failed to open local bot api file: {e}")))
+    }
+
+    /// Best-effort NDJSON debug line under WORK_DIR (nobody-writable after entrypoint chown).
+    fn agent_debug_log(
+        hypothesis_id: &str,
+        location: &str,
+        message: &str,
+        data: serde_json::Value,
+    ) -> std::io::Result<()> {
+        use std::io::Write;
+        let work = std::env::var("WORK_DIR").unwrap_or_else(|_| "/work".into());
+        let path = std::path::Path::new(&work).join("agent-debug.ndjson");
+        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+        let line = json!({
+            "sessionId": "4d2da0",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+        });
+        writeln!(f, "{line}")
+    }
+
+    /// When the absolute local path is not readable by this process, ask the Local Bot API
+    /// HTTP `/file/bot…` endpoint (runs as the bot-api user) to stream the bytes instead.
+    async fn download_local_path_via_http(
+        &self,
+        absolute_path: &str,
+        token: &str,
+    ) -> SarcaResult<Vec<u8>> {
+        let relative = absolute_path.trim_start_matches('/');
+        let url = self.build_url("file/", relative, token);
+        let masked = Self::mask_url(&url);
+        tracing::warn!(
+            "[TELEGRAM API] falling back to HTTP file download after local open failure url={}",
+            masked
+        );
+        // #region agent log
+        let _ = Self::agent_debug_log(
+            "C",
+            "bot_api.rs:download_local_path_via_http",
+            "http fallback",
+            json!({ "masked": masked }),
+        );
+        // #endregion
+        let response = Self::send_with_retries("download/file-fallback", None, || {
+            reqwest::Client::new().get(&url).send()
+        })
+        .await?;
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(SarcaError::TelegramAPIError(format!(
+                "HTTP fallback download failed {status}: {error_body}"
+            )));
+        }
+        Ok(response.bytes().await.map(|b| b.to_vec())?)
+    }
+
+    async fn download_local_path_via_http_stream(
+        &self,
+        absolute_path: &str,
+        token: &str,
+    ) -> SarcaResult<Pin<Box<dyn Stream<Item = Result<tokio_util::bytes::Bytes, SarcaError>> + Send>>>
+    {
+        let relative = absolute_path.trim_start_matches('/');
+        let url = self.build_url("file/", relative, token);
+        let masked = Self::mask_url(&url);
+        tracing::warn!(
+            "[TELEGRAM API] falling back to HTTP file stream after local open failure url={}",
+            masked
+        );
+        // #region agent log
+        let _ = Self::agent_debug_log(
+            "C",
+            "bot_api.rs:download_local_path_via_http_stream",
+            "http stream fallback",
+            json!({ "masked": masked }),
+        );
+        // #endregion
+        let response = reqwest::Client::new().get(url).send().await?.error_for_status()?;
+        let stream = response.bytes_stream().map(|res| res.map_err(SarcaError::from));
+        Ok(Box::pin(stream))
     }
 
     async fn read_local_bot_api_file(path: &str) -> SarcaResult<Vec<u8>> {
@@ -801,9 +916,21 @@ impl<'t> TelegramBotApi<'t> {
             }
 
             let path = body.result.file_path;
-            let bytes = Self::read_local_bot_api_file(&path).await?;
-            maybe_remove_local_bot_api_file(&path).await;
-            return Ok(bytes);
+            match Self::read_local_bot_api_file(&path).await {
+                Ok(bytes) => {
+                    maybe_remove_local_bot_api_file(&path).await;
+                    return Ok(bytes);
+                },
+                Err(local_err) => {
+                    tracing::warn!(
+                        "[TELEGRAM API] local read failed, trying HTTP fallback: {local_err}"
+                    );
+                    let token = self.scheduler.get_token(storage_id).await?;
+                    let bytes = self.download_local_path_via_http(&path, &token).await?;
+                    maybe_remove_local_bot_api_file(&path).await;
+                    return Ok(bytes);
+                },
+            }
         }
 
         // downloading the file itself
@@ -885,16 +1012,28 @@ impl<'t> TelegramBotApi<'t> {
             }
 
             let path = body.result.file_path;
-            let file = Self::open_local_bot_api_file(&path).await?;
-            let stream = ReaderStream::new(file).map(|res| {
-                res.map_err(|e| {
-                    SarcaError::TelegramAPIError(format!("Failed to read local bot api file: {e}"))
-                })
-            });
-            return Ok(Box::pin(CleanupLocalFileStream {
-                inner: stream,
-                path: Some(path),
-            }));
+            match Self::open_local_bot_api_file(&path).await {
+                Ok(file) => {
+                    let stream = ReaderStream::new(file).map(|res| {
+                        res.map_err(|e| {
+                            SarcaError::TelegramAPIError(format!(
+                                "Failed to read local bot api file: {e}"
+                            ))
+                        })
+                    });
+                    return Ok(Box::pin(CleanupLocalFileStream {
+                        inner: stream,
+                        path: Some(path),
+                    }));
+                },
+                Err(local_err) => {
+                    tracing::warn!(
+                        "[TELEGRAM API] local stream open failed, trying HTTP fallback: {local_err}"
+                    );
+                    let token = self.scheduler.get_token(storage_id).await?;
+                    return self.download_local_path_via_http_stream(&path, &token).await;
+                },
+            }
         }
 
         // downloading the file itself
