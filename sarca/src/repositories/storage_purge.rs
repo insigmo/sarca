@@ -151,7 +151,8 @@ impl<'d> StoragePurgeRepository<'d> {
 
     pub async fn requeue_stale_in_progress(&self, older_than: Duration) -> SarcaResult<u64> {
         let cutoff = Utc::now()
-            - ChronoDuration::from_std(older_than).unwrap_or(ChronoDuration::seconds(i64::MAX));
+            - ChronoDuration::from_std(older_than)
+                .unwrap_or_else(|_| ChronoDuration::days(365 * 100));
         let result = sqlx::query(
             r#"
             UPDATE storage_purge_messages
@@ -229,12 +230,13 @@ impl<'d> StoragePurgeRepository<'d> {
     pub async fn try_complete_jobs(&self) -> SarcaResult<u64> {
         let result = sqlx::query(
             r#"
-            UPDATE storage_purge_jobs j
+            UPDATE storage_purge_jobs
             SET completed_at = datetime('now')
-            WHERE j.completed_at IS NULL
+            WHERE completed_at IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM storage_purge_messages m
-                WHERE m.job_id = j.id AND m.status IN ('pending', 'in_progress')
+                WHERE m.job_id = storage_purge_jobs.id
+                  AND m.status IN ('pending', 'in_progress')
               )
             "#,
         )

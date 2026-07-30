@@ -23,7 +23,7 @@ impl FavoritesRouter {
     pub fn get_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
             .route("/", get(Self::list).put(Self::add))
-            .route("/*path", delete(Self::remove))
+            .route("/{*path}", delete(Self::remove))
     }
 
     fn service(state: &AppState) -> FavoritesService<'_> {

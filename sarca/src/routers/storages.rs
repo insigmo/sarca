@@ -52,27 +52,27 @@ impl StoragesRouter {
         let shares_router = SharesRouter::get_router(state.clone());
         Router::new()
             .route("/", get(Self::list).post(Self::create))
-            .route("/:storage_id", get(Self::get).put(Self::update).delete(Self::delete))
+            .route("/{storage_id}", get(Self::get).put(Self::update).delete(Self::delete))
             .route(
-                "/:storage_id/access",
+                "/{storage_id}/access",
                 get(Self::list_users_with_access)
                     .post(Self::grant_access)
                     .delete(Self::restrict_access),
             )
-            .route("/:storage_id/channels", axum::routing::post(Self::add_channel))
-            .route("/:storage_id/channels/refresh", axum::routing::post(Self::refresh_channels))
-            .route("/:storage_id/bot", axum::routing::put(Self::set_bot))
+            .route("/{storage_id}/channels", axum::routing::post(Self::add_channel))
+            .route("/{storage_id}/channels/refresh", axum::routing::post(Self::refresh_channels))
+            .route("/{storage_id}/bot", axum::routing::put(Self::set_bot))
             .route(
-                "/:storage_id/channels/:channel_id",
+                "/{storage_id}/channels/{channel_id}",
                 axum::routing::put(Self::update_channel).delete(Self::remove_channel),
             )
-            .route("/:storage_id/replication/retry", axum::routing::post(Self::retry_replication))
-            .nest("/:storage_id/files", files_router)
-            .nest("/:storage_id/trash", trash_router)
-            .nest("/:storage_id/favorites", favorites_router)
-            .nest("/:storage_id/recent", recent_router)
-            .nest("/:storage_id/shares", shares_router)
-            .nest("/:storage_id/sync", SyncRouter::get_router(state.clone()))
+            .route("/{storage_id}/replication/retry", axum::routing::post(Self::retry_replication))
+            .nest("/{storage_id}/files", files_router)
+            .nest("/{storage_id}/trash", trash_router)
+            .nest("/{storage_id}/favorites", favorites_router)
+            .nest("/{storage_id}/recent", recent_router)
+            .nest("/{storage_id}/shares", shares_router)
+            .nest("/{storage_id}/sync", SyncRouter::get_router(state.clone()))
             .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required))
             .with_state(state)
     }
