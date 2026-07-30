@@ -52,7 +52,17 @@ impl ChunkCache {
 
         let dest = self.path_for(telegram_file_id);
         if dest.is_file() {
-            return Ok(dest);
+            // Stale root-owned cache from a previous privileged run must be rebuilt.
+            match tokio::fs::File::open(&dest).await {
+                Ok(_) => return Ok(dest),
+                Err(e) => {
+                    tracing::warn!(
+                        "[CHUNK CACHE] cached file unreadable ({e}), re-downloading {}",
+                        dest.display()
+                    );
+                    let _ = tokio::fs::remove_file(&dest).await;
+                },
+            }
         }
 
         let tmp = self.root.join(format!("{}.tmp", Uuid::new_v4()));
