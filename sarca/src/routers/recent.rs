@@ -20,8 +20,8 @@ use crate::{
 pub struct RecentRouter;
 
 impl RecentRouter {
-    pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>, axum::body::Body> {
-        Router::new().route("/", get(Self::list).post(Self::record)).with_state(state)
+    pub fn get_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
+        Router::new().route("/", get(Self::list).post(Self::record))
     }
 
     fn service(state: &AppState) -> RecentService<'_> {

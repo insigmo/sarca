@@ -5,16 +5,15 @@ use axum::{
     Extension,
     Json,
     Router,
-    body::{Bytes, StreamBody},
+    body::{Body, Bytes},
     extract::{DefaultBodyLimit, Multipart, Path as RoutePath, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     middleware,
     response::{AppendHeaders, IntoResponse, Response},
     routing::{get, post},
 };
 use futures::{Stream, StreamExt};
 use percent_encoding::percent_decode_str;
-use reqwest::header;
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::mpsc,
@@ -60,7 +59,7 @@ impl FilesRouter {
     /// Max total uncompressed size of files packed into a folder ZIP.
     const MAX_FOLDER_ZIP_BYTES: i64 = 10 * 1024 * 1024 * 1024;
 
-    pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>, axum::body::Body> {
+    pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
             .route("/create_folder", post(Self::create_folder))
             .route("/upload", post(Self::upload))
@@ -70,7 +69,6 @@ impl FilesRouter {
             .route("/*path", get(Self::dynamic_get).delete(Self::delete))
             .layer(DefaultBodyLimit::disable())
             .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required))
-            .with_state(state)
     }
 
     fn service(state: &AppState) -> FilesService<'_> {
@@ -440,7 +438,7 @@ impl FilesRouter {
         let mut response = (
             StatusCode::CREATED,
             [(header::CONTENT_TYPE, "application/x-ndjson")],
-            StreamBody::new(stream),
+            Body::from_stream(stream),
         )
             .into_response();
         // Discourage reverse proxies / CDNs from buffering NDJSON progress lines.
@@ -590,7 +588,7 @@ impl FilesRouter {
 
         // Empty file
         if file_size == 0 {
-            let body = StreamBody::new(futures::stream::empty::<Result<Bytes, io::Error>>());
+            let body = Body::from_stream(futures::stream::empty::<Result<Bytes, io::Error>>());
             let mut response = body.into_response();
             *response.status_mut() = StatusCode::OK;
             let headers_mut = response.headers_mut();
@@ -709,7 +707,7 @@ impl FilesRouter {
         };
 
         let stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(stream);
-        let body = StreamBody::new(stream);
+        let body = Body::from_stream(stream);
 
         let mut response = (body).into_response();
         *response.status_mut() = status;
@@ -888,7 +886,7 @@ impl FilesRouter {
         };
 
         let stream: Pin<Box<dyn Stream<Item = Result<Bytes, io::Error>> + Send>> = Box::pin(stream);
-        let body = StreamBody::new(stream);
+        let body = Body::from_stream(stream);
 
         let disposition = content_disposition_value("attachment", &format!("{folder_name}.zip"));
         let mut response = body.into_response();
