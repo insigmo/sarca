@@ -1,5 +1,5 @@
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -21,7 +21,7 @@ pub struct SharesService<'d> {
 }
 
 impl<'d> SharesService<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             shares: ShareLinksRepository::new(db),
             files: FilesRepository::new(db),
@@ -137,7 +137,7 @@ pub struct PublicSharesService<'d> {
 }
 
 impl<'d> PublicSharesService<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             shares: ShareLinksRepository::new(db),
             files: FilesRepository::new(db),

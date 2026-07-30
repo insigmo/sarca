@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -11,11 +11,11 @@ pub const FILES_TABLE: &str = "files";
 pub const RECENT_LIMIT: i64 = 20;
 
 pub struct RecentFilesRepository<'d> {
-    db: &'d PgPool,
+    db: &'d SqlitePool,
 }
 
 impl<'d> RecentFilesRepository<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             db,
         }
@@ -83,9 +83,9 @@ impl<'d> RecentFilesRepository<'d> {
             format!(
                 "
                 INSERT INTO {TABLE} (user_id, storage_id, file_id, viewed_at)
-                VALUES ($1, $2, $3, NOW())
+                VALUES ($1, $2, $3, datetime('now'))
                 ON CONFLICT (user_id, file_id) DO UPDATE
-                  SET viewed_at = NOW(),
+                  SET viewed_at = datetime('now'),
                       storage_id = EXCLUDED.storage_id
                 "
             )

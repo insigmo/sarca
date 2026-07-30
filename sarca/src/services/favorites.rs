@@ -1,4 +1,4 @@
-use sqlx::PgPool;
+use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
@@ -19,7 +19,7 @@ pub struct FavoritesService<'d> {
 }
 
 impl<'d> FavoritesService<'d> {
-    pub fn new(db: &'d PgPool) -> Self {
+    pub fn new(db: &'d SqlitePool) -> Self {
         Self {
             favorites: FavoritesRepository::new(db),
             files: FilesRepository::new(db),
