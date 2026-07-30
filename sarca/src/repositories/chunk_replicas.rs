@@ -242,9 +242,9 @@ impl<'d> ChunkReplicasRepository<'d> {
             format!(
                 "
                 SELECT
-                    COUNT(*) FILTER (WHERE cr.status = '{REPLICA_STATUS_PENDING}') AS pending,
-                    COUNT(*) FILTER (WHERE cr.status = '{REPLICA_STATUS_UPLOADED}') AS uploaded,
-                    COUNT(*) FILTER (WHERE cr.status = '{REPLICA_STATUS_FAILED}') AS failed
+                    SUM(CASE WHEN cr.status = '{REPLICA_STATUS_PENDING}' THEN 1 ELSE 0 END) AS pending,
+                    SUM(CASE WHEN cr.status = '{REPLICA_STATUS_UPLOADED}' THEN 1 ELSE 0 END) AS uploaded,
+                    SUM(CASE WHEN cr.status = '{REPLICA_STATUS_FAILED}' THEN 1 ELSE 0 END) AS failed
                 FROM {TABLE} cr
                 JOIN storage_channels sc ON sc.id = cr.channel_id
                 WHERE sc.storage_id = $1
