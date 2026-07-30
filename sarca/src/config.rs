@@ -2,7 +2,7 @@ use std::{env, net::SocketAddr, str::FromStr};
 
 use super::{
     errors::{SarcaError, SarcaResult},
-    tls::{parse_tls_identity, TlsIdentity, TlsError},
+    tls::{TlsError, TlsIdentity, parse_tls_identity},
 };
 
 #[derive(Debug, Clone)]
@@ -69,10 +69,7 @@ impl Config {
 
     /// Parsed TLS identity when `TLS_HOSTNAME` is set.
     pub fn tls_identity(&self) -> Result<Option<TlsIdentity>, TlsError> {
-        match self.tls_hostname.as_deref() {
-            Some(host) => parse_tls_identity(host).map(Some),
-            None => Ok(None),
-        }
+        self.tls_hostname.as_deref().map_or(Ok(None), |host| parse_tls_identity(host).map(Some))
     }
 
     pub fn new() -> SarcaResult<Self> {
@@ -80,10 +77,14 @@ impl Config {
         let sqlite_path = Self::get_optional_env_var("SQLITE_PATH")
             .unwrap_or_else(|| Self::default_sqlite_path(&work_dir));
         let port = Self::get_env_var("PORT")?;
-        let https_addr =
-            Self::get_env_var_with_default("HTTPS_ADDR", "0.0.0.0:8443".parse().expect("valid addr"))?;
-        let acme_http_addr =
-            Self::get_env_var_with_default("ACME_HTTP_ADDR", "0.0.0.0:8080".parse().expect("valid addr"))?;
+        let https_addr = Self::get_env_var_with_default(
+            "HTTPS_ADDR",
+            "0.0.0.0:8443".parse().expect("valid addr"),
+        )?;
+        let acme_http_addr = Self::get_env_var_with_default(
+            "ACME_HTTP_ADDR",
+            "0.0.0.0:8080".parse().expect("valid addr"),
+        )?;
         let tls_hostname = Self::get_optional_env_var("TLS_HOSTNAME");
         let acme_directory = Self::get_env_var_with_default(
             "ACME_DIRECTORY",
@@ -103,7 +104,8 @@ impl Config {
             "https://api.telegram.org".to_owned(),
         )?;
         let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 18)?;
-        let telegram_chunk_size_mb = Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", 20u32)?;
+        let telegram_chunk_size_mb =
+            Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", 20u32)?;
         let telegram_video_chunk_size_mb =
             Self::get_env_var_with_default("TELEGRAM_VIDEO_CHUNK_SIZE_MB", 20u32)?;
 

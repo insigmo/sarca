@@ -17,13 +17,7 @@ pub const FILES_TABLE: &str = "files";
 pub const CHUNKS_TABLE: &str = "file_chunks";
 
 fn next_segment<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
-    let rest = if prefix.is_empty() {
-        path
-    } else if let Some(stripped) = path.strip_prefix(prefix) {
-        stripped
-    } else {
-        return None;
-    };
+    let rest = if prefix.is_empty() { path } else { path.strip_prefix(prefix)? };
     rest.split('/').next().filter(|segment| !segment.is_empty())
 }
 
@@ -61,10 +55,7 @@ fn pick_duplicate_path(path_with_stem: &str, suffix: &str, existing: &[String]) 
     format!("{path_with_stem} ({next}){suffix}", next = prev + 1)
 }
 
-fn aggregate_dir_listing(
-    rows: Vec<(String, i64, Option<String>)>,
-    prefix: &str,
-) -> Vec<FSElement> {
+fn aggregate_dir_listing(rows: Vec<(String, i64, Option<String>)>, prefix: &str) -> Vec<FSElement> {
     #[derive(Default)]
     struct Acc {
         is_file: bool,
@@ -257,13 +248,15 @@ impl<'d> FilesRepository<'d> {
         .bind(&in_obj.content_hash)
         .fetch_one(self.db)
         .await
-        .map_err(|e| match e {
-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
-                SarcaError::DoesNotExist("such storage".to_string())
-            }
-            _ => {
-                tracing::error!("{e}");
-                SarcaError::Unknown
+        .map_err(|e| {
+            match e {
+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+                    SarcaError::DoesNotExist("such storage".to_string())
+                },
+                _ => {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                },
             }
         })
     }
@@ -319,7 +312,8 @@ impl<'d> FilesRepository<'d> {
     /// `prefix` must be without leading and trailing slashes
     pub async fn list_dir(&self, storage_id: Uuid, prefix: &str) -> SarcaResult<Vec<FSElement>> {
         let prefix = if prefix.is_empty() { prefix.to_string() } else { format!("{prefix}/") };
-        let path_filter = if prefix.is_empty() { String::new() } else { "AND path LIKE $1 || '%'".to_string() };
+        let path_filter =
+            if prefix.is_empty() { String::new() } else { "AND path LIKE $1 || '%'".to_string() };
 
         let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(&format!(
             "
@@ -776,7 +770,8 @@ impl<'d> FilesRepository<'d> {
     /// Directory listing for trashed items under `prefix` (without leading/trailing slashes).
     pub async fn list_trash(&self, storage_id: Uuid, prefix: &str) -> SarcaResult<Vec<FSElement>> {
         let prefix = if prefix.is_empty() { prefix.to_string() } else { format!("{prefix}/") };
-        let path_filter = if prefix.is_empty() { String::new() } else { "AND path LIKE $1 || '%'".to_string() };
+        let path_filter =
+            if prefix.is_empty() { String::new() } else { "AND path LIKE $1 || '%'".to_string() };
 
         let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(&format!(
             "

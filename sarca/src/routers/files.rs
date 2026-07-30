@@ -68,7 +68,7 @@ impl FilesRouter {
             .route("/copy", post(Self::copy_to))
             .route("/*path", get(Self::dynamic_get).delete(Self::delete))
             .layer(DefaultBodyLimit::disable())
-            .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required))
+            .route_layer(middleware::from_fn_with_state(state, logged_in_required))
     }
 
     fn service(state: &AppState) -> FilesService<'_> {
