@@ -262,6 +262,12 @@ impl<'d> FilesRepository<'d> {
     }
 
     pub async fn create_chunks_batch(&self, chunks: Vec<FileChunk>) -> SarcaResult<()> {
+        // Empty files upload no chunks at all; `push_values` on an empty list would
+        // build an INSERT without a VALUES clause and fail.
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
         QueryBuilder::new(format!("INSERT INTO {CHUNKS_TABLE} (id, file_id, position) ").as_str())
             .push_values(chunks, |mut q, chunk| {
                 q.push_bind(chunk.id).push_bind(chunk.file_id).push_bind(chunk.position);
@@ -473,23 +479,55 @@ impl<'d> FilesRepository<'d> {
         .map(|_| ())
     }
 
-    /// `(chat_id, message_id, storage_id)` for thumbnail Telegram messages of the given files.
-    pub async fn list_thumb_messages_for_files(
+    pub async fn set_preview(
+        &self,
+        file_id: Uuid,
+        preview_telegram_file_id: &str,
+        preview_telegram_message_id: i64,
+    ) -> SarcaResult<()> {
+        sqlx::query(
+            format!(
+                "
+                UPDATE {FILES_TABLE}
+                SET preview_telegram_file_id = $2,
+                    preview_telegram_message_id = $3
+                WHERE id = $1
+                "
+            )
+            .as_str(),
+        )
+        .bind(file_id)
+        .bind(preview_telegram_file_id)
+        .bind(preview_telegram_message_id)
+        .execute(self.db)
+        .await
+        .map_err(|_| SarcaError::Unknown)
+        .map(|_| ())
+    }
+
+    /// `(chat_id, message_id, storage_id)` for derived (thumbnail + preview) Telegram
+    /// messages of the given files.
+    pub async fn list_derived_messages_for_files(
         &self,
         file_ids: &[Uuid],
     ) -> SarcaResult<Vec<(i64, i64, Uuid)>> {
         if file_ids.is_empty() {
             return Ok(vec![]);
         }
-        // Thumb is uploaded to the primary channel at upload time; try all storage
+        // Derived documents go to the primary channel at upload time; try all storage
         // channels so purge still works if primary later rotated.
         let mut builder = QueryBuilder::new(
             format!(
                 "
-                SELECT DISTINCT sc.chat_id, f.thumb_telegram_message_id, f.storage_id
+                SELECT DISTINCT sc.chat_id, m.message_id, f.storage_id
                 FROM {FILES_TABLE} f
                 JOIN storage_channels sc ON sc.storage_id = f.storage_id
-                WHERE f.thumb_telegram_message_id IS NOT NULL
+                JOIN (
+                    SELECT id, thumb_telegram_message_id AS message_id FROM {FILES_TABLE}
+                    UNION ALL
+                    SELECT id, preview_telegram_message_id AS message_id FROM {FILES_TABLE}
+                ) m ON m.id = f.id
+                WHERE m.message_id IS NOT NULL
                   AND f.id IN ("
             )
             .as_str(),
@@ -511,19 +549,25 @@ impl<'d> FilesRepository<'d> {
             .collect())
     }
 
-    /// `(chat_id, message_id)` for thumbnail Telegram messages of all files in a storage.
-    pub async fn list_thumb_messages_for_storage(
+    /// `(chat_id, message_id)` for derived (thumbnail + preview) Telegram messages of all
+    /// files in a storage.
+    pub async fn list_derived_messages_for_storage(
         &self,
         storage_id: Uuid,
     ) -> SarcaResult<Vec<(i64, i64)>> {
         let rows: Vec<(i64, Option<i64>)> = sqlx::query_as(
             format!(
                 "
-                SELECT DISTINCT sc.chat_id, f.thumb_telegram_message_id
+                SELECT DISTINCT sc.chat_id, m.message_id
                 FROM {FILES_TABLE} f
                 JOIN storage_channels sc ON sc.storage_id = f.storage_id
+                JOIN (
+                    SELECT id, thumb_telegram_message_id AS message_id FROM {FILES_TABLE}
+                    UNION ALL
+                    SELECT id, preview_telegram_message_id AS message_id FROM {FILES_TABLE}
+                ) m ON m.id = f.id
                 WHERE f.storage_id = $1
-                  AND f.thumb_telegram_message_id IS NOT NULL
+                  AND m.message_id IS NOT NULL
                 "
             )
             .as_str(),
@@ -542,9 +586,9 @@ impl<'d> FilesRepository<'d> {
             .collect())
     }
 
-    /// True if any remaining file (live or trashed) still uses this thumb message
-    /// on a channel with `chat_id`.
-    pub async fn thumb_message_still_referenced(
+    /// True if any remaining file (live or trashed) still uses this message as its
+    /// thumbnail or preview on a channel with `chat_id`.
+    pub async fn derived_message_still_referenced(
         &self,
         chat_id: i64,
         message_id: i64,
@@ -557,7 +601,7 @@ impl<'d> FilesRepository<'d> {
                     FROM {FILES_TABLE} f
                     JOIN storage_channels sc ON sc.storage_id = f.storage_id
                     WHERE sc.chat_id = $1
-                      AND f.thumb_telegram_message_id = $2
+                      AND $2 IN (f.thumb_telegram_message_id, f.preview_telegram_message_id)
                 )
                 "
             )
@@ -1328,7 +1372,7 @@ impl<'d> FilesRepository<'d> {
         })
     }
 
-    /// Insert a live file row copying size/flags/thumb/chunk size from `source`.
+    /// Insert a live file row copying size/flags/thumb/preview/chunk size from `source`.
     pub async fn insert_cloned_file(&self, source: &File, dest_path: &str) -> SarcaResult<File> {
         let id = Uuid::new_v4();
         sqlx::query_as(
@@ -1337,9 +1381,10 @@ impl<'d> FilesRepository<'d> {
                 INSERT INTO {FILES_TABLE} (
                     id, path, size, storage_id, is_uploaded,
                     thumb_telegram_file_id, thumb_telegram_message_id, chunk_size_bytes,
-                    source_created_at, source_mtime
+                    source_created_at, source_mtime,
+                    preview_telegram_file_id, preview_telegram_message_id
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 RETURNING *
                 "
             )
@@ -1355,6 +1400,8 @@ impl<'d> FilesRepository<'d> {
         .bind(source.chunk_size_bytes)
         .bind(source.source_created_at)
         .bind(source.source_mtime)
+        .bind(&source.preview_telegram_file_id)
+        .bind(source.preview_telegram_message_id)
         .fetch_one(self.db)
         .await
         .map_err(|e| {

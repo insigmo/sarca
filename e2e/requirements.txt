@@ -1,2 +1,6 @@
 httpx==0.28.1
 pytest==8.3.5
+# HTTP/3 client for the QUIC scenario
+aioquic==1.3.0
+# image inspection + photo fixtures for the preview scenario
+pillow==12.3.0

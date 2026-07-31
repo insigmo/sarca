@@ -48,6 +48,30 @@ const FLOOD_PACING_WINDOW: Duration = Duration::from_mins(5);
 /// Extra cooldown after honoring `retry_after`, before the next attempt.
 const POST_FLOOD_EXTRA_COOLDOWN: Duration = Duration::from_secs(7);
 
+/// Test hook: `SARCA_TELEGRAM_PACING_MS` overrides the proactive send pacing so e2e
+/// runs against a local fake Bot API don't sleep seconds between documents. Never set
+/// this against api.telegram.org — the defaults exist to stay under flood control.
+fn pacing_override() -> Option<Duration> {
+    static OVERRIDE: OnceLock<Option<Duration>> = OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        let ms = std::env::var("SARCA_TELEGRAM_PACING_MS").ok()?.parse::<u64>().ok()?;
+        tracing::warn!("[TELEGRAM API] send pacing overridden to {ms}ms (test hook)");
+        Some(Duration::from_millis(ms))
+    })
+}
+
+fn min_send_gap() -> Duration {
+    pacing_override().unwrap_or(MIN_SEND_GAP)
+}
+
+fn min_send_gap_after_flood() -> Duration {
+    pacing_override().unwrap_or(MIN_SEND_GAP_AFTER_FLOOD)
+}
+
+fn post_flood_extra_cooldown() -> Duration {
+    pacing_override().unwrap_or(POST_FLOOD_EXTRA_COOLDOWN)
+}
+
 struct TokenSendGate {
     sem: Arc<Semaphore>,
     last_ok: Mutex<Option<Instant>>,
@@ -83,9 +107,9 @@ impl SendPermit {
             let last = gate.last_ok.lock().await;
             let flood_until = *gate.flood_cooldown_until.lock().await;
             let gap = if flood_until.is_some_and(|t| Instant::now() < t) {
-                MIN_SEND_GAP_AFTER_FLOOD
+                min_send_gap_after_flood()
             } else {
-                MIN_SEND_GAP
+                min_send_gap()
             };
             last.and_then(|t| gap.checked_sub(t.elapsed())).unwrap_or(Duration::ZERO)
         };
@@ -248,7 +272,7 @@ impl<'t> TelegramBotApi<'t> {
         if let Some(p) = permit {
             p.note_flood().await;
         }
-        tokio::time::sleep(POST_FLOOD_EXTRA_COOLDOWN).await;
+        tokio::time::sleep(post_flood_extra_cooldown()).await;
         if progress.is_some_and(tokio::sync::mpsc::Sender::is_closed) {
             return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
         }

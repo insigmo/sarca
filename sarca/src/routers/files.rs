@@ -9,7 +9,7 @@ use axum::{
     extract::{DefaultBodyLimit, Multipart, Path as RoutePath, Query, State},
     http::{HeaderMap, StatusCode, header},
     middleware,
-    response::{AppendHeaders, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use futures::{Stream, StreamExt};
@@ -938,13 +938,7 @@ impl FilesRouter {
             .await
             .map_err(<(StatusCode, String)>::from)?;
 
-        let headers = AppendHeaders([
-            (header::CONTENT_TYPE, "image/jpeg".to_owned()),
-            (header::CONTENT_DISPOSITION, "inline; filename=\"thumb.jpg\"".to_owned()),
-            (header::CACHE_CONTROL, "private, max-age=86400".to_owned()),
-        ]);
-
-        Ok((headers, bytes).into_response())
+        Ok(inline_jpeg_response(bytes, "thumb.jpg"))
     }
 
     async fn preview(
@@ -991,6 +985,28 @@ impl FilesRouter {
                 return Ok(preview_jpeg_response(bytes));
             }
             preview_cache.remove(&cache_key).await;
+        }
+
+        // Preview built at upload time: one small Telegram document instead of
+        // re-downloading every chunk of the original and re-encoding it.
+        if let Some(preview_id) = file.preview_telegram_file_id.as_deref() {
+            let scheduler =
+                StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
+            match TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
+                .download(preview_id, storage_id)
+                .await
+            {
+                Ok(bytes) if is_jpeg(&bytes) => {
+                    if let Err(e) = preview_cache.put(&cache_key, &bytes).await {
+                        tracing::warn!("preview cache write skipped: {e}");
+                    }
+                    return Ok(preview_jpeg_response(bytes));
+                },
+                Ok(_) => tracing::warn!("stored preview for {path} is not a JPEG; re-encoding"),
+                // Fall through to the slow path: the file predates stored previews, or
+                // its preview document is gone from Telegram.
+                Err(e) => tracing::warn!("stored preview download failed for {path}: {e}"),
+            }
         }
 
         let raw = assemble_file_bytes(&state, storage_id, &file).await?;
@@ -1268,12 +1284,21 @@ fn is_jpeg(bytes: &[u8]) -> bool {
 }
 
 fn preview_jpeg_response(bytes: Vec<u8>) -> Response {
-    let headers = AppendHeaders([
-        (header::CONTENT_TYPE, "image/jpeg".to_owned()),
-        (header::CONTENT_DISPOSITION, "inline; filename=\"preview.jpg\"".to_owned()),
-        (header::CACHE_CONTROL, "private, max-age=86400".to_owned()),
-    ]);
-    (headers, bytes).into_response()
+    inline_jpeg_response(bytes, "preview.jpg")
+}
+
+/// `Vec<u8>` responds as `application/octet-stream`, so the JPEG headers must
+/// *replace* the defaults — appending them would emit two Content-Type values.
+fn inline_jpeg_response(bytes: Vec<u8>, filename: &str) -> Response {
+    let mut response = bytes.into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, "image/jpeg".parse().unwrap());
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        format!("inline; filename=\"{filename}\"").parse().unwrap(),
+    );
+    headers.insert(header::CACHE_CONTROL, "private, max-age=86400".parse().unwrap());
+    response
 }
 
 fn prefetch_telegram_chunk(
