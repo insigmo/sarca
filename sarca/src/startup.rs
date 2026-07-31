@@ -368,7 +368,7 @@ pub async fn init_db(db: &SqlitePool) {
         .await
         .unwrap();
     if version_count == 0 {
-        sqlx::query("INSERT INTO schema_version (version) VALUES (?)")
+        sqlx::query("INSERT INTO schema_version (version) VALUES (?) ")
             .bind(SCHEMA_VERSION)
             .execute(&mut *transaction)
             .await
