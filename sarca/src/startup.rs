@@ -439,7 +439,7 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         let tables: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('users','files','chunk_replicas','file_sync_events')",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('users','files','chunk_replicas','file_sync_events') ",
         )
         .fetch_one(&pool)
         .await
