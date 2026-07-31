@@ -253,38 +253,47 @@ impl<'d> StorageWorkersRepository<'d> {
 
         let new_id = Uuid::new_v4();
 
-        // trying to take a token and to register it's usage
-        let token = sqlx::query_as(&format!(
+        let candidate: Option<(Uuid,)> = sqlx::query_as(&format!(
             "
-            WITH swu AS (
-                INSERT INTO {STORAGE_WORKERS_USAGES_TABLE} (id, storage_worker_id)
-                WITH sw AS (
-                    SELECT sw.id AS storage_worker_id
-                    FROM {STORAGE_WORKERS_TABLE} sw
-                    LEFT JOIN {STORAGE_WORKERS_USAGES_TABLE} swu ON sw.id = swu.storage_worker_id
-                    WHERE sw.storage_id = $1
-                    GROUP BY sw.id
-                    HAVING COUNT(swu.id) < $2
-                    ORDER BY COUNT(swu.id)
-                    LIMIT 1
-                )
-                SELECT $3, storage_worker_id FROM sw
-                RETURNING storage_worker_id
-            )
-            SELECT token
-            FROM swu
-            JOIN {STORAGE_WORKERS_TABLE} sw ON swu.storage_worker_id = sw.id;
-        "
+            SELECT sw.id AS storage_worker_id
+            FROM {STORAGE_WORKERS_TABLE} sw
+            LEFT JOIN {STORAGE_WORKERS_USAGES_TABLE} swu ON sw.id = swu.storage_worker_id
+            WHERE sw.storage_id = $1
+            GROUP BY sw.id
+            HAVING COUNT(swu.id) < $2
+            ORDER BY COUNT(swu.id)
+            LIMIT 1
+            "
         ))
         .bind(storage_id)
         .bind(i16::from(limit))
-        .bind(new_id)
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|e| map_not_found(&e, "some entity"))?;
 
+        let Some((storage_worker_id,)) = candidate else {
+            transaction.commit().await.ok();
+            return Ok(None);
+        };
+
+        sqlx::query(&format!(
+            "INSERT INTO {STORAGE_WORKERS_USAGES_TABLE} (id, storage_worker_id) VALUES ($1, $2)"
+        ))
+        .bind(new_id)
+        .bind(storage_worker_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|e| map_not_found(&e, "some entity"))?;
+
+        let token: StorageWorkerTokenOnly =
+            sqlx::query_as(&format!("SELECT token FROM {STORAGE_WORKERS_TABLE} WHERE id = $1"))
+                .bind(storage_worker_id)
+                .fetch_one(&mut *transaction)
+                .await
+                .map_err(|e| map_not_found(&e, "some entity"))?;
+
         transaction.commit().await.map_err(|e| map_not_found(&e, ""))?;
 
-        Ok(token)
+        Ok(Some(token))
     }
 }
