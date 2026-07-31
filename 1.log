@@ -1,0 +1,2188 @@
+Diff in /home/beta/git/sarca/sarca/src/common/channels.rs:46:
+     /// Spool + DB row ready; Telegram upload has not started yet.
+     /// Clients may start the next file's client→Sarca transfer on this event.
+     pub fn spooled(total: u64) -> Self {
+[31m-        Self { phase: "spooled", uploaded: 0, total, chunk: None, chunks: None, retry_after: None }
+(B[m[32m+        Self {
+(B[m[32m+            phase: "spooled",
+(B[m[32m+            uploaded: 0,
+(B[m[32m+            total,
+(B[m[32m+            chunk: None,
+(B[m[32m+            chunks: None,
+(B[m[32m+            retry_after: None,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub fn telegram(uploaded: u64, total: u64, chunk: u32, chunks: u32) -> Self {
+Diff in /home/beta/git/sarca/sarca/src/common/channels.rs:115:
+ 
+ impl StorageManagerMessage {
+     pub fn new(data: StorageManagerData) -> Self {
+[31m-        Self { data }
+(B[m[32m+        Self {
+(B[m[32m+            data,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/common/chunk_cache.rs:20:
+ 
+ impl ChunkCache {
+     pub fn new(work_dir: impl AsRef<Path>) -> Self {
+[31m-        Self { root: work_dir.as_ref().join("chunk_cache") }
+(B[m[32m+        Self {
+(B[m[32m+            root: work_dir.as_ref().join("chunk_cache"),
+(B[m[32m+        }
+(B[m     }
+ 
+     fn path_for(&self, telegram_file_id: &str) -> PathBuf {
+Diff in /home/beta/git/sarca/sarca/src/common/jwt_manager.rs:38:
+ 
+ impl AuthUser {
+     pub fn new(id: Uuid, email: String) -> Self {
+[31m-        Self { id, email }
+(B[m[32m+        Self {
+(B[m[32m+            id,
+(B[m[32m+            email,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/common/mailer.rs:1:
+ //! Outbound SMTP mailer. Soft-fails when SMTP is not configured.
+ 
+ use lettre::{
+[31m-    AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor,
+(B[m[32m+    AsyncSmtpTransport,
+(B[m[32m+    AsyncTransport,
+(B[m[32m+    Message,
+(B[m[32m+    Tokio1Executor,
+(B[m     message::{Mailbox, MultiPart, SinglePart},
+     transport::smtp::authentication::Credentials,
+ };
+Diff in /home/beta/git/sarca/sarca/src/common/mailer.rs:17:
+ 
+ impl<'c> Mailer<'c> {
+     pub fn new(config: &'c Config) -> Self {
+[31m-        Self { config }
+(B[m[32m+        Self {
+(B[m[32m+            config,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub fn require_configured(&self) -> SarcaResult<()> {
+Diff in /home/beta/git/sarca/sarca/src/common/mailer.rs:78:
+     fn build_transport(&self, host: &str) -> SarcaResult<AsyncSmtpTransport<Tokio1Executor>> {
+         let tls = self.config.smtp_tls.to_ascii_lowercase();
+         let mut builder = match tls.as_str() {
+[31m-            "none" => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
+(B[m[31m-                .port(self.config.smtp_port),
+(B[m[31m-            "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(host)
+(B[m[31m-                .map_err(|e| {
+(B[m[31m-                    tracing::error!("SMTP relay setup failed: {e}");
+(B[m[31m-                    SarcaError::Unknown
+(B[m[31m-                })?
+(B[m[31m-                .port(self.config.smtp_port),
+(B[m[32m+            "none" => {
+(B[m[32m+                AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
+(B[m[32m+                    .port(self.config.smtp_port)
+(B[m[32m+            },
+(B[m[32m+            "tls" => {
+(B[m[32m+                AsyncSmtpTransport::<Tokio1Executor>::relay(host)
+(B[m[32m+                    .map_err(|e| {
+(B[m[32m+                        tracing::error!("SMTP relay setup failed: {e}");
+(B[m[32m+                        SarcaError::Unknown
+(B[m[32m+                    })?
+(B[m[32m+                    .port(self.config.smtp_port)
+(B[m[32m+            },
+(B[m             // starttls (default)
+[31m-            _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
+(B[m[31m-                .map_err(|e| {
+(B[m[31m-                    tracing::error!("SMTP starttls setup failed: {e}");
+(B[m[31m-                    SarcaError::Unknown
+(B[m[31m-                })?
+(B[m[31m-                .port(self.config.smtp_port),
+(B[m[32m+            _ => {
+(B[m[32m+                AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(host)
+(B[m[32m+                    .map_err(|e| {
+(B[m[32m+                        tracing::error!("SMTP starttls setup failed: {e}");
+(B[m[32m+                        SarcaError::Unknown
+(B[m[32m+                    })?
+(B[m[32m+                    .port(self.config.smtp_port)
+(B[m[32m+            },
+(B[m         };
+ 
+         if let (Some(user), Some(pass)) =
+Diff in /home/beta/git/sarca/sarca/src/common/preview_cache.rs:26:
+ 
+ impl PreviewCache {
+     pub fn new(work_dir: impl AsRef<Path>) -> Self {
+[31m-        Self { root: work_dir.as_ref().join("preview_cache") }
+(B[m[32m+        Self {
+(B[m[32m+            root: work_dir.as_ref().join("preview_cache"),
+(B[m[32m+        }
+(B[m     }
+ 
+     pub fn cache_key(storage_id: Uuid, logical_path: &str) -> String {
+Diff in /home/beta/git/sarca/sarca/src/common/preview_cache.rs:102:
+                 let size = meta.len();
+                 total = total.saturating_add(size);
+                 let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+[31m-                entries.push(CacheEntry { path, size, modified });
+(B[m[32m+                entries.push(CacheEntry {
+(B[m[32m+                    path,
+(B[m[32m+                    size,
+(B[m[32m+                    modified,
+(B[m[32m+                });
+(B[m             }
+             Ok((total, entries))
+         })
+Diff in /home/beta/git/sarca/sarca/src/common/routing/app_state.rs:11:
+ 
+ impl AppState {
+     pub fn new(db: Pool<Sqlite>, config: Config, tx: ClientSender) -> Self {
+[31m-        Self { db, config, tx }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+            config,
+(B[m[32m+            tx,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/common/telegram_api/bot_api.rs:17:
+ use uuid::Uuid;
+ 
+ use super::schemas::{
+[31m-    ChatInfo, CopyMessageBodySchema, DownloadBodySchema, GetChatBodySchema, UploadBodySchema,
+(B[m[32m+    ChatInfo,
+(B[m[32m+    CopyMessageBodySchema,
+(B[m[32m+    DownloadBodySchema,
+(B[m[32m+    GetChatBodySchema,
+(B[m[32m+    UploadBodySchema,
+(B[m     UploadOutcome,
+ };
+ use crate::{
+Diff in /home/beta/git/sarca/sarca/src/common/telegram_api/bot_api.rs:88:
+         if !sleep_for.is_zero() {
+             tokio::time::sleep(sleep_for).await;
+         }
+[31m-        Self { _permit: permit, gate }
+(B[m[32m+        Self {
+(B[m[32m+            _permit: permit,
+(B[m[32m+            gate,
+(B[m[32m+        }
+(B[m     }
+ 
+     async fn mark_ok(&self) {
+Diff in /home/beta/git/sarca/sarca/src/common/telegram_api/bot_api.rs:125:
+ 
+ impl<'t> TelegramBotApi<'t> {
+     pub fn new(base_url: &'t str, scheduler: StorageWorkersScheduler<'t>) -> Self {
+[31m-        Self { base_url, scheduler }
+(B[m[32m+        Self {
+(B[m[32m+            base_url,
+(B[m[32m+            scheduler,
+(B[m[32m+        }
+(B[m     }
+ 
+     /// Masks the bot token in URL for safe logging
+Diff in /home/beta/git/sarca/sarca/src/common/telegram_api/bot_api.rs:805:
+             .or(body.result.first_name)
+             .unwrap_or_else(|| chat_id.to_string());
+ 
+[31m-        Ok(ChatInfo { title })
+(B[m[32m+        Ok(ChatInfo {
+(B[m[32m+            title,
+(B[m[32m+        })
+(B[m     }
+ 
+     /// Copy a message (with its document) from one chat to another without re-uploading.
+Diff in /home/beta/git/sarca/sarca/src/common/telegram_api/bot_api.rs:866:
+ 
+         let body: CopyMessageBodySchema = response.json().await?;
+ 
+[31m-        Ok(UploadOutcome { file_id: source_file_id.to_owned(), message_id: body.result.message_id })
+(B[m[32m+        Ok(UploadOutcome {
+(B[m[32m+            file_id: source_file_id.to_owned(),
+(B[m[32m+            message_id: body.result.message_id,
+(B[m[32m+        })
+(B[m     }
+ 
+     /// Best-effort Telegram `deleteMessage`. Missing/already-deleted messages are treated as
+Diff in /home/beta/git/sarca/sarca/src/common/telegram_api/schemas.rs:225:
+         .or_else(|| chat.username.clone())
+         .or_else(|| chat.first_name.clone())
+         .unwrap_or_else(|| chat.id.to_string());
+[31m-    out.push(DetectedChat { chat_id: chat.id, title });
+(B[m[32m+    out.push(DetectedChat {
+(B[m[32m+        chat_id: chat.id,
+(B[m[32m+        title,
+(B[m[32m+    });
+(B[m }
+ 
+ #[cfg(test)]
+Diff in /home/beta/git/sarca/sarca/src/common/telegram_api/token_client.rs:3:
+ use serde_json::json;
+ 
+ use super::schemas::{
+[31m-    BotMe, ChatInfo, DetectedChat, GetChatBodySchema, GetChatMemberBodySchema, GetMeBodySchema,
+(B[m[31m-    GetUpdatesBodySchema, chats_from_updates,
+(B[m[32m+    BotMe,
+(B[m[32m+    ChatInfo,
+(B[m[32m+    DetectedChat,
+(B[m[32m+    GetChatBodySchema,
+(B[m[32m+    GetChatMemberBodySchema,
+(B[m[32m+    GetMeBodySchema,
+(B[m[32m+    GetUpdatesBodySchema,
+(B[m[32m+    chats_from_updates,
+(B[m };
+ use crate::{
+     common::types::ChatId,
+Diff in /home/beta/git/sarca/sarca/src/common/telegram_api/token_client.rs:63:
+             .filter(|u| !u.is_empty())
+             .or(body.result.first_name)
+             .unwrap_or_else(|| format!("bot_{}", body.result.id));
+[31m-        Ok(BotMe { id: body.result.id, username })
+(B[m[32m+        Ok(BotMe {
+(B[m[32m+            id: body.result.id,
+(B[m[32m+            username,
+(B[m[32m+        })
+(B[m     }
+ 
+     pub async fn delete_webhook(&self) -> SarcaResult<()> {
+Diff in /home/beta/git/sarca/sarca/src/common/telegram_api/token_client.rs:223:
+             .or(body.result.username)
+             .or(body.result.first_name)
+             .unwrap_or_else(|| chat_id.to_string());
+[31m-        Ok(ChatInfo { title })
+(B[m[32m+        Ok(ChatInfo {
+(B[m[32m+            title,
+(B[m[32m+        })
+(B[m     }
+ 
+     /// Returns Telegram member status (`creator`, `administrator`, `member`, …).
+Diff in /home/beta/git/sarca/sarca/src/conf.rs:4:
+ //! binary and in the current working directory. Migrates legacy `.env` once.
+ 
+ use std::{
+[31m-    env, fs,
+(B[m[32m+    env,
+(B[m[32m+    fs,
+(B[m     io::{BufRead, BufReader},
+     path::{Path, PathBuf},
+ };
+Diff in /home/beta/git/sarca/sarca/src/models/file_chunks.rs:9:
+ 
+ impl FileChunk {
+     pub fn new(id: uuid::Uuid, file_id: uuid::Uuid, position: Position) -> Self {
+[31m-        Self { id, file_id, position }
+(B[m[32m+        Self {
+(B[m[32m+            id,
+(B[m[32m+            file_id,
+(B[m[32m+            position,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/models/storage_channels.rs:36:
+ 
+ impl InStorageChannel {
+     pub fn active(storage_id: uuid::Uuid, position: i16, chat_id: ChatId, name: String) -> Self {
+[31m-        Self { storage_id, position, chat_id, name, status: CHANNEL_STATUS_ACTIVE.to_owned() }
+(B[m[32m+        Self {
+(B[m[32m+            storage_id,
+(B[m[32m+            position,
+(B[m[32m+            chat_id,
+(B[m[32m+            name,
+(B[m[32m+            status: CHANNEL_STATUS_ACTIVE.to_owned(),
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/models/storage_workers.rs:14:
+         token: String,
+         storage_id: Option<uuid::Uuid>,
+     ) -> Self {
+[31m-        Self { name, user_id, token, storage_id }
+(B[m[32m+        Self {
+(B[m[32m+            name,
+(B[m[32m+            user_id,
+(B[m[32m+            token,
+(B[m[32m+            storage_id,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/models/storage_workers.rs:35:
+         token: String,
+         storage_id: Option<uuid::Uuid>,
+     ) -> Self {
+[31m-        Self { id, name, user_id, token, storage_id }
+(B[m[32m+        Self {
+(B[m[32m+            id,
+(B[m[32m+            name,
+(B[m[32m+            user_id,
+(B[m[32m+            token,
+(B[m[32m+            storage_id,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/models/storages.rs:7:
+ 
+ impl InStorage {
+     pub fn new(name: String) -> Self {
+[31m-        Self { name, primary_position: 1 }
+(B[m[32m+        Self {
+(B[m[32m+            name,
+(B[m[32m+            primary_position: 1,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/models/storages.rs:20:
+ 
+ impl Storage {
+     pub fn new(id: uuid::Uuid, name: String, primary_position: i16) -> Self {
+[31m-        Self { id, name, primary_position }
+(B[m[32m+        Self {
+(B[m[32m+            id,
+(B[m[32m+            name,
+(B[m[32m+            primary_position,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/models/users.rs:8:
+ 
+ impl InDBUser {
+     pub fn new_password(email: String, password_hash: String) -> Self {
+[31m-        Self { email, password_hash: Some(password_hash), email_verified_at: None }
+(B[m[32m+        Self {
+(B[m[32m+            email,
+(B[m[32m+            password_hash: Some(password_hash),
+(B[m[32m+            email_verified_at: None,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/repositories/access.rs:27:
+ 
+ impl<'d> AccessRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     /// Grant access to the caller by id (owner path).
+Diff in /home/beta/git/sarca/sarca/src/repositories/access.rs:60:
+         .bind(access_type)
+         .execute(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(ref dbe) if dbe.is_foreign_key_violation() => {
+(B[m[31m-                map_access_fk_violation(storage_id, dbe.constraint())
+(B[m[31m-            },
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(ref dbe) if dbe.is_foreign_key_violation() => {
+(B[m[32m+                    map_access_fk_violation(storage_id, dbe.constraint())
+(B[m[32m+                },
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })?;
+ 
+         tracing::debug!(
+Diff in /home/beta/git/sarca/sarca/src/repositories/access.rs:110:
+         .bind(grant_access.access_type)
+         .execute(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(ref dbe) if dbe.is_foreign_key_violation() => {
+(B[m[31m-                map_access_fk_violation(storage_id, dbe.constraint())
+(B[m[31m-            },
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(ref dbe) if dbe.is_foreign_key_violation() => {
+(B[m[32m+                    map_access_fk_violation(storage_id, dbe.constraint())
+(B[m[32m+                },
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })?;
+ 
+         tracing::debug!("[ACCESS REPO] Query affected {} rows", result.rows_affected());
+Diff in /home/beta/git/sarca/sarca/src/repositories/app_settings.rs:14:
+ 
+ impl<'d> AppSettingsRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn get_value(&self, key: &str) -> SarcaResult<Option<String>> {
+Diff in /home/beta/git/sarca/sarca/src/repositories/chunk_replicas.rs:5:
+     common::{db::sql::push_uuid_list, types::ChatId},
+     errors::{SarcaError, SarcaResult},
+     models::chunk_replicas::{
+[31m-        ChunkReplica, REPLICA_STATUS_FAILED, REPLICA_STATUS_PENDING, REPLICA_STATUS_UPLOADED,
+(B[m[32m+        ChunkReplica,
+(B[m[32m+        REPLICA_STATUS_FAILED,
+(B[m[32m+        REPLICA_STATUS_PENDING,
+(B[m[32m+        REPLICA_STATUS_UPLOADED,
+(B[m         ReplicationStats,
+     },
+ };
+Diff in /home/beta/git/sarca/sarca/src/repositories/chunk_replicas.rs:36:
+ 
+ impl<'d> ChunkReplicasRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn insert_batch(&self, replicas: Vec<ChunkReplica>) -> SarcaResult<()> {
+Diff in /home/beta/git/sarca/sarca/src/repositories/email_tokens.rs:14:
+ 
+ impl<'d> EmailTokensRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn invalidate_unused(&self, user_id: Uuid, purpose: &str) -> SarcaResult<()> {
+Diff in /home/beta/git/sarca/sarca/src/repositories/favorites.rs:15:
+ 
+ impl<'d> FavoritesRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     /// Live uploaded files starred by the user in this storage, newest star first.
+Diff in /home/beta/git/sarca/sarca/src/repositories/favorites.rs:52:
+             .into_iter()
+             .map(|(path, size, has_thumb)| {
+                 let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+[31m-                FSElement { path, name, size, is_file: true, has_thumb }
+(B[m[32m+                FSElement {
+(B[m[32m+                    path,
+(B[m[32m+                    name,
+(B[m[32m+                    size,
+(B[m[32m+                    is_file: true,
+(B[m[32m+                    has_thumb,
+(B[m[32m+                }
+(B[m             })
+             .collect())
+     }
+Diff in /home/beta/git/sarca/sarca/src/repositories/files.rs:104:
+ 
+ impl<'d> FilesRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn create_folder(&self, in_obj: InFile) -> SarcaResult<File> {
+Diff in /home/beta/git/sarca/sarca/src/repositories/files.rs:135:
+         .bind(&in_obj.content_hash)
+         .execute(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[31m-                SarcaError::DoesNotExist("such storage".to_string())
+(B[m[31m-            },
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                SarcaError::AlreadyExists("File with such name".to_string())
+(B[m[31m-            },
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[32m+                    SarcaError::DoesNotExist("such storage".to_string())
+(B[m[32m+                },
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                    SarcaError::AlreadyExists("File with such name".to_string())
+(B[m[32m+                },
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })?;
+ 
+         let mut storage = File::new(
+Diff in /home/beta/git/sarca/sarca/src/repositories/files.rs:244:
+         .bind(&in_obj.content_hash)
+         .fetch_one(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[31m-                SarcaError::DoesNotExist("such storage".to_string())
+(B[m[31m-            },
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[32m+                    SarcaError::DoesNotExist("such storage".to_string())
+(B[m[32m+                },
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })
+     }
+ 
+Diff in /home/beta/git/sarca/sarca/src/repositories/files.rs:945:
+             .bind(path)
+             .execute(self.db)
+             .await
+[31m-            .map_err(|e| match e {
+(B[m[31m-                sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                    SarcaError::TrashPathConflict
+(B[m[31m-                },
+(B[m[31m-                _ => {
+(B[m[31m-                    tracing::error!("{e}");
+(B[m[31m-                    SarcaError::Unknown
+(B[m[31m-                },
+(B[m[32m+            .map_err(|e| {
+(B[m[32m+                match e {
+(B[m[32m+                    sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                        SarcaError::TrashPathConflict
+(B[m[32m+                    },
+(B[m[32m+                    _ => {
+(B[m[32m+                        tracing::error!("{e}");
+(B[m[32m+                        SarcaError::Unknown
+(B[m[32m+                    },
+(B[m[32m+                }
+(B[m             })?
+             .rows_affected()
+         } else {
+Diff in /home/beta/git/sarca/sarca/src/repositories/files.rs:975:
+             .bind(&folder_prefix)
+             .execute(self.db)
+             .await
+[31m-            .map_err(|e| match e {
+(B[m[31m-                sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                    SarcaError::TrashPathConflict
+(B[m[31m-                },
+(B[m[31m-                _ => {
+(B[m[31m-                    tracing::error!("{e}");
+(B[m[31m-                    SarcaError::Unknown
+(B[m[31m-                },
+(B[m[32m+            .map_err(|e| {
+(B[m[32m+                match e {
+(B[m[32m+                    sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                        SarcaError::TrashPathConflict
+(B[m[32m+                    },
+(B[m[32m+                    _ => {
+(B[m[32m+                        tracing::error!("{e}");
+(B[m[32m+                        SarcaError::Unknown
+(B[m[32m+                    },
+(B[m[32m+                }
+(B[m             })?
+             .rows_affected()
+         };
+Diff in /home/beta/git/sarca/sarca/src/repositories/files.rs:1072:
+             .bind(&folder_path)
+             .execute(self.db)
+             .await
+[31m-            .map_err(|e| match e {
+(B[m[31m-                sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                    SarcaError::TrashPathConflict
+(B[m[31m-                },
+(B[m[31m-                _ => {
+(B[m[31m-                    tracing::error!("{e}");
+(B[m[31m-                    SarcaError::Unknown
+(B[m[31m-                },
+(B[m[32m+            .map_err(|e| {
+(B[m[32m+                match e {
+(B[m[32m+                    sqlx::Error::Database(ref dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                        SarcaError::TrashPathConflict
+(B[m[32m+                    },
+(B[m[32m+                    _ => {
+(B[m[32m+                        tracing::error!("{e}");
+(B[m[32m+                        SarcaError::Unknown
+(B[m[32m+                    },
+(B[m[32m+                }
+(B[m             })?
+             .rows_affected();
+ 
+Diff in /home/beta/git/sarca/sarca/src/repositories/files.rs:1345:
+         .bind(source.source_mtime)
+         .fetch_one(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                SarcaError::AlreadyExists("File with such name".to_string())
+(B[m[31m-            },
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                    SarcaError::AlreadyExists("File with such name".to_string())
+(B[m[32m+                },
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })
+     }
+ 
+Diff in /home/beta/git/sarca/sarca/src/repositories/recent_files.rs:16:
+ 
+ impl<'d> RecentFilesRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     /// Up to 20 live uploaded files, most recently viewed first.
+Diff in /home/beta/git/sarca/sarca/src/repositories/recent_files.rs:54:
+             .into_iter()
+             .map(|(path, size, has_thumb)| {
+                 let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+[31m-                FSElement { path, name, size, is_file: true, has_thumb }
+(B[m[32m+                FSElement {
+(B[m[32m+                    path,
+(B[m[32m+                    name,
+(B[m[32m+                    size,
+(B[m[32m+                    is_file: true,
+(B[m[32m+                    has_thumb,
+(B[m[32m+                }
+(B[m             })
+             .collect())
+     }
+Diff in /home/beta/git/sarca/sarca/src/repositories/share_links.rs:16:
+ 
+ impl<'d> ShareLinksRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn create(
+Diff in /home/beta/git/sarca/sarca/src/repositories/storage_channels.rs:15:
+ 
+ impl<'d> StorageChannelsRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn list_by_storage(&self, storage_id: Uuid) -> SarcaResult<Vec<StorageChannel>> {
+Diff in /home/beta/git/sarca/sarca/src/repositories/storage_channels.rs:80:
+         .bind(&in_obj.status)
+         .execute(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[31m-                SarcaError::DoesNotExist("such storage".to_string())
+(B[m[31m-            },
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                SarcaError::StorageChatIdConflict
+(B[m[31m-            },
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[32m+                    SarcaError::DoesNotExist("such storage".to_string())
+(B[m[32m+                },
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                    SarcaError::StorageChatIdConflict
+(B[m[32m+                },
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })?;
+ 
+         Ok(StorageChannel {
+Diff in /home/beta/git/sarca/sarca/src/repositories/storage_channels.rs:121:
+         .bind(name)
+         .fetch_one(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                SarcaError::StorageChatIdConflict
+(B[m[31m-            },
+(B[m[31m-            _ => map_not_found(&e, "storage channel"),
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                    SarcaError::StorageChatIdConflict
+(B[m[32m+                },
+(B[m[32m+                _ => map_not_found(&e, "storage channel"),
+(B[m[32m+            }
+(B[m         })
+     }
+ 
+Diff in /home/beta/git/sarca/sarca/src/repositories/storage_purge.rs:15:
+ 
+ impl<'d> StoragePurgeRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn enqueue_in_tx(
+Diff in /home/beta/git/sarca/sarca/src/repositories/storage_workers.rs:16:
+ 
+ impl<'d> StorageWorkersRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn create(&self, in_obj: InStorageWorker) -> SarcaResult<StorageWorker> {
+Diff in /home/beta/git/sarca/sarca/src/repositories/storage_workers.rs:35:
+         .bind(in_obj.storage_id)
+         .execute(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                SarcaError::StorageWorkerTokenConflict
+(B[m[31m-            },
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[31m-                SarcaError::DoesNotExist("Such storage does not exist".to_string())
+(B[m[31m-            },
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                    SarcaError::StorageWorkerTokenConflict
+(B[m[32m+                },
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[32m+                    SarcaError::DoesNotExist("Such storage does not exist".to_string())
+(B[m[32m+                },
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })?;
+ 
+         let sw =
+Diff in /home/beta/git/sarca/sarca/src/repositories/storage_workers.rs:159:
+         .bind(name)
+         .fetch_one(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                SarcaError::StorageWorkerNameConflict
+(B[m[31m-            },
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[31m-                SarcaError::DoesNotExist("Such storage does not exist".to_string())
+(B[m[31m-            },
+(B[m[31m-            sqlx::Error::RowNotFound => SarcaError::DoesNotExist("storage_worker".to_owned()),
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                    SarcaError::StorageWorkerNameConflict
+(B[m[32m+                },
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[32m+                    SarcaError::DoesNotExist("Such storage does not exist".to_string())
+(B[m[32m+                },
+(B[m[32m+                sqlx::Error::RowNotFound => SarcaError::DoesNotExist("storage_worker".to_owned()),
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })
+     }
+ 
+Diff in /home/beta/git/sarca/sarca/src/repositories/storage_workers.rs:189:
+         .bind(token)
+         .fetch_one(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                SarcaError::StorageWorkerTokenConflict
+(B[m[31m-            },
+(B[m[31m-            sqlx::Error::RowNotFound => SarcaError::DoesNotExist("storage_worker".to_owned()),
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                    SarcaError::StorageWorkerTokenConflict
+(B[m[32m+                },
+(B[m[32m+                sqlx::Error::RowNotFound => SarcaError::DoesNotExist("storage_worker".to_owned()),
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })?;
+         Ok(result)
+     }
+Diff in /home/beta/git/sarca/sarca/src/repositories/storages.rs:16:
+ 
+ impl<'d> StoragesRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn create(&self, in_obj: InStorage) -> SarcaResult<Storage> {
+Diff in /home/beta/git/sarca/sarca/src/repositories/storages.rs:31:
+         .bind(in_obj.primary_position)
+         .execute(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[31m-                SarcaError::UserWasRemoved
+(B[m[31m-            },
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_foreign_key_violation() => {
+(B[m[32m+                    SarcaError::UserWasRemoved
+(B[m[32m+                },
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })?;
+ 
+         let storage = Storage::new(id, in_obj.name, in_obj.primary_position);
+Diff in /home/beta/git/sarca/sarca/src/repositories/sync.rs:12:
+ 
+ impl<'d> SyncRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn changelog(
+Diff in /home/beta/git/sarca/sarca/src/repositories/users.rs:14:
+ 
+ impl<'d> UsersRepository<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn create(&self, in_obj: InDBUser) -> SarcaResult<User> {
+Diff in /home/beta/git/sarca/sarca/src/repositories/users.rs:32:
+         .bind(in_obj.email_verified_at)
+         .execute(self.db)
+         .await
+[31m-        .map_err(|e| match e {
+(B[m[31m-            sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[31m-                SarcaError::AlreadyExists("user with given email".into())
+(B[m[31m-            },
+(B[m[31m-            _ => {
+(B[m[31m-                tracing::error!("{e}");
+(B[m[31m-                SarcaError::Unknown
+(B[m[31m-            },
+(B[m[32m+        .map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+(B[m[32m+                    SarcaError::AlreadyExists("user with given email".into())
+(B[m[32m+                },
+(B[m[32m+                _ => {
+(B[m[32m+                    tracing::error!("{e}");
+(B[m[32m+                    SarcaError::Unknown
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         })?;
+ 
+         Ok(User {
+Diff in /home/beta/git/sarca/sarca/src/routers/auth.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::{Query, State},
+     http::StatusCode,
+     middleware,
+Diff in /home/beta/git/sarca/sarca/src/routers/auth.rs:15:
+         routing::{app_state::AppState, middlewares::auth::logged_in_required},
+     },
+     schemas::auth::{
+[31m-        ForgotPasswordSchema, LoginSchema, MeSchema, RefreshSchema, ResetPasswordSchema,
+(B[m[31m-        TokenBodySchema, TokenSchema,
+(B[m[32m+        ForgotPasswordSchema,
+(B[m[32m+        LoginSchema,
+(B[m[32m+        MeSchema,
+(B[m[32m+        RefreshSchema,
+(B[m[32m+        ResetPasswordSchema,
+(B[m[32m+        TokenBodySchema,
+(B[m[32m+        TokenSchema,
+(B[m     },
+     services::auth::AuthService,
+ };
+Diff in /home/beta/git/sarca/sarca/src/routers/favorites.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::{Path, State},
+     http::StatusCode,
+     response::IntoResponse,
+Diff in /home/beta/git/sarca/sarca/src/routers/files.rs:2:
+ 
+ use async_stream::try_stream;
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     body::{Body, Bytes},
+     extract::{DefaultBodyLimit, Multipart, Path as RoutePath, Query, State},
+     http::{HeaderMap, StatusCode, header},
+Diff in /home/beta/git/sarca/sarca/src/routers/files.rs:31:
+     errors::{SarcaError, SarcaResult},
+     models::{access::AccessType, files::InFile, storage_channels::StorageChannel},
+     repositories::{
+[31m-        access::AccessRepository, files::FilesRepository,
+(B[m[31m-        storage_channels::StorageChannelsRepository, storages::StoragesRepository,
+(B[m[32m+        access::AccessRepository,
+(B[m[32m+        files::FilesRepository,
+(B[m[32m+        storage_channels::StorageChannelsRepository,
+(B[m[32m+        storages::StoragesRepository,
+(B[m     },
+     schemas::files::{
+[31m-        CopySchema, InFolderSchema, MoveSchema, RenameSchema, SearchQuery, UploadParams,
+(B[m[32m+        CopySchema,
+(B[m[32m+        InFolderSchema,
+(B[m[32m+        MoveSchema,
+(B[m[32m+        RenameSchema,
+(B[m[32m+        SearchQuery,
+(B[m[32m+        UploadParams,
+(B[m     },
+     services::{
+[31m-        files::FilesService, storage_workers_scheduler::StorageWorkersScheduler, thumbnails,
+(B[m[32m+        files::FilesService,
+(B[m[32m+        storage_workers_scheduler::StorageWorkersScheduler,
+(B[m[32m+        thumbnails,
+(B[m     },
+ };
+ 
+Diff in /home/beta/git/sarca/sarca/src/routers/files.rs:519:
+                 // UI folder paths omit the trailing slash; try as folder.
+                 let folder_path = format!("{path}/");
+                 match Self::download_folder(state, storage_id, &folder_path).await {
+[31m-                    Err((StatusCode::NOT_FOUND, _)) => Err((
+(B[m[31m-                        StatusCode::NOT_FOUND,
+(B[m[31m-                        SarcaError::DoesNotExist("file".to_owned()).to_string(),
+(B[m[31m-                    )),
+(B[m[32m+                    Err((StatusCode::NOT_FOUND, _)) => {
+(B[m[32m+                        Err((
+(B[m[32m+                            StatusCode::NOT_FOUND,
+(B[m[32m+                            SarcaError::DoesNotExist("file".to_owned()).to_string(),
+(B[m[32m+                        ))
+(B[m[32m+                    },
+(B[m                     other => other,
+                 }
+             },
+Diff in /home/beta/git/sarca/sarca/src/routers/files.rs:1287:
+ fn content_disposition_value(disposition: &str, filename: &str) -> header::HeaderValue {
+     let ascii_name: String = filename
+         .chars()
+[31m-        .map(|c| match c {
+(B[m[31m-            ' '..='~' if c != '"' && c != '\\' => c,
+(B[m[31m-            _ => '_',
+(B[m[32m+        .map(|c| {
+(B[m[32m+            match c {
+(B[m[32m+                ' '..='~' if c != '"' && c != '\\' => c,
+(B[m[32m+                _ => '_',
+(B[m[32m+            }
+(B[m         })
+         .collect();
+     let ascii_name =
+Diff in /home/beta/git/sarca/sarca/src/routers/public_shares.rs:1:
+ use std::{sync::Arc, time::Duration};
+ 
+ use axum::{
+[31m-    Json, Router,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::{Path, Query, State},
+     http::{HeaderMap, HeaderValue, StatusCode, header},
+     response::{IntoResponse, Response},
+Diff in /home/beta/git/sarca/sarca/src/routers/public_shares.rs:97:
+             return Ok(StatusCode::NO_CONTENT.into_response());
+         }
+ 
+[31m-        PublicSharesService::verify_password(&link, &body.password).map_err(|e| match e {
+(B[m[31m-            SarcaError::NotAuthenticated => {
+(B[m[31m-                (StatusCode::UNAUTHORIZED, Json(NeedPasswordSchema::yes())).into_response()
+(B[m[31m-            },
+(B[m[31m-            other => err_response(other),
+(B[m[32m+        PublicSharesService::verify_password(&link, &body.password).map_err(|e| {
+(B[m[32m+            match e {
+(B[m[32m+                SarcaError::NotAuthenticated => {
+(B[m[32m+                    (StatusCode::UNAUTHORIZED, Json(NeedPasswordSchema::yes())).into_response()
+(B[m[32m+                },
+(B[m[32m+                other => err_response(other),
+(B[m[32m+            }
+(B[m         })?;
+ 
+         let max_age = PublicSharesService::unlock_max_age_secs(&link);
+Diff in /home/beta/git/sarca/sarca/src/routers/recent.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::{Path, State},
+     http::StatusCode,
+     response::IntoResponse,
+Diff in /home/beta/git/sarca/sarca/src/routers/setup.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::State,
+     http::StatusCode,
+     middleware,
+Diff in /home/beta/git/sarca/sarca/src/routers/shares.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::{Path, State},
+     http::StatusCode,
+     response::IntoResponse,
+Diff in /home/beta/git/sarca/sarca/src/routers/storage_workers.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::{Path, Query, State},
+     http::StatusCode,
+     middleware,
+Diff in /home/beta/git/sarca/sarca/src/routers/storage_workers.rs:16:
+         routing::{app_state::AppState, middlewares::auth::logged_in_required},
+     },
+     schemas::storage_workers::{
+[31m-        HasStorageWorkers, InStorageWorkerSchema, StorageWorkersStorageIDQuery,
+(B[m[32m+        HasStorageWorkers,
+(B[m[32m+        InStorageWorkerSchema,
+(B[m[32m+        StorageWorkersStorageIDQuery,
+(B[m     },
+     services::storage_workers::StorageWorkersService,
+ };
+Diff in /home/beta/git/sarca/sarca/src/routers/storage_workers.rs:70:
+         let has = StorageWorkersService::new(&state.db)
+             .has_storage_workers(query.0.storage_id, &user)
+             .await?;
+[31m-        Ok(Json(HasStorageWorkers { has }).into_response())
+(B[m[32m+        Ok(Json(HasStorageWorkers {
+(B[m[32m+            has,
+(B[m[32m+        })
+(B[m[32m+        .into_response())
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/routers/storages.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::{Path, State},
+     http::StatusCode,
+     middleware,
+Diff in /home/beta/git/sarca/sarca/src/routers/storages.rs:11:
+ use uuid::Uuid;
+ 
+ use super::{
+[31m-    favorites::FavoritesRouter, files::FilesRouter, recent::RecentRouter, shares::SharesRouter,
+(B[m[31m-    sync::SyncRouter, trash::TrashRouter,
+(B[m[32m+    favorites::FavoritesRouter,
+(B[m[32m+    files::FilesRouter,
+(B[m[32m+    recent::RecentRouter,
+(B[m[32m+    shares::SharesRouter,
+(B[m[32m+    sync::SyncRouter,
+(B[m[32m+    trash::TrashRouter,
+(B[m };
+ use crate::{
+     common::{
+Diff in /home/beta/git/sarca/sarca/src/routers/storages.rs:23:
+     schemas::{
+         access::{GrantAccess, RestrictAccess},
+         storages::{
+[31m-            AddChannelSchema, InStorageSchema, RefreshChannelsResultSchema, SetStorageBotSchema,
+(B[m[31m-            StoragesListSchema, UpdateChannelSchema, UpdateStorageSchema,
+(B[m[32m+            AddChannelSchema,
+(B[m[32m+            InStorageSchema,
+(B[m[32m+            RefreshChannelsResultSchema,
+(B[m[32m+            SetStorageBotSchema,
+(B[m[32m+            StoragesListSchema,
+(B[m[32m+            UpdateChannelSchema,
+(B[m[32m+            UpdateStorageSchema,
+(B[m         },
+     },
+     services::storages::StoragesService,
+Diff in /home/beta/git/sarca/sarca/src/routers/sync.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::{Path, Query, State},
+     routing::get,
+ };
+Diff in /home/beta/git/sarca/sarca/src/routers/trash.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m     extract::{Path, Query, State},
+     http::StatusCode,
+     response::IntoResponse,
+Diff in /home/beta/git/sarca/sarca/src/routers/users.rs:1:
+ use std::sync::Arc;
+ 
+ use axum::{
+[31m-    Extension, Json, Router, extract::State, http::StatusCode, middleware, response::IntoResponse,
+(B[m[32m+    Extension,
+(B[m[32m+    Json,
+(B[m[32m+    Router,
+(B[m[32m+    extract::State,
+(B[m[32m+    http::StatusCode,
+(B[m[32m+    middleware,
+(B[m[32m+    response::IntoResponse,
+(B[m     routing::get,
+ };
+ 
+Diff in /home/beta/git/sarca/sarca/src/routers/users.rs:29:
+         Extension(user): Extension<AuthUser>,
+     ) -> Result<Json<UserListSchema>, (StatusCode, String)> {
+         let users = UsersService::new(&state.db).list_for_superuser(&user, &state.config).await?;
+[31m-        Ok(Json(UserListSchema { users }))
+(B[m[32m+        Ok(Json(UserListSchema {
+(B[m[32m+            users,
+(B[m[32m+        }))
+(B[m     }
+ 
+     async fn create(
+Diff in /home/beta/git/sarca/sarca/src/schemas/auth.rs:20:
+ 
+ impl TokenSchema {
+     pub fn new(access_token: String, refresh_token: String, email_verified: bool) -> Self {
+[31m-        Self { access_token, refresh_token, email_verified }
+(B[m[32m+        Self {
+(B[m[32m+            access_token,
+(B[m[32m+            refresh_token,
+(B[m[32m+            email_verified,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/schemas/files.rs:15:
+ 
+ impl InFolderSchema {
+     pub fn new(storage_id: Uuid, parent_path: String, folder_name: String) -> Self {
+[31m-        Self { storage_id, parent_path, folder_name }
+(B[m[32m+        Self {
+(B[m[32m+            storage_id,
+(B[m[32m+            parent_path,
+(B[m[32m+            folder_name,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/schemas/shares.rs:67:
+ 
+ impl NeedPasswordSchema {
+     pub fn yes() -> Self {
+[31m-        Self { need_password: true }
+(B[m[32m+        Self {
+(B[m[32m+            need_password: true,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/schemas/storages.rs:4:
+ use crate::{
+     common::types::ChatId,
+     models::{
+[31m-        chunk_replicas::ReplicationStats, storage_channels::StorageChannel,
+(B[m[32m+        chunk_replicas::ReplicationStats,
+(B[m[32m+        storage_channels::StorageChannel,
+(B[m         storages::StorageWithInfo,
+     },
+ };
+Diff in /home/beta/git/sarca/sarca/src/schemas/storages.rs:34:
+ 
+ impl StoragesListSchema {
+     pub fn new(storages: Vec<StorageWithInfo>) -> Self {
+[31m-        Self { storages }
+(B[m[32m+        Self {
+(B[m[32m+            storages,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/schemas/sync.rs:21:
+     pub fn new(events: Vec<FileSyncEvent>, requested_limit: i64) -> Self {
+         let has_more = events.len() as i64 >= requested_limit;
+         let next_cursor = events.last().map_or(0, |e| e.id);
+[31m-        Self { events, next_cursor, has_more }
+(B[m[32m+        Self {
+(B[m[32m+            events,
+(B[m[32m+            next_cursor,
+(B[m[32m+            has_more,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/server.rs:3:
+ use axum::{
+     Router,
+     http::{
+[31m-        HeaderValue, StatusCode,
+(B[m[32m+        HeaderValue,
+(B[m[32m+        StatusCode,
+(B[m         header::{CACHE_CONTROL, HeaderName},
+     },
+ };
+Diff in /home/beta/git/sarca/sarca/src/server.rs:18:
+     common::routing::app_state::AppState,
+     conf,
+     routers::{
+[31m-        auth::AuthRouter, public_shares::PublicSharesRouter, settings::SettingsRouter,
+(B[m[31m-        setup::SetupRouter, storage_workers::StorageWorkersRouter, storages::StoragesRouter,
+(B[m[32m+        auth::AuthRouter,
+(B[m[32m+        public_shares::PublicSharesRouter,
+(B[m[32m+        settings::SettingsRouter,
+(B[m[32m+        setup::SetupRouter,
+(B[m[32m+        storage_workers::StorageWorkersRouter,
+(B[m[32m+        storages::StoragesRouter,
+(B[m         users::UsersRouter,
+     },
+     tls::{TlsRuntime, serve_dual_tls},
+Diff in /home/beta/git/sarca/sarca/src/server.rs:58:
+             .nest_service("/assets", serve_assets)
+             .fallback_service(serve_ui);
+ 
+[31m-        Self { router, ui_dir }
+(B[m[32m+        Self {
+(B[m[32m+            router,
+(B[m[32m+            ui_dir,
+(B[m[32m+        }
+(B[m     }
+ 
+     #[inline]
+Diff in /home/beta/git/sarca/sarca/src/services/auth.rs:28:
+ 
+ impl<'d> AuthService<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { repo: UsersRepository::new(db), tokens: EmailTokensRepository::new(db) }
+(B[m[32m+        Self {
+(B[m[32m+            repo: UsersRepository::new(db),
+(B[m[32m+            tokens: EmailTokensRepository::new(db),
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn login(
+Diff in /home/beta/git/sarca/sarca/src/services/favorites.rs:6:
+     errors::{SarcaError, SarcaResult},
+     models::{access::AccessType, files::FSElement},
+     repositories::{
+[31m-        access::AccessRepository, favorites::FavoritesRepository, files::FilesRepository,
+(B[m[32m+        access::AccessRepository,
+(B[m[32m+        favorites::FavoritesRepository,
+(B[m[32m+        files::FilesRepository,
+(B[m     },
+ };
+ 
+Diff in /home/beta/git/sarca/sarca/src/services/files.rs:8:
+     common::{
+         access::check_access,
+         channels::{
+[31m-            ClientData, ClientMessage, ClientSender, StorageManagerData, StorageManagerMessage,
+(B[m[31m-            UploadFileData, UploadProgressEvent,
+(B[m[32m+            ClientData,
+(B[m[32m+            ClientMessage,
+(B[m[32m+            ClientSender,
+(B[m[32m+            StorageManagerData,
+(B[m[32m+            StorageManagerMessage,
+(B[m[32m+            UploadFileData,
+(B[m[32m+            UploadProgressEvent,
+(B[m         },
+         jwt_manager::AuthUser,
+     },
+Diff in /home/beta/git/sarca/sarca/src/services/files.rs:21:
+         files::{FSElement, File, InFile, SearchFSElement},
+     },
+     repositories::{
+[31m-        access::AccessRepository, chunk_replicas::ChunkReplicasRepository, files::FilesRepository,
+(B[m[31m-        share_links::ShareLinksRepository, storage_workers::StorageWorkersRepository,
+(B[m[32m+        access::AccessRepository,
+(B[m[32m+        chunk_replicas::ChunkReplicasRepository,
+(B[m[32m+        files::FilesRepository,
+(B[m[32m+        share_links::ShareLinksRepository,
+(B[m[32m+        storage_workers::StorageWorkersRepository,
+(B[m     },
+     schemas::files::InFolderSchema,
+     services::trash::purge_file_ids,
+Diff in /home/beta/git/sarca/sarca/src/services/files.rs:154:
+         // Prefer a clear error over panicking if the manager drops the oneshot
+         // (e.g. process shutdown while this upload is queued).
+         let message_back = match resp_rx.await {
+[31m-            Ok(StorageManagerMessage { data: StorageManagerData::UploadFile(r) }) => r,
+(B[m[32m+            Ok(StorageManagerMessage {
+(B[m[32m+                data: StorageManagerData::UploadFile(r),
+(B[m[32m+            }) => r,
+(B[m             Err(_) => {
+                 tracing::error!("storage manager dropped upload response for {}", file.id);
+                 Err(SarcaError::Unknown)
+Diff in /home/beta/git/sarca/sarca/src/services/recent.rs:6:
+     errors::{SarcaError, SarcaResult},
+     models::{access::AccessType, files::FSElement},
+     repositories::{
+[31m-        access::AccessRepository, files::FilesRepository, recent_files::RecentFilesRepository,
+(B[m[32m+        access::AccessRepository,
+(B[m[32m+        files::FilesRepository,
+(B[m[32m+        recent_files::RecentFilesRepository,
+(B[m     },
+ };
+ 
+Diff in /home/beta/git/sarca/sarca/src/services/replication.rs:6:
+ use crate::{
+     common::telegram_api::bot_api::{TelegramBotApi, is_chat_dead_error},
+     repositories::{
+[31m-        chunk_replicas::ChunkReplicasRepository, storage_channels::StorageChannelsRepository,
+(B[m[32m+        chunk_replicas::ChunkReplicasRepository,
+(B[m[32m+        storage_channels::StorageChannelsRepository,
+(B[m     },
+ };
+ 
+Diff in /home/beta/git/sarca/sarca/src/services/replication.rs:67:
+                     )
+                     .await
+                 },
+[31m-                (Some(file_id), None) => match api.download(&file_id, source.storage_id).await {
+(B[m[31m-                    Ok(bytes) => api.upload(&bytes, job.target_chat_id, source.storage_id).await,
+(B[m[31m-                    Err(e) => Err(e),
+(B[m[32m+                (Some(file_id), None) => {
+(B[m[32m+                    match api.download(&file_id, source.storage_id).await {
+(B[m[32m+                        Ok(bytes) => {
+(B[m[32m+                            api.upload(&bytes, job.target_chat_id, source.storage_id).await
+(B[m[32m+                        },
+(B[m[32m+                        Err(e) => Err(e),
+(B[m[32m+                    }
+(B[m                 },
+                 (None, _) => {
+                     tracing::warn!(
+Diff in /home/beta/git/sarca/sarca/src/services/settings.rs:1:
+ use sqlx::SqlitePool;
+ 
+ use crate::{
+[31m-    errors::SarcaResult, repositories::app_settings::AppSettingsRepository,
+(B[m[32m+    errors::SarcaResult,
+(B[m[32m+    repositories::app_settings::AppSettingsRepository,
+(B[m     schemas::settings::TrashSettingsSchema,
+ };
+ 
+Diff in /home/beta/git/sarca/sarca/src/services/settings.rs:11:
+ 
+ impl<'d> SettingsService<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { repo: AppSettingsRepository::new(db) }
+(B[m[32m+        Self {
+(B[m[32m+            repo: AppSettingsRepository::new(db),
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn get_trash(&self) -> SarcaResult<TrashSettingsSchema> {
+Diff in /home/beta/git/sarca/sarca/src/services/settings.rs:18:
+[31m-        Ok(TrashSettingsSchema { retention_days: self.repo.get_trash_retention_days().await? })
+(B[m[32m+        Ok(TrashSettingsSchema {
+(B[m[32m+            retention_days: self.repo.get_trash_retention_days().await?,
+(B[m[32m+        })
+(B[m     }
+ 
+     pub async fn set_trash(&self, retention_days: i32) -> SarcaResult<TrashSettingsSchema> {
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:2:
+ 
+ use crate::{
+     common::{
+[31m-        access::check_access, jwt_manager::AuthUser,
+(B[m[31m-        telegram_api::token_client::TelegramTokenClient, types::ChatId,
+(B[m[32m+        access::check_access,
+(B[m[32m+        jwt_manager::AuthUser,
+(B[m[32m+        telegram_api::token_client::TelegramTokenClient,
+(B[m[32m+        types::ChatId,
+(B[m     },
+     conf,
+     errors::{SarcaError, SarcaResult},
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:10:
+     models::{access::AccessType, storages::Storage},
+     repositories::{
+[31m-        access::AccessRepository, storage_channels::StorageChannelsRepository,
+(B[m[32m+        access::AccessRepository,
+(B[m[32m+        storage_channels::StorageChannelsRepository,
+(B[m         storages::StoragesRepository,
+     },
+     schemas::{
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:16:
+         setup::{
+[31m-            BotValidateSchema, ChannelPollHitSchema, ChannelPollResultSchema,
+(B[m[31m-            SetupCreateStorageResultSchema, SetupCreateStorageSchema, SetupStatusSchema,
+(B[m[32m+            BotValidateSchema,
+(B[m[32m+            ChannelPollHitSchema,
+(B[m[32m+            ChannelPollResultSchema,
+(B[m[32m+            SetupCreateStorageResultSchema,
+(B[m[32m+            SetupCreateStorageSchema,
+(B[m[32m+            SetupStatusSchema,
+(B[m         },
+         storages::{ChannelInput, InStorageSchema, SetStorageBotSchema},
+     },
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:31:
+ 
+ impl<'d> SetupService<'d> {
+     pub fn new(db: &'d SqlitePool, telegram_base_url: &'d str, rate_limit: u8) -> Self {
+[31m-        Self { db, telegram_base_url, rate_limit, storages_repo: StoragesRepository::new(db) }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+            telegram_base_url,
+(B[m[32m+            rate_limit,
+(B[m[32m+            storages_repo: StoragesRepository::new(db),
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn status(&self, user: &AuthUser) -> SarcaResult<SetupStatusSchema> {
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:62:
+         let channels = found
+             .into_iter()
+             .take(3)
+[31m-            .map(|(chat_id, title)| ChannelPollHitSchema { chat_id, title })
+(B[m[32m+            .map(|(chat_id, title)| {
+(B[m[32m+                ChannelPollHitSchema {
+(B[m[32m+                    chat_id,
+(B[m[32m+                    title,
+(B[m[32m+                }
+(B[m[32m+            })
+(B[m             .collect::<Vec<_>>();
+ 
+[31m-        Ok(BotValidateSchema { bot_id: me.id, username: me.username, channels })
+(B[m[32m+        Ok(BotValidateSchema {
+(B[m[32m+            bot_id: me.id,
+(B[m[32m+            username: me.username,
+(B[m[32m+            channels,
+(B[m[32m+        })
+(B[m     }
+ 
+     /// Discover chats where the bot is admin/creator (negative chat ids only).
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:99:
+         let channels = found
+             .into_iter()
+             .take(room)
+[31m-            .map(|(chat_id, title)| ChannelPollHitSchema { chat_id, title })
+(B[m[32m+            .map(|(chat_id, title)| {
+(B[m[32m+                ChannelPollHitSchema {
+(B[m[32m+                    chat_id,
+(B[m[32m+                    title,
+(B[m[32m+                }
+(B[m[32m+            })
+(B[m             .collect::<Vec<_>>();
+         let hint = if channels.is_empty() { hint } else { None };
+[31m-        Ok(ChannelPollResultSchema { channels, hint })
+(B[m[32m+        Ok(ChannelPollResultSchema {
+(B[m[32m+            channels,
+(B[m[32m+            hint,
+(B[m[32m+        })
+(B[m     }
+ 
+     pub async fn create_storage(
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:133:
+ 
+         // Retry path: previous Finish may have left channels without a worker.
+         if let Some(existing) = self.storage_owned_by_chats(&body.chat_ids, user).await? {
+[31m-            storages.set_bot(existing.id, SetStorageBotSchema { token }, user).await?;
+(B[m[31m-            return Ok(SetupCreateStorageResultSchema { id: existing.id, name: existing.name });
+(B[m[32m+            storages
+(B[m[32m+                .set_bot(
+(B[m[32m+                    existing.id,
+(B[m[32m+                    SetStorageBotSchema {
+(B[m[32m+                        token,
+(B[m[32m+                    },
+(B[m[32m+                    user,
+(B[m[32m+                )
+(B[m[32m+                .await?;
+(B[m[32m+            return Ok(SetupCreateStorageResultSchema {
+(B[m[32m+                id: existing.id,
+(B[m[32m+                name: existing.name,
+(B[m[32m+            });
+(B[m         }
+ 
+         let mut channels = Vec::with_capacity(body.chat_ids.len());
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:143:
+                 Ok(info) => Some(info.title),
+                 Err(_) => Some(format!("Channel {}", i + 1)),
+             };
+[31m-            channels.push(ChannelInput { chat_id, name: title });
+(B[m[32m+            channels.push(ChannelInput {
+(B[m[32m+                chat_id,
+(B[m[32m+                name: title,
+(B[m[32m+            });
+(B[m         }
+ 
+         let storage = match storages
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:150:
+[31m-            .create(InStorageSchema { name: name.clone(), channels }, user)
+(B[m[32m+            .create(
+(B[m[32m+                InStorageSchema {
+(B[m[32m+                    name: name.clone(),
+(B[m[32m+                    channels,
+(B[m[32m+                },
+(B[m[32m+                user,
+(B[m[32m+            )
+(B[m             .await
+         {
+             Ok(s) => s,
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:154:
+             Err(SarcaError::StorageChatIdConflict) => {
+                 // Lost race / partial prior attempt — recover if we own the chats.
+                 if let Some(existing) = self.storage_owned_by_chats(&body.chat_ids, user).await? {
+[31m-                    storages.set_bot(existing.id, SetStorageBotSchema { token }, user).await?;
+(B[m[32m+                    storages
+(B[m[32m+                        .set_bot(
+(B[m[32m+                            existing.id,
+(B[m[32m+                            SetStorageBotSchema {
+(B[m[32m+                                token,
+(B[m[32m+                            },
+(B[m[32m+                            user,
+(B[m[32m+                        )
+(B[m[32m+                        .await?;
+(B[m                     return Ok(SetupCreateStorageResultSchema {
+                         id: existing.id,
+                         name: existing.name,
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:165:
+             Err(e) => return Err(e),
+         };
+ 
+[31m-        if let Err(e) = storages.set_bot(storage.id, SetStorageBotSchema { token }, user).await {
+(B[m[32m+        if let Err(e) = storages
+(B[m[32m+            .set_bot(
+(B[m[32m+                storage.id,
+(B[m[32m+                SetStorageBotSchema {
+(B[m[32m+                    token,
+(B[m[32m+                },
+(B[m[32m+                user,
+(B[m[32m+            )
+(B[m[32m+            .await
+(B[m[32m+        {
+(B[m             tracing::error!(
+                 "setup: storage {} created but set_bot failed: {e:?}; force-deleting storage",
+                 storage.id
+Diff in /home/beta/git/sarca/sarca/src/services/setup.rs:180:
+             return Err(e);
+         }
+ 
+[31m-        Ok(SetupCreateStorageResultSchema { id: storage.id, name: storage.name })
+(B[m[32m+        Ok(SetupCreateStorageResultSchema {
+(B[m[32m+            id: storage.id,
+(B[m[32m+            name: storage.name,
+(B[m[32m+        })
+(B[m     }
+ 
+     /// If every `chat_id` belongs to the same storage and this user is admin, return it.
+Diff in /home/beta/git/sarca/sarca/src/services/shares.rs:7:
+     errors::{SarcaError, SarcaResult},
+     models::{access::AccessType, files::FSElement, share_links::ShareLink},
+     repositories::{
+[31m-        access::AccessRepository, files::FilesRepository, share_links::ShareLinksRepository,
+(B[m[32m+        access::AccessRepository,
+(B[m[32m+        files::FilesRepository,
+(B[m[32m+        share_links::ShareLinksRepository,
+(B[m     },
+     schemas::shares::{PublicShareMetaSchema, ShareLinkSchema},
+ };
+Diff in /home/beta/git/sarca/sarca/src/services/shares.rs:136:
+ 
+ impl<'d> PublicSharesService<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { shares: ShareLinksRepository::new(db), files: FilesRepository::new(db) }
+(B[m[32m+        Self {
+(B[m[32m+            shares: ShareLinksRepository::new(db),
+(B[m[32m+            files: FilesRepository::new(db),
+(B[m[32m+        }
+(B[m     }
+ 
+     /// Load share by token; 404 if missing / revoked / expired.
+Diff in /home/beta/git/sarca/sarca/src/services/storage_manager.rs:10:
+     },
+     errors::{SarcaError, SarcaResult},
+     models::{
+[31m-        chunk_replicas::ChunkReplica, file_chunks::FileChunk, storage_channels::StorageChannel,
+(B[m[32m+        chunk_replicas::ChunkReplica,
+(B[m[32m+        file_chunks::FileChunk,
+(B[m[32m+        storage_channels::StorageChannel,
+(B[m     },
+     repositories::{
+[31m-        chunk_replicas::ChunkReplicasRepository, files::FilesRepository,
+(B[m[31m-        storage_channels::StorageChannelsRepository, storages::StoragesRepository,
+(B[m[32m+        chunk_replicas::ChunkReplicasRepository,
+(B[m[32m+        files::FilesRepository,
+(B[m[32m+        storage_channels::StorageChannelsRepository,
+(B[m[32m+        storages::StoragesRepository,
+(B[m     },
+     services::thumbnails,
+ };
+Diff in /home/beta/git/sarca/sarca/src/services/storage_purge.rs:7:
+     common::telegram_api::bot_api::TelegramBotApi,
+     errors::SarcaResult,
+     repositories::{
+[31m-        chunk_replicas::ChunkReplicasRepository, files::FilesRepository,
+(B[m[31m-        storage_purge::StoragePurgeRepository, storage_workers::StorageWorkersRepository,
+(B[m[32m+        chunk_replicas::ChunkReplicasRepository,
+(B[m[32m+        files::FilesRepository,
+(B[m[32m+        storage_purge::StoragePurgeRepository,
+(B[m[32m+        storage_workers::StorageWorkersRepository,
+(B[m     },
+     services::storage_workers_scheduler::StorageWorkersScheduler,
+ };
+Diff in /home/beta/git/sarca/sarca/src/services/storage_workers.rs:21:
+     pub fn new(db: &'d SqlitePool) -> Self {
+         let repo = StorageWorkersRepository::new(db);
+         let access_repo = AccessRepository::new(db);
+[31m-        Self { repo, access_repo }
+(B[m[32m+        Self {
+(B[m[32m+            repo,
+(B[m[32m+            access_repo,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn create(
+Diff in /home/beta/git/sarca/sarca/src/services/storage_workers_scheduler.rs:18:
+ impl<'d> StorageWorkersScheduler<'d> {
+     pub fn new(db: &'d SqlitePool, rate: u8) -> Self {
+         let repo = StorageWorkersRepository::new(db);
+[31m-        Self { repo, rate }
+(B[m[32m+        Self {
+(B[m[32m+            repo,
+(B[m[32m+            rate,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn get_token(&self, storage_id: Uuid) -> SarcaResult<String> {
+Diff in /home/beta/git/sarca/sarca/src/services/storages.rs:18:
+         storages::{InStorage, Storage, StorageWithInfo},
+     },
+     repositories::{
+[31m-        access::AccessRepository, chunk_replicas::ChunkReplicasRepository,
+(B[m[31m-        storage_channels::StorageChannelsRepository, storage_workers::StorageWorkersRepository,
+(B[m[32m+        access::AccessRepository,
+(B[m[32m+        chunk_replicas::ChunkReplicasRepository,
+(B[m[32m+        storage_channels::StorageChannelsRepository,
+(B[m[32m+        storage_workers::StorageWorkersRepository,
+(B[m         storages::StoragesRepository,
+     },
+     schemas::{
+Diff in /home/beta/git/sarca/sarca/src/services/storages.rs:26:
+         access::{GrantAccess, RestrictAccess},
+         storages::{
+[31m-            AddChannelSchema, InStorageSchema, RefreshChannelsResultSchema, SetStorageBotSchema,
+(B[m[31m-            StorageBotSchema, StorageDetailSchema, UpdateChannelSchema, UpdateStorageSchema,
+(B[m[32m+            AddChannelSchema,
+(B[m[32m+            InStorageSchema,
+(B[m[32m+            RefreshChannelsResultSchema,
+(B[m[32m+            SetStorageBotSchema,
+(B[m[32m+            StorageBotSchema,
+(B[m[32m+            StorageDetailSchema,
+(B[m[32m+            UpdateChannelSchema,
+(B[m[32m+            UpdateStorageSchema,
+(B[m         },
+     },
+     services::{
+Diff in /home/beta/git/sarca/sarca/src/services/storages.rs:180:
+             channels.iter().any(super::super::models::storage_channels::StorageChannel::is_dead);
+         let replication = self.replicas_repo.replication_stats(id).await?;
+         let bot = StorageWorkersRepository::new(self.db).get_by_storage_id(id).await?.map(|w| {
+[31m-            StorageBotSchema { id: w.id, name: w.name, token_masked: mask_bot_token(&w.token) }
+(B[m[32m+            StorageBotSchema {
+(B[m[32m+                id: w.id,
+(B[m[32m+                name: w.name,
+(B[m[32m+                token_masked: mask_bot_token(&w.token),
+(B[m[32m+            }
+(B[m         });
+ 
+         Ok(StorageDetailSchema {
+Diff in /home/beta/git/sarca/sarca/src/services/storages.rs:295:
+                 break;
+             }
+             match self
+[31m-                .add_channel(storage_id, AddChannelSchema { chat_id, name: Some(title) }, user)
+(B[m[32m+                .add_channel(
+(B[m[32m+                    storage_id,
+(B[m[32m+                    AddChannelSchema {
+(B[m[32m+                        chat_id,
+(B[m[32m+                        name: Some(title),
+(B[m[32m+                    },
+(B[m[32m+                    user,
+(B[m[32m+                )
+(B[m                 .await
+             {
+                 Ok(channel) => {
+Diff in /home/beta/git/sarca/sarca/src/services/storages.rs:314:
+         }
+ 
+         let channels = self.channels_repo.list_by_storage(storage_id).await?;
+[31m-        Ok(RefreshChannelsResultSchema { added, skipped_full, skipped_in_use, channels, hint })
+(B[m[32m+        Ok(RefreshChannelsResultSchema {
+(B[m[32m+            added,
+(B[m[32m+            skipped_full,
+(B[m[32m+            skipped_in_use,
+(B[m[32m+            channels,
+(B[m[32m+            hint,
+(B[m[32m+        })
+(B[m     }
+ 
+     pub async fn update(
+Diff in /home/beta/git/sarca/sarca/src/services/sync.rs:15:
+ 
+ impl<'d> SyncService<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { db }
+(B[m[32m+        Self {
+(B[m[32m+            db,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn changelog(
+Diff in /home/beta/git/sarca/sarca/src/services/sync.rs:42:
+         let repo = SyncRepository::new(self.db);
+         let files = repo.snapshot(storage_id).await?;
+         let cursor = repo.max_cursor(storage_id).await?;
+[31m-        Ok(SnapshotResponse { files, cursor })
+(B[m[32m+        Ok(SnapshotResponse {
+(B[m[32m+            files,
+(B[m[32m+            cursor,
+(B[m[32m+        })
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/services/thumbnails.rs:26:
+ 
+     let raw = match kind {
+         ThumbKind::Image => generate_image(file_path).await?,
+[31m-        ThumbKind::Video => match generate_video(file_path).await {
+(B[m[31m-            Ok(bytes) => bytes,
+(B[m[31m-            Err(e) => {
+(B[m[31m-                tracing::warn!("video thumbnail skipped: {e}");
+(B[m[31m-                return Ok(None);
+(B[m[31m-            },
+(B[m[32m+        ThumbKind::Video => {
+(B[m[32m+            match generate_video(file_path).await {
+(B[m[32m+                Ok(bytes) => bytes,
+(B[m[32m+                Err(e) => {
+(B[m[32m+                    tracing::warn!("video thumbnail skipped: {e}");
+(B[m[32m+                    return Ok(None);
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         },
+[31m-        ThumbKind::Pdf => match generate_pdf(file_path).await {
+(B[m[31m-            Ok(bytes) => bytes,
+(B[m[31m-            Err(e) => {
+(B[m[31m-                tracing::warn!("pdf thumbnail skipped: {e}");
+(B[m[31m-                return Ok(None);
+(B[m[31m-            },
+(B[m[32m+        ThumbKind::Pdf => {
+(B[m[32m+            match generate_pdf(file_path).await {
+(B[m[32m+                Ok(bytes) => bytes,
+(B[m[32m+                Err(e) => {
+(B[m[32m+                    tracing::warn!("pdf thumbnail skipped: {e}");
+(B[m[32m+                    return Ok(None);
+(B[m[32m+                },
+(B[m[32m+            }
+(B[m         },
+     };
+ 
+Diff in /home/beta/git/sarca/sarca/src/services/trash.rs:6:
+     errors::{SarcaError, SarcaResult},
+     models::{access::AccessType, files::FSElement},
+     repositories::{
+[31m-        access::AccessRepository, chunk_replicas::ChunkReplicasRepository, files::FilesRepository,
+(B[m[32m+        access::AccessRepository,
+(B[m[32m+        chunk_replicas::ChunkReplicasRepository,
+(B[m[32m+        files::FilesRepository,
+(B[m         share_links::ShareLinksRepository,
+     },
+     services::storage_workers_scheduler::StorageWorkersScheduler,
+Diff in /home/beta/git/sarca/sarca/src/services/users.rs:16:
+ 
+ impl<'d> UsersService<'d> {
+     pub fn new(db: &'d SqlitePool) -> Self {
+[31m-        Self { repo: UsersRepository::new(db) }
+(B[m[32m+        Self {
+(B[m[32m+            repo: UsersRepository::new(db),
+(B[m[32m+        }
+(B[m     }
+ 
+     fn require_superuser(user: &AuthUser, config: &Config) -> SarcaResult<()> {
+Diff in /home/beta/git/sarca/sarca/src/services/users.rs:36:
+         let users = self.repo.list_all().await?;
+         Ok(users
+             .into_iter()
+[31m-            .map(|u| UserOut {
+(B[m[31m-                is_superuser: u.email.eq_ignore_ascii_case(&config.superuser_email),
+(B[m[31m-                email_verified: u.email_verified(),
+(B[m[31m-                id: u.id,
+(B[m[31m-                email: u.email,
+(B[m[32m+            .map(|u| {
+(B[m[32m+                UserOut {
+(B[m[32m+                    is_superuser: u.email.eq_ignore_ascii_case(&config.superuser_email),
+(B[m[32m+                    email_verified: u.email_verified(),
+(B[m[32m+                    id: u.id,
+(B[m[32m+                    email: u.email,
+(B[m[32m+                }
+(B[m             })
+             .collect())
+     }
+Diff in /home/beta/git/sarca/sarca/src/storage_manager.rs:2:
+ 
+ use crate::{
+     common::channels::{
+[31m-        ClientData, ClientMessage, StorageManagerData, StorageManagerListener,
+(B[m[31m-        StorageManagerMessage, UploadFileData,
+(B[m[32m+        ClientData,
+(B[m[32m+        ClientMessage,
+(B[m[32m+        StorageManagerData,
+(B[m[32m+        StorageManagerListener,
+(B[m[32m+        StorageManagerMessage,
+(B[m[32m+        UploadFileData,
+(B[m     },
+     config::Config,
+     services::storage_manager::StorageManagerService,
+Diff in /home/beta/git/sarca/sarca/src/storage_manager.rs:17:
+ 
+ impl StorageManager {
+     pub fn new(rx: StorageManagerListener, db: SqlitePool, config: Config) -> Self {
+[31m-        Self { rx, db, config }
+(B[m[32m+        Self {
+(B[m[32m+            rx,
+(B[m[32m+            db,
+(B[m[32m+            config,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub async fn run(&mut self) {
+Diff in /home/beta/git/sarca/sarca/src/tls/acme.rs:5:
+ 
+ use chrono::{DateTime, Utc};
+ use instant_acme::{
+[31m-    Account, AccountCredentials, ChallengeType, Identifier, NewAccount, NewOrder, RetryPolicy,
+(B[m[32m+    Account,
+(B[m[32m+    AccountCredentials,
+(B[m[32m+    ChallengeType,
+(B[m[32m+    Identifier,
+(B[m[32m+    NewAccount,
+(B[m[32m+    NewOrder,
+(B[m[32m+    RetryPolicy,
+(B[m };
+ use thiserror::Error;
+ 
+Diff in /home/beta/git/sarca/sarca/src/tls/acme.rs:55:
+         challenges: AcmeChallengeStore,
+         account_path: PathBuf,
+     ) -> Self {
+[31m-        Self { directory, http_addr, identity, challenges, account_path }
+(B[m[32m+        Self {
+(B[m[32m+            directory,
+(B[m[32m+            http_addr,
+(B[m[32m+            identity,
+(B[m[32m+            challenges,
+(B[m[32m+            account_path,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/tls/acme.rs:115:
+ 
+ impl InstantAcmeIssuer {
+     pub fn new(config: AcmeConfig) -> Self {
+[31m-        Self { config }
+(B[m[32m+        Self {
+(B[m[32m+            config,
+(B[m[32m+        }
+(B[m     }
+ 
+     pub fn from_parts(
+Diff in /home/beta/git/sarca/sarca/src/tls/acme.rs:172:
+ 
+ impl StubAcmeIssuer {
+     pub fn new(config: AcmeConfig) -> Self {
+[31m-        Self { config }
+(B[m[32m+        Self {
+(B[m[32m+            config,
+(B[m[32m+        }
+(B[m     }
+ }
+ 
+Diff in /home/beta/git/sarca/sarca/src/tls/acme.rs:233:
+ 
+     let not_after = super::renew::parse_not_after(&cert_pem)?;
+ 
+[31m-    Ok(IssuedCertificate { cert_pem, key_pem, not_after })
+(B[m[32m+    Ok(IssuedCertificate {
+(B[m[32m+        cert_pem,
+(B[m[32m+        key_pem,
+(B[m[32m+        not_after,
+(B[m[32m+    })
+(B[m }
+ 
+ async fn new_order_with_profile(
+Diff in /home/beta/git/sarca/sarca/src/tls/mod.rs:6:
+ use std::net::IpAddr;
+ 
+ pub use acme::{
+[31m-    AcmeChallengeStore, AcmeConfig, AcmeError, AcmeIssuer, InstantAcmeIssuer, IssuedCertificate,
+(B[m[31m-    SHORTLIVED_PROFILE, StubAcmeIssuer, acme_enabled, identity_to_identifier, register_challenge,
+(B[m[32m+    AcmeChallengeStore,
+(B[m[32m+    AcmeConfig,
+(B[m[32m+    AcmeError,
+(B[m[32m+    AcmeIssuer,
+(B[m[32m+    InstantAcmeIssuer,
+(B[m[32m+    IssuedCertificate,
+(B[m[32m+    SHORTLIVED_PROFILE,
+(B[m[32m+    StubAcmeIssuer,
+(B[m[32m+    acme_enabled,
+(B[m[32m+    identity_to_identifier,
+(B[m[32m+    register_challenge,
+(B[m     save_issued,
+ };
+ pub use renew::{parse_not_after, renew_at, spawn_renewal_task};
+Diff in /home/beta/git/sarca/sarca/src/tls/mod.rs:14:
+ pub use serve::{
+[31m-    ChallengeStore, TlsMaterial, TlsRuntime, acme_router, build_quinn_config, build_rustls_config,
+(B[m[31m-    generate_self_signed, install_crypto_provider, load_or_generate_material, new_runtime,
+(B[m[31m-    parse_pem_material, serve_dual_tls, spawn_acme_http_listener,
+(B[m[32m+    ChallengeStore,
+(B[m[32m+    TlsMaterial,
+(B[m[32m+    TlsRuntime,
+(B[m[32m+    acme_router,
+(B[m[32m+    build_quinn_config,
+(B[m[32m+    build_rustls_config,
+(B[m[32m+    generate_self_signed,
+(B[m[32m+    install_crypto_provider,
+(B[m[32m+    load_or_generate_material,
+(B[m[32m+    new_runtime,
+(B[m[32m+    parse_pem_material,
+(B[m[32m+    serve_dual_tls,
+(B[m[32m+    spawn_acme_http_listener,
+(B[m };
+ pub use store::CertStore;
+ use thiserror::Error;
+Diff in /home/beta/git/sarca/sarca/src/tls/renew.rs:5:
+ use x509_parser::prelude::FromDer;
+ 
+ use super::{
+[31m-    CertStore, TlsRuntime,
+(B[m[32m+    CertStore,
+(B[m[32m+    TlsRuntime,
+(B[m     acme::{self, InstantAcmeIssuer, IssuedCertificate, save_issued},
+     parse_pem_material,
+ };
+Diff in /home/beta/git/sarca/sarca/src/tls/serve.rs:83:
+     let key_pem = cert.key_pair.serialize_pem();
+     let key = PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
+     let cert_chain = vec![CertificateDer::from(cert.cert)];
+[31m-    Ok((cert_pem, key_pem, TlsMaterial { cert_chain, key }))
+(B[m[32m+    Ok((
+(B[m[32m+        cert_pem,
+(B[m[32m+        key_pem,
+(B[m[32m+        TlsMaterial {
+(B[m[32m+            cert_chain,
+(B[m[32m+            key,
+(B[m[32m+        },
+(B[m[32m+    ))
+(B[m }
+ 
+ pub fn parse_pem_material(cert_pem: &str, key_pem: &str) -> Result<TlsMaterial, TlsError> {
+Diff in /home/beta/git/sarca/sarca/src/tls/serve.rs:101:
+         return Err(TlsError::InvalidPem);
+     }
+ 
+[31m-    Ok(TlsMaterial { cert_chain: certs, key })
+(B[m[32m+    Ok(TlsMaterial {
+(B[m[32m+        cert_chain: certs,
+(B[m[32m+        key,
+(B[m[32m+    })
+(B[m }
+ 
+ pub fn build_rustls_config(material: &TlsMaterial, alpn: &[&[u8]]) -> Arc<ServerConfig> {
+Diff in /home/beta/git/sarca/sarca/src/tls/store.rs:11:
+ 
+ impl CertStore {
+     pub fn new(dir: impl Into<PathBuf>) -> Self {
+[31m-        Self { dir: dir.into() }
+(B[m[32m+        Self {
+(B[m[32m+            dir: dir.into(),
+(B[m[32m+        }
+(B[m     }
+ 
+     pub fn dir(&self) -> &Path {
+Diff in /home/beta/git/sarca/sarca/src/main.rs:12:
+     config::Config,
+     server::Server,
+     services::{
+[31m-        channel_health::ChannelHealthService, replication::ReplicationService,
+(B[m[31m-        storage_purge::StoragePurgeService, trash_purge::TrashPurgeService,
+(B[m[32m+        channel_health::ChannelHealthService,
+(B[m[32m+        replication::ReplicationService,
+(B[m[32m+        storage_purge::StoragePurgeService,
+(B[m[32m+        trash_purge::TrashPurgeService,
+(B[m     },
+     startup::{create_superuser, delete_orphan_storage_workers, init_db},
+     storage_manager::StorageManager,
+Diff in /home/beta/git/sarca/sarca/src/main.rs:20:
+     tls::{
+[31m-        CertStore, ChallengeStore, InstantAcmeIssuer, acme_enabled, install_crypto_provider,
+(B[m[31m-        load_or_generate_material, new_runtime, save_issued, spawn_acme_http_listener,
+(B[m[32m+        CertStore,
+(B[m[32m+        ChallengeStore,
+(B[m[32m+        InstantAcmeIssuer,
+(B[m[32m+        acme_enabled,
+(B[m[32m+        install_crypto_provider,
+(B[m[32m+        load_or_generate_material,
+(B[m[32m+        new_runtime,
+(B[m[32m+        save_issued,
+(B[m[32m+        spawn_acme_http_listener,
+(B[m         spawn_renewal_task,
+     },
+ };
+Already up to date
+Done in 321ms using pnpm v11.17.0
+vite v4.5.0 building for production...
+transforming...
+✓ 938 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/assets/markdown-42f95867.svg       0.16 kB │ gzip:   0.16 kB
+dist/assets/toml-eaeb55ba.svg           0.18 kB │ gzip:   0.16 kB
+dist/assets/audio-d4dc1adb.svg          0.19 kB │ gzip:   0.16 kB
+dist/assets/video-4d5d50b0.svg          0.19 kB │ gzip:   0.16 kB
+dist/assets/yaml-666b724d.svg           0.20 kB │ gzip:   0.18 kB
+dist/assets/folder-5b8e272c.svg         0.22 kB │ gzip:   0.17 kB
+dist/assets/zip-dad79a45.svg            0.23 kB │ gzip:   0.18 kB
+dist/assets/html-23e04ad5.svg           0.23 kB │ gzip:   0.20 kB
+dist/assets/document-64f5da56.svg       0.23 kB │ gzip:   0.20 kB
+dist/assets/log-71501c5f.svg            0.24 kB │ gzip:   0.20 kB
+dist/assets/word-9f12a8d9.svg           0.25 kB │ gzip:   0.20 kB
+dist/assets/powerpoint-40468dee.svg     0.26 kB │ gzip:   0.20 kB
+dist/assets/typescript-1822f882.svg     0.27 kB │ gzip:   0.19 kB
+dist/assets/table-1714898c.svg          0.27 kB │ gzip:   0.21 kB
+dist/assets/folder-open-532456ac.svg    0.27 kB │ gzip:   0.20 kB
+dist/assets/xml-51bfeb93.svg            0.29 kB │ gzip:   0.21 kB
+dist/assets/javascript-00eb9422.svg     0.29 kB │ gzip:   0.18 kB
+dist/assets/file-083ea334.svg           0.32 kB │ gzip:   0.21 kB
+dist/assets/image-838e1953.svg          0.35 kB │ gzip:   0.24 kB
+dist/assets/url-f5fe83f2.svg            0.42 kB │ gzip:   0.22 kB
+dist/assets/rust-a58c2464.svg           0.53 kB │ gzip:   0.33 kB
+dist/assets/json-649ad4f4.svg           0.54 kB │ gzip:   0.32 kB
+dist/assets/css-afe20f8d.svg            0.67 kB │ gzip:   0.29 kB
+dist/assets/python-798fcd59.svg         0.77 kB │ gzip:   0.38 kB
+dist/assets/http-d2e9b95d.svg           0.92 kB │ gzip:   0.46 kB
+dist/index.html                         0.93 kB │ gzip:   0.51 kB
+dist/assets/pdf-c14c66a3.svg            0.98 kB │ gzip:   0.55 kB
+dist/assets/react-6a7fb2e8.svg          1.10 kB │ gzip:   0.53 kB
+dist/assets/react_ts-f5caa027.svg       1.10 kB │ gzip:   0.53 kB
+dist/assets/svg-120ceffc.svg            1.29 kB │ gzip:   0.47 kB
+dist/assets/logo-9ca4ddcd.svg           1.61 kB │ gzip:   0.69 kB
+dist/assets/index-2feb8c02.css         68.27 kB │ gzip:  12.31 kB
+dist/assets/marked.esm-26b2fd78.js     41.50 kB │ gzip:  12.67 kB
+dist/assets/index-a8b0f920.js         427.89 kB │ gzip: 129.90 kB
+dist/assets/index-2120a872.js         495.83 kB │ gzip: 130.04 kB
+✓ built in 3.80s

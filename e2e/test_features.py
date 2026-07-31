@@ -386,15 +386,12 @@ def test_share_unknown_token_404(client: httpx.Client) -> None:
 
 
 def test_share_file_download_and_inline_no_trailing_slash(
-    client: httpx.Client, auth_headers: dict[str, str]
+    client: httpx.Client, auth_headers: dict[str, str], shared_storage: str
 ) -> None:
     """Single-file shares must hit /download and /inline without a trailing slash."""
     import uuid
 
-    workers = client.get("/api/storage_workers", headers=auth_headers)
-    if workers.status_code != 200 or not workers.json():
-        pytest.skip("needs a storage worker to upload a shareable file")
-    storage_id = workers.json()[0]["storage_id"]
+    storage_id = shared_storage
 
     name = f"share-file-{uuid.uuid4().hex[:8]}.txt"
     content = b"hello public share\n"

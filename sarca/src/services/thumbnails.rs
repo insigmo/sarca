@@ -62,6 +62,12 @@ pub fn is_preview_image(logical_path: &str) -> bool {
     matches!(detect_kind(logical_path), Some(ThumbKind::Image))
 }
 
+/// Read an image file and encode it to a screen-sized JPEG preview.
+pub async fn generate_preview_from_path(file_path: &Path) -> Result<Vec<u8>, String> {
+    let raw = tokio::fs::read(file_path).await.map_err(|e| format!("read image: {e}"))?;
+    generate_preview(raw).await
+}
+
 /// Encode raw image bytes to a screen-sized JPEG preview.
 pub async fn generate_preview(raw: Vec<u8>) -> Result<Vec<u8>, String> {
     tokio::task::spawn_blocking(move || {
