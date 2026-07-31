@@ -80,7 +80,9 @@ pub async fn init_db(db: &SqlitePool) {
             updated_at              TEXT NOT NULL DEFAULT (datetime('now')),
             source_created_at       TEXT,
             source_mtime            TEXT,
-            content_hash            TEXT
+            content_hash            TEXT,
+            preview_telegram_file_id TEXT,
+            preview_telegram_message_id INTEGER
         );
         ",
         "
@@ -376,6 +378,41 @@ pub async fn init_db(db: &SqlitePool) {
     }
 
     transaction.commit().await.unwrap();
+
+    add_missing_columns(db).await;
+}
+
+/// Columns added after a table's first release: `CREATE TABLE IF NOT EXISTS` never
+/// touches an existing table, so older databases need an explicit `ADD COLUMN`.
+/// Duplicate-column errors mean the database is already current.
+#[inline]
+async fn add_missing_columns(db: &SqlitePool) {
+    for (table, column, definition) in [
+        ("files", "preview_telegram_file_id", "TEXT"),
+        ("files", "preview_telegram_message_id", "INTEGER"),
+    ] {
+        let has_column: bool = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM pragma_table_info($1) WHERE name = $2",
+        )
+        .bind(table)
+        .bind(column)
+        .fetch_one(db)
+        .await
+        // On a read error, assume the column exists: never ALTER blindly.
+        .map_or(true, |n| n > 0);
+
+        if has_column {
+            continue;
+        }
+
+        match sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+            .execute(db)
+            .await
+        {
+            Ok(_) => tracing::info!("migrated: added {table}.{column}"),
+            Err(e) => tracing::error!("failed to add {table}.{column}: {e}"),
+        }
+    }
 }
 
 /// Remove storage workers that were never bound to a storage (legacy orphans).
@@ -445,5 +482,51 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(tables, 4);
+    }
+
+    /// A database created before previews existed keeps its `files` table, so the
+    /// new columns can only arrive through `add_missing_columns`.
+    #[tokio::test]
+    async fn init_db_adds_preview_columns_to_an_older_files_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("legacy.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+
+        sqlx::query(
+            "CREATE TABLE files (
+                id BLOB PRIMARY KEY NOT NULL,
+                path TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                storage_id BLOB NOT NULL,
+                is_uploaded INTEGER NOT NULL,
+                thumb_telegram_file_id TEXT,
+                chunk_size_bytes INTEGER,
+                deleted_at TEXT,
+                thumb_telegram_message_id INTEGER,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                source_created_at TEXT,
+                source_mtime TEXT,
+                content_hash TEXT
+            );",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        init_db(&pool).await;
+
+        for column in ["preview_telegram_file_id", "preview_telegram_message_id"] {
+            let present: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM pragma_table_info('files') WHERE name = $1",
+            )
+            .bind(column)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(present, 1, "{column} missing after migration");
+        }
+
+        init_db(&pool).await; // idempotent: no duplicate-column error
     }
 }

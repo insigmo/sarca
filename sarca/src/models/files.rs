@@ -78,6 +78,10 @@ pub struct File {
     pub thumb_telegram_file_id: Option<String>,
     /// Telegram message id of the thumbnail document (refcount-GC'd on hard purge).
     pub thumb_telegram_message_id: Option<i64>,
+    /// Screen-sized JPEG preview built at upload time (images only).
+    pub preview_telegram_file_id: Option<String>,
+    /// Telegram message id of the preview document (refcount-GC'd on hard purge).
+    pub preview_telegram_message_id: Option<i64>,
     /// Telegram chunk size used at upload; `None` for pre-feature / folder rows.
     pub chunk_size_bytes: Option<i64>,
     /// When set, the file is in the trash.
@@ -107,6 +111,8 @@ impl File {
             is_uploaded,
             thumb_telegram_file_id: None,
             thumb_telegram_message_id: None,
+            preview_telegram_file_id: None,
+            preview_telegram_message_id: None,
             chunk_size_bytes,
             deleted_at: None,
             created_at: now,
