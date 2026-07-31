@@ -262,7 +262,7 @@ impl<'d> FilesRepository<'d> {
     }
 
     pub async fn create_chunks_batch(&self, chunks: Vec<FileChunk>) -> SarcaResult<()> {
-        QueryBuilder::new(format!("INSERT INTO {CHUNKS_TABLE} (id, file_id, position)").as_str())
+        QueryBuilder::new(format!("INSERT INTO {CHUNKS_TABLE} (id, file_id, position) ").as_str())
             .push_values(chunks, |mut q, chunk| {
                 q.push_bind(chunk.id).push_bind(chunk.file_id).push_bind(chunk.position);
             })
