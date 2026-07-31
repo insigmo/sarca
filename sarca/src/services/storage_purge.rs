@@ -106,7 +106,7 @@ pub async fn snapshot_storage_telegram_purge(
 ) -> SarcaResult<Option<(String, Vec<(i64, i64)>)>> {
     let mut messages =
         ChunkReplicasRepository::new(db).list_telegram_messages_for_storage(storage_id).await?;
-    messages.extend(FilesRepository::new(db).list_thumb_messages_for_storage(storage_id).await?);
+    messages.extend(FilesRepository::new(db).list_derived_messages_for_storage(storage_id).await?);
     messages.sort_unstable();
     messages.dedup();
 

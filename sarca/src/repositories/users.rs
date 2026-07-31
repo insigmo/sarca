@@ -70,6 +70,22 @@ impl<'d> UsersRepository<'d> {
             .map_err(|e| map_not_found(&e, "user"))
     }
 
+    /// Delete a user row. `access` and `storage_workers` rows cascade.
+    pub async fn delete(&self, id: Uuid) -> SarcaResult<()> {
+        let res = sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(id)
+            .execute(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
+        if res.rows_affected() == 0 {
+            return Err(SarcaError::DoesNotExist("user".into()));
+        }
+        Ok(())
+    }
+
     pub async fn list_all(&self) -> SarcaResult<Vec<User>> {
         sqlx::query_as("SELECT * FROM users ORDER BY email ASC").fetch_all(self.db).await.map_err(
             |e| {

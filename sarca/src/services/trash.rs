@@ -169,7 +169,7 @@ pub async fn purge_file_ids(
     let shares_repo = ShareLinksRepository::new(db);
 
     let mut messages = replicas_repo.list_telegram_messages_for_files(ids).await?;
-    messages.extend(files_repo.list_thumb_messages_for_files(ids).await?);
+    messages.extend(files_repo.list_derived_messages_for_files(ids).await?);
 
     // Shares are path-keyed; drop them before file rows disappear.
     if let Err(e) = shares_repo.delete_for_file_ids(ids).await {
@@ -216,8 +216,8 @@ async fn gc_telegram_messages(
 
     for (chat_id, message_id, storage_id) in messages {
         let replica_ref = replicas_repo.message_still_referenced(chat_id, message_id).await?;
-        let thumb_ref = files_repo.thumb_message_still_referenced(chat_id, message_id).await?;
-        if replica_ref || thumb_ref {
+        let derived_ref = files_repo.derived_message_still_referenced(chat_id, message_id).await?;
+        if replica_ref || derived_ref {
             continue;
         }
         if let Err(e) = api.delete_message(chat_id, message_id, storage_id).await {

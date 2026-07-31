@@ -39,6 +39,8 @@ pub enum SarcaError {
     InvalidFolderName,
     #[error("You cannot manage access of yourself")]
     CannotManageAccessOfYourself,
+    #[error("The superuser account cannot be deleted")]
+    CannotDeleteSuperuser,
     #[error("Storage does not have workers")]
     StorageDoesNotHaveWorkers,
     #[error("storage_id is required")]
@@ -81,7 +83,9 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::CannotManageAccessOfYourself
             | SarcaError::TrashPathConflict => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
-            SarcaError::Forbidden => (StatusCode::FORBIDDEN, e.to_string()),
+            SarcaError::Forbidden | SarcaError::CannotDeleteSuperuser => {
+                (StatusCode::FORBIDDEN, e.to_string())
+            },
             SarcaError::DoesNotExist(_) => (StatusCode::NOT_FOUND, e.to_string()),
             SarcaError::FolderTooLargeForZip => (StatusCode::PAYLOAD_TOO_LARGE, e.to_string()),
             SarcaError::HeaderMissed(_)
