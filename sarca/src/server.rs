@@ -1,8 +1,12 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
 
 use axum::{
     Router,
-    http::{HeaderValue, StatusCode, header::CACHE_CONTROL},
+    http::{
+        HeaderValue,
+        StatusCode,
+        header::{CACHE_CONTROL, HeaderName},
+    },
 };
 use tower::{ServiceBuilder, limit::ConcurrencyLimitLayer};
 use tower_http::{
@@ -128,13 +132,23 @@ impl Server {
         acme_task: Option<tokio::task::JoinHandle<()>>,
     ) {
         let ui_dir = self.ui_dir.clone();
-        serve_dual_tls(self.router, ui_dir, runtime, acme_task).await;
+        let router = with_alt_svc(self.router, runtime.https_addr.port());
+        serve_dual_tls(router, ui_dir, runtime, acme_task).await;
     }
 
     /// Minimal health router for TLS integration tests (no UI directory required).
-    pub fn health_router() -> Router {
-        Router::new().route("/health", axum::routing::get(|| async { "ok" }))
+    pub fn health_router(https_port: u16) -> Router {
+        with_alt_svc(
+            Router::new().route("/health", axum::routing::get(|| async { "ok" })),
+            https_port,
+        )
     }
+}
+
+pub fn with_alt_svc(router: Router, https_port: u16) -> Router {
+    let value =
+        HeaderValue::from_str(&format!("h3=\":{https_port}\"; ma=86400")).expect("Alt-Svc header");
+    router.layer(SetResponseHeaderLayer::overriding(HeaderName::from_static("alt-svc"), value))
 }
 
 /// Locate the built UI (`index.html` + `assets/`).
