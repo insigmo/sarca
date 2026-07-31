@@ -70,7 +70,7 @@ impl<'d> StorageChannelsRepository<'d> {
         sqlx::query(
             format!(
                 "INSERT INTO {TABLE} (id, storage_id, position, chat_id, name, status)
-                 VALUES ($1, $2, $3, $4, $5, $6)"
+                 VALUES ($1, $2, $3, $4, $5, $6) "
             )
             .as_str(),
         )
