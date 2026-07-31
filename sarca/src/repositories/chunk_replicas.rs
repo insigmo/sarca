@@ -52,7 +52,7 @@ impl<'d> ChunkReplicasRepository<'d> {
         QueryBuilder::new(
             format!(
                 "INSERT INTO {TABLE} (id, chunk_id, channel_id, telegram_file_id, \
-                 telegram_message_id, status)"
+                 telegram_message_id, status) "
             )
             .as_str(),
         )
@@ -198,7 +198,7 @@ impl<'d> ChunkReplicasRepository<'d> {
         let mut builder = QueryBuilder::new(
             format!(
                 "INSERT INTO {TABLE} (id, chunk_id, channel_id, telegram_file_id, \
-                 telegram_message_id, status)"
+                 telegram_message_id, status) "
             )
             .as_str(),
         );
