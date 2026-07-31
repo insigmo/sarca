@@ -23,6 +23,7 @@ async-trait = "0.1"
 chrono = { version = "0.4", features = ["clock", "serde"] }
 futures = "0.3"
 hex = "0.4"
+log = "0.4"
 notify = { version = "6", optional = true, default-features = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream", "http2"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
