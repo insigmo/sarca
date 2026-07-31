@@ -104,10 +104,10 @@ impl<'d> RecentFilesRepository<'d> {
         sqlx::query(
             format!(
                 "
-                DELETE FROM {TABLE} rf
-                WHERE rf.user_id = $1
-                  AND rf.storage_id = $2
-                  AND rf.file_id NOT IN (
+                DELETE FROM {TABLE}
+                WHERE user_id = $1
+                  AND storage_id = $2
+                  AND file_id NOT IN (
                       SELECT file_id FROM (
                           SELECT file_id
                           FROM {TABLE}
