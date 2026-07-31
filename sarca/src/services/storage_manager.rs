@@ -5,6 +5,7 @@ use super::storage_workers_scheduler::StorageWorkersScheduler;
 use crate::{
     common::{
         channels::{UploadFileData, UploadProgressEvent, emit_upload_progress},
+        preview_cache::PreviewCache,
         telegram_api::bot_api::{TelegramBotApi, UploadFilePartRequest},
         types::ChatId,
     },
@@ -31,10 +32,17 @@ pub struct StorageManagerService<'d> {
     telegram_baseurl: &'d str,
     db: &'d SqlitePool,
     rate_limit: u8,
+    /// `WORK_DIR`, so freshly built previews can warm the on-disk preview cache.
+    work_dir: &'d str,
 }
 
 impl<'d> StorageManagerService<'d> {
-    pub fn new(db: &'d SqlitePool, telegram_baseurl: &'d str, rate_limit: u8) -> Self {
+    pub fn new(
+        db: &'d SqlitePool,
+        telegram_baseurl: &'d str,
+        rate_limit: u8,
+        work_dir: &'d str,
+    ) -> Self {
         let files_repo = FilesRepository::new(db);
         let storages_repo = StoragesRepository::new(db);
         let channels_repo = StorageChannelsRepository::new(db);
@@ -47,6 +55,7 @@ impl<'d> StorageManagerService<'d> {
             telegram_baseurl,
             db,
             rate_limit,
+            work_dir,
         }
     }
 
@@ -170,6 +179,12 @@ impl<'d> StorageManagerService<'d> {
             {
                 tracing::warn!("thumbnail upload failed for {}: {e}", data.file_id);
             }
+            if let Err(e) = self
+                .maybe_upload_preview(data.file_id, storage.id, primary.chat_id, &data.file_path)
+                .await
+            {
+                tracing::warn!("preview upload failed for {}: {e}", data.file_id);
+            }
             // Mark uploaded here so a client disconnect after Telegram finishes (oneshot
             // already closed) still leaves a visible file instead of a stale spool row.
             if let Err(e) = self.files_repo.set_as_uploaded(data.file_id).await {
@@ -209,6 +224,69 @@ impl<'d> StorageManagerService<'d> {
         tracing::debug!(
             "uploaded thumbnail for file {} as telegram_file_id {} (message_id={})",
             file_id,
+            outcome.file_id,
+            outcome.message_id
+        );
+
+        Ok(())
+    }
+
+    /// Build the screen-sized JPEG preview for an image while the original is still on
+    /// disk, store it as its own Telegram document, and warm the local preview cache.
+    ///
+    /// Opening a photo then costs one small `getFile` (or a disk read) instead of
+    /// re-downloading every chunk of the original and re-encoding it.
+    async fn maybe_upload_preview(
+        &self,
+        file_id: Uuid,
+        storage_id: Uuid,
+        chat_id: ChatId,
+        file_path: &std::path::Path,
+    ) -> SarcaResult<()> {
+        let file = self.files_repo.get_by_id(file_id).await?;
+        if !thumbnails::is_preview_image(&file.path) {
+            return Ok(());
+        }
+
+        let jpeg = match thumbnails::generate_preview_from_path(file_path).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::warn!("preview generation failed for {}: {e}", file.path);
+                return Ok(());
+            },
+        };
+
+        let cache = PreviewCache::new(self.work_dir);
+        let cache_key = PreviewCache::cache_key(storage_id, &file.path);
+        if let Err(e) = cache.put(&cache_key, &jpeg).await {
+            tracing::warn!("preview cache warm skipped for {}: {e}", file.path);
+        }
+
+        // An already-small photo gains nothing from a second copy in Telegram: reading
+        // its single original chunk costs the same round trip as reading a preview
+        // document would. Keep the warm cache entry, skip the upload (and the bot's
+        // send budget); the preview endpoint re-encodes on demand if the cache is lost.
+        let original_size = file.size.max(0).cast_unsigned();
+        if u64::try_from(jpeg.len()).unwrap_or(u64::MAX) * 10 >= original_size * 7 {
+            tracing::debug!(
+                "preview for {} not stored: {} bytes vs {original_size} byte original",
+                file.path,
+                jpeg.len()
+            );
+            return Ok(());
+        }
+
+        let scheduler = StorageWorkersScheduler::new(self.db, self.rate_limit);
+        let outcome = TelegramBotApi::new(self.telegram_baseurl, scheduler)
+            .upload(&jpeg, chat_id, storage_id)
+            .await?;
+
+        self.files_repo.set_preview(file_id, &outcome.file_id, outcome.message_id).await?;
+
+        tracing::debug!(
+            "uploaded preview for file {} ({} bytes) as telegram_file_id {} (message_id={})",
+            file_id,
+            jpeg.len(),
             outcome.file_id,
             outcome.message_id
         );

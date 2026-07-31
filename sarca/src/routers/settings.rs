@@ -7,6 +7,7 @@ use crate::{
         jwt_manager::AuthUser,
         routing::{app_state::AppState, middlewares::auth::logged_in_required},
     },
+    errors::SarcaError,
     schemas::settings::TrashSettingsSchema,
     services::settings::SettingsService,
 };
@@ -32,11 +33,16 @@ impl SettingsRouter {
         Self::service(&state).get_trash().await.map(Json).map_err(Into::into)
     }
 
+    /// Trash retention is global: only the superuser may shorten it, or any account
+    /// could force an early purge of everyone else's trashed files.
     async fn set_trash(
         State(state): State<Arc<AppState>>,
-        Extension(_user): Extension<AuthUser>,
+        Extension(user): Extension<AuthUser>,
         Json(body): Json<TrashSettingsSchema>,
     ) -> Result<Json<TrashSettingsSchema>, (StatusCode, String)> {
+        if !user.email.eq_ignore_ascii_case(&state.config.superuser_email) {
+            return Err(<(StatusCode, String)>::from(SarcaError::Forbidden));
+        }
         Self::service(&state).set_trash(body.retention_days).await.map(Json).map_err(Into::into)
     }
 }

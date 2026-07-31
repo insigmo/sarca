@@ -163,8 +163,11 @@ impl<'d> StoragesRepository<'d> {
         tx: &mut Transaction<'_, Sqlite>,
         storage_id: Uuid,
     ) -> SarcaResult<()> {
-        // storage_workers.storage_id has no ON DELETE; detach first
-        sqlx::query("UPDATE storage_workers SET storage_id = NULL WHERE storage_id = $1")
+        // storage_workers.storage_id has no ON DELETE, and a bot is bound 1:1 to a
+        // storage — a detached worker is garbage (startup already sweeps those), so
+        // drop it here instead of leaving a phantom bot until the next boot. The
+        // purge job has already captured the token it needs for Telegram cleanup.
+        sqlx::query("DELETE FROM storage_workers WHERE storage_id = $1")
             .bind(storage_id)
             .execute(&mut **tx)
             .await
