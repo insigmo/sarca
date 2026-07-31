@@ -168,6 +168,7 @@ jobs:
           test -d "$NDK"
           {
             echo "ANDROID_NDK_HOME=$NDK"
+            echo "ANDROID_NDK_ROOT=$NDK"
             echo "NDK_HOME=$NDK"
             echo "ANDROID_SDK_ROOT=$ANDROID_HOME"
           } >> "$GITHUB_ENV"
@@ -204,12 +205,15 @@ jobs:
         env:
           CI: true
           RUST_BACKTRACE: "1"
+          # Prefer appending; target rustflags in .cargo/config.toml also set this.
+          RUSTFLAGS: "--cfg reqwest_unstable"
         run: |
           set -euo pipefail
           java -version
           echo "JAVA_HOME=${JAVA_HOME:-}"
           echo "ANDROID_HOME=${ANDROID_HOME:-}"
           echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-}"
+          echo "ANDROID_NDK_ROOT=${ANDROID_NDK_ROOT:-}"
           test -x "${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
           if [ ! -d src-tauri/gen/android ]; then
             pnpm tauri android init --ci --skip-targets-install

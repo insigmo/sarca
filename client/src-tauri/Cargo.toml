@@ -20,8 +20,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-# Mobile builds: no HTTP/3 (quinn/reqwest http3 is unreliable on Android/iOS NDK).
-sarca-sync = { path = "../../crates/sarca-sync", default-features = false, features = ["watcher"] }
+# Prefer HTTP/3 (QUIC) on all platforms, including Android/iOS NDK.
+sarca-sync = { path = "../../crates/sarca-sync" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 network-interface = "2"
@@ -36,11 +36,13 @@ hostname = "0.4"
 base64 = "0.22"
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-# Desktop/Linux/macOS/Windows: prefer QUIC when the server speaks HTTP/3.
-sarca-sync = { path = "../../crates/sarca-sync", default-features = false, features = ["http3-client"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = "2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+log = "0.4"
 
 [dev-dependencies]
 tauri-utils = { version = "2", default-features = false }

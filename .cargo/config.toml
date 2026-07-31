@@ -1,2 +1,25 @@
 [build]
 rustflags = ["--cfg", "reqwest_unstable"]
+
+# Tauri Android sets RUSTFLAGS for linking, which replaces [build].rustflags.
+# Keep reqwest HTTP/3 cfg on mobile targets via target-specific flags (appended).
+[target.aarch64-linux-android]
+rustflags = ["--cfg", "reqwest_unstable"]
+
+[target.armv7-linux-androideabi]
+rustflags = ["--cfg", "reqwest_unstable"]
+
+[target.i686-linux-android]
+rustflags = ["--cfg", "reqwest_unstable"]
+
+[target.x86_64-linux-android]
+rustflags = ["--cfg", "reqwest_unstable"]
+
+[target.aarch64-apple-ios]
+rustflags = ["--cfg", "reqwest_unstable"]
+
+[target.x86_64-apple-ios]
+rustflags = ["--cfg", "reqwest_unstable"]
+
+[target.aarch64-apple-ios-sim]
+rustflags = ["--cfg", "reqwest_unstable"]

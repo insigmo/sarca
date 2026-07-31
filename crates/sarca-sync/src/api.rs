@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
@@ -38,18 +39,36 @@ struct StoragesResponse {
 
 #[derive(Clone)]
 pub struct SarcaApi {
-    client: Client,
+    /// Lazily built HTTP/3 client (`http3_prior_knowledge` needs a tokio runtime).
+    h3_client: Arc<OnceLock<Client>>,
+    /// Client used for TCP HTTPS fallback (ALPN `h2`/`http/1.1`).
+    tcp_client: Client,
+    timeout: Duration,
     base_url: String,
     access_token: String,
 }
 
 impl SarcaApi {
     pub fn new(base_url: impl Into<String>, access_token: impl Into<String>) -> Self {
+        let timeout = DEFAULT_HTTP_TIMEOUT;
+        let tcp_client = build_tcp_client(timeout).expect("failed to create HTTP client");
         Self {
-            client: build_http_client(DEFAULT_HTTP_TIMEOUT)
-                .expect("failed to create HTTP client"),
+            h3_client: Arc::new(OnceLock::new()),
+            tcp_client,
+            timeout,
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             access_token: access_token.into(),
+        }
+    }
+
+    fn h3_client(&self) -> &Client {
+        ensure_h3_client(&self.h3_client, self.timeout).unwrap_or(&self.tcp_client)
+    }
+
+    fn clients(&self) -> HttpClients {
+        HttpClients {
+            h3: self.h3_client().clone(),
+            tcp: self.tcp_client.clone(),
         }
     }
 
@@ -86,9 +105,9 @@ impl SarcaApi {
         password: impl AsRef<str>,
     ) -> Result<LoginResponse> {
         let base = normalize_server_url(base_url.as_ref())?;
-        let client = build_http_client(DEFAULT_HTTP_TIMEOUT)?;
+        let clients = build_http_clients(DEFAULT_HTTP_TIMEOUT)?;
         let url = format!("{base}/api/auth/login");
-        let resp = match send_preferring_h3(&client, "POST", &url, |version| {
+        let resp = match send_preferring_h3(&clients, "POST", &url, |client, version| {
             client
                 .post(&url)
                 .version(version)
@@ -142,9 +161,9 @@ impl SarcaApi {
         if refresh.is_empty() {
             bail!("Missing refresh token — sign in again");
         }
-        let client = build_http_client(DEFAULT_HTTP_TIMEOUT)?;
+        let clients = build_http_clients(DEFAULT_HTTP_TIMEOUT)?;
         let url = format!("{base}/api/auth/refresh");
-        let resp = send_preferring_h3(&client, "POST", &url, |version| {
+        let resp = send_preferring_h3(&clients, "POST", &url, |client, version| {
             client
                 .post(&url)
                 .version(version)
@@ -169,8 +188,9 @@ impl SarcaApi {
         url: &str,
         build: impl Fn(&Client, Version) -> reqwest::RequestBuilder,
     ) -> Result<Response> {
-        send_preferring_h3(&self.client, method, url, |version| {
-            self.auth(build(&self.client, version))
+        let clients = self.clients();
+        send_preferring_h3(&clients, method, url, |client, version| {
+            self.auth(build(client, version))
         })
         .await
         .map_err(Into::into)
@@ -286,6 +306,7 @@ impl SarcaApi {
 
         async fn build_upload(
             api: &SarcaApi,
+            client: &Client,
             url: &str,
             version: Version,
             parent_path: &str,
@@ -311,16 +332,17 @@ impl SarcaApi {
             if let Some(hash) = content_hash {
                 form = form.text("content_hash", hash.to_owned());
             }
-            Ok(api.auth(
-                api.client
-                    .post(url)
-                    .version(version)
-                    .multipart(form),
-            ))
+            Ok(api.auth(client.post(url).version(version).multipart(form)))
         }
 
+        let h3_client = if h3_version == Version::HTTP_3 {
+            self.h3_client()
+        } else {
+            &self.tcp_client
+        };
         let resp = match build_upload(
             self,
+            h3_client,
             &url,
             h3_version,
             parent_path,
@@ -338,14 +360,18 @@ impl SarcaApi {
                 resp
             }
             Err(err) if should_fallback_from_h3(&url, h3_version, &err) => {
-                tracing::debug!(
+                tracing::info!(
                     method = "POST",
                     url = %url,
                     error = %err,
                     "HTTP/3 upload failed, falling back to TCP HTTPS"
                 );
+                log::info!(
+                    "HTTP/3 upload failed, falling back to TCP HTTPS url={url} error={err}"
+                );
                 let resp = build_upload(
                     self,
+                    &self.tcp_client,
                     &url,
                     Version::HTTP_11,
                     parent_path,
@@ -404,15 +430,58 @@ impl SarcaApi {
     }
 }
 
-/// Build the shared HTTP client used by sync API calls.
-///
-/// With the default `http3-client` feature, reqwest is compiled with HTTP/3 support.
-/// HTTPS requests prefer QUIC first; [`send_preferring_h3`] retries over TCP on failure.
-pub fn build_http_client(timeout: Duration) -> Result<Client> {
+/// Pair of HTTP clients: QUIC/HTTP/3 (ALPN `h3`) and TCP HTTPS fallback.
+#[derive(Clone)]
+pub struct HttpClients {
+    pub h3: Client,
+    pub tcp: Client,
+}
+
+fn build_tcp_client(timeout: Duration) -> Result<Client> {
     Client::builder()
         .timeout(timeout)
         .build()
-        .context("failed to create HTTP client")
+        .context("failed to create TCP HTTP client")
+}
+
+fn build_h3_prior_client(timeout: Duration) -> Result<Client> {
+    #[cfg(feature = "http3-client")]
+    {
+        Client::builder()
+            .timeout(timeout)
+            .http3_prior_knowledge()
+            .build()
+            .context("failed to create HTTP/3 client")
+    }
+    #[cfg(not(feature = "http3-client"))]
+    {
+        build_tcp_client(timeout)
+    }
+}
+
+fn ensure_h3_client(slot: &OnceLock<Client>, timeout: Duration) -> Option<&Client> {
+    if let Some(c) = slot.get() {
+        return Some(c);
+    }
+    let client = build_h3_prior_client(timeout).ok()?;
+    let _ = slot.set(client);
+    slot.get()
+}
+
+/// Build HTTP clients used by sync API calls.
+///
+/// With the `http3-client` feature, the H3 client uses `http3_prior_knowledge()` so the
+/// QUIC ClientHello advertises ALPN `h3`. A separate TCP client keeps `h2`/`http/1.1` ALPN
+/// for fallback. H3 construction requires a tokio runtime (lazy in [`SarcaApi`]).
+pub fn build_http_clients(timeout: Duration) -> Result<HttpClients> {
+    let tcp = build_tcp_client(timeout)?;
+    let h3 = build_h3_prior_client(timeout).unwrap_or_else(|_| tcp.clone());
+    Ok(HttpClients { h3, tcp })
+}
+
+/// Build a single HTTP client (H3-capable when the feature is on and a runtime is present).
+pub fn build_http_client(timeout: Duration) -> Result<Client> {
+    Ok(build_http_clients(timeout)?.h3)
 }
 
 /// Request HTTP version for a URL when HTTP/3 preference is enabled.
@@ -443,40 +512,47 @@ fn format_http_version(version: Version) -> &'static str {
 }
 
 fn log_response_protocol(method: &str, url: &str, version: Version) {
-    tracing::debug!(
+    let protocol = format_http_version(version);
+    // info so Android logcat can prove HTTP/3 without enabling debug.
+    tracing::info!(
         method = method,
         url = url,
-        protocol = format_http_version(version),
+        protocol = protocol,
         "sarca-sync HTTP response"
     );
+    // `log` + android_logger bridge (client init) reaches adb logcat.
+    log::info!("sarca-sync HTTP response method={method} url={url} protocol={protocol}");
 }
 
 async fn send_preferring_h3(
-    _client: &Client,
+    clients: &HttpClients,
     method: &'static str,
     url: &str,
-    build: impl Fn(Version) -> reqwest::RequestBuilder,
+    build: impl Fn(&Client, Version) -> reqwest::RequestBuilder,
 ) -> Result<Response, reqwest::Error> {
     let preferred = preferred_request_version(url);
     if preferred == Version::HTTP_3 {
-        match build(Version::HTTP_3).send().await {
+        match build(&clients.h3, Version::HTTP_3).send().await {
             Ok(resp) => {
                 log_response_protocol(method, url, resp.version());
                 return Ok(resp);
             }
             Err(err) if should_fallback_from_h3(url, Version::HTTP_3, &err) => {
-                tracing::debug!(
+                tracing::info!(
                     method = method,
                     url = url,
                     error = %err,
                     "HTTP/3 unavailable, falling back to TCP HTTPS"
+                );
+                log::info!(
+                    "HTTP/3 unavailable, falling back to TCP HTTPS method={method} url={url} error={err}"
                 );
             }
             Err(err) => return Err(err),
         }
     }
 
-    let resp = build(Version::HTTP_11).send().await?;
+    let resp = build(&clients.tcp, Version::HTTP_11).send().await?;
     log_response_protocol(method, url, resp.version());
     Ok(resp)
 }

@@ -34,6 +34,15 @@ fn focus_main_window(app: &impl Manager<tauri::Wry>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "android")]
+    {
+        android_logger::init_once(
+            android_logger::Config::default()
+                .with_max_level(log::LevelFilter::Info)
+                .with_tag("sarca"),
+        );
+    }
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
 
