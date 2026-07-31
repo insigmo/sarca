@@ -25,7 +25,7 @@ impl<'d> StoragesRepository<'d> {
         let id = Uuid::new_v4();
 
         sqlx::query(
-            format!("INSERT INTO {TABLE} (id, name, primary_position) VALUES ($1, $2, $3)")
+            format!("INSERT INTO {TABLE} (id, name, primary_position) VALUES ($1, $2, $3) ")
                 .as_str(),
         )
         .bind(id)
