@@ -36,7 +36,7 @@ impl<'d> UsersRepository<'d> {
         .await
         .map_err(|e| {
             match e {
-                sqlx::Error::Database(dbe) if dbe.constraint() == Some("users_email_key") => {
+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
                     SarcaError::AlreadyExists("user with given email".into())
                 },
                 _ => {
@@ -132,5 +132,76 @@ impl<'d> UsersRepository<'d> {
             return Err(SarcaError::DoesNotExist("user".into()));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::{
+        common::db::pool::get_pool,
+        config::Config,
+        startup::{create_superuser, init_db},
+    };
+
+    fn test_config(superuser_email: &str, superuser_pass: &str) -> Config {
+        Config {
+            sqlite_path: String::new(),
+            port: 8001,
+            https_addr: "127.0.0.1:8443".parse().expect("valid addr"),
+            acme_http_addr: "127.0.0.1:8080".parse().expect("valid addr"),
+            tls_hostname: None,
+            acme_directory: String::new(),
+            certs_dir: String::new(),
+            workers: 1,
+            channel_capacity: 8,
+            superuser_email: superuser_email.into(),
+            superuser_pass: superuser_pass.into(),
+            access_token_expire_in_secs: 1800,
+            refresh_token_expire_in_days: 14,
+            secret_key: "test-secret".into(),
+            telegram_api_base_url: "https://api.telegram.org".into(),
+            telegram_rate_limit: 18,
+            work_dir: String::new(),
+            telegram_chunk_size_mb: 20,
+            telegram_video_chunk_size_mb: 20,
+            public_base_url: "http://127.0.0.1:8001".into(),
+            smtp_host: None,
+            smtp_port: 587,
+            smtp_username: None,
+            smtp_password: None,
+            smtp_from: String::new(),
+            smtp_tls: "starttls".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_duplicate_email_maps_to_already_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+
+        let email = "admin@example.com";
+        let u1 = InDBUser::new_password(email.into(), "h1".into());
+        UsersRepository::new(&pool).create(u1).await.unwrap();
+
+        let u2 = InDBUser::new_password(email.into(), "h2".into());
+        let err = UsersRepository::new(&pool).create(u2).await.unwrap_err();
+        assert!(matches!(err, SarcaError::AlreadyExists(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn create_superuser_twice_does_not_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+
+        let config = test_config("admin@example.com", "super-secret");
+        create_superuser(&pool, &config).await;
+        create_superuser(&pool, &config).await;
     }
 }

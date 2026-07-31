@@ -410,9 +410,7 @@ pub async fn create_superuser(db: &SqlitePool, config: &Config) {
         },
 
         // in case of another error kind -> terminating process
-        _ => {
-            panic!("can't create superuser; terminating process")
-        },
+        Err(_) => panic!("can't create superuser; terminating process"),
     }
 }
 
