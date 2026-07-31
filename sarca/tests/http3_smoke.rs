@@ -36,12 +36,45 @@ fn test_material() -> TlsMaterial {
 }
 
 async fn get_tcp_https(url: &str) -> String {
+    get_tcp_https_response(url).await.text().await.unwrap()
+}
+
+async fn get_tcp_https_response(url: &str) -> reqwest::Response {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .timeout(Duration::from_secs(5))
         .build()
         .unwrap();
-    client.get(url).send().await.unwrap().text().await.unwrap()
+    client.get(url).send().await.unwrap()
+}
+
+#[tokio::test]
+async fn tcp_https_response_advertises_alt_svc() {
+    install_crypto_provider();
+    let (https_addr, acme_addr) = pick_ports();
+    let material = test_material();
+    let runtime = new_runtime(
+        https_addr,
+        acme_addr,
+        &material,
+        format!("https://127.0.0.1:{}", https_addr.port()),
+        std::sync::Arc::default(),
+    );
+
+    let router = Server::health_router(https_addr.port());
+    let server_task = tokio::spawn(async move {
+        serve_dual_tls(router, std::path::PathBuf::from("/dev/null"), runtime, None).await;
+    });
+
+    sleep(Duration::from_millis(200)).await;
+
+    let response =
+        get_tcp_https_response(&format!("https://127.0.0.1:{}/health", https_addr.port())).await;
+    let alt_svc = response.headers().get("alt-svc").expect("Alt-Svc missing");
+    let expected = format!("h3=\":{}\"; ma=86400", https_addr.port());
+    assert_eq!(alt_svc.to_str().unwrap(), expected);
+
+    server_task.abort();
 }
 
 #[tokio::test]
@@ -59,7 +92,7 @@ async fn tcp_https_and_acme_challenge_serve_health() {
 
     register_challenge(&runtime.challenges, "test-token", "test-key-auth");
 
-    let router = Server::health_router();
+    let router = Server::health_router(https_addr.port());
     let server_task = tokio::spawn(async move {
         serve_dual_tls(router, std::path::PathBuf::from("/dev/null"), runtime, None).await;
     });
@@ -102,7 +135,7 @@ async fn h3_serves_health_when_endpoint_accepts() {
         std::sync::Arc::default(),
     );
 
-    let router = Server::health_router();
+    let router = Server::health_router(https_addr.port());
     let server_task = tokio::spawn(async move {
         serve_dual_tls(router, std::path::PathBuf::from("/dev/null"), runtime, None).await;
     });
