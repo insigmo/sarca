@@ -6,6 +6,7 @@ fn main() {
         "platform_label",
         "device_label",
         "get_session",
+        "get_url_history",
         "update_session",
         "connect",
         "disconnect",

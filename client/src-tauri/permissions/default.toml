@@ -3,6 +3,7 @@ description = "Allow all Sarca Sync / Security / General native IPC commands"
 permissions = [
   "allow-platform-label",
   "allow-get-session",
+  "allow-get-url-history",
   "allow-connect",
   "allow-disconnect",
   "allow-open-app",

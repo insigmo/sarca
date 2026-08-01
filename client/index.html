@@ -160,6 +160,40 @@
         opacity: 0.5;
         cursor: not-allowed;
       }
+      .url-history {
+        margin: -6px 0 14px;
+      }
+      .url-history__label {
+        margin: 0 0 6px;
+        font-size: 0.78rem;
+        color: var(--sarca-ink-soft);
+      }
+      .url-history__list {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .url-history__item {
+        width: 100%;
+        margin-top: 0;
+        padding: 8px 12px;
+        border-radius: 8px;
+        border: 1px solid var(--sarca-border);
+        background: color-mix(in srgb, var(--sarca-paper) 55%, transparent);
+        color: var(--sarca-ink);
+        font: inherit;
+        font-size: 0.85rem;
+        font-weight: 500;
+        text-align: left;
+        cursor: pointer;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .url-history__item:hover {
+        background: color-mix(in srgb, var(--sarca-paper) 80%, transparent);
+        border-color: var(--sarca-accent);
+      }
     </style>
   </head>
   <body>
@@ -180,6 +214,10 @@
           placeholder="https://sarca.example.com"
           required
         />
+        <div id="urlHistory" class="url-history" hidden>
+          <p class="url-history__label">Recent</p>
+          <div id="urlHistoryList" class="url-history__list"></div>
+        </div>
         <p id="error" class="error" aria-live="polite"></p>
         <button id="submit" type="submit">Connect</button>
       </form>
