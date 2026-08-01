@@ -44,3 +44,9 @@ docs/superpowers/**
 # Git worktrees (local)
 .worktrees/
 target-android/
+# Added by code-review-graph
+.code-review-graph/
+.claudeignore
+.claude/
+.mcp.json
+CLAUDE.md

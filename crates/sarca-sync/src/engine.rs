@@ -563,12 +563,7 @@ impl SyncEngine {
                 }
                 self.abandon_pending(pending_iter.collect()).await;
                 return Err(e).with_context(|| {
-                    format!(
-                        "upload {} → {}/{}",
-                        path.display(),
-                        remote_parent,
-                        filename
-                    )
+                    format!("upload {} → {}/{}", path.display(), remote_parent, filename)
                 });
             }
             self.transfer_complete(&tid).await;
@@ -690,12 +685,7 @@ impl SyncEngine {
                             }
                         }
                         let tid = self
-                            .transfer_begin(
-                                &binding.id,
-                                TransferDirection::Download,
-                                &rel,
-                                ev.size,
-                            )
+                            .transfer_begin(&binding.id, TransferDirection::Download, &rel, ev.size)
                             .await;
                         let dl = self
                             .api()
@@ -966,21 +956,13 @@ mod tests {
             .unwrap();
         engine.tick().await.unwrap();
         assert!(
-            engine
-                .statuses()
-                .await
-                .iter()
-                .any(|s| s.binding_id == id),
+            engine.statuses().await.iter().any(|s| s.binding_id == id),
             "status should exist after a successful tick"
         );
 
         engine.set_binding_enabled(&id, false).unwrap();
         assert!(
-            engine
-                .statuses()
-                .await
-                .iter()
-                .all(|s| s.binding_id != id),
+            engine.statuses().await.iter().all(|s| s.binding_id != id),
             "disabling a binding must clear its status so UI error banners clear"
         );
     }
@@ -1005,11 +987,7 @@ mod tests {
 
         engine.remove_binding(&id).unwrap();
         assert!(
-            engine
-                .statuses()
-                .await
-                .iter()
-                .all(|s| s.binding_id != id),
+            engine.statuses().await.iter().all(|s| s.binding_id != id),
             "removing a binding must clear its status"
         );
     }
@@ -1094,7 +1072,10 @@ mod tests {
         };
 
         let result = engine.push_local(&binding).await;
-        assert!(result.is_err(), "upload must fail against an unreachable API");
+        assert!(
+            result.is_err(),
+            "upload must fail against an unreachable API"
+        );
 
         let snap = engine.transfer_queue().await;
         assert_eq!(

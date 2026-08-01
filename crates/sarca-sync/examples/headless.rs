@@ -15,13 +15,7 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use anyhow::{bail, Result};
 use sarca_sync::{
-    Binding,
-    BindingMode,
-    FsMediaSource,
-    KeepBothPrompt,
-    SarcaApi,
-    SyncEngine,
-    SyncEngineConfig,
+    Binding, BindingMode, FsMediaSource, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig,
 };
 use uuid::Uuid;
 
@@ -54,7 +48,11 @@ async fn main() -> Result<()> {
     let storage_id: Uuid = required(&args, "storage-id")?.parse()?;
     let local = required(&args, "local")?;
     let remote_root = args.get("remote-root").cloned().unwrap_or_default();
-    let mode = match args.get("mode").map(String::as_str).unwrap_or("auto_upload") {
+    let mode = match args
+        .get("mode")
+        .map(String::as_str)
+        .unwrap_or("auto_upload")
+    {
         "auto_upload" => BindingMode::AutoUpload,
         "folder_upload" => BindingMode::FolderUpload,
         "sync" => BindingMode::Sync,
@@ -62,7 +60,10 @@ async fn main() -> Result<()> {
     };
     let ticks: usize = args.get("ticks").and_then(|t| t.parse().ok()).unwrap_or(1);
     let data_dir = PathBuf::from(required(&args, "data-dir")?);
-    let binding_id = args.get("binding-id").cloned().unwrap_or_else(|| "e2e-binding".to_owned());
+    let binding_id = args
+        .get("binding-id")
+        .cloned()
+        .unwrap_or_else(|| "e2e-binding".to_owned());
 
     std::fs::create_dir_all(&data_dir)?;
 
