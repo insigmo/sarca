@@ -8,6 +8,49 @@ const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 export { API_BASE }
 
 let refreshPromise = null
+let sessionExpiredHandled = false
+
+/**
+ * Decode a JWT's payload without verifying the signature — good enough to
+ * read `exp` client-side and avoid sending requests we know will 401.
+ * @param {string} token
+ * @returns {{ exp?: number } | null}
+ */
+const decodeJwtPayload = (token) => {
+	try {
+		const part = token.split('.')[1]
+		const base64 = part.replace(/-/g, '+').replace(/_/g, '/')
+		return JSON.parse(atob(base64))
+	} catch {
+		return null
+	}
+}
+
+/**
+ * @param {string | null | undefined} token
+ * @param {number} [skewSeconds] Treat the token as expired this many seconds early.
+ */
+const isTokenExpired = (token, skewSeconds = 15) => {
+	if (!token) return true
+	const payload = decodeJwtPayload(token)
+	if (!payload?.exp) return false
+	return Date.now() >= payload.exp * 1000 - skewSeconds * 1000
+}
+
+/**
+ * The refresh token is gone or rejected — the session is genuinely over.
+ * Clear it once and send the user to /login instead of letting every
+ * in-flight request surface its own raw "not authenticated" alert.
+ */
+const forceReLogin = () => {
+	if (sessionExpiredHandled) return
+	sessionExpiredHandled = true
+	const [, setStore, remove] = createLocalStore()
+	remove('access_token')
+	remove('refresh_token')
+	setStore('redirect', window.location.pathname)
+	window.location.assign('/login')
+}
 
 /**
  * Attempt a single token refresh using the stored refresh_token.
@@ -51,6 +94,25 @@ const tryRefreshToken = async () => {
 	})()
 
 	return refreshPromise
+}
+
+/**
+ * Current access token, refreshed first if it looks expired (or already
+ * gone). Used for `<img>`/`<video>`/`<iframe>` URLs, which can't rely on
+ * apiRequest's reactive 401-retry since the browser loads them directly.
+ * @returns {Promise<string|null>} raw access token (no "Bearer " prefix)
+ */
+export const getFreshAccessToken = async () => {
+	const [store] = createLocalStore()
+	if (!store.access_token) return null
+	if (!isTokenExpired(store.access_token)) return store.access_token
+
+	const refreshed = await tryRefreshToken()
+	if (!refreshed) {
+		forceReLogin()
+		return null
+	}
+	return refreshed.replace(/^Bearer /, '')
 }
 
 /**
@@ -109,6 +171,7 @@ const apiRequest = async (
 					signal,
 				)
 			}
+			forceReLogin()
 		}
 
 		if (!response.ok) {
@@ -129,7 +192,7 @@ const apiRequest = async (
 		if (err?.name === 'AbortError' || signal?.aborted) {
 			throw err
 		}
-		if (!silent) {
+		if (!silent && !sessionExpiredHandled) {
 			addAlert(err.message, 'error')
 		}
 
@@ -250,7 +313,7 @@ export const apiMultipartRequest = (path, auth_token, form, onProgress, options 
 	}
 
 	const fail = (message) => {
-		if (!silent) addAlert(message, 'error')
+		if (!silent && !sessionExpiredHandled) addAlert(message, 'error')
 		return Promise.reject(new Error(message))
 	}
 
@@ -290,6 +353,7 @@ export const apiMultipartRequest = (path, auth_token, form, onProgress, options 
 			if (newToken) {
 				return run(newToken, true)
 			}
+			forceReLogin()
 		}
 
 		if (!response.ok) {

@@ -3,6 +3,7 @@ import createLocalStore from '../../libs'
 import apiRequest, {
 	apiMultipartRequest,
 	publicApiRequest,
+	getFreshAccessToken,
 	API_BASE,
 } from './request'
 import { alertStore } from '../components/AlertStack'
@@ -576,29 +577,34 @@ const encodeFilePath = (path) => {
  * Authenticated URL for `<video>` / `<audio>` / `<img>` / `<iframe>` streaming.
  * Uses `?access_token=` so the browser can send Range requests without a custom fetch.
  *
+ * Refreshes the access token first if it looks expired — these URLs are
+ * handed straight to the browser, which can't retry through apiRequest's
+ * 401 handling the way JSON calls do.
+ *
  * @param {string} storage_id
  * @param {string} path
- * @returns {string}
+ * @returns {Promise<string>}
  */
-const getInlineMediaUrl = (storage_id, path) => {
-	const [store] = createLocalStore()
+const getInlineMediaUrl = async (storage_id, path) => {
+	const token = await getFreshAccessToken()
 	const params = new URLSearchParams({
 		inline: '1',
-		access_token: store.access_token || '',
+		access_token: token || '',
 	})
 	return `${API_BASE}/storages/${storage_id}/files/download/${encodeFilePath(path)}?${params}`
 }
 
 /**
  * Authenticated URL for image preview JPEG (FileViewer).
+ * Refreshes the access token first if it looks expired (see {@link getInlineMediaUrl}).
  * @param {string} storage_id
  * @param {string} path
- * @returns {string}
+ * @returns {Promise<string>}
  */
-const getPreviewUrl = (storage_id, path) => {
-	const [store] = createLocalStore()
+const getPreviewUrl = async (storage_id, path) => {
+	const token = await getFreshAccessToken()
 	const params = new URLSearchParams({
-		access_token: store.access_token || '',
+		access_token: token || '',
 	})
 	return `${API_BASE}/storages/${storage_id}/files/preview/${encodeFilePath(path)}?${params}`
 }
