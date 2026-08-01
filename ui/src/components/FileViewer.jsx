@@ -19,6 +19,7 @@ import { fileKind } from '../common/fileKind'
 import { convertSize } from '../common/size_converter'
 import { nativeInvoke } from '../common/nativeBridge'
 import { nativeClientStore } from '../common/nativeClient'
+import { getCachedPreview, putCachedPreview } from '../common/previewCache'
 import FileTypeIcon from './FileTypeIcon'
 import LoadingDots from './LoadingDots'
 import { alertStore } from './AlertStack'
@@ -101,6 +102,8 @@ const FileViewer = (props) => {
 	let chromePinned = false
 	/** True while a silent play→pause is used only to start buffering. */
 	let silentBufferKick = false
+	/** Paths already prefetched (or attempted) this session — avoid refetching. */
+	const prefetchedPreviews = new Set()
 
 	const kind = () =>
 		props.file ? fileKind(props.file.name, props.file.is_file) : 'generic'
@@ -166,6 +169,55 @@ const FileViewer = (props) => {
 		props.resolvePreviewUrl
 			? props.resolvePreviewUrl(path)
 			: await API.files.getPreviewUrl(props.storageId, path)
+
+	/**
+	 * Warm the preview for a neighboring photo before the user opens it.
+	 * Best-effort and silent: mirrors the native-cache path used on open, but
+	 * never touches loading/error state. Server and native caches are both
+	 * size-capped and LRU-evicted, so over-prefetching just churns the LRU
+	 * tail rather than growing unbounded.
+	 */
+	const prefetchPreview = async (path) => {
+		if (!path || prefetchedPreviews.has(path)) return
+		prefetchedPreviews.add(path)
+		const scope = props.storageId || 'share'
+		try {
+			if (!isNative()) {
+				if (await getCachedPreview(scope, path)) return
+				const url = await previewUrlFor(path)
+				const resp = await fetch(url, { credentials: 'include' })
+				if (!resp.ok) return
+				const blob = await resp.blob()
+				await putCachedPreview(scope, path, blob)
+				return
+			}
+			const url = await previewUrlFor(path)
+			try {
+				const cached = await nativeInvoke('cache_get_preview', { scope, path })
+				if (typeof cached === 'string' && cached.length > 0) return
+			} catch {
+				/* cache probe best-effort; fall through to network fetch */
+			}
+			const resp = await fetch(url, { credentials: 'include' })
+			if (!resp.ok) return
+			const blob = await resp.blob()
+			const bytesB64 = await new Promise((resolve, reject) => {
+				const reader = new FileReader()
+				reader.onload = () => {
+					const dataUrl = String(reader.result || '')
+					const comma = dataUrl.indexOf(',')
+					resolve(comma >= 0 ? dataUrl.slice(comma + 1) : '')
+				}
+				reader.onerror = () => reject(reader.error || new Error('FileReader failed'))
+				reader.readAsDataURL(blob)
+			})
+			if (bytesB64) {
+				await nativeInvoke('cache_put_preview', { scope, path, bytes_b64: bytesB64 })
+			}
+		} catch {
+			/* prefetch is best-effort */
+		}
+	}
 
 	const downloadBlobFor = (path) =>
 		props.resolveDownload
@@ -433,8 +485,33 @@ const FileViewer = (props) => {
 								if (!cancelled) setMediaUrl(url)
 								return
 							}
+						} else {
+							// Browser: content-addressed IndexedDB cache, keyed by (scope, path)
+							// rather than by URL — the URL's access_token is short-lived and
+							// would otherwise defeat plain HTTP caching across sessions.
+							try {
+								const cachedBlob = await getCachedPreview(scope, path)
+								if (cachedBlob) {
+									objectUrl = URL.createObjectURL(cachedBlob)
+									if (!cancelled) setMediaUrl(objectUrl)
+									return
+								}
+							} catch {
+								/* cache read best-effort; fall through to network fetch */
+							}
+							try {
+								const resp = await fetch(url, { credentials: 'include' })
+								if (!resp.ok) throw new Error(`preview failed (${resp.status})`)
+								const blob = await resp.blob()
+								putCachedPreview(scope, path, blob).catch(() => {})
+								objectUrl = URL.createObjectURL(blob)
+								if (!cancelled) setMediaUrl(objectUrl)
+								return
+							} catch (fetchErr) {
+								if (!cancelled) setMediaUrl(url)
+								return
+							}
 						}
-						if (!cancelled) setMediaUrl(url)
 					} catch (err) {
 						console.error(err)
 						if (!cancelled) {
@@ -510,6 +587,19 @@ const FileViewer = (props) => {
 				if (!cancelled) setLoading(false)
 			}
 		})()
+	})
+
+	// Warm the next couple of photos' previews while the current one is open,
+	// so swiping forward rarely hits a cold fetch.
+	createEffect(() => {
+		if (!props.open || kind() !== 'image') return
+		const files = viewableFiles()
+		const i = currentIndex()
+		if (i < 0) return
+		const candidates = [files[i + 1], files[i + 2], files[i - 1]].filter(Boolean)
+		for (const f of candidates) {
+			if (fileKind(f.name, f.is_file) === 'image') prefetchPreview(f.path)
+		}
 	})
 
 	// Start first-chunk buffering as soon as the video element has a URL —
