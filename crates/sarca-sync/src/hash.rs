@@ -15,8 +15,7 @@ pub async fn sha256_file(path: &Path) -> Result<String> {
 }
 
 fn hash_file_blocking(path: &Path) -> Result<String> {
-    let mut file =
-        std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut file = std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; 1024 * 1024];
     loop {

@@ -27,7 +27,6 @@ impl TelegramTokenClient {
     /// `allowed_updates` must be set explicitly — Telegram remembers the last filter;
     /// a sticky restrictive list silently drops `my_chat_member`.
     const ALLOWED_UPDATES: &'static str = r#"["message","edited_message","channel_post","edited_channel_post","my_chat_member","chat_member"]"#;
-
     /// Non-long-poll calls (getMe, deleteWebhook, getChat, getChatMember) must never
     /// hang forever: if the host can't reach Telegram (blocked/unroutable), a plain
     /// `reqwest::Client::new()` request with no timeout waits indefinitely — the
@@ -89,12 +88,8 @@ impl TelegramTokenClient {
     pub async fn delete_webhook(&self) -> SarcaResult<()> {
         let url = self.build_url("deleteWebhook");
         let masked = Self::mask_url(&url);
-        let response = self
-            .client
-            .post(&url)
-            .form(&[("drop_pending_updates", "false")])
-            .send()
-            .await?;
+        let response =
+            self.client.post(&url).form(&[("drop_pending_updates", "false")]).send().await?;
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();
@@ -179,8 +174,7 @@ impl TelegramTokenClient {
             if let Some(off) = offset {
                 query.push(("offset", off.to_string()));
             }
-            let response =
-                self.client.get(&url).query(&query).timeout(req_timeout).send().await?;
+            let response = self.client.get(&url).query(&query).timeout(req_timeout).send().await?;
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             if status.as_u16() == 409 && attempt < 2 {
@@ -222,12 +216,8 @@ impl TelegramTokenClient {
     pub async fn get_chat(&self, chat_id: ChatId) -> SarcaResult<ChatInfo> {
         let url = self.build_url("getChat");
         let masked = Self::mask_url(&url);
-        let response = self
-            .client
-            .get(&url)
-            .query(&[("chat_id", chat_id.to_string())])
-            .send()
-            .await?;
+        let response =
+            self.client.get(&url).query(&[("chat_id", chat_id.to_string())]).send().await?;
         let status = response.status();
         if !status.is_success() {
             let text = response.text().await.unwrap_or_default();

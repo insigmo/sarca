@@ -116,6 +116,25 @@ impl<'d> FilesService<'d> {
         // 1. check whether storage got workers
         Self::check_storage_workers(self, in_file.storage_id).await?;
 
+        // A sync client retries a path+hash it already sent when it couldn't tell
+        // whether the previous attempt succeeded (e.g. a client-side timeout while
+        // Telegram relay was still in progress). create_file_anyway always inserts
+        // a fresh row instead, so without this check the retry lands beside the
+        // original as "name (1).ext". Only short-circuit on an exact content_hash
+        // match at the same path — a real edit has a different hash and still
+        // falls through below, keeping upload_anyway's rename-on-collision to that
+        // case.
+        if let Some(hash) = in_file.content_hash.as_deref() {
+            if let Ok(existing) =
+                self.repo.get_file_by_path(&in_file.path, in_file.storage_id).await
+            {
+                if existing.is_uploaded && existing.content_hash.as_deref() == Some(hash) {
+                    let _ = tokio::fs::remove_file(&file_path).await;
+                    return Ok(());
+                }
+            }
+        }
+
         // 2. saving file in db
         let file = self.repo.create_file_anyway(in_file).await?;
 

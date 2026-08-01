@@ -55,17 +55,15 @@ pub fn is_dispatched_command(cmd: &str) -> bool {
 }
 
 fn arg_str(args: &Value, snake: &str, camel: &str) -> Option<String> {
-    args.get(snake)
-        .or_else(|| args.get(camel))
-        .and_then(|v| {
-            if v.is_null() {
-                None
-            } else if let Some(s) = v.as_str() {
-                Some(s.to_owned())
-            } else {
-                Some(v.to_string())
-            }
-        })
+    args.get(snake).or_else(|| args.get(camel)).and_then(|v| {
+        if v.is_null() {
+            None
+        } else if let Some(s) = v.as_str() {
+            Some(s.to_owned())
+        } else {
+            Some(v.to_string())
+        }
+    })
 }
 
 fn arg_value<'a>(args: &'a Value, snake: &str, camel: &str) -> Option<&'a Value> {
@@ -105,8 +103,8 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
                 .ok_or_else(|| "access_token required".to_string())?;
             let refresh_token = arg_str(&args, "refresh_token", "refreshToken");
             let email = arg_str(&args, "email", "email");
-            let email_verified = arg_value(&args, "email_verified", "emailVerified")
-                .and_then(|v| v.as_bool());
+            let email_verified =
+                arg_value(&args, "email_verified", "emailVerified").and_then(|v| v.as_bool());
             let dto = commands::update_session(
                 state.clone(),
                 access_token,
@@ -204,8 +202,7 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let storage_id = arg_str(&args, "storage_id", "storageId")
                 .ok_or_else(|| "storage_id required".to_string())?;
             let parent = arg_str(&args, "parent", "parent").unwrap_or_default();
-            let name =
-                arg_str(&args, "name", "name").ok_or_else(|| "name required".to_string())?;
+            let name = arg_str(&args, "name", "name").ok_or_else(|| "name required".to_string())?;
             let path = commands::ensure_remote_folder(
                 app.clone(),
                 state.clone(),
@@ -229,15 +226,15 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             serde_json::to_value(dto).map_err(|e| e.to_string())
         }
         "cache_get_preview" => {
-            let scope = arg_str(&args, "scope", "scope")
-                .ok_or_else(|| "scope required".to_string())?;
+            let scope =
+                arg_str(&args, "scope", "scope").ok_or_else(|| "scope required".to_string())?;
             let path = arg_str(&args, "path", "path").unwrap_or_default();
             let b64 = commands::cache_get_preview(state.clone(), scope, path)?;
             Ok(json!(b64))
         }
         "cache_put_preview" => {
-            let scope = arg_str(&args, "scope", "scope")
-                .ok_or_else(|| "scope required".to_string())?;
+            let scope =
+                arg_str(&args, "scope", "scope").ok_or_else(|| "scope required".to_string())?;
             let path = arg_str(&args, "path", "path").unwrap_or_default();
             let bytes_b64 = args
                 .get("bytes_b64")
@@ -268,89 +265,6 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
                 Err(format!("Unknown native command: {other}"))
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn dispatch_command_names_are_snake_case_exact() {
-        for cmd in REMOTE_SETTINGS_COMMANDS {
-            assert!(
-                cmd.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
-                "command must be snake_case: {cmd}"
-            );
-            assert!(
-                is_dispatched_command(cmd),
-                "is_dispatched_command missed {cmd}"
-            );
-        }
-        assert!(!is_dispatched_command("defaultGalleryPath"));
-        assert!(!is_dispatched_command("DefaultGalleryPath"));
-        assert!(!is_dispatched_command("pickLocalFolder"));
-    }
-
-    #[test]
-    fn sync_security_commands_are_dispatched() {
-        for cmd in [
-            "default_gallery_path",
-            "pick_local_folder",
-            "set_client_prefs",
-            "get_client_prefs",
-            "export_logs",
-            "add_binding",
-            "remove_binding",
-            "ensure_remote_folder",
-            "update_session",
-            "list_bindings",
-            "sync_now",
-            "sync_statuses",
-            "sync_transfer_queue",
-            "is_on_wifi",
-            "get_about",
-            "get_cache_size",
-            "clear_local_cache",
-            "cache_get_preview",
-            "cache_put_preview",
-            "platform_label",
-            "device_label",
-            "set_binding_enabled",
-            "update_binding_local_path",
-            "update_binding_remote_root",
-        ] {
-            assert!(
-                is_dispatched_command(cmd),
-                "Settings Sync/Security command missing from dispatch: {cmd}"
-            );
-        }
-    }
-
-    #[test]
-    fn soft_disable_commands_are_dispatched() {
-        assert!(is_dispatched_command("set_binding_enabled"));
-        assert!(is_dispatched_command("update_binding_local_path"));
-        assert!(is_dispatched_command("update_binding_remote_root"));
-    }
-
-    #[test]
-    fn ipc_url_detects_navigation_and_scheme() {
-        assert!(is_ipc_url(
-            &tauri::Url::parse("https://sarca.ipc/__invoke__?p=%7B%7D").unwrap()
-        ));
-        assert!(is_ipc_url(
-            &tauri::Url::parse("http://sarca.ipc/__invoke__?p=1").unwrap()
-        ));
-        assert!(is_ipc_url(
-            &tauri::Url::parse("sarca-ipc://localhost/__invoke__?p=1").unwrap()
-        ));
-        assert!(is_ipc_url(
-            &tauri::Url::parse("sarca-ipc://localhost/invoke").unwrap()
-        ));
-        assert!(!is_ipc_url(
-            &tauri::Url::parse("https://example.com/__invoke__").unwrap()
-        ));
     }
 }
 
@@ -435,7 +349,11 @@ pub fn handle_protocol(
     responder: UriSchemeResponder,
 ) {
     if request.method() == tauri::http::Method::OPTIONS {
-        responder.respond(cors_response(StatusCode::NO_CONTENT, Vec::new(), "text/plain"));
+        responder.respond(cors_response(
+            StatusCode::NO_CONTENT,
+            Vec::new(),
+            "text/plain",
+        ));
         return;
     }
 
@@ -448,9 +366,7 @@ pub fn handle_protocol(
             let mut p = None;
             for pair in q.split('&') {
                 if let Some(rest) = pair.strip_prefix("p=") {
-                    p = Some(
-                        urlencoding_decode(rest).unwrap_or_else(|| rest.to_owned()),
-                    );
+                    p = Some(urlencoding_decode(rest).unwrap_or_else(|| rest.to_owned()));
                     break;
                 }
             }
@@ -502,7 +418,9 @@ pub fn handle_protocol(
             ),
             Err(err) => (
                 StatusCode::OK,
-                json!({ "ok": false, "error": err }).to_string().into_bytes(),
+                json!({ "ok": false, "error": err })
+                    .to_string()
+                    .into_bytes(),
             ),
         };
         responder.respond(cors_response(status, body, "application/json"));
@@ -528,4 +446,87 @@ fn urlencoding_decode(s: &str) -> Option<String> {
         }
     }
     String::from_utf8(out).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dispatch_command_names_are_snake_case_exact() {
+        for cmd in REMOTE_SETTINGS_COMMANDS {
+            assert!(
+                cmd.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "command must be snake_case: {cmd}"
+            );
+            assert!(
+                is_dispatched_command(cmd),
+                "is_dispatched_command missed {cmd}"
+            );
+        }
+        assert!(!is_dispatched_command("defaultGalleryPath"));
+        assert!(!is_dispatched_command("DefaultGalleryPath"));
+        assert!(!is_dispatched_command("pickLocalFolder"));
+    }
+
+    #[test]
+    fn sync_security_commands_are_dispatched() {
+        for cmd in [
+            "default_gallery_path",
+            "pick_local_folder",
+            "set_client_prefs",
+            "get_client_prefs",
+            "export_logs",
+            "add_binding",
+            "remove_binding",
+            "ensure_remote_folder",
+            "update_session",
+            "list_bindings",
+            "sync_now",
+            "sync_statuses",
+            "sync_transfer_queue",
+            "is_on_wifi",
+            "get_about",
+            "get_cache_size",
+            "clear_local_cache",
+            "cache_get_preview",
+            "cache_put_preview",
+            "platform_label",
+            "device_label",
+            "set_binding_enabled",
+            "update_binding_local_path",
+            "update_binding_remote_root",
+        ] {
+            assert!(
+                is_dispatched_command(cmd),
+                "Settings Sync/Security command missing from dispatch: {cmd}"
+            );
+        }
+    }
+
+    #[test]
+    fn soft_disable_commands_are_dispatched() {
+        assert!(is_dispatched_command("set_binding_enabled"));
+        assert!(is_dispatched_command("update_binding_local_path"));
+        assert!(is_dispatched_command("update_binding_remote_root"));
+    }
+
+    #[test]
+    fn ipc_url_detects_navigation_and_scheme() {
+        assert!(is_ipc_url(
+            &tauri::Url::parse("https://sarca.ipc/__invoke__?p=%7B%7D").unwrap()
+        ));
+        assert!(is_ipc_url(
+            &tauri::Url::parse("http://sarca.ipc/__invoke__?p=1").unwrap()
+        ));
+        assert!(is_ipc_url(
+            &tauri::Url::parse("sarca-ipc://localhost/__invoke__?p=1").unwrap()
+        ));
+        assert!(is_ipc_url(
+            &tauri::Url::parse("sarca-ipc://localhost/invoke").unwrap()
+        ));
+        assert!(!is_ipc_url(
+            &tauri::Url::parse("https://example.com/__invoke__").unwrap()
+        ));
+    }
 }
