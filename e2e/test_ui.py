@@ -7,6 +7,8 @@ import re
 
 import httpx
 
+from helpers.server import SarcaServer
+
 
 def test_root_serves_spa_html(client: httpx.Client) -> None:
     r = client.get("/")
@@ -60,12 +62,18 @@ def test_api_unknown_route_is_not_html_spa(client: httpx.Client) -> None:
     assert "text/html" not in r.headers.get("content-type", "")
 
 
-def test_startup_banner_mentions_port(server_log_path: str | None) -> None:
+def test_startup_banner_mentions_port(
+    server_log_path: str | None, server: SarcaServer | None
+) -> None:
     if not server_log_path or not os.path.isfile(server_log_path):
         # Local runs without CI log file still pass other tests.
         return
     log = open(server_log_path, encoding="utf-8", errors="replace").read()
     assert "Sarca is running" in log, log[-2000:]
-    port = os.environ.get("PORT", "8000")
+    # SarcaServer.start() always launches with a fresh free_port(), ignoring
+    # any PORT the test process inherited — os.environ["PORT"] here reflects
+    # the *pytest* process, not the child server, so it never matches the
+    # banner except by coincidence. Read the actual port off the fixture.
+    port = str(server.port) if server else os.environ.get("PORT", "8000")
     assert port in log or f":{port}" in log, log[-2000:]
     assert "database ok" in log or "listening on" in log, log[-2000:]
