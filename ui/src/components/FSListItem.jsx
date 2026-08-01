@@ -79,6 +79,7 @@ const FSListItem = (props) => {
 
 	const handleCloseMore = () => {
 		setMenuPos(null)
+		suppressClickAfterLongPress = false
 	}
 
 	const clearLongPress = () => {
