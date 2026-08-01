@@ -10,6 +10,10 @@ import ListItemText from '@suid/material/ListItemText'
 import createLocalStore from '../../libs'
 import { clearSession } from '../common/auth'
 import { settingsStore } from '../common/settings'
+import { isNativeClient } from '../common/nativeClient'
+import { nativeInvoke } from '../common/nativeBridge'
+import { alertStore } from './AlertStack'
+import ActionConfirmDialog from './ActionConfirmDialog'
 import FluentIcon, { fluentIcons } from './FluentIcon'
 
 const STORAGE_KEY = 'sarca.filesSidebarCollapsed'
@@ -109,6 +113,17 @@ const SidebarNav = (props) => {
 		>
 			<div class="files-sidebar__top">
 				<Show when={props.variant === 'files'}>
+					<A
+						href="/storages"
+						class="files-sidebar__item"
+						aria-label="Storages"
+						title="Storages"
+						onClick={() => props.onAfterAction?.()}
+					>
+						<FluentIcon name="storage" size={20} />
+						<span class="files-sidebar__label">Storages</span>
+					</A>
+					<div class="files-sidebar__divider" aria-hidden="true" />
 					<SidebarNewButton
 						collapsed={props.collapsed}
 						disabled={props.createDisabled}
@@ -148,6 +163,18 @@ const SidebarNav = (props) => {
 					<FluentIcon name="settings" size={20} />
 					<span class="files-sidebar__label">Settings</span>
 				</button>
+				<Show when={props.showDisconnect}>
+					<button
+						type="button"
+						class="files-sidebar__item"
+						aria-label="Disconnect"
+						title="Disconnect"
+						onClick={props.onDisconnect}
+					>
+						<FluentIcon name="plugDisconnected" size={20} />
+						<span class="files-sidebar__label">Disconnect</span>
+					</button>
+				</Show>
 				<button
 					type="button"
 					class="files-sidebar__item files-sidebar__item--danger"
@@ -208,6 +235,30 @@ const FilesSidebar = (props) => {
 		navigate(clearSession(setStore))
 	}
 
+	const showDisconnect = isNativeClient()
+	const { addAlert } = alertStore
+	const [disconnectConfirmOpen, setDisconnectConfirmOpen] = createSignal(false)
+	const [disconnecting, setDisconnecting] = createSignal(false)
+
+	const requestDisconnect = () => {
+		props.onMobileClose?.()
+		setDisconnectConfirmOpen(true)
+	}
+
+	const confirmDisconnect = async () => {
+		if (disconnecting()) return
+		setDisconnecting(true)
+		try {
+			await nativeInvoke('disconnect')
+			setDisconnectConfirmOpen(false)
+			// Native side navigates the webview to the connect shell on success.
+		} catch (e) {
+			addAlert(e?.message || 'Failed to disconnect', 'error')
+		} finally {
+			setDisconnecting(false)
+		}
+	}
+
 	createEffect(() => {
 		if (!props.mobileOpen) return
 
@@ -234,6 +285,8 @@ const FilesSidebar = (props) => {
 		onSelect: select,
 		onOpenSettings: openSidebarSettings,
 		onLogout: logout,
+		showDisconnect,
+		onDisconnect: requestDisconnect,
 		onCreateFolder: props.onCreateFolder,
 		onUploadFile: props.onUploadFile,
 		onUploadFolder: props.onUploadFolder,
@@ -283,6 +336,15 @@ const FilesSidebar = (props) => {
 					</aside>
 				</Portal>
 			</Show>
+
+			<ActionConfirmDialog
+				isOpened={disconnectConfirmOpen()}
+				entity="server"
+				action="Disconnect"
+				actionDescription="disconnect from this server — you'll need to enter the server address again to sign back in"
+				onConfirm={confirmDisconnect}
+				onCancel={() => setDisconnectConfirmOpen(false)}
+			/>
 		</>
 	)
 }

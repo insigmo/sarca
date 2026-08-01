@@ -826,6 +826,14 @@ impl AppSyncState {
     pub fn shell_url(&self) -> Option<Url> {
         self.shell_url.lock().ok().and_then(|g| g.clone())
     }
+
+    pub fn load_url_history(&self) -> Vec<String> {
+        load_url_history(&self.data_dir)
+    }
+
+    pub fn record_url_history(&self, base_url: &str) -> Vec<String> {
+        record_url_history(&self.data_dir, base_url)
+    }
 }
 
 /// True only for the Tauri-bundled connect shell / assets — not for a Sarca
@@ -862,6 +870,39 @@ pub fn load_server_config(data_dir: &Path) -> ServerConfig {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
+}
+
+const URL_HISTORY_MAX: usize = 3;
+
+fn url_history_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("url_history.json")
+}
+
+/// Most-recently-used server URLs shown on the Connect screen, newest first.
+/// Kept separate from `ServerConfig` so `disconnect` (which resets the config)
+/// does not wipe it.
+pub fn load_url_history(data_dir: &Path) -> Vec<String> {
+    fs::read_to_string(url_history_path(data_dir))
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Move `base_url` to the front of the history (deduped), capped at
+/// `URL_HISTORY_MAX`, and persist. Returns the updated list.
+pub fn record_url_history(data_dir: &Path, base_url: &str) -> Vec<String> {
+    let base_url = base_url.trim().trim_end_matches('/').to_string();
+    if base_url.is_empty() {
+        return load_url_history(data_dir);
+    }
+    let mut history = load_url_history(data_dir);
+    history.retain(|u| u != &base_url);
+    history.insert(0, base_url);
+    history.truncate(URL_HISTORY_MAX);
+    if let Ok(json) = serde_json::to_string_pretty(&history) {
+        let _ = fs::write(url_history_path(data_dir), json);
+    }
+    history
 }
 
 pub fn parse_mode(mode: &str) -> BindingMode {
@@ -1107,6 +1148,55 @@ mod tests {
         let err = merge_session_tokens(&mut cfg, "  ", None, None, None).unwrap_err();
         assert!(err.to_lowercase().contains("access token"));
         assert_eq!(cfg.access_token, "old");
+    }
+
+    #[test]
+    fn record_url_history_dedupes_mru_and_caps_at_three() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("sarca-url-history-{nanos}"));
+        fs::create_dir_all(&dir).unwrap();
+
+        assert!(load_url_history(&dir).is_empty());
+
+        record_url_history(&dir, "https://a.example.com/");
+        record_url_history(&dir, "https://b.example.com");
+        let history = record_url_history(&dir, "https://c.example.com");
+        assert_eq!(
+            history,
+            vec![
+                "https://c.example.com",
+                "https://b.example.com",
+                "https://a.example.com",
+            ]
+        );
+
+        // Re-visiting an existing entry moves it to the front instead of duplicating.
+        let history = record_url_history(&dir, "https://a.example.com");
+        assert_eq!(
+            history,
+            vec![
+                "https://a.example.com",
+                "https://c.example.com",
+                "https://b.example.com",
+            ]
+        );
+
+        // A fourth distinct URL evicts the oldest.
+        let history = record_url_history(&dir, "https://d.example.com");
+        assert_eq!(
+            history,
+            vec![
+                "https://d.example.com",
+                "https://a.example.com",
+                "https://c.example.com",
+            ]
+        );
+        assert_eq!(load_url_history(&dir), history);
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

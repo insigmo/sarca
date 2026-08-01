@@ -172,10 +172,6 @@ pub fn run() {
                 let sep = PredefinedMenuItem::separator(app)?;
 
                 let tray_show = MenuItem::with_id(app, "show", "Show Sarca", true, None::<&str>)?;
-                let tray_sync_now =
-                    MenuItem::with_id(app, "sync_now", "Sync now", true, None::<&str>)?;
-                let tray_sync_settings =
-                    MenuItem::with_id(app, "sync_settings", "Sync settings", true, None::<&str>)?;
                 let tray_disconnect =
                     MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
                 let tray_quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -220,32 +216,29 @@ pub fn run() {
                 let app_menu = Menu::with_items(app, &[&app_submenu])?;
                 let _ = app.set_menu(app_menu);
 
-                let tray_menu = Menu::with_items(
-                    app,
-                    &[
-                        &tray_show,
-                        &tray_sync_settings,
-                        &tray_sync_now,
-                        &tray_disconnect,
-                        &tray_quit,
-                    ],
-                )?;
+                let tray_menu =
+                    Menu::with_items(app, &[&tray_show, &tray_disconnect, &tray_quit])?;
 
                 let _tray = TrayIconBuilder::new()
                     .icon(app.default_window_icon().unwrap().clone())
                     .menu(&tray_menu)
-                    .tooltip("Sarca — Sync settings in menu")
-                    .show_menu_on_left_click(true)
-                    .on_tray_icon_event(|tray, event| {
-                        if let TrayIconEvent::Click {
-                            button: MouseButton::Right,
+                    .show_menu_on_left_click(false)
+                    .tooltip("Sarca")
+                    .on_tray_icon_event(|tray, event| match event {
+                        TrayIconEvent::Click {
+                            button: MouseButton::Left,
                             button_state: MouseButtonState::Up,
                             ..
-                        } = event
-                        {
-                            let app = tray.app_handle();
-                            focus_main_window(app);
+                        } => {
+                            focus_main_window(tray.app_handle());
                         }
+                        TrayIconEvent::DoubleClick {
+                            button: MouseButton::Left,
+                            ..
+                        } => {
+                            focus_main_window(tray.app_handle());
+                        }
+                        _ => {}
                     })
                     .build(app)?;
 
@@ -306,6 +299,7 @@ pub fn run() {
             commands::platform_label,
             commands::device_label,
             commands::get_session,
+            commands::get_url_history,
             commands::update_session,
             commands::connect,
             commands::disconnect,

@@ -6,6 +6,29 @@ function setError(message) {
   $("error").textContent = message || "";
 }
 
+function renderUrlHistory(urls) {
+  const wrap = $("urlHistory");
+  const list = $("urlHistoryList");
+  list.innerHTML = "";
+  if (!urls?.length) {
+    wrap.hidden = true;
+    return;
+  }
+  for (const url of urls) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "url-history__item";
+    item.textContent = url;
+    item.addEventListener("click", () => {
+      const input = $("serverUrl");
+      input.value = url;
+      input.focus();
+    });
+    list.appendChild(item);
+  }
+  wrap.hidden = false;
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   try {
     $("platform").textContent = await invoke("platform_label");
@@ -21,6 +44,12 @@ window.addEventListener("DOMContentLoaded", async () => {
     // Saved session with tokens auto-opens the server app from Rust on launch.
   } catch (e) {
     setError(String(e));
+  }
+
+  try {
+    renderUrlHistory(await invoke("get_url_history"));
+  } catch {
+    renderUrlHistory([]);
   }
 
   $("connectForm").addEventListener("submit", async (event) => {

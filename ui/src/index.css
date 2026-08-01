@@ -531,9 +531,13 @@ a.default-link:hover {
 	-webkit-user-select: none;
 }
 
-/* Hard-disable text selection visuals across Files UI. */
+/* Hard-disable text selection visuals across Files UI. Excludes .files-canvas
+   (the scrollable file list): WebKitGTK on Linux fails to deliver mouse-wheel
+   scroll events to overflow:auto elements that also carry user-select:none —
+   the JS selectstart guard (installTextSelectionGuard) already blocks actual
+   text selection there without needing the CSS property. */
 .files-shell,
-.files-shell * {
+.files-shell *:not(.files-canvas):not(.files-canvas *) {
 	user-select: none !important;
 	-webkit-user-select: none !important;
 }
@@ -543,14 +547,15 @@ a.default-link:hover {
 	color: inherit !important;
 }
 
-/* Authenticated shell: block native text selection everywhere except editables. */
+/* Authenticated shell: block native text selection everywhere except editables.
+   .files-canvas excluded too — see WebKitGTK note above the .files-shell rule. */
 body.sarca-no-select,
-body.sarca-no-select *:not(input):not(textarea):not(select):not([contenteditable='true']):not(.allow-text-select):not(.allow-text-select *) {
+body.sarca-no-select *:not(input):not(textarea):not(select):not([contenteditable='true']):not(.allow-text-select):not(.allow-text-select *):not(.files-canvas):not(.files-canvas *) {
 	user-select: none !important;
 	-webkit-user-select: none !important;
 }
 
-body.sarca-no-select *:not(input):not(textarea):not(select):not([contenteditable='true']):not(.allow-text-select):not(.allow-text-select *)::selection {
+body.sarca-no-select *:not(input):not(textarea):not(select):not([contenteditable='true']):not(.allow-text-select):not(.allow-text-select *):not(.files-canvas):not(.files-canvas *)::selection {
 	background: transparent !important;
 	color: inherit !important;
 }
@@ -1017,7 +1022,6 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	-webkit-backdrop-filter: none;
 	box-shadow: none !important;
 	position: relative;
-	user-select: none;
 }
 
 .files-canvas--marquee {
@@ -2700,48 +2704,42 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	}
 }
 
-/* Mobile New FAB — hidden on desktop */
+/* New FAB — same "+" affordance on desktop/web and mobile */
 .files-new-fab {
-	display: none;
+	display: inline-flex;
+	position: fixed;
+	right: max(16px, var(--sarca-safe-right));
+	bottom: calc(20px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
+	z-index: 1100;
+	width: 56px;
+	height: 56px;
+	margin: 0;
+	padding: 0;
+	border: none;
+	border-radius: 16px;
+	align-items: center;
+	justify-content: center;
+	cursor: pointer;
+	color: #fff;
+	background: var(--sarca-accent-deep);
+	box-shadow: var(--sarca-shadow);
+	transition: transform 0.15s ease, background 0.15s ease;
 }
 
-@media (max-width: 840px) {
-	.files-new-fab {
-		display: inline-flex;
-		position: fixed;
-		right: max(16px, var(--sarca-safe-right));
-		bottom: calc(20px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
-		z-index: 1100;
-		width: 56px;
-		height: 56px;
-		margin: 0;
-		padding: 0;
-		border: none;
-		border-radius: 16px;
-		align-items: center;
-		justify-content: center;
-		cursor: pointer;
-		color: #fff;
-		background: var(--sarca-accent-deep);
-		box-shadow: var(--sarca-shadow);
-		transition: transform 0.15s ease, background 0.15s ease;
-	}
+.files-new-fab:hover:not(:disabled) {
+	background: var(--sarca-accent);
+	transform: scale(1.04);
+}
 
-	.files-new-fab:hover:not(:disabled) {
-		background: var(--sarca-accent);
-		transform: scale(1.04);
-	}
+.files-new-fab:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+	box-shadow: none;
+}
 
-	.files-new-fab:disabled {
-		opacity: 0.45;
-		cursor: not-allowed;
-		box-shadow: none;
-	}
-
-	.files-new-fab:focus-visible {
-		outline: 2px solid var(--sarca-teal);
-		outline-offset: 3px;
-	}
+.files-new-fab:focus-visible {
+	outline: 2px solid var(--sarca-teal);
+	outline-offset: 3px;
 }
 
 @media (prefers-reduced-motion: reduce) {
