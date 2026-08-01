@@ -1,15 +1,9 @@
 import { render, fireEvent } from '@solidjs/testing-library'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
-import { alertStore } from './AlertStack'
 import CreateFolderDialog from './CreateFolderDialog'
 
 describe('CreateFolderDialog', () => {
-	beforeEach(() => {
-		// Drain any alerts left over from a previous test.
-		for (const a of alertStore.alertList()) alertStore.dismissAlert(a.id)
-	})
-
 	// Regression: the <form onSubmit={onCreate}> handler took no event and
 	// never called preventDefault(). Every other form in this codebase
 	// (Login, GrantAccess, ShareLinkDialog, StorageSettingsModal) does. On a
@@ -55,19 +49,19 @@ describe('CreateFolderDialog', () => {
 
 	// Regression: onClose() (which clears the input and unmounts the dialog)
 	// used to run *before* `await props.onCreate(...)`, with no try/catch —
-	// a rejected create (name conflict, network error, server-side validation)
-	// became an unhandled promise rejection and the dialog just silently
-	// closed with no feedback to the user.
-	it('keeps the dialog open and surfaces an alert when onCreate rejects', async () => {
+	// a rejected create (name conflict, network error, server-side validation;
+	// apiRequest already shows its own error alert for these) became an
+	// unhandled promise rejection and the dialog just silently closed,
+	// discarding the name the user had typed.
+	it('keeps the dialog open with the typed name when onCreate rejects', async () => {
 		const onCreate = vi.fn().mockRejectedValue(new Error('name already exists'))
 		const onClose = vi.fn()
 		render(() => (
 			<CreateFolderDialog isOpened={true} onCreate={onCreate} onClose={onClose} />
 		))
 
-		await fireEvent.input(document.getElementById('folder-name'), {
-			target: { value: 'Photos' },
-		})
+		const input = document.getElementById('folder-name')
+		await fireEvent.input(input, { target: { value: 'Photos' } })
 		const form = document.querySelector('form')
 		await fireEvent.submit(form)
 		// let the rejected promise's microtask settle
@@ -76,8 +70,10 @@ describe('CreateFolderDialog', () => {
 
 		expect(onCreate).toHaveBeenCalledWith('Photos')
 		expect(onClose).not.toHaveBeenCalled()
-		expect(
-			alertStore.alertList().some((a) => /name already exists/.test(a.msg)),
-		).toBe(true)
+		expect(input.value).toBe('Photos')
+
+		// Not stuck disabled/"creating" forever — the user can retry.
+		await fireEvent.submit(form)
+		expect(onCreate).toHaveBeenCalledTimes(2)
 	})
 })
