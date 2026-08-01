@@ -38,6 +38,11 @@ import { formatBulkDeleteMessage } from '../../common/bulkDeleteMessage'
 import { createRafBatcher } from '../../common/rafBatch'
 import { shouldRefreshOnVisibilityEvent } from '../../common/visibilityRefresh'
 import {
+	fsLayerCacheKey,
+	readFsLayerCache,
+	writeFsLayerCache,
+} from '../../common/filesListCache'
+import {
 	pushViewerHistory,
 	shouldCloseViewerOnPopstate,
 } from '../../common/viewerHistory'
@@ -650,8 +655,12 @@ const Files = () => {
 		const gen = ++fsLayerFetchGen
 		const pathAtCall = path
 		const pathChanged = fsLayerPaintedPath !== pathAtCall
+		const cacheKey = fsLayerCacheKey(params.id, pathAtCall)
 		if (pathChanged) {
-			setFsLayer([])
+			// First paint this session (e.g. a full page reload): repaint the last-known
+			// snapshot instead of blanking, so the list does not flash empty while the
+			// fresh fetch is in flight.
+			setFsLayer(fsLayerPaintedPath === null ? readFsLayerCache(cacheKey) || [] : [])
 		}
 		try {
 			const fsLayerRes = await API.files.getFSLayer(params.id, path)
@@ -659,7 +668,9 @@ const Files = () => {
 				return
 			}
 			fsLayerPaintedPath = pathAtCall
-			setFsLayer((fsLayerRes || []).filter((el) => el.name !== '..'))
+			const items = (fsLayerRes || []).filter((el) => el.name !== '..')
+			setFsLayer(items)
+			writeFsLayerCache(cacheKey, items)
 			chrome.setIsSearching(false)
 			chrome.setSearchQuery('')
 		} catch (err) {
@@ -2117,7 +2128,7 @@ const Files = () => {
 					onClose={closeCreateFolderDialog}
 				/>
 
-				{/* Mobile FAB — same actions as sidebar New (CSS hides on desktop) */}
+				{/* New FAB — same actions as sidebar New, visible on all viewport widths */}
 				<button
 					type="button"
 					class="files-new-fab"

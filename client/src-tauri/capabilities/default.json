@@ -19,6 +19,7 @@
     "allow-platform-label",
     "allow-device-label",
     "allow-get-session",
+    "allow-get-url-history",
     "allow-update-session",
     "allow-connect",
     "allow-disconnect",

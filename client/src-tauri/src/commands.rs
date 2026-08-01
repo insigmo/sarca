@@ -339,6 +339,12 @@ pub fn ensure_device_label_cached(app: &AppHandle) {
     let _ = resolve_device_label(app);
 }
 
+/// Recent server URLs for the Connect screen, newest first (max 3).
+#[tauri::command]
+pub async fn get_url_history(state: State<'_, AppSyncState>) -> Result<Vec<String>, String> {
+    Ok(state.load_url_history())
+}
+
 #[tauri::command]
 pub async fn get_session(state: State<'_, AppSyncState>) -> Result<SessionDto, String> {
     let cfg = state.server.lock().await.clone();
@@ -407,6 +413,7 @@ pub async fn connect(
     };
     state.save_server(&cfg).await.map_err(|e| e.to_string())?;
     navigate_to_server(&app, &cfg)?;
+    state.record_url_history(&cfg.base_url);
 
     Ok(SessionDto {
         connected: cfg.is_connected(),

@@ -37,6 +37,7 @@ import navigation24Regular from '@fluentui/svg-icons/icons/navigation_24_regular
 import options24Regular from '@fluentui/svg-icons/icons/options_24_regular.svg?raw'
 import person24Regular from '@fluentui/svg-icons/icons/person_24_regular.svg?raw'
 import person24Filled from '@fluentui/svg-icons/icons/person_24_filled.svg?raw'
+import plugDisconnected24Regular from '@fluentui/svg-icons/icons/plug_disconnected_24_regular.svg?raw'
 import rename24Regular from '@fluentui/svg-icons/icons/rename_24_regular.svg?raw'
 import search24Regular from '@fluentui/svg-icons/icons/search_24_regular.svg?raw'
 import settings24Regular from '@fluentui/svg-icons/icons/settings_24_regular.svg?raw'
@@ -93,6 +94,7 @@ export const fluentIcons = {
 	options: options24Regular,
 	person: person24Regular,
 	personFilled: person24Filled,
+	plugDisconnected: plugDisconnected24Regular,
 	rename: rename24Regular,
 	search: search24Regular,
 	settings: settings24Regular,
