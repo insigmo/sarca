@@ -157,15 +157,15 @@ const FileViewer = (props) => {
 		props.onNavigate(viewableFiles()[currentIndex() + 1])
 	}
 
-	const inlineUrlFor = (path) =>
+	const inlineUrlFor = async (path) =>
 		props.resolveInlineUrl
 			? props.resolveInlineUrl(path)
-			: API.files.getInlineMediaUrl(props.storageId, path)
+			: await API.files.getInlineMediaUrl(props.storageId, path)
 
-	const previewUrlFor = (path) =>
+	const previewUrlFor = async (path) =>
 		props.resolvePreviewUrl
 			? props.resolvePreviewUrl(path)
-			: API.files.getPreviewUrl(props.storageId, path)
+			: await API.files.getPreviewUrl(props.storageId, path)
 
 	const downloadBlobFor = (path) =>
 		props.resolveDownload
@@ -371,7 +371,7 @@ const FileViewer = (props) => {
 				;(async () => {
 					const path = file.path
 					const scope = props.storageId || 'share'
-					const url = previewUrlFor(path)
+					const url = await previewUrlFor(path)
 					try {
 						if (isNative()) {
 							// Cache read is best-effort: bridge/ACL failures must not block open.
@@ -447,8 +447,14 @@ const FileViewer = (props) => {
 				})()
 				return
 			}
-			setMediaUrl(inlineUrlFor(file.path))
-			if (k === 'video') scheduleHideChrome()
+			setLoading(true)
+			;(async () => {
+				const url = await inlineUrlFor(file.path)
+				if (cancelled) return
+				setMediaUrl(url)
+				setLoading(false)
+				if (k === 'video') scheduleHideChrome()
+			})()
 			return
 		}
 
