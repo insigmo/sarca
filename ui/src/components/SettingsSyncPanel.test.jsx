@@ -563,6 +563,47 @@ describe('SettingsSyncPanel', () => {
 		).toBeTruthy()
 	})
 
+	it('does not rebind the camera folder to a storage merely being viewed while its bound storage still exists', async () => {
+		// Regression test: opening Settings → Sync from *any* storage other than
+		// the one the Camera binding is actually attached to used to be treated
+		// as "the old storage was deleted" and silently rebound (removed +
+		// recreated) the binding onto whatever storage happened to be open —
+		// even though the originally bound storage was never deleted. A user
+		// with more than one storage would have their Camera auto-upload
+		// silently moved just by opening Settings while browsing a different
+		// storage.
+		mockNativeInvoke([
+			{
+				id: '1',
+				mode: 'auto_upload',
+				enabled: true,
+				local_path: '/p',
+				remote_root: 'Camera/Pixel 8',
+				storage_id: 'storage-A',
+			},
+		])
+		nativeInvoke.mockImplementation(
+			(orig => async (cmd, args = {}) => {
+				if (cmd === 'list_storages') {
+					return [
+						{ id: 'storage-A', name: 'A' },
+						{ id: 'storage-B', name: 'B' },
+					]
+				}
+				return orig(cmd, args)
+			})(nativeInvoke.getMockImplementation()),
+		)
+
+		render(() => <SettingsSyncPanel storageId="storage-B" storageName="B" />)
+
+		await waitFor(() => expect(callsFor('list_bindings').length).toBeGreaterThan(0))
+		// Give any (buggy) automatic migration a chance to fire.
+		await new Promise((r) => setTimeout(r, 50))
+
+		expect(callsFor('remove_binding').length).toBe(0)
+		expect(callsFor('add_binding').length).toBe(0)
+	})
+
 	it('shows cached camera ON immediately while list_bindings is slow', async () => {
 		sessionStorage.setItem('sarca.client.cameraAutoUploadEnabled', '1')
 		let release

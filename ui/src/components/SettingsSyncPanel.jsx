@@ -13,6 +13,7 @@ import {
 	pickLocalFolder,
 } from '../common/nativeBridge'
 import {
+	bindingStorageId,
 	cameraBinding,
 	cameraRemoteRoot,
 	displayCameraRemoteRoot,
@@ -251,10 +252,23 @@ const SettingsSyncPanel = (props) => {
 		if (staleStorageMigrateTried()) return
 		const sid = lockedStorageId()
 		if (!sid) return
-		const decision = resolveCameraToggle(liveBindings, true, sid)
-		if (decision.action !== 'rebind') return
+		const existing = cameraBinding(liveBindings)
+		if (!existing) return
+		const boundSid = bindingStorageId(existing)
+		// Only "different storage than bound" is a candidate for migration —
+		// this alone does NOT mean the bound storage is gone: Settings can be
+		// opened from any storage's own settings, or from Files while browsing
+		// a storage other than the one Camera auto-upload targets. Confirm the
+		// bound storage was actually deleted before touching the binding.
+		if (!boundSid || boundSid === sid) return
 		setStaleStorageMigrateTried(true)
 		try {
+			const storages = await nativeInvoke('list_storages')
+			// Can't confirm deletion (bad response) — do nothing rather than
+			// risk rebinding a storage that's actually still there.
+			if (!Array.isArray(storages)) return
+			const stillExists = storages.some((s) => String(s?.id) === boundSid)
+			if (stillExists) return
 			// Re-run enable path: remove stale binding + add for current storage.
 			await setAutoUpload(true)
 		} catch {
