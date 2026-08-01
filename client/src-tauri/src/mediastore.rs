@@ -7,7 +7,9 @@
 use std::path::Path;
 
 use async_trait::async_trait;
-use sarca_sync::{collect_fs_candidates, strip_dcim_prefix, Binding, LocalCandidate, LocalMediaSource};
+use sarca_sync::{
+    collect_fs_candidates, strip_dcim_prefix, Binding, LocalCandidate, LocalMediaSource,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{
     plugin::{Builder as PluginBuilder, TauriPlugin},
@@ -21,8 +23,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             #[cfg(target_os = "android")]
             {
                 use tauri::Manager;
-                let handle = api
-                    .register_android_plugin("app.sarca.client.mediastore", "MediaStorePlugin")?;
+                let handle =
+                    api.register_android_plugin("app.sarca.client.mediastore", "MediaStorePlugin")?;
                 app.manage(AndroidMediaStore { handle });
             }
             #[cfg(not(target_os = "android"))]
@@ -341,8 +343,7 @@ mod tests {
     #[test]
     fn filter_to_dcim_subfolder_keeps_everything_at_dcim_root() {
         let candidates = vec![candidate("Camera/a.jpg"), candidate("Screenshots/b.jpg")];
-        let filtered =
-            filter_to_dcim_subfolder(candidates.clone(), "/storage/emulated/0/DCIM");
+        let filtered = filter_to_dcim_subfolder(candidates.clone(), "/storage/emulated/0/DCIM");
         assert_eq!(filtered.len(), candidates.len());
     }
 
@@ -353,8 +354,7 @@ mod tests {
             candidate("Screenshots/b.jpg"),
             candidate("Camera/nested/c.jpg"),
         ];
-        let filtered =
-            filter_to_dcim_subfolder(candidates, "/storage/emulated/0/DCIM/Camera");
+        let filtered = filter_to_dcim_subfolder(candidates, "/storage/emulated/0/DCIM/Camera");
         let paths: Vec<_> = filtered.iter().map(|c| c.relative_path.as_str()).collect();
         assert_eq!(paths, vec!["Camera/a.jpg", "Camera/nested/c.jpg"]);
     }

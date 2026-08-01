@@ -12,8 +12,10 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             #[cfg(target_os = "android")]
             {
                 use tauri::Manager;
-                let handle = api
-                    .register_android_plugin("app.sarca.client.folderpicker", "FolderPickerPlugin")?;
+                let handle = api.register_android_plugin(
+                    "app.sarca.client.folderpicker",
+                    "FolderPickerPlugin",
+                )?;
                 app.manage(AndroidFolderPicker { handle });
             }
             #[cfg(not(target_os = "android"))]

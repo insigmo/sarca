@@ -108,13 +108,10 @@ impl SarcaApi {
         let clients = build_http_clients(DEFAULT_HTTP_TIMEOUT)?;
         let url = format!("{base}/api/auth/login");
         let resp = match send_preferring_h3(&clients, "POST", &url, |client, version| {
-            client
-                .post(&url)
-                .version(version)
-                .json(&serde_json::json!({
-                    "email": email.as_ref(),
-                    "password": password.as_ref(),
-                }))
+            client.post(&url).version(version).json(&serde_json::json!({
+                "email": email.as_ref(),
+                "password": password.as_ref(),
+            }))
         })
         .await
         {
@@ -125,10 +122,7 @@ impl SarcaApi {
                 }
                 if err.is_connect()
                     || err.is_request()
-                    || err
-                        .to_string()
-                        .to_ascii_lowercase()
-                        .contains("dns")
+                    || err.to_string().to_ascii_lowercase().contains("dns")
                 {
                     bail!(
                         "Cannot reach server — no connection. Check the URL and that the server is running."
@@ -148,7 +142,7 @@ impl SarcaApi {
             }
             bail!("Login failed ({status}): {body}");
         }
-        Ok(resp.json().await.context("invalid login response")?)
+        resp.json().await.context("invalid login response")
     }
 
     /// Exchange a refresh token for a new access/refresh pair.
@@ -175,7 +169,7 @@ impl SarcaApi {
             let status = resp.status();
             bail!("token refresh failed: {status}");
         }
-        Ok(resp.json().await.context("invalid refresh response")?)
+        resp.json().await.context("invalid refresh response")
     }
 
     fn auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -247,7 +241,7 @@ impl SarcaApi {
     ) -> Result<()> {
         let encoded = remote_path
             .split('/')
-            .map(|p| urlencoding_encode(p))
+            .map(urlencoding_encode)
             .collect::<Vec<_>>()
             .join("/");
         let url = format!(
@@ -273,7 +267,7 @@ impl SarcaApi {
     pub async fn delete_remote(&self, storage_id: Uuid, remote_path: &str) -> Result<()> {
         let encoded = remote_path
             .split('/')
-            .map(|p| urlencoding_encode(p))
+            .map(urlencoding_encode)
             .collect::<Vec<_>>()
             .join("/");
         let url = format!(
@@ -304,32 +298,36 @@ impl SarcaApi {
         let url = format!("{}/api/storages/{storage_id}/files/upload", self.base_url);
         let h3_version = preferred_request_version(&url);
 
+        struct UploadParams<'a> {
+            parent_path: &'a str,
+            filename: &'a str,
+            local_path: &'a Path,
+            mtime_ms: Option<i64>,
+            content_hash: Option<&'a str>,
+        }
+
         async fn build_upload(
             api: &SarcaApi,
             client: &Client,
             url: &str,
             version: Version,
-            parent_path: &str,
-            filename: &str,
-            local_path: &Path,
-            mtime_ms: Option<i64>,
-            content_hash: Option<&str>,
+            params: &UploadParams<'_>,
         ) -> Result<reqwest::RequestBuilder> {
-            let file = File::open(local_path).await?;
+            let file = File::open(params.local_path).await?;
             let meta = file.metadata().await?;
             let stream = ReaderStream::new(file);
             let body = reqwest::Body::wrap_stream(stream);
             let part = Part::stream_with_length(body, meta.len())
-                .file_name(filename.to_owned())
+                .file_name(params.filename.to_owned())
                 .mime_str("application/octet-stream")?;
             let mut form = Form::new()
-                .text("path", parent_path.to_owned())
-                .text("filename", filename.to_owned())
+                .text("path", params.parent_path.to_owned())
+                .text("filename", params.filename.to_owned())
                 .part("file", part);
-            if let Some(ms) = mtime_ms {
+            if let Some(ms) = params.mtime_ms {
                 form = form.text("mtime", ms.to_string());
             }
-            if let Some(hash) = content_hash {
+            if let Some(hash) = params.content_hash {
                 form = form.text("content_hash", hash.to_owned());
             }
             Ok(api.auth(client.post(url).version(version).multipart(form)))
@@ -340,20 +338,17 @@ impl SarcaApi {
         } else {
             &self.tcp_client
         };
-        let resp = match build_upload(
-            self,
-            h3_client,
-            &url,
-            h3_version,
+        let params = UploadParams {
             parent_path,
             filename,
             local_path,
             mtime_ms,
             content_hash,
-        )
-        .await?
-        .send()
-        .await
+        };
+        let resp = match build_upload(self, h3_client, &url, h3_version, &params)
+            .await?
+            .send()
+            .await
         {
             Ok(resp) => {
                 log_response_protocol("POST", &url, resp.version());
@@ -366,23 +361,11 @@ impl SarcaApi {
                     error = %err,
                     "HTTP/3 upload failed, falling back to TCP HTTPS"
                 );
-                log::info!(
-                    "HTTP/3 upload failed, falling back to TCP HTTPS url={url} error={err}"
-                );
-                let resp = build_upload(
-                    self,
-                    &self.tcp_client,
-                    &url,
-                    Version::HTTP_11,
-                    parent_path,
-                    filename,
-                    local_path,
-                    mtime_ms,
-                    content_hash,
-                )
-                .await?
-                .send()
-                .await?;
+                log::info!("HTTP/3 upload failed, falling back to TCP HTTPS url={url} error={err}");
+                let resp = build_upload(self, &self.tcp_client, &url, Version::HTTP_11, &params)
+                    .await?
+                    .send()
+                    .await?;
                 log_response_protocol("POST", &url, resp.version());
                 resp
             }
@@ -477,11 +460,6 @@ pub fn build_http_clients(timeout: Duration) -> Result<HttpClients> {
     let tcp = build_tcp_client(timeout)?;
     let h3 = build_h3_prior_client(timeout).unwrap_or_else(|_| tcp.clone());
     Ok(HttpClients { h3, tcp })
-}
-
-/// Build a single HTTP client (H3-capable when the feature is on and a runtime is present).
-pub fn build_http_client(timeout: Duration) -> Result<Client> {
-    Ok(build_http_clients(timeout)?.h3)
 }
 
 /// Request HTTP version for a URL when HTTP/3 preference is enabled.
@@ -625,10 +603,12 @@ mod tests {
 
     #[test]
     fn http3_preference_enabled_in_default_build() {
-        assert!(
-            HTTP3_PREFERRED,
-            "default build should compile HTTP/3 preference (http3-client + reqwest_unstable)"
-        );
+        const {
+            assert!(
+                HTTP3_PREFERRED,
+                "default build should compile HTTP/3 preference (http3-client + reqwest_unstable)"
+            );
+        }
     }
 
     #[test]
@@ -645,7 +625,7 @@ mod tests {
 
     #[test]
     fn build_http_client_succeeds_with_h3_config() {
-        build_http_client(Duration::from_secs(5)).expect("HTTP client builder should succeed");
+        build_http_clients(Duration::from_secs(5)).expect("HTTP client builder should succeed");
     }
 
     #[test]
@@ -716,7 +696,9 @@ mod tests {
             let req = String::from_utf8_lossy(&buf[..n]).into_owned();
             let _ = tx.send(req);
             let _ = sock
-                .write_all(b"HTTP/1.1 409 Conflict\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .write_all(
+                    b"HTTP/1.1 409 Conflict\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
                 .await;
         });
 
