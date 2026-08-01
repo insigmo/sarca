@@ -376,8 +376,12 @@ impl SarcaApi {
             let body = resp.text().await.unwrap_or_default();
             bail!("upload failed: {status} {body}");
         }
-        // Drain NDJSON progress stream.
-        let _ = resp.bytes().await?;
+        // Status is sent before Telegram delivery even starts — the real
+        // outcome is a `phase` line in the streamed NDJSON body.
+        let body = resp.bytes().await?;
+        if let Some(msg) = ndjson_error_message(&body) {
+            bail!("upload failed: {msg}");
+        }
         Ok(())
     }
 
@@ -561,6 +565,34 @@ fn urlencoding_encode(s: &str) -> String {
     out
 }
 
+/// Scan an upload's streamed NDJSON body for a `phase: "error"` line and
+/// return its message. Mirrors `handleUploadNdjsonLine` in `ui/src/api/request.js` —
+/// the HTTP status is sent before Telegram delivery starts, so a `phase: error`
+/// line mid-stream is the only signal the upload actually failed.
+fn ndjson_error_message(body: &[u8]) -> Option<String> {
+    for line in body.split(|&b| b == b'\n') {
+        let Ok(line) = std::str::from_utf8(line) else {
+            continue;
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(ev) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if ev.get("phase").and_then(|p| p.as_str()) == Some("error") {
+            return Some(
+                ev.get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("Upload failed")
+                    .to_owned(),
+            );
+        }
+    }
+    None
+}
+
 /// Normalize a Sarca server base URL.
 /// Accepts `http://…`, `https://…`, or a host/IP without scheme (defaults to `http://`).
 pub fn normalize_server_url(raw: &str) -> Result<String> {
@@ -716,6 +748,58 @@ mod tests {
         assert!(
             req.contains("/files/create_folder"),
             "wrong path in request:\n{req}"
+        );
+    }
+
+    /// Server sends `201` before Telegram delivery even starts, then streams
+    /// NDJSON progress; a mid-stream `phase: error` line means the upload
+    /// never actually landed even though the HTTP status was success.
+    #[tokio::test]
+    async fn upload_file_fails_on_ndjson_error_phase_despite_201_status() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 65536];
+            // Drain the (chunked-encoded, multi-write) multipart request body
+            // before responding: keep reading until the stream goes idle
+            // rather than assuming one short read means "done".
+            loop {
+                match tokio::time::timeout(
+                    std::time::Duration::from_millis(200),
+                    sock.read(&mut buf),
+                )
+                .await
+                {
+                    Ok(Ok(0) | Err(_)) | Err(_) => break,
+                    Ok(Ok(_)) => {}
+                }
+            }
+            let body = concat!(
+                "{\"phase\":\"spooled\",\"uploaded\":0,\"total\":4}\n",
+                "{\"phase\":\"telegram\",\"uploaded\":0,\"total\":4}\n",
+                "{\"message\":\"[Telegram API] 401 Unauthorized\",\"phase\":\"error\"}\n",
+            );
+            let resp = format!(
+                "HTTP/1.1 201 Created\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        tokio::fs::write(&file_path, b"test").await.unwrap();
+
+        let api = SarcaApi::new(format!("http://{addr}"), "test-access-token");
+        let err = api
+            .upload_file(Uuid::nil(), "", "test.txt", &file_path, None, None)
+            .await
+            .expect_err("NDJSON error phase must surface as Err, not silent Ok");
+        assert!(
+            err.to_string().contains("401 Unauthorized"),
+            "unexpected error: {err}"
         );
     }
 }
