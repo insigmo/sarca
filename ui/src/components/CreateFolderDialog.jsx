@@ -6,8 +6,6 @@ import DialogContent from '@suid/material/DialogContent'
 import DialogTitle from '@suid/material/DialogTitle'
 import { createEffect, createSignal } from 'solid-js'
 
-import { alertStore } from './AlertStack'
-
 /**
  * @typedef {Object} CreateFolderDialogProps
  * @property {boolean} isOpened
@@ -24,7 +22,6 @@ const CreateFolderDialog = (props) => {
 	const [errFolderName, setErrFolderName] = createSignal(null)
 	const [folderName, setFolderName] = createSignal('')
 	const [creating, setCreating] = createSignal(false)
-	const { addAlert } = alertStore
 
 	let folderNameElement
 
@@ -71,11 +68,9 @@ const CreateFolderDialog = (props) => {
 			await props.onCreate(foldeName)
 			onClose()
 		} catch (err) {
+			// apiRequest already surfaces an error alert; just keep the
+			// dialog open with the typed name so the user can retry.
 			console.error(err)
-			addAlert(
-				`Could not create folder "${foldeName}": ${err?.message || 'Unknown error'}`,
-				'error',
-			)
 		} finally {
 			setCreating(false)
 		}
