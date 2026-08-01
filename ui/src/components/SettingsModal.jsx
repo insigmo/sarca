@@ -52,6 +52,12 @@ const SettingsModal = () => {
 	const [cacheLimitBytes, setCacheLimitBytes] = createSignal(1_073_741_824)
 	const [sessionInfo, setSessionInfo] = createSignal({ base_url: '', email: '' })
 	const [lockEnabled, setLockEnabled] = createSignal(false)
+	// True only while the user is mid-way through turning app lock on (PIN
+	// typed but not yet saved). Kept separate from lockEnabled — which must
+	// only ever reflect what is actually persisted natively — so a failed
+	// or abandoned save can't leave the switch reading "on" for a lock that
+	// was never actually enabled.
+	const [enablingLock, setEnablingLock] = createSignal(false)
 	const [logsEnabled, setLogsEnabled] = createSignal(false)
 	const [logsBusy, setLogsBusy] = createSignal(false)
 	const [pinDraft, setPinDraft] = createSignal('')
@@ -340,6 +346,7 @@ const SettingsModal = () => {
 					},
 				})
 				setLockEnabled(true)
+				setEnablingLock(false)
 				setPinDraft('')
 				setPinConfirm('')
 				addAlert('App lock enabled', 'success')
@@ -357,6 +364,7 @@ const SettingsModal = () => {
 					},
 				})
 				setLockEnabled(false)
+				setEnablingLock(false)
 				setPinDraft('')
 				setPinConfirm('')
 				addAlert('App lock disabled', 'success')
@@ -934,13 +942,20 @@ const SettingsModal = () => {
 											}
 										>
 											<AppLockToggle
-												checked={lockEnabled()}
+												checked={lockEnabled() || enablingLock()}
 												onChange={(on) => {
 													if (on) {
-														setLockEnabled(true)
+														setEnablingLock(true)
 														setSecurityMsg('Enter a new PIN below, then save')
-													} else {
+													} else if (lockEnabled()) {
 														saveAppLock(false)
+													} else {
+														// Was never actually saved — just close the
+														// "entering PIN" UI, nothing to disable natively.
+														setEnablingLock(false)
+														setSecurityMsg('')
+														setPinDraft('')
+														setPinConfirm('')
 													}
 												}}
 											/>
