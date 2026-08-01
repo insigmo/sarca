@@ -157,8 +157,11 @@ const apiRequest = async (
 			signal,
 		})
 
-		if (response.status === 401 && auth_token && !retried) {
-			const newToken = await tryRefreshToken()
+		if (response.status === 401 && auth_token) {
+			// Only spend a refresh attempt on the first 401 — if the retried
+			// request (already carrying a fresh token) 401s again, the
+			// session is genuinely dead and must not surface as a raw error.
+			const newToken = retried ? null : await tryRefreshToken()
 			if (newToken) {
 				return apiRequest(
 					path,
