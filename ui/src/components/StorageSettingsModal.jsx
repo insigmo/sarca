@@ -34,12 +34,16 @@ const MAX_CHANNELS = 3
  * @param {string} value
  * @returns {string | null}
  */
-const validateChatId = (value) => {
+export const validateChatId = (value) => {
 	if (value === '' || value === null || value === undefined) {
 		return 'Chat id is required'
 	}
 	const n = Number(value)
-	if (!Number.isFinite(n) || n >= 0) {
+	// Number.isInteger (not just isFinite) — a fractional value like "-100.5"
+	// used to pass validation here and then get silently truncated by
+	// parseInt(draftChatId(), 10) in saveChannel, saving the wrong chat id
+	// with no indication to the user that their input was altered.
+	if (!Number.isInteger(n) || n >= 0) {
 		return 'Chat id must be a negative integer'
 	}
 	return null

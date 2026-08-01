@@ -16,14 +16,25 @@ const AppLockGate = (props) => {
 
 	onMount(async () => {
 		if (!isNative()) return
-		try {
-			if (sessionStorage.getItem('sarca_unlocked') === '1') return
-			const prefs = await nativeInvoke('get_client_prefs')
-			if (prefs?.app_lock_enabled && prefs?.app_lock_pin) {
-				setNeeded(true)
+		if (sessionStorage.getItem('sarca_unlocked') === '1') return
+
+		// isNative() can be true from a stale localStorage flag before the
+		// real bridge (window.__sarcaInvoke / __TAURI_INTERNALS__) is
+		// injected — nativeClientStore itself polls up to ~10s for exactly
+		// this reason (see nativeClient.js). Treating the first failure as
+		// "not native, skip the lock" let a slow-injecting WebView (common on
+		// Android) start fully unlocked even with app lock + a PIN set.
+		// Retry on the same schedule instead of bypassing the lock outright.
+		for (let attempt = 0; attempt < 40 && isNative(); attempt++) {
+			try {
+				const prefs = await nativeInvoke('get_client_prefs')
+				if (prefs?.app_lock_enabled && prefs?.app_lock_pin) {
+					setNeeded(true)
+				}
+				return
+			} catch {
+				await new Promise((resolve) => setTimeout(resolve, 250))
 			}
-		} catch {
-			// Bridge unavailable (browser) — skip.
 		}
 	})
 
