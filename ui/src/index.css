@@ -2708,15 +2708,15 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 .files-new-fab {
 	display: inline-flex;
 	position: fixed;
-	right: max(16px, var(--sarca-safe-right));
-	bottom: calc(20px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
+	right: max(24px, var(--sarca-safe-right));
+	bottom: calc(32px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
 	z-index: 1100;
-	width: 56px;
-	height: 56px;
+	width: 48px;
+	height: 48px;
 	margin: 0;
 	padding: 0;
 	border: none;
-	border-radius: 16px;
+	border-radius: 14px;
 	align-items: center;
 	justify-content: center;
 	cursor: pointer;
