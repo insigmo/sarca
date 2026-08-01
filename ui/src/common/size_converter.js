@@ -7,7 +7,9 @@ const units = ['bytes', 'KB', 'MB', 'GB', 'TB']
  */
 export const convertSize = (size) => {
 	let l = 0,
-		n = size
+		n = Number(size)
+
+	if (!Number.isFinite(n) || n < 0) n = 0
 
 	while (n >= 1024 && l < units.length - 1 && ++l) {
 		n = n / 1024

@@ -21,6 +21,7 @@ import { createEffect, createSignal } from 'solid-js'
 const CreateFolderDialog = (props) => {
 	const [errFolderName, setErrFolderName] = createSignal(null)
 	const [folderName, setFolderName] = createSignal('')
+	const [creating, setCreating] = createSignal(false)
 
 	let folderNameElement
 
@@ -55,10 +56,24 @@ const CreateFolderDialog = (props) => {
 		props.onClose()
 	}
 
-	const onCreate = async () => {
+	/**
+	 * @param {SubmitEvent} [event]
+	 */
+	const onCreate = async (event) => {
+		event?.preventDefault?.()
 		const foldeName = folderName()
-		onClose()
-		await props.onCreate(foldeName)
+		if (creating()) return
+		setCreating(true)
+		try {
+			await props.onCreate(foldeName)
+			onClose()
+		} catch (err) {
+			// apiRequest already surfaces an error alert; just keep the
+			// dialog open with the typed name so the user can retry.
+			console.error(err)
+		} finally {
+			setCreating(false)
+		}
 	}
 
 	return (
@@ -85,11 +100,11 @@ const CreateFolderDialog = (props) => {
 						<Button
 							type="submit"
 							color="success"
-							disabled={!folderName().length || errFolderName()}
+							disabled={!folderName().length || errFolderName() || creating()}
 						>
 							Create
 						</Button>
-						<Button onClick={onClose} color="error">
+						<Button onClick={onClose} color="error" disabled={creating()}>
 							Cancel
 						</Button>
 					</DialogActions>
