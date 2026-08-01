@@ -174,7 +174,8 @@ impl TransferQueue {
     }
 
     pub fn snapshot(&self) -> TransferQueueSnapshot {
-        let mut items = Vec::with_capacity(self.active.len() + self.waiting.len() + self.done.len());
+        let mut items =
+            Vec::with_capacity(self.active.len() + self.waiting.len() + self.done.len());
         items.extend(self.active.iter().cloned());
         items.extend(self.waiting.iter().cloned());
         items.extend(self.done.iter().cloned());

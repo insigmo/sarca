@@ -82,7 +82,7 @@ pub fn run() {
                 ))
                 .on_navigation(|webview, url| {
                     // Remote Settings UI → Rust command channel (cancel navigation).
-                    if remote_ipc::handle_navigation(&webview, url) {
+                    if remote_ipc::handle_navigation(webview, url) {
                         return false;
                     }
                     // Custom scheme and legacy query: open in-app Settings → Sync.
@@ -137,12 +137,13 @@ pub fn run() {
     // process + autostart are desktop-oriented.
     #[cfg(desktop)]
     {
-        builder = builder
-            .plugin(tauri_plugin_process::init())
-            .plugin(tauri_plugin_autostart::init(
-                tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-                Some(vec!["--minimized"]),
-            ));
+        builder =
+            builder
+                .plugin(tauri_plugin_process::init())
+                .plugin(tauri_plugin_autostart::init(
+                    tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+                    Some(vec!["--minimized"]),
+                ));
     }
 
     builder
@@ -170,8 +171,7 @@ pub fn run() {
                 let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
                 let sep = PredefinedMenuItem::separator(app)?;
 
-                let tray_show =
-                    MenuItem::with_id(app, "show", "Show Sarca", true, None::<&str>)?;
+                let tray_show = MenuItem::with_id(app, "show", "Show Sarca", true, None::<&str>)?;
                 let tray_sync_now =
                     MenuItem::with_id(app, "sync_now", "Sync now", true, None::<&str>)?;
                 let tray_sync_settings =
@@ -215,14 +215,7 @@ pub fn run() {
                     app,
                     "Sarca",
                     true,
-                    &[
-                        &show,
-                        &sync_settings,
-                        &sync_now,
-                        &sep,
-                        &disconnect,
-                        &quit,
-                    ],
+                    &[&show, &sync_settings, &sync_now, &sep, &disconnect, &quit],
                 )?;
                 let app_menu = Menu::with_items(app, &[&app_submenu])?;
                 let _ = app.set_menu(app_menu);

@@ -73,10 +73,7 @@ pub fn device_model_label<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<Strin
     }
 
     let state = app.try_state::<AndroidStartup<R>>()?;
-    let resp: DeviceModelResponse = state
-        .handle
-        .run_mobile_plugin("deviceModel", ())
-        .ok()?;
+    let resp: DeviceModelResponse = state.handle.run_mobile_plugin("deviceModel", ()).ok()?;
     let raw = resp
         .label
         .filter(|s| !s.trim().is_empty())
@@ -213,7 +210,10 @@ mod tests {
         assert_eq!(read_device_label_cache(&dir), None);
 
         write_device_label_cache(&dir, "  Pixel/8\\Pro  ").unwrap();
-        assert_eq!(read_device_label_cache(&dir).as_deref(), Some("Pixel 8 Pro"));
+        assert_eq!(
+            read_device_label_cache(&dir).as_deref(),
+            Some("Pixel 8 Pro")
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

@@ -343,12 +343,22 @@ mod tests {
         .unwrap();
 
         idx.set_binding_enabled(&id, false).unwrap();
-        let b = idx.list_bindings().unwrap().into_iter().find(|x| x.id == id).unwrap();
+        let b = idx
+            .list_bindings()
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == id)
+            .unwrap();
         assert!(!b.enabled);
         assert!(idx.get_entry(&id, "a.jpg").unwrap().is_some());
 
         idx.set_binding_enabled(&id, true).unwrap();
-        let b = idx.list_bindings().unwrap().into_iter().find(|x| x.id == id).unwrap();
+        let b = idx
+            .list_bindings()
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == id)
+            .unwrap();
         assert!(b.enabled);
         assert!(idx.get_entry(&id, "a.jpg").unwrap().is_some());
     }

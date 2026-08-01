@@ -24,9 +24,7 @@ pub use hash::sha256_file;
 pub use index::LocalIndex;
 pub use media_source::{FsMediaSource, LocalMediaSource};
 pub use scheduler::BindingScheduler;
-pub use transfer::{
-    TransferDirection, TransferItem, TransferQueueSnapshot, TransferStatus,
-};
+pub use transfer::{TransferDirection, TransferItem, TransferQueueSnapshot, TransferStatus};
 pub use types::{
     scan_counters, Binding, BindingMode, ChangelogEvent, ChangelogResponse, SnapshotEntry,
     SnapshotResponse, SyncStatus,
