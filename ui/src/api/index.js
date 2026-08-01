@@ -1135,9 +1135,19 @@ const getSetupStatus = async () => {
  * @returns {Promise<{ bot_id: number, username: string, channels?: Array<{ chat_id: number, title: string }> }>}
  */
 const validateBot = async (token) => {
-	return await apiRequest('/setup/bot/validate', 'post', getAuthToken(), {
-		token,
-	})
+	// Backstop: the backend now times out each Telegram call individually, but
+	// keep a client-side ceiling too so "Validate bot" never stays stuck forever
+	// if something upstream still hangs.
+	return await apiRequest(
+		'/setup/bot/validate',
+		'post',
+		getAuthToken(),
+		{ token },
+		false,
+		false,
+		false,
+		AbortSignal.timeout(60_000),
+	)
 }
 
 /**
@@ -1147,11 +1157,16 @@ const validateBot = async (token) => {
  * @returns {Promise<{ channels: Array<{ chat_id: number, title: string }>, hint?: string }>}
  */
 const pollChannel = async (token, exclude_chat_ids = [], probe_chat_ids = []) => {
-	return await apiRequest('/setup/channel/poll', 'post', getAuthToken(), {
-		token,
-		exclude_chat_ids,
-		probe_chat_ids,
-	})
+	return await apiRequest(
+		'/setup/channel/poll',
+		'post',
+		getAuthToken(),
+		{ token, exclude_chat_ids, probe_chat_ids },
+		false,
+		false,
+		false,
+		AbortSignal.timeout(60_000),
+	)
 }
 
 /**

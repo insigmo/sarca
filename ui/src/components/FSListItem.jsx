@@ -1,4 +1,3 @@
-import CircularProgress from '@suid/material/CircularProgress'
 import IconButton from '@suid/material/IconButton'
 import ListItemIcon from '@suid/material/ListItemIcon'
 import ListItemText from '@suid/material/ListItemText'
@@ -15,6 +14,7 @@ import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
 import FileTypeIcon from './FileTypeIcon'
 import FluentIcon from './FluentIcon'
+import LoadingDots from './LoadingDots'
 import ShareLinkDialog from './ShareLinkDialog'
 import { alertStore } from './AlertStack'
 
@@ -797,11 +797,9 @@ const FSListItem = (props) => {
 			<Show when={isDownloading()}>
 				<Portal mount={document.body}>
 					<div class="download-preparing" role="status" aria-live="polite">
-						<CircularProgress color="secondary" size={42} />
 						<div class="download-preparing__text">
-							{props.fsElement.is_file
-								? 'Preparing download…'
-								: 'Preparing ZIP archive…'}
+							{props.fsElement.is_file ? 'Preparing download' : 'Preparing ZIP archive'}
+							<LoadingDots />
 						</div>
 						<div class="download-preparing__hint">
 							This may take a while for large folders

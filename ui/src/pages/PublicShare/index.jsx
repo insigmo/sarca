@@ -28,6 +28,7 @@ import FileTypeIcon from '../../components/FileTypeIcon'
 import FileViewer from '../../components/FileViewer'
 import { alertStore } from '../../components/AlertStack'
 import AppIcon from '../../components/AppIcon'
+import LoadingDots from '../../components/LoadingDots'
 
 /**
  * Guest-facing public share page at `/s/:token`.
@@ -561,8 +562,10 @@ const PublicShare = () => {
 			<Show when={zipDownloading()}>
 				<Portal mount={document.body}>
 					<div class="download-preparing" role="status" aria-live="polite">
-						<CircularProgress color="secondary" size={42} />
-						<div class="download-preparing__text">Preparing ZIP archive…</div>
+						<div class="download-preparing__text">
+							Preparing ZIP archive
+							<LoadingDots />
+						</div>
 						<div class="download-preparing__hint">
 							This may take a while for large folders
 						</div>

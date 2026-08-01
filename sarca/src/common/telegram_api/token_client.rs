@@ -20,6 +20,7 @@ use crate::{
 pub struct TelegramTokenClient {
     base_url: String,
     token: String,
+    client: reqwest::Client,
 }
 
 impl TelegramTokenClient {
@@ -27,10 +28,20 @@ impl TelegramTokenClient {
     /// a sticky restrictive list silently drops `my_chat_member`.
     const ALLOWED_UPDATES: &'static str = r#"["message","edited_message","channel_post","edited_channel_post","my_chat_member","chat_member"]"#;
 
+    /// Non-long-poll calls (getMe, deleteWebhook, getChat, getChatMember) must never
+    /// hang forever: if the host can't reach Telegram (blocked/unroutable), a plain
+    /// `reqwest::Client::new()` request with no timeout waits indefinitely — the
+    /// setup wizard's "Validate bot" then stays stuck disabled with no error.
+    const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
     pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             token: token.into().trim().to_owned(),
+            client: reqwest::Client::builder()
+                .timeout(Self::DEFAULT_TIMEOUT)
+                .build()
+                .unwrap_or_default(),
         }
     }
 
@@ -50,7 +61,7 @@ impl TelegramTokenClient {
     pub async fn get_me(&self) -> SarcaResult<BotMe> {
         let url = self.build_url("getMe");
         let masked = Self::mask_url(&url);
-        let response = reqwest::Client::new().get(&url).send().await?;
+        let response = self.client.get(&url).send().await?;
         let status = response.status();
         let text = response.text().await.unwrap_or_default();
         if !status.is_success() {
@@ -78,7 +89,8 @@ impl TelegramTokenClient {
     pub async fn delete_webhook(&self) -> SarcaResult<()> {
         let url = self.build_url("deleteWebhook");
         let masked = Self::mask_url(&url);
-        let response = reqwest::Client::new()
+        let response = self
+            .client
             .post(&url)
             .form(&[("drop_pending_updates", "false")])
             .send()
@@ -168,7 +180,7 @@ impl TelegramTokenClient {
                 query.push(("offset", off.to_string()));
             }
             let response =
-                reqwest::Client::new().get(&url).query(&query).timeout(req_timeout).send().await?;
+                self.client.get(&url).query(&query).timeout(req_timeout).send().await?;
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
             if status.as_u16() == 409 && attempt < 2 {
@@ -210,7 +222,8 @@ impl TelegramTokenClient {
     pub async fn get_chat(&self, chat_id: ChatId) -> SarcaResult<ChatInfo> {
         let url = self.build_url("getChat");
         let masked = Self::mask_url(&url);
-        let response = reqwest::Client::new()
+        let response = self
+            .client
             .get(&url)
             .query(&[("chat_id", chat_id.to_string())])
             .send()
@@ -245,7 +258,8 @@ impl TelegramTokenClient {
     ) -> SarcaResult<String> {
         let url = self.build_url("getChatMember");
         let masked = Self::mask_url(&url);
-        let response = reqwest::Client::new()
+        let response = self
+            .client
             .get(&url)
             .query(&[("chat_id", chat_id.to_string()), ("user_id", user_id.to_string())])
             .send()

@@ -285,7 +285,7 @@ a.default-link:hover {
 	height: 55vmax;
 	border-radius: 50%;
 	background: radial-gradient(circle, rgba(124, 92, 191, 0.12), transparent 65%);
-	animation: sarca-drift 14s ease-in-out infinite alternate;
+	animation: sarca-drift 14s ease-in-out both;
 	pointer-events: none;
 }
 
@@ -298,7 +298,7 @@ a.default-link:hover {
 	height: 50vmax;
 	border-radius: 50%;
 	background: radial-gradient(circle, rgba(92, 83, 70, 0.1), transparent 65%);
-	animation: sarca-drift 18s ease-in-out infinite alternate-reverse;
+	animation: sarca-drift 18s ease-in-out reverse both;
 	pointer-events: none;
 }
 
