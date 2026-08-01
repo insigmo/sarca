@@ -34,6 +34,9 @@ import { filesChromeStore } from '../../common/filesChrome'
 import { attachPullToRefresh } from '../../common/pullToRefresh'
 import { clearThumbQueue } from '../../common/thumbQueue'
 import { sortFsElements, sortLabel } from '../../common/sortFs'
+import { formatBulkDeleteMessage } from '../../common/bulkDeleteMessage'
+import { createRafBatcher } from '../../common/rafBatch'
+import { shouldRefreshOnVisibilityEvent } from '../../common/visibilityRefresh'
 import {
 	pushViewerHistory,
 	shouldCloseViewerOnPopstate,
@@ -499,6 +502,13 @@ const Files = () => {
 			}
 		}
 
+		// Hit-testing walks every visible tile's getBoundingClientRect() — too
+		// expensive to run on every raw mousemove in a large (photo) folder.
+		// Batch it to at most once per animation frame.
+		const hitTestBatcher = createRafBatcher((x, y) => {
+			if (marqueeGesture) applyLiveHit(x, y)
+		})
+
 		const onMove = (ev) => {
 			if (!marqueeGesture || !filesCanvasEl) return
 			ev.preventDefault()
@@ -522,13 +532,14 @@ const Files = () => {
 			setMarqueeBox({ left, top, width, height })
 
 			if (marqueeGesture.moved) {
-				applyLiveHit(ev.clientX, ev.clientY)
+				hitTestBatcher.schedule(ev.clientX, ev.clientY)
 			}
 		}
 
 		const onUp = (ev) => {
 			window.removeEventListener('mousemove', onMove)
 			window.removeEventListener('mouseup', onUp)
+			hitTestBatcher.cancel()
 			const gesture = marqueeGesture
 			marqueeGesture = null
 			setMarqueeBox(null)
@@ -1110,7 +1121,8 @@ const Files = () => {
 	const confirmBulkDelete = async () => {
 		setBulkDeleteOpen(false)
 		const items = selectedItems()
-		let ok = 0
+		/** @type {typeof items} */
+		const succeeded = []
 		for (const el of items) {
 			try {
 				if (trashMode()) {
@@ -1118,21 +1130,18 @@ const Files = () => {
 				} else {
 					await API.files.deleteFile(params.id, itemNormalizedPath(el))
 				}
-				ok++
+				succeeded.push(el)
 			} catch {
 				/* alerted */
 			}
 		}
-		if (ok) {
-			const permanent = trashMode()
+		if (succeeded.length) {
 			addAlert(
-				ok === 1
-					? permanent
-						? `Permanently deleted "${items[0].name}"`
-						: `Deleted "${items[0].name}"`
-					: permanent
-						? `Permanently deleted ${ok} items`
-						: `Deleted ${ok} items`,
+				formatBulkDeleteMessage(
+					succeeded.length,
+					succeeded[0].name,
+					trashMode(),
+				),
 				'success',
 			)
 		}
@@ -1335,10 +1344,24 @@ const Files = () => {
 		const unsubIdle = uploadQueueStore.onIdle(() => {
 			scheduleListRefreshAfterUpload()
 		})
+
+		// Native/background auto-upload (Camera sync on mobile clients) runs
+		// entirely on the Rust side and never touches uploadQueueStore — there
+		// is no native→web push channel for it. Refresh on return to the app
+		// so newly auto-uploaded files show up without a manual pull-to-refresh.
+		const onVisibilityOrFocus = () => {
+			if (!shouldRefreshOnVisibilityEvent(document.visibilityState)) return
+			scheduleListRefreshAfterUpload()
+		}
+		document.addEventListener('visibilitychange', onVisibilityOrFocus)
+		window.addEventListener('focus', onVisibilityOrFocus)
+
 		onCleanup(() => {
 			window.clearTimeout(refreshTimer)
 			unsubItemDone()
 			unsubIdle()
+			document.removeEventListener('visibilitychange', onVisibilityOrFocus)
+			window.removeEventListener('focus', onVisibilityOrFocus)
 		})
 	})
 	onCleanup(() => {
