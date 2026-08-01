@@ -1,5 +1,4 @@
 import Button from '@suid/material/Button'
-import CircularProgress from '@suid/material/CircularProgress'
 import Dialog from '@suid/material/Dialog'
 import DialogActions from '@suid/material/DialogActions'
 import DialogContent from '@suid/material/DialogContent'
@@ -12,6 +11,7 @@ import { fileKind } from '../common/fileKind'
 import { convertSize } from '../common/size_converter'
 import FileTypeIcon from './FileTypeIcon'
 import FluentIcon from './FluentIcon'
+import LoadingDots from './LoadingDots'
 
 /**
  * @typedef {Object} FileInfoDialogProps
@@ -219,8 +219,10 @@ const FileInfoDialog = (props) => {
 			<DialogContent class="file-info-dialog__content">
 				<Show when={loading()}>
 					<div class="file-info-dialog__loading">
-						<CircularProgress size={22} color="secondary" />
-						<span>Loading details…</span>
+						<span>
+							Loading details
+							<LoadingDots />
+						</span>
 					</div>
 				</Show>
 				<dl class="file-info-dialog__list">

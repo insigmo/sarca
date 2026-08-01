@@ -20,6 +20,7 @@ import { convertSize } from '../common/size_converter'
 import { nativeInvoke } from '../common/nativeBridge'
 import { nativeClientStore } from '../common/nativeClient'
 import FileTypeIcon from './FileTypeIcon'
+import LoadingDots from './LoadingDots'
 import { alertStore } from './AlertStack'
 
 const formatTime = (sec) => {
@@ -889,8 +890,10 @@ const FileViewer = (props) => {
 					>
 						<Show when={loading()}>
 							<div class="file-viewer__loading">
-								<CircularProgress color="secondary" />
-								<span>Loading…</span>
+								<span>
+									Loading
+									<LoadingDots />
+								</span>
 							</div>
 						</Show>
 
@@ -1141,8 +1144,10 @@ const FileViewer = (props) => {
 
 					<Show when={isDownloading()}>
 						<div class="download-preparing" role="status" aria-live="polite">
-							<CircularProgress color="secondary" size={42} />
-							<div class="download-preparing__text">Preparing download…</div>
+							<div class="download-preparing__text">
+								Preparing download
+								<LoadingDots />
+							</div>
 							<div class="download-preparing__hint">
 								Please wait while the file is prepared
 							</div>

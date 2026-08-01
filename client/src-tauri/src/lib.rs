@@ -43,6 +43,16 @@ pub fn run() {
         );
     }
 
+    // WebKitGTK's DMA-BUF renderer (default since 2.42) drives GPU usage far
+    // higher than the page content warrants on many Linux GPU/driver combos
+    // (NVIDIA proprietary, some Mesa+Wayland setups) — see
+    // https://v2.tauri.app/develop/debug/linux-graphics/. Must be set before
+    // the webview is created. Respect an explicit user override either way.
+    #[cfg(all(desktop, target_os = "linux"))]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
 

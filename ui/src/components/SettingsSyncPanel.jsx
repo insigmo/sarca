@@ -4,6 +4,7 @@ import CircularProgress from '@suid/material/CircularProgress'
 import Typography from '@suid/material/Typography'
 import AccessTimeIcon from '@suid/icons-material/AccessTime'
 import CheckIcon from '@suid/icons-material/Check'
+import LoadingDots from './LoadingDots'
 
 import {
 	formatBytes,
@@ -285,7 +286,14 @@ const SettingsSyncPanel = (props) => {
 
 	const statusIcon = (status) => {
 		if (status === 'active') {
-			return <CircularProgress size={16} color="secondary" />
+			// A transfer list can hold many "active" rows at once; a spinner per
+			// row means that many continuously-repainting animations at all
+			// times, which is costly under WebKitGTK. Animated dot text is not.
+			return (
+				<span style={{ 'font-size': '16px', 'line-height': 1, color: 'var(--sarca-teal)' }}>
+					<LoadingDots />
+				</span>
+			)
 		}
 		if (status === 'waiting') {
 			return <AccessTimeIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
