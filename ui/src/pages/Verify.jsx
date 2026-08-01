@@ -3,12 +3,12 @@ import Box from '@suid/material/Box'
 import Button from '@suid/material/Button'
 import Paper from '@suid/material/Paper'
 import Stack from '@suid/material/Stack'
-import CircularProgress from '@suid/material/CircularProgress'
 import { A, useNavigate, useSearchParams } from '@solidjs/router'
 
 import API from '../api'
 import createLocalStore from '../../libs'
 import { alertStore } from '../components/AlertStack'
+import LoadingDots from '../components/LoadingDots'
 import logoUrl from '../assets/logo.svg'
 
 const Verify = () => {
@@ -62,8 +62,10 @@ const Verify = () => {
 
 					<Show when={phase() === 'loading'}>
 						<Stack alignItems="center" spacing={2} sx={{ py: 2 }}>
-							<CircularProgress color="primary" />
-							<p class="auth-message">Verifying your email…</p>
+							<p class="auth-message">
+								Verifying your email
+								<LoadingDots />
+							</p>
 						</Stack>
 					</Show>
 

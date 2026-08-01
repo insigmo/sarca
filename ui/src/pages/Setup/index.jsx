@@ -11,10 +11,22 @@ import { useNavigate } from '@solidjs/router'
 
 import API from '../../api'
 import { alertStore } from '../../components/AlertStack'
+import LoadingDots from '../../components/LoadingDots'
 
 const POLL_MS = 0
 const POLL_TIMEOUT_MS = 120_000
 const MAX_CHANNELS = 3
+const BOT_TOKEN_RE = /^\d+:[A-Za-z0-9_-]{35}$/
+
+/**
+ * Format-only sanity check — deliberately does not call Telegram. A real
+ * getMe() round trip hangs the wizard indefinitely when the server can't
+ * reach api.telegram.org; the actual bot/channel access gets verified for
+ * real on the "Check channel" step instead.
+ * @param {string} value
+ * @returns {boolean}
+ */
+export const isValidBotToken = (value) => BOT_TOKEN_RE.test(String(value ?? '').trim())
 
 /**
  * Parse a Telegram channel id from raw number or t.me/c/<id> link.
@@ -57,7 +69,6 @@ const SetupWizard = () => {
 	const [polling, setPolling] = createSignal(false)
 	const [pollError, setPollError] = createSignal('')
 	const [finishing, setFinishing] = createSignal(false)
-	const [busy, setBusy] = createSignal(false)
 	const [chatIdInput, setChatIdInput] = createSignal('')
 	const [probeBusy, setProbeBusy] = createSignal(false)
 
@@ -96,45 +107,17 @@ const SetupWizard = () => {
 		if (step() !== 2) stopPolling()
 	})
 
-	const handleValidateBot = async () => {
-		setBusy(true)
-		try {
-			const res = await API.setup.validateBot(token().trim())
-			setBotUsername(res.username)
-			addAlert(`Bot @${res.username} looks good`, 'success')
-			setPollError('')
-			stopPolling()
-			const seeded = Array.isArray(res.channels) ? res.channels : []
-			const next = []
-			for (const hit of seeded) {
-				if (next.length >= MAX_CHANNELS) break
-				if (next.some((c) => c.chat_id === hit.chat_id)) continue
-				if (hit.chat_id == null) continue
-				next.push({
-					chat_id: hit.chat_id,
-					title: hit.title || String(hit.chat_id),
-				})
-			}
-			setChannels(next)
-			if (next.length) {
-				const labels = next.map((c) => c.title).join(', ')
-				addAlert(
-					next.length === 1
-						? `Found channel: ${labels}`
-						: `Found ${next.length} channels: ${labels}`,
-					'success',
-				)
-			}
-			setStep(2)
-			// Keep listening only if we still have free slots (new admin adds / forwards).
-			if (next.length < MAX_CHANNELS) {
-				queueMicrotask(() => startPolling())
-			}
-		} catch {
-			/* apiRequest already alerts */
-		} finally {
-			setBusy(false)
+	const handleValidateBot = () => {
+		const trimmed = token().trim()
+		if (!isValidBotToken(trimmed)) {
+			addAlert('Bot token looks invalid — copy it again from @BotFather', 'error')
+			return
 		}
+		setBotUsername('')
+		setChannels([])
+		setPollError('')
+		stopPolling()
+		setStep(2)
 	}
 
 	const NOT_ADDED_MSG =
@@ -345,7 +328,7 @@ const SetupWizard = () => {
 							component="form"
 							onSubmit={(e) => {
 								e.preventDefault()
-								if (busy() || !token().trim()) return
+								if (!token().trim()) return
 								handleValidateBot()
 							}}
 						>
@@ -380,7 +363,7 @@ const SetupWizard = () => {
 									<Button
 										type="submit"
 										variant="contained"
-										disabled={busy() || !token().trim()}
+										disabled={!token().trim()}
 									>
 										Validate bot
 									</Button>
@@ -408,12 +391,10 @@ const SetupWizard = () => {
 							</Typography>
 
 							<Show when={polling()}>
-								<Stack direction="row" spacing={1} alignItems="center">
-									<CircularProgress size={22} />
-									<Typography variant="body2">
-										Listening for admin channels…
-									</Typography>
-								</Stack>
+								<Typography variant="body2">
+									Listening for admin channels
+									<LoadingDots />
+								</Typography>
 							</Show>
 
 							<Show when={pollError()}>
@@ -503,11 +484,6 @@ const SetupWizard = () => {
 								>
 									<Button variant="outlined" onClick={startPolling}>
 										Detect another channel
-									</Button>
-								</Show>
-								<Show when={!polling() && pollError() && !channels().length}>
-									<Button variant="outlined" onClick={startPolling}>
-										Try again
 									</Button>
 								</Show>
 								<Button
