@@ -1,16 +1,14 @@
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex as StdMutex},
     time::Duration,
 };
 
 use anyhow::Result;
-use sarca_sync::{
-    Binding, BindingMode, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig,
-};
 #[cfg(not(target_os = "android"))]
 use sarca_sync::FsMediaSource;
+use sarca_sync::{Binding, BindingMode, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
 use tokio::sync::{Mutex, RwLock};
@@ -87,12 +85,7 @@ impl WebviewSessionTokens {
         let mut email = None;
         let mut email_verified = None;
         if let Some(raw) = user_raw {
-            let parsed: Option<serde_json::Value> = serde_json::from_str(raw.trim())
-                .ok()
-                .or_else(|| {
-                    // Already an object string without outer quotes — try as-is via Value.
-                    None
-                });
+            let parsed: Option<serde_json::Value> = serde_json::from_str(raw.trim()).ok();
             if let Some(user) = parsed {
                 email = user
                     .get("email")
@@ -693,10 +686,7 @@ impl AppSyncState {
 
     /// Wake the background sync loop so the next tick runs without waiting
     /// out the full poll interval (used on Android/iOS resume).
-    #[cfg_attr(
-        not(any(target_os = "android", target_os = "ios")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(any(target_os = "android", target_os = "ios")), allow(dead_code))]
     pub fn request_sync_wake(&self) {
         let next = self.wake_tx.borrow().wrapping_add(1);
         let _ = self.wake_tx.send(next);
@@ -742,10 +732,7 @@ impl AppSyncState {
                         .await
                     {
                         tracing::warn!(error = %e, "sync tick error");
-                        crate::client_log::write_line(
-                            &data_dir,
-                            &format!("sync tick error: {e}"),
-                        );
+                        crate::client_log::write_line(&data_dir, &format!("sync tick error: {e}"));
                     }
                 }
                 tokio::select! {
@@ -869,7 +856,7 @@ pub fn sync_settings_url(shell: &Url) -> Result<Url, String> {
     base.join("sync.html").map_err(|e| e.to_string())
 }
 
-pub fn load_server_config(data_dir: &PathBuf) -> ServerConfig {
+pub fn load_server_config(data_dir: &Path) -> ServerConfig {
     let path = data_dir.join("server.json");
     fs::read_to_string(path)
         .ok()
@@ -958,9 +945,7 @@ mod tests {
         assert!(is_shell_url(
             &Url::parse("https://tauri.localhost/").unwrap()
         ));
-        assert!(is_shell_url(
-            &Url::parse("http://localhost:1420/").unwrap()
-        ));
+        assert!(is_shell_url(&Url::parse("http://localhost:1420/").unwrap()));
         // Sarca server on localhost must NOT be treated as the client shell.
         assert!(!is_shell_url(
             &Url::parse("http://127.0.0.1:8080/storages").unwrap()
@@ -968,9 +953,7 @@ mod tests {
         assert!(!is_shell_url(
             &Url::parse("https://localhost/sync.html").unwrap()
         ));
-        assert!(!is_shell_url(
-            &Url::parse("https://example.com/").unwrap()
-        ));
+        assert!(!is_shell_url(&Url::parse("https://example.com/").unwrap()));
     }
 
     #[test]
@@ -986,14 +969,10 @@ mod tests {
         // Guard against regressing to "fetch first" which surfaces
         // TypeError: Load failed on WebKitGTK when custom protocol is blocked.
         let js = OPEN_SYNC_JS;
-        let invoke = js
-            .find("function __sarcaInvoke")
-            .expect("__sarcaInvoke");
+        let invoke = js.find("function __sarcaInvoke").expect("__sarcaInvoke");
         let body = &js[invoke..];
         let via_tauri_call = body.find("return viaTauri()").expect("prefer viaTauri");
-        let fetch_call = body
-            .find("__sarcaFetchInvoke")
-            .expect("fetch fallback");
+        let fetch_call = body.find("__sarcaFetchInvoke").expect("fetch fallback");
         let nav_call = body.find("__sarcaNavInvoke").expect("nav fallback");
         assert!(
             via_tauri_call < fetch_call && fetch_call < nav_call,
@@ -1074,8 +1053,14 @@ mod tests {
             access_token: String::new(),
             ..Default::default()
         };
-        merge_session_tokens(&mut cfg, "\"webview-token\"", Some("\"refresh\""), None, None)
-            .unwrap();
+        merge_session_tokens(
+            &mut cfg,
+            "\"webview-token\"",
+            Some("\"refresh\""),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(cfg.access_token, "webview-token");
         assert_eq!(cfg.refresh_token, "refresh");
         assert!(cfg.is_connected());

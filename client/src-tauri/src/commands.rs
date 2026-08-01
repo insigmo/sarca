@@ -270,7 +270,7 @@ pub fn platform_label() -> String {
     }
     #[cfg(target_os = "linux")]
     {
-        return "Linux".into();
+        "Linux".into()
     }
     #[cfg(not(any(
         target_os = "android",
@@ -462,9 +462,9 @@ pub async fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String>
             Ok(Err(e)) => return Err(e.to_string()),
             Err(_) => return Err("Folder picker timed out".into()),
         };
-        return Ok(folder_path_from_picked_path(
+        Ok(folder_path_from_picked_path(
             folder.and_then(|p| p.into_path().ok()),
-        ));
+        ))
     }
 
     // Android: SAF document-tree picker → filesystem path when resolvable.
@@ -516,9 +516,7 @@ async fn ensure_sync_session(
         .map(|t| t.has_access())
         .unwrap_or(false);
     if !session_ready_for_sync(false, webview_has) {
-        return Err(
-            "Not connected — sign in again so Sync can use your session".into(),
-        );
+        return Err("Not connected — sign in again so Sync can use your session".into());
     }
     // Webview had tokens but first apply failed — retry once with explicit apply.
     if let Some(tokens) = webview_tokens {
@@ -579,10 +577,7 @@ async fn create_folder_with_auth_retry(
                 cfg.access_token = tokens.access_token;
                 cfg.refresh_token = tokens.refresh_token;
                 cfg.email_verified = tokens.email_verified;
-                state
-                    .save_server(&cfg)
-                    .await
-                    .map_err(|e| e.to_string())?;
+                state.save_server(&cfg).await.map_err(|e| e.to_string())?;
                 return try_create_folder(&cfg, sid, parent, name)
                     .await
                     .map_err(|e| e.to_string());
@@ -872,7 +867,10 @@ pub async fn export_logs(
     // Ensure the file exists so share/save always has something.
     if !client_log::is_enabled() {
         client_log::set_enabled(true, &data_dir);
-        client_log::write_line(&data_dir, "export_logs: logging was off; enabled for export");
+        client_log::write_line(
+            &data_dir,
+            "export_logs: logging was off; enabled for export",
+        );
         let mut prefs = load_prefs(&state);
         prefs.enable_logs = true;
         let _ = save_prefs(&state, &prefs);
@@ -1046,9 +1044,7 @@ mod tests {
 
     #[test]
     fn ensure_path_refuses_only_when_native_and_webview_empty() {
-        use crate::state::{
-            merge_session_tokens, session_ready_for_sync, WebviewSessionTokens,
-        };
+        use crate::state::{merge_session_tokens, session_ready_for_sync, WebviewSessionTokens};
 
         // Both empty → refuse
         assert!(!session_ready_for_sync(false, false));

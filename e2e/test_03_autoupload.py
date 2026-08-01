@@ -114,6 +114,33 @@ def test_edited_photo_is_re_uploaded_beside_the_original(
     assert sha256(sarca.download_bytes(storage, "Camera/IMG_0001 (1).jpg")) == sha256(edited)
 
 
+def test_retried_upload_with_same_hash_is_not_duplicated(
+    sarca: SarcaClient, storage: str
+) -> None:
+    """A client retry with unchanged bytes must not create a second file.
+
+    sarca-sync can believe an upload failed (e.g. a client-side timeout while
+    the server was still relaying to Telegram) and resend the exact same path
+    and content_hash on the next pass. Unlike a real edit, this is not new
+    content, so the server must recognize it as the same upload instead of
+    parking it beside the original as "IMG_0001 (1).jpg".
+    """
+    data = media.big_photo(800, 600)
+    content_hash = sha256(data)
+
+    assert sarca.create_folder(storage, "Camera").status_code in (200, 201)
+
+    first = sarca.upload(storage, "IMG_0001.jpg", data, path="Camera/", content_hash=content_hash)
+    assert first.ok, first.events
+    sarca.wait_for_file(storage, "Camera/IMG_0001.jpg")
+
+    second = sarca.upload(storage, "IMG_0001.jpg", data, path="Camera/", content_hash=content_hash)
+    assert second.ok, second.events
+
+    names = sorted(e["name"] for e in sarca.tree(storage, "Camera"))
+    assert names == ["IMG_0001.jpg"], names
+
+
 def test_nested_folders_are_mirrored(
     sarca: SarcaClient, storage: str, gallery, tmp_path
 ) -> None:
