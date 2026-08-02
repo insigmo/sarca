@@ -21,7 +21,6 @@ import {
 	resolveCameraToggle,
 } from '../common/autoUploadActions'
 import { sortTransferItems } from '../common/syncTransferQueue'
-import { syncScanHint } from '../common/syncScanHint'
 import { filesChromeStore } from '../common/filesChrome'
 import { alertStore } from './AlertStack'
 import FluentIcon from './FluentIcon'
@@ -105,14 +104,6 @@ const SettingsSyncPanel = (props) => {
 		writeCachedCameraEnabled(enabled)
 		return list
 	}
-	const cameraScanHint = createMemo(() => {
-		const auto = autoBinding()
-		if (!auto) return null
-		const st = statuses().find((s) => s?.binding_id === auto.id) || null
-		return syncScanHint(st, {
-			unfinishedUploads: Number(transferSnap().uploading) || 0,
-		})
-	})
 	const desiredCameraRemoteRoot = () =>
 		displayCameraRemoteRoot(deviceLabel(), platform())
 
@@ -455,16 +446,6 @@ const SettingsSyncPanel = (props) => {
 				when={queueView()}
 				fallback={
 					<>
-			<p class="settings-bot-hint">
-				Photo and video auto-upload goes to remote{' '}
-				<code>
-					{desiredCameraRemoteRoot()
-						? `${desiredCameraRemoteRoot()}/`
-						: 'Camera/…/'}
-				</code>
-				.
-			</p>
-
 			<div class="settings-toggle">
 				<span>Enable photo and video auto-upload</span>
 				<Show
@@ -490,9 +471,6 @@ const SettingsSyncPanel = (props) => {
 				<p class="settings-sync-panel__meta">
 					{autoBinding().local_path} → {autoBinding().remote_root || 'Camera'}
 				</p>
-				<Show when={cameraScanHint()}>
-					<p class="settings-bot-hint">{cameraScanHint()}</p>
-				</Show>
 				<div class="settings-sync-panel__row">
 					<Button
 						variant="outlined"
