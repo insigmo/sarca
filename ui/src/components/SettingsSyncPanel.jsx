@@ -1,6 +1,5 @@
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
 import Button from '@suid/material/Button'
-import CircularProgress from '@suid/material/CircularProgress'
 import Typography from '@suid/material/Typography'
 import AccessTimeIcon from '@suid/icons-material/AccessTime'
 import CheckIcon from '@suid/icons-material/Check'
@@ -21,6 +20,7 @@ import {
 	resolveCameraToggle,
 } from '../common/autoUploadActions'
 import { sortTransferItems } from '../common/syncTransferQueue'
+import { syncScanHint } from '../common/syncScanHint'
 import { filesChromeStore } from '../common/filesChrome'
 import { alertStore } from './AlertStack'
 import FluentIcon from './FluentIcon'
@@ -28,22 +28,52 @@ import SettingsSwitch from './SettingsSwitch'
 
 const CAMERA_ENABLED_CACHE_KEY = 'sarca.client.cameraAutoUploadEnabled'
 
-function readCachedCameraEnabled() {
+/**
+ * localStorage first so the toggle keeps its value across app restarts, then
+ * sessionStorage for webviews that block persistent storage. Reading both on
+ * load also migrates clients that only ever wrote the session copy.
+ * @returns {Array<Storage>}
+ */
+function cacheStores() {
+	const stores = []
 	try {
-		const v = sessionStorage.getItem(CAMERA_ENABLED_CACHE_KEY)
-		if (v === '1') return true
-		if (v === '0') return false
+		if (typeof localStorage !== 'undefined') stores.push(localStorage)
 	} catch {
-		// private mode / blocked storage
+		// blocked storage
+	}
+	try {
+		if (typeof sessionStorage !== 'undefined') stores.push(sessionStorage)
+	} catch {
+		// blocked storage
+	}
+	return stores
+}
+
+/**
+ * Last known auto-upload state, or `null` when this client has never been told.
+ * `null` means OFF for rendering purposes — auto-upload is opt-in everywhere.
+ * @returns {boolean | null}
+ */
+function readCachedCameraEnabled() {
+	for (const store of cacheStores()) {
+		try {
+			const v = store.getItem(CAMERA_ENABLED_CACHE_KEY)
+			if (v === '1') return true
+			if (v === '0') return false
+		} catch {
+			// private mode / blocked storage
+		}
 	}
 	return null
 }
 
 function writeCachedCameraEnabled(enabled) {
-	try {
-		sessionStorage.setItem(CAMERA_ENABLED_CACHE_KEY, enabled ? '1' : '0')
-	} catch {
-		// ignore
+	for (const store of cacheStores()) {
+		try {
+			store.setItem(CAMERA_ENABLED_CACHE_KEY, enabled ? '1' : '0')
+		} catch {
+			// ignore
+		}
 	}
 }
 
@@ -86,8 +116,10 @@ const SettingsSyncPanel = (props) => {
 
 	// Camera row can exist while soft-disabled — never removed on toggle-off.
 	const autoBinding = () => cameraBinding(bindings())
-	// Until the first successful list_bindings, prefer session cache so remounting
-	// Sync does not flash the empty-bindings default (OFF) while IPC is in flight.
+	// Until the first successful list_bindings, show the cached value. A client
+	// that has never enabled auto-upload has no cache entry and renders OFF —
+	// the toggle is opt-in, so "unknown" and "off" are the same picture and the
+	// panel never has to block on IPC to draw itself.
 	const cameraOn = () => {
 		if (!bindingsLoaded()) {
 			return cachedCameraOn() === true
@@ -274,6 +306,15 @@ const SettingsSyncPanel = (props) => {
 		})
 	})
 
+	// "Nothing is happening" is ambiguous: idle because everything is uploaded,
+	// or idle because the scan found nothing? Say which.
+	const scanHint = createMemo(() => {
+		const binding = autoBinding()
+		if (!binding) return null
+		const status = statuses().find((s) => s.binding_id === binding.id)
+		return syncScanHint(status, { unfinishedUploads: transferSnap().uploading })
+	})
+
 	const queueItems = createMemo(() => {
 		const dir = queueView()
 		if (!dir) return []
@@ -448,23 +489,20 @@ const SettingsSyncPanel = (props) => {
 					<>
 			<div class="settings-toggle">
 				<span>Enable photo and video auto-upload</span>
-				<Show
-					when={bindingsLoaded() || cachedCameraOn() !== null}
-					fallback={
-						<CircularProgress
-							size={22}
-							color="secondary"
-							aria-label="Loading auto-upload state"
-						/>
-					}
-				>
-					<SettingsSwitch
-						id="settings-camera-switch"
-						checked={cameraOn()}
-						disabled={busy() || !bindingsLoaded()}
-						onChange={(checked) => setAutoUpload(checked)}
-					/>
-				</Show>
+				{/*
+				  * Always interactive: never gate on bindingsLoaded(). The panel
+				  * used to render a spinner (cold start, empty cache) and then a
+				  * disabled switch until list_bindings returned, which reads as a
+				  * hang whenever the sync engine is busy. setAutoUpload() re-reads
+				  * live bindings itself, so acting before the background refresh
+				  * lands is safe.
+				  */}
+				<SettingsSwitch
+					id="settings-camera-switch"
+					checked={cameraOn()}
+					disabled={busy()}
+					onChange={(checked) => setAutoUpload(checked)}
+				/>
 			</div>
 
 			<Show when={autoBinding()}>
@@ -566,6 +604,10 @@ const SettingsSyncPanel = (props) => {
 					Upload now
 				</Button>
 			</div>
+
+			<Show when={scanHint()}>
+				<p class="settings-account__hint">{scanHint()}</p>
+			</Show>
 
 			<Show when={statuses().some((s) => s.last_error)}>
 				<p class="settings-bot-hint" role="alert">

@@ -9,6 +9,7 @@ the same way.
 
 ```sh
 task e2e                       # build + run everything (recommended)
+task e2e:gui                   # only the GUI suite, driving the real client
 cd e2e && ../.venv/bin/python -m pytest -q          # if the venv already exists
 pytest -q test_02_upload_download.py -k hash        # one file / one test
 pytest -q -m "not slow"                             # skip the slow scenarios
@@ -42,7 +43,9 @@ fake-Telegram documents) after the run, `SARCA_E2E_RUST_LOG` overrides `RUST_LOG
 | `test_07_open_speed.py` | "Opens in under a second" with injected Telegram latency: cold/warm photo preview, thumbnail grid, first video Range, time-to-first-byte for documents, and that open time does not scale with photo size. |
 | `test_08_preview_and_original.py` | The stored-JPEG-preview feature: preview exists and is downscaled, download still returns the untouched original, cold reads cost exactly one Telegram document, disk cache, restart persistence, legacy fallback, PNG→JPEG previews, thumb vs preview, purge of preview documents. |
 | `test_api.py`, `test_features.py`, `test_ui.py` | Pre-existing suites (auth, FS ops, trash, shares, favorites, UI serving), now running against this harness. |
-| `test_upload_smoke.py` | Opt-in real-Telegram smoke (`-m smoke`), excluded by default. |
+| `test_09_upload_resilience.py` | A retried upload keeps its original name (no `(1)` suffix), parallel file uploads actually overlap, and concurrency backs off on flood control. |
+| `test_10_client_ui.py` | The desktop client itself, driven through `tauri-pilot`: sync settings paint the auto-upload toggle with no spinner, it defaults to off, the cached state lives in localStorage across a relaunch, and folder rows keep their name tight to the icon. |
+| `test_upload_smoke.py` | Image + video upload smoke. Runs on the mock by default (so it is in CI); point it at real Telegram or a deployed server for a live check. |
 
 ## Harness
 
@@ -56,7 +59,17 @@ helpers/api.py             API client (upload drains the NDJSON progress stream)
 helpers/sync_client.py     runs the sarca-sync headless driver
 helpers/h3.py              HTTP/3 client (aioquic)
 helpers/media.py           deterministic photos / PNGs / blobs / video fixture
+helpers/pilot.py           builds and drives the desktop client (tauri-pilot):
+                           private DBus session, isolated HOME/XDG dirs, a static
+                           server standing in for `pnpm dev`, connect/login flows
 ```
 
 Markers: `slow` (multi-second), `mock_only` (needs the fake Bot API), `smoke`
-(real Telegram, deselected by default).
+(media upload smoke), `gui` (drives the desktop client). Nothing is deselected by
+default; `gui` skips itself without a display or without `tauri-pilot` on PATH.
+
+### GUI tests
+
+`task e2e:gui` installs `tauri-pilot-cli` if missing, builds `client/dist` plus a
+debug client with `--features pilot` (the plugin is compiled in only there), and
+runs under Xvfb when there is no display.
