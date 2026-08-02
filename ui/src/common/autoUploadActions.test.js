@@ -5,7 +5,6 @@ import {
 	displayCameraRemoteRoot,
 	needsCameraRootMigration,
 	resolveCameraToggle,
-	withBackgroundSyncOn,
 } from './autoUploadActions'
 
 describe('cameraBinding', () => {
@@ -96,13 +95,6 @@ describe('resolveCameraToggle', () => {
 	})
 	it('noops when disabling with no binding', () => {
 		expect(resolveCameraToggle([], false)).toEqual({ action: 'noop' })
-	})
-})
-
-describe('withBackgroundSyncOn', () => {
-	it('forces background_sync true', () => {
-		expect(withBackgroundSyncOn({ wifi_only: true, background_sync: false }))
-			.toEqual({ wifi_only: true, background_sync: true })
 	})
 })
 

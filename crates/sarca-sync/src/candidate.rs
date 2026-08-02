@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use tracing::warn;
 use walkdir::WalkDir;
 
@@ -64,7 +64,11 @@ pub fn is_media_file(path: &Path) -> bool {
 /// since that combination usually means the whole root is unreadable.
 pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalCandidate>> {
     if !root.exists() {
-        bail!("local folder missing or unreadable: {}", root.display());
+        // Folder deleted locally (by hand or accident) — recreate it rather
+        // than erroring forever, so the next push_local pass can redownload
+        // its indexed content instead of leaving the binding stuck.
+        std::fs::create_dir_all(root)
+            .with_context(|| format!("recreate local folder: {}", root.display()))?;
     }
     let mut out = Vec::new();
     let mut walk_errors = 0usize;
@@ -167,7 +171,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_fs_candidates_lists_media_and_fails_on_missing_root() {
+    fn collect_fs_candidates_lists_media_and_recreates_missing_root() {
         let dir = tempfile::tempdir().unwrap();
         let pics = dir.path().join("pics");
         std::fs::create_dir_all(&pics).unwrap();
@@ -179,7 +183,9 @@ mod tests {
         assert!(!got[0].ephemeral);
 
         let missing = dir.path().join("nope");
-        assert!(collect_fs_candidates(&missing, true).is_err());
+        let got = collect_fs_candidates(&missing, true).unwrap();
+        assert!(got.is_empty());
+        assert!(missing.is_dir());
     }
 
     #[test]
