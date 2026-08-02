@@ -858,11 +858,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # GITHUB_TOKEN cannot trigger other workflows on release:published — call Docker directly.
-  # Only needs the resolved tag (needs.version.outputs.tag), not release's published
-  # assets, so it runs parallel to build-client/build-client-android/release instead
-  # of waiting behind them.
+  # The image build curls sarca_linux_${arch}.tar.gz from the release, so it has to wait
+  # for `release` to publish it; starting earlier just races the upload and 404s.
   docker:
-    needs: [version, package]
+    needs: [version, package, release]
     uses: ./.github/workflows/docker-image.yml
     with:
       version: ${{ needs.version.outputs.tag }}
