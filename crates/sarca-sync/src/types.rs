@@ -47,6 +47,15 @@ pub struct SyncStatus {
     /// `scanned - pending` when the tick completed without a discovery error.
     #[serde(default)]
     pub already_synced: usize,
+    /// Files attempted this tick whose upload failed. They did not abort the
+    /// batch — each was recorded with a retry deadline instead.
+    #[serde(default)]
+    pub failed: usize,
+    /// Files currently held back by the retry backoff, including ones not
+    /// attempted this tick. Non-zero means real work is waiting on a deadline,
+    /// which is why an idle-looking panel is not necessarily "all uploaded".
+    #[serde(default)]
+    pub deferred: usize,
 }
 
 /// Derive scan honesty counters from discovery + filter sizes.
