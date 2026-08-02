@@ -297,6 +297,23 @@ class ClientApp:
     def url(self) -> str:
         return self.run("url")
 
+    def fill(self, selector: str, value: str, timeout_ms: int = 15000) -> None:
+        """Wait for a field, then type into it.
+
+        A plain `fill` races the framework: the node can be replaced between
+        two fills while the login form finishes hydrating (seen on CI runners),
+        and the CLI then reports "No element". Waiting first, and retrying once
+        on that specific error, makes the flow deterministic.
+        """
+        self.wait_for(selector, timeout_ms=timeout_ms)
+        try:
+            self.run("fill", selector, value)
+        except PilotError as first:
+            if "No element" not in str(first):
+                raise
+            self.wait_for(selector, timeout_ms=timeout_ms)
+            self.run("fill", selector, value)
+
     # ------------------------------------------------------------- app flows
 
     def wait_for_url(self, *fragments: str, timeout_s: float = 30.0) -> str:
@@ -319,18 +336,34 @@ class ClientApp:
     def connect(self, base_url: str) -> None:
         """Fill the local connect shim and land on the server UI."""
         self.wait_for("body[data-shim-ready]")
-        self.run("fill", "#serverUrl", base_url)
+        self.fill("#serverUrl", base_url)
         self.run("click", "#submit")
         # The Rust side navigates the webview once the server answers.
         self.wait_for_url(base_url.split("://", 1)[-1])
         self.wait_for("input[name=email]", timeout_ms=30000)
 
     def login(self, email: str, password: str) -> None:
-        self.run("fill", "input[name=email]", email)
-        self.run("fill", "input[name=password]", password)
+        self.fill("input[name=email]", email, timeout_ms=30000)
+        self.fill("input[name=password]", password, timeout_ms=30000)
         # requestSubmit() instead of clicking: the button lives inside a SUID
         # wrapper, and the form's own submit handler is what does the work.
-        self.eval_js("document.querySelector('form').requestSubmit(); 'ok'")
+        # Both fields are re-read here, so a value lost to a re-render is
+        # caught before the request goes out.
+        submitted = self.eval_js(
+            """
+            (() => {
+              const form = document.querySelector('form');
+              const email = document.querySelector('input[name=email]');
+              const password = document.querySelector('input[name=password]');
+              if (!form || !email || !password) return 'missing';
+              if (!email.value || !password.value) return 'empty';
+              form.requestSubmit();
+              return 'ok';
+            })()
+            """
+        )
+        if submitted != "ok":
+            raise PilotError(f"login form was not ready to submit: {submitted!r}")
 
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
