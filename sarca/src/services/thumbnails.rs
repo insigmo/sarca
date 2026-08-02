@@ -19,7 +19,11 @@ enum ThumbKind {
 
 /// Try to build a JPEG thumbnail for the given file.
 /// Returns `Ok(None)` when the type is unsupported or helpers are missing.
-pub async fn generate(file_path: &Path, logical_path: &str) -> Result<Option<Vec<u8>>, String> {
+pub async fn generate(
+    file_path: &Path,
+    logical_path: &str,
+    chunk_size_bytes: u64,
+) -> Result<Option<Vec<u8>>, String> {
     let Some(kind) = detect_kind(logical_path) else {
         return Ok(None);
     };
@@ -27,7 +31,7 @@ pub async fn generate(file_path: &Path, logical_path: &str) -> Result<Option<Vec
     let raw = match kind {
         ThumbKind::Image => generate_image(file_path).await?,
         ThumbKind::Video => {
-            match generate_video(file_path).await {
+            match generate_video(file_path, chunk_size_bytes).await {
                 Ok(bytes) => bytes,
                 Err(e) => {
                     tracing::warn!("video thumbnail skipped: {e}");
@@ -136,18 +140,68 @@ async fn generate_image(file_path: &Path) -> Result<Vec<u8>, String> {
     tokio::fs::read(file_path).await.map_err(|e| format!("read image: {e}"))
 }
 
-async fn generate_video(file_path: &Path) -> Result<Vec<u8>, String> {
+async fn generate_video(file_path: &Path, chunk_size_bytes: u64) -> Result<Vec<u8>, String> {
     if which("ffmpeg").await.is_none() {
         return Err("ffmpeg not found in PATH".into());
     }
 
     let tmp = tempfile_dir().await?;
-    let pattern = tmp.join("kf_%02d.jpg");
+    let names = keyframe_candidate_names(KEYFRAME_TARGET);
 
+    let prefix_path = tmp.join("prefix.bin");
+    if truncate_prefix(file_path, &prefix_path, chunk_size_bytes).await.is_ok()
+        && extract_keyframes(&prefix_path, &tmp, KEYFRAME_TARGET).await.is_ok()
+    {
+        if let Some(frame) = pick_existing_keyframe(&tmp, &names) {
+            let bytes = tokio::fs::read(&frame).await.map_err(|e| format!("read keyframe: {e}"));
+            let _ = tokio::fs::remove_dir_all(&tmp).await;
+            return bytes;
+        }
+    }
+
+    // The truncated prefix didn't decode (e.g. an mp4 without `+faststart` has
+    // its `moov` index at the end of the file) or yielded no keyframes — retry
+    // against the full original before falling back to a single near-start frame.
+    if extract_keyframes(file_path, &tmp, KEYFRAME_TARGET).await.is_ok() {
+        if let Some(frame) = pick_existing_keyframe(&tmp, &names) {
+            let bytes = tokio::fs::read(&frame).await.map_err(|e| format!("read keyframe: {e}"));
+            let _ = tokio::fs::remove_dir_all(&tmp).await;
+            return bytes;
+        }
+    }
+
+    // Fallback: grab a single frame near 10% of duration / 1s.
+    let fallback = tmp.join("fallback.jpg");
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-hide_banner", "-loglevel", "error", "-ss", "1", "-i"])
+        .arg(file_path)
+        .args(["-frames:v", "1", "-q:v", "3"])
+        .arg(&fallback)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map_err(|e| format!("spawn ffmpeg fallback: {e}"))?;
+
+    if !status.success() || !fallback.exists() {
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        return Err("ffmpeg could not extract a frame".into());
+    }
+
+    let bytes = tokio::fs::read(&fallback).await.map_err(|e| format!("read fallback frame: {e}"));
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+    bytes
+}
+
+/// Extract up to `count` I-frames from `input` into `out_dir/kf_%02d.jpg`.
+/// `Err` means ffmpeg exited non-zero (e.g. no usable index in `input`).
+async fn extract_keyframes(input: &Path, out_dir: &Path, count: u32) -> Result<(), String> {
+    let pattern = out_dir.join("kf_%02d.jpg");
     let status = Command::new("ffmpeg")
         .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
-        .arg(file_path)
-        .args(["-vf", "select=eq(pict_type\\,I)", "-vsync", "vfr", "-frames:v", "3"])
+        .arg(input)
+        .args(["-vf", "select=eq(pict_type\\,I)", "-vsync", "vfr", "-frames:v"])
+        .arg(count.to_string())
         .arg(&pattern)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -155,50 +209,7 @@ async fn generate_video(file_path: &Path) -> Result<Vec<u8>, String> {
         .await
         .map_err(|e| format!("spawn ffmpeg: {e}"))?;
 
-    if !status.success() {
-        // Fallback: grab a single frame near 10% of duration / 1s.
-        let fallback = tmp.join("fallback.jpg");
-        let status = Command::new("ffmpeg")
-            .args(["-y", "-hide_banner", "-loglevel", "error", "-ss", "1", "-i"])
-            .arg(file_path)
-            .args(["-frames:v", "1", "-q:v", "3"])
-            .arg(&fallback)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map_err(|e| format!("spawn ffmpeg fallback: {e}"))?;
-
-        if !status.success() || !fallback.exists() {
-            let _ = tokio::fs::remove_dir_all(&tmp).await;
-            return Err("ffmpeg could not extract a frame".into());
-        }
-
-        let bytes =
-            tokio::fs::read(&fallback).await.map_err(|e| format!("read fallback frame: {e}"))?;
-        let _ = tokio::fs::remove_dir_all(&tmp).await;
-        return Ok(bytes);
-    }
-
-    let candidates = ["kf_03.jpg", "kf_02.jpg", "kf_01.jpg"];
-    let mut chosen: Option<PathBuf> = None;
-    for name in candidates {
-        let p = tmp.join(name);
-        if p.exists() {
-            chosen = Some(p);
-            break;
-        }
-    }
-
-    let Some(frame) = chosen else {
-        let _ = tokio::fs::remove_dir_all(&tmp).await;
-        return Err("no keyframes extracted".into());
-    };
-
-    // Prefer the 3rd keyframe when present (kf_03); otherwise last available.
-    let bytes = tokio::fs::read(&frame).await.map_err(|e| format!("read keyframe: {e}"))?;
-    let _ = tokio::fs::remove_dir_all(&tmp).await;
-    Ok(bytes)
+    if status.success() { Ok(()) } else { Err("ffmpeg keyframe extraction failed".into()) }
 }
 
 async fn generate_pdf(file_path: &Path) -> Result<Vec<u8>, String> {
@@ -359,5 +370,53 @@ mod tests {
         truncate_prefix(&src, &dst, 1_000_000).await.unwrap();
 
         assert_eq!(std::fs::read(&dst).unwrap(), b"short");
+    }
+
+    async fn make_test_video(
+        dir: &std::path::Path,
+        name: &str,
+        extra_args: &[&str],
+    ) -> std::path::PathBuf {
+        let out = dir.join(name);
+        let status = tokio::process::Command::new("ffmpeg")
+            .args(["-y", "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i"])
+            .arg("testsrc=size=320x240:rate=10:duration=2")
+            .args(["-pix_fmt", "yuv420p", "-c:v", "libx264"])
+            .args(extra_args)
+            .arg(&out)
+            .status()
+            .await
+            .expect("spawn ffmpeg");
+        assert!(status.success(), "test fixture encode failed");
+        out
+    }
+
+    #[tokio::test]
+    async fn generate_video_full_file_still_works() {
+        if which("ffmpeg").await.is_none() {
+            eprintln!("skip: ffmpeg not on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let video = make_test_video(dir.path(), "full.mp4", &["-movflags", "+faststart"]).await;
+        let size = std::fs::metadata(&video).unwrap().len();
+
+        let jpeg = generate_video(&video, size).await.unwrap();
+        assert!(jpeg.starts_with(&[0xFF, 0xD8, 0xFF]));
+    }
+
+    #[tokio::test]
+    async fn generate_video_falls_back_to_full_file_when_prefix_lacks_moov() {
+        if which("ffmpeg").await.is_none() {
+            eprintln!("skip: ffmpeg not on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        // No +faststart: the mp4 muxer puts `moov` at the end of the file, so a
+        // small byte prefix has no index and ffmpeg cannot decode it directly.
+        let video = make_test_video(dir.path(), "no_faststart.mp4", &[]).await;
+
+        let jpeg = generate_video(&video, 4096).await.unwrap();
+        assert!(jpeg.starts_with(&[0xFF, 0xD8, 0xFF]));
     }
 }
