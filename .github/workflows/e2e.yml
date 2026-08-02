@@ -119,19 +119,27 @@ jobs:
       SQLITE_PATH: ${{ github.workspace }}/runtime/sarca.sqlite
       SARCA_PLAIN_HTTP: "1"
       SARCA_BASE_URL: http://127.0.0.1:8000
+      # e2e/helpers/server.py's build_binary() reruns `cargo build --release` unless
+      # this is set — this job has no Rust toolchain/cache, and the binary is already
+      # built by the build-server job (downloaded below to target/release/sarca).
+      SARCA_SKIP_BUILD: "1"
 
     steps:
       - uses: actions/checkout@v5
 
+      # e2e/helpers/server.py's ui_dist() looks for <repo_root>/ui/dist/index.html
+      # (used to symlink UI for managed server instances spawned directly by tests,
+      # e.g. test_04_http3.py / test_06_settings.py) — download straight into place.
       - uses: actions/download-artifact@v7
         with:
           name: ui-dist
-          path: ui-dist
+          path: ui/dist
 
+      # build_binary() defaults to <CARGO_TARGET_DIR or repo_root/target>/release/sarca.
       - uses: actions/download-artifact@v7
         with:
           name: server-bin
-          path: server-bin
+          path: target/release
 
       - uses: actions/setup-python@v6
         with:
@@ -142,8 +150,9 @@ jobs:
       - name: Prepare runtime dir
         run: |
           mkdir -p "$WORK_DIR" runtime/ui
-          cp -a ui-dist/. runtime/ui/
-          cp server-bin/sarca runtime/sarca
+          cp -a ui/dist/. runtime/ui/
+          chmod +x target/release/sarca
+          cp target/release/sarca runtime/sarca
           chmod +x runtime/sarca
           # Binary self-loads sarca.conf (production-like).
           {
