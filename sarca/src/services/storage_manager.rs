@@ -36,6 +36,26 @@ pub struct StorageManagerService<'d> {
     work_dir: &'d str,
 }
 
+enum PreviewSource {
+    /// A video keyframe already extracted while building the thumb — use
+    /// it directly, no second ffmpeg run.
+    Ready(Vec<u8>),
+    /// An image with no precomputed bytes — generate a preview from the
+    /// original on disk.
+    NeedsGeneration,
+    /// Not an image and nothing precomputed (e.g. video keyframe
+    /// extraction failed) — no preview for this file.
+    Skip,
+}
+
+fn resolve_preview_bytes(precomputed: Option<Vec<u8>>, is_image: bool) -> PreviewSource {
+    match (precomputed, is_image) {
+        (Some(bytes), _) => PreviewSource::Ready(bytes),
+        (None, true) => PreviewSource::NeedsGeneration,
+        (None, false) => PreviewSource::Skip,
+    }
+}
+
 impl<'d> StorageManagerService<'d> {
     pub fn new(
         db: &'d SqlitePool,
@@ -173,14 +193,24 @@ impl<'d> StorageManagerService<'d> {
         let result = self.replicas_repo.insert_batch(replicas).await;
 
         if result.is_ok() {
-            if let Err(e) = self
+            let video_preview = match self
                 .maybe_upload_thumb(data.file_id, storage.id, primary.chat_id, &data.file_path)
                 .await
             {
-                tracing::warn!("thumbnail upload failed for {}: {e}", data.file_id);
-            }
+                Ok(preview) => preview,
+                Err(e) => {
+                    tracing::warn!("thumbnail upload failed for {}: {e}", data.file_id);
+                    None
+                },
+            };
             if let Err(e) = self
-                .maybe_upload_preview(data.file_id, storage.id, primary.chat_id, &data.file_path)
+                .maybe_upload_preview(
+                    data.file_id,
+                    storage.id,
+                    primary.chat_id,
+                    &data.file_path,
+                    video_preview,
+                )
                 .await
             {
                 tracing::warn!("preview upload failed for {}: {e}", data.file_id);
@@ -202,7 +232,7 @@ impl<'d> StorageManagerService<'d> {
         storage_id: Uuid,
         chat_id: ChatId,
         file_path: &std::path::Path,
-    ) -> SarcaResult<()> {
+    ) -> SarcaResult<Option<Vec<u8>>> {
         let file = self.files_repo.get_by_id(file_id).await?;
 
         let result = match thumbnails::generate(
@@ -213,17 +243,16 @@ impl<'d> StorageManagerService<'d> {
         .await
         {
             Ok(Some(result)) => result,
-            Ok(None) => return Ok(()),
+            Ok(None) => return Ok(None),
             Err(e) => {
                 tracing::warn!("thumbnail generation failed: {e}");
-                return Ok(());
+                return Ok(None);
             },
         };
-        let jpeg = result.thumb;
 
         let scheduler = StorageWorkersScheduler::new(self.db, self.rate_limit);
         let outcome = TelegramBotApi::new(self.telegram_baseurl, scheduler)
-            .upload(&jpeg, chat_id, storage_id)
+            .upload(&result.thumb, chat_id, storage_id)
             .await?;
 
         self.files_repo.set_thumb(file_id, &outcome.file_id, outcome.message_id).await?;
@@ -235,7 +264,7 @@ impl<'d> StorageManagerService<'d> {
             outcome.message_id
         );
 
-        Ok(())
+        Ok(result.preview)
     }
 
     /// Build the screen-sized JPEG preview for an image while the original is still on
@@ -249,17 +278,24 @@ impl<'d> StorageManagerService<'d> {
         storage_id: Uuid,
         chat_id: ChatId,
         file_path: &std::path::Path,
+        precomputed_video_preview: Option<Vec<u8>>,
     ) -> SarcaResult<()> {
         let file = self.files_repo.get_by_id(file_id).await?;
-        if !thumbnails::is_preview_image(&file.path) {
-            return Ok(());
-        }
 
-        let jpeg = match thumbnails::generate_preview_from_path(file_path).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::warn!("preview generation failed for {}: {e}", file.path);
-                return Ok(());
+        let jpeg = match resolve_preview_bytes(
+            precomputed_video_preview,
+            thumbnails::is_preview_image(&file.path),
+        ) {
+            PreviewSource::Ready(bytes) => bytes,
+            PreviewSource::Skip => return Ok(()),
+            PreviewSource::NeedsGeneration => {
+                match thumbnails::generate_preview_from_path(file_path).await {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        tracing::warn!("preview generation failed for {}: {e}", file.path);
+                        return Ok(());
+                    },
+                }
             },
         };
 
@@ -352,5 +388,28 @@ impl<'d> StorageManagerService<'d> {
         );
 
         Ok((chunk, replica))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_preview_bytes_prefers_precomputed_video_bytes() {
+        let source = resolve_preview_bytes(Some(vec![1, 2, 3]), true);
+        assert!(matches!(source, PreviewSource::Ready(bytes) if bytes == vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn resolve_preview_bytes_generates_for_images_without_precomputed() {
+        let source = resolve_preview_bytes(None, true);
+        assert!(matches!(source, PreviewSource::NeedsGeneration));
+    }
+
+    #[test]
+    fn resolve_preview_bytes_skips_non_images_without_precomputed() {
+        let source = resolve_preview_bytes(None, false);
+        assert!(matches!(source, PreviewSource::Skip));
     }
 }
