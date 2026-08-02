@@ -109,7 +109,7 @@ async fn truncate_prefix(src: &Path, dst: &Path, max_bytes: u64) -> Result<(), S
         tokio::fs::File::create(dst).await.map_err(|e| format!("create prefix file: {e}"))?;
 
     let mut remaining = max_bytes;
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = vec![0u8; 64 * 1024].into_boxed_slice();
     while remaining > 0 {
         let want = remaining.min(buf.len() as u64) as usize;
         let n = input.read(&mut buf[..want]).await.map_err(|e| format!("read source: {e}"))?;
