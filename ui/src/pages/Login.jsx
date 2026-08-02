@@ -8,6 +8,7 @@ import createLocalStore from '../../libs'
 import { A, useNavigate } from '@solidjs/router'
 
 import API from '../api'
+import { safeRedirectPath } from '../common/auth'
 import logoUrl from '../assets/logo.svg'
 
 const Login = () => {
@@ -51,7 +52,9 @@ const Login = () => {
 			/* keep login payload */
 		}
 
-		const redirect_url = store.redirect || '/'
+		const redirect_url = safeRedirectPath(store.redirect)
+		// One-shot: a deep link consumed here must not steer the next sign-in.
+		setStore('redirect', '/')
 		navigate(redirect_url)
 	}
 
