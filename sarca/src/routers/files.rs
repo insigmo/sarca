@@ -964,18 +964,18 @@ impl FilesRouter {
             return Err((StatusCode::BAD_REQUEST, SarcaError::InvalidPath.to_string()));
         }
 
-        if !thumbnails::is_preview_image(path) {
-            return Err((
-                StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                "Preview is only available for image files".to_owned(),
-            ));
-        }
-
         let files_repo = FilesRepository::new(&state.db);
         let file = files_repo
             .get_file_by_path(path, storage_id)
             .await
             .map_err(<(StatusCode, String)>::from)?;
+
+        if !preview_allowed(path, file.preview_telegram_file_id.is_some()) {
+            return Err((
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "Preview is only available for image files".to_owned(),
+            ));
+        }
 
         let preview_cache = PreviewCache::new(&state.config.work_dir);
         let cache_key = PreviewCache::cache_key(storage_id, path);
@@ -1007,6 +1007,15 @@ impl FilesRouter {
                 // its preview document is gone from Telegram.
                 Err(e) => tracing::warn!("stored preview download failed for {path}: {e}"),
             }
+        }
+
+        // Slow-path re-encode stays image-only: there is no on-demand video
+        // transcode here, so a video with no (or a lost) stored preview 415s.
+        if !thumbnails::is_preview_image(path) {
+            return Err((
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "Preview is only available for image files".to_owned(),
+            ));
         }
 
         let raw = assemble_file_bytes(&state, storage_id, &file).await?;
@@ -1283,6 +1292,10 @@ fn is_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 3 && bytes[0..3] == [0xFF, 0xD8, 0xFF]
 }
 
+fn preview_allowed(path: &str, has_stored_preview: bool) -> bool {
+    has_stored_preview || thumbnails::is_preview_image(path)
+}
+
 fn preview_jpeg_response(bytes: Vec<u8>) -> Response {
     inline_jpeg_response(bytes, "preview.jpg")
 }
@@ -1418,7 +1431,7 @@ fn parse_bytes_range(header: Option<&str>, file_size: u64) -> Result<Option<(u64
 
 #[cfg(test)]
 mod construct_path_tests {
-    use super::FilesRouter;
+    use super::{FilesRouter, preview_allowed};
     use crate::errors::SarcaError;
 
     #[test]
@@ -1469,5 +1482,23 @@ mod construct_path_tests {
             .unwrap(),
             "Пассивный доход до 125 000 ₽. Тариф Премиум (2026)/video.mp4"
         );
+    }
+
+    #[test]
+    fn preview_allowed_images_always() {
+        assert!(preview_allowed("a.jpg", false));
+        assert!(preview_allowed("a.jpg", true));
+    }
+
+    #[test]
+    fn preview_allowed_video_only_with_stored_preview() {
+        assert!(!preview_allowed("clip.mp4", false));
+        assert!(preview_allowed("clip.mp4", true));
+    }
+
+    #[test]
+    fn preview_allowed_other_types_only_with_stored_preview() {
+        assert!(!preview_allowed("doc.pdf", false));
+        assert!(preview_allowed("doc.pdf", true));
     }
 }
