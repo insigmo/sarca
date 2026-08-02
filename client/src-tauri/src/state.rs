@@ -583,8 +583,6 @@ pub fn native_chrome_js() -> String {
 pub struct ClientPrefs {
     #[serde(default = "default_true")]
     pub wifi_only: bool,
-    #[serde(default = "default_true")]
-    pub background_sync: bool,
     #[serde(default)]
     pub app_lock_enabled: bool,
     #[serde(default)]
@@ -607,7 +605,6 @@ impl Default for ClientPrefs {
     fn default() -> Self {
         Self {
             wifi_only: true,
-            background_sync: true,
             app_lock_enabled: false,
             app_lock_pin: None,
             enable_logs: true,
@@ -704,8 +701,9 @@ impl AppSyncState {
                     .unwrap_or_default();
                 // Never run discovery/upload while disconnected — MediaStore
                 // listing still blocks the UI thread via the plugin bridge and
-                // cannot upload without credentials anyway.
-                if prefs.background_sync && connected {
+                // cannot upload without credentials anyway. Background sync
+                // is otherwise always on — there is no user-facing toggle.
+                if connected {
                     let allow_auto = crate::commands::allow_auto_upload(&prefs);
                     if let Err(e) = engine
                         .tick_filtered(|b| {

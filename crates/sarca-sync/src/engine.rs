@@ -590,20 +590,50 @@ impl SyncEngine {
             }
         }
 
-        // Detect local deletes for Sync mode.
-        if matches!(binding.mode, BindingMode::Sync) {
-            let indexed = self.index.list_entry_paths(&binding.id)?;
-            for rel in indexed {
-                let local = root.join(&rel);
-                if !local.exists() {
-                    let remote = join_remote(&binding.remote_root, &rel);
-                    self.api()
-                        .await
-                        .delete_remote(binding.storage_id, &remote)
-                        .await?;
-                    self.index.delete_entry(&binding.id, &rel)?;
-                }
+        // Indexed files missing on disk get redownloaded, never deleted
+        // remotely — local absence (folder wiped, file removed by hand) is
+        // not user intent to delete server data. The only way remote
+        // content is ever removed is an explicit user action (e.g. removing
+        // the binding), never an inferred local deletion. Applies to every
+        // binding mode, including upload-only Camera/Folder auto-upload.
+        let indexed = self.index.list_entry_paths(&binding.id)?;
+        for rel in indexed {
+            let local = root.join(&rel);
+            if local.exists() {
+                continue;
             }
+            let Some(entry) = self.index.get_entry(&binding.id, &rel)? else {
+                continue;
+            };
+            let remote = join_remote(&binding.remote_root, &rel);
+            let tid = self
+                .transfer_begin(&binding.id, TransferDirection::Download, &rel, Some(entry.size))
+                .await;
+            if let Err(e) = self
+                .api()
+                .await
+                .download_to(binding.storage_id, &remote, &local)
+                .await
+            {
+                self.transfer_abandon(&tid).await;
+                tracing::warn!(binding = %binding.id, path = %rel, error = %e, "redownload of locally-missing file failed");
+                continue;
+            }
+            self.transfer_complete(&tid).await;
+            // Refresh mtime so the next scan doesn't see "changed" and re-upload it.
+            let meta = tokio::fs::metadata(&local).await?;
+            let mtime = meta.modified().ok().map(mtime_ms_from_system).unwrap_or(0);
+            self.index.upsert_entry(
+                &binding.id,
+                &IndexEntry {
+                    relative_path: rel,
+                    size: entry.size,
+                    mtime_ms: mtime,
+                    content_hash: entry.content_hash,
+                    remote_file_id: entry.remote_file_id,
+                    last_cursor: entry.last_cursor,
+                },
+            )?;
         }
         Ok(PushLocalResult {
             uploaded,
@@ -1155,6 +1185,68 @@ mod tests {
         assert!(
             !unchanged_path.exists(),
             "ephemeral file not selected for upload must be cleaned up"
+        );
+    }
+
+    #[tokio::test]
+    async fn push_local_never_drops_index_entry_for_missing_local_file() {
+        // Regression test: a file that was uploaded/synced and then removed
+        // locally (folder wiped by hand, disk cleanup, etc.) must never be
+        // deleted on the server as a side effect. push_local attempts a
+        // redownload instead, and a failed redownload (as here, against an
+        // unreachable API) is logged and skipped rather than failing the
+        // whole tick — the index entry must survive either way, so the file
+        // stays eligible for retry on the next tick instead of vanishing.
+        let dir = tempfile::tempdir().unwrap();
+        let engine = SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
+                    "http://127.0.0.1:9",
+                    "",
+                ))),
+                data_dir: dir.path().to_path_buf(),
+                media_source: Arc::new(FixedMediaSource(vec![])),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap();
+        let binding = Binding {
+            id: "cam".into(),
+            storage_id: uuid::Uuid::new_v4(),
+            remote_root: "Camera".into(),
+            local_path: dir.path().join("pics").to_string_lossy().into(),
+            mode: BindingMode::AutoUpload,
+            enabled: true,
+        };
+        engine
+            .index
+            .upsert_entry(
+                &binding.id,
+                &IndexEntry {
+                    relative_path: "gone.jpg".into(),
+                    size: 1,
+                    mtime_ms: 5,
+                    content_hash: Some("whatever".into()),
+                    remote_file_id: None,
+                    last_cursor: 0,
+                },
+            )
+            .unwrap();
+
+        let result = engine.push_local(&binding).await;
+        assert!(
+            result.is_ok(),
+            "a single failed redownload must not fail the whole tick"
+        );
+
+        assert!(
+            engine
+                .index
+                .get_entry(&binding.id, "gone.jpg")
+                .unwrap()
+                .is_some(),
+            "missing local file must never drop the index entry (which would leave nothing to redownload) or imply a remote delete"
         );
     }
 

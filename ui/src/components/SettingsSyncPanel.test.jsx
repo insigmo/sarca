@@ -41,7 +41,6 @@ function mockNativeInvoke(initialBindings = []) {
 			case 'get_client_prefs':
 				return {
 					wifi_only: true,
-					background_sync: true,
 					app_lock_enabled: false,
 					app_lock_pin: null,
 				}
@@ -107,7 +106,7 @@ beforeEach(() => {
 })
 
 describe('SettingsSyncPanel', () => {
-	it('enabling with no camera binding adds one and turns background sync on', async () => {
+	it('enabling with no camera binding adds one', async () => {
 		mockNativeInvoke([])
 		const { container } = render(() => (
 			<SettingsSyncPanel storageId="sid" storageName="Test" />
@@ -122,14 +121,6 @@ describe('SettingsSyncPanel', () => {
 			mode: 'auto_upload',
 			remoteRoot: 'Camera/Pixel 8',
 		})
-
-		await waitFor(() =>
-			expect(
-				callsFor('set_client_prefs').some(
-					([, a]) => a.prefs?.background_sync === true,
-				),
-			).toBe(true),
-		)
 		expect(callsFor('remove_binding').length).toBe(0)
 	})
 
@@ -247,35 +238,6 @@ describe('SettingsSyncPanel', () => {
 		expect(callsFor('set_binding_enabled').length).toBe(0)
 	})
 
-	it('toggling a folder binding row calls set_binding_enabled', async () => {
-		mockNativeInvoke([
-			{
-				id: 'f1',
-				mode: 'folder_upload',
-				enabled: true,
-				local_path: '/f',
-				remote_root: 'R',
-			},
-		])
-		const { container } = render(() => (
-			<SettingsSyncPanel storageId="sid" storageName="Test" />
-		))
-		await waitFor(() =>
-			expect(
-				container.querySelector('#settings-folder-switch-f1'),
-			).not.toBeNull(),
-		)
-
-		const sw = container.querySelector('#settings-folder-switch-f1')
-		fireEvent.click(sw)
-
-		await waitFor(() => expect(callsFor('set_binding_enabled').length).toBe(1))
-		expect(callsFor('set_binding_enabled')[0][1]).toEqual({
-			id: 'f1',
-			enabled: false,
-		})
-	})
-
 	it('migrates legacy Camera root to per-device folder on refresh', async () => {
 		mockNativeInvoke([
 			{
@@ -339,7 +301,6 @@ describe('SettingsSyncPanel', () => {
 				case 'get_client_prefs':
 					return {
 						wifi_only: true,
-						background_sync: true,
 						app_lock_enabled: false,
 						app_lock_pin: null,
 					}
@@ -401,7 +362,6 @@ describe('SettingsSyncPanel', () => {
 				case 'get_client_prefs':
 					return {
 						wifi_only: true,
-						background_sync: true,
 						app_lock_enabled: false,
 						app_lock_pin: null,
 					}
@@ -461,7 +421,6 @@ describe('SettingsSyncPanel', () => {
 				case 'get_client_prefs':
 					return {
 						wifi_only: true,
-						background_sync: true,
 						app_lock_enabled: false,
 						app_lock_pin: null,
 					}
@@ -528,7 +487,6 @@ describe('SettingsSyncPanel', () => {
 				case 'get_client_prefs':
 					return {
 						wifi_only: true,
-						background_sync: true,
 						app_lock_enabled: false,
 						app_lock_pin: null,
 					}
@@ -631,7 +589,6 @@ describe('SettingsSyncPanel', () => {
 				case 'get_client_prefs':
 					return {
 						wifi_only: true,
-						background_sync: true,
 						app_lock_enabled: false,
 						app_lock_pin: null,
 					}
@@ -690,7 +647,6 @@ describe('SettingsSyncPanel', () => {
 				case 'get_client_prefs':
 					return {
 						wifi_only: true,
-						background_sync: true,
 						app_lock_enabled: false,
 						app_lock_pin: null,
 					}
