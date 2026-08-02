@@ -7,6 +7,9 @@ ACCESS_TOKEN_EXPIRE_IN_SECS=1800
 REFRESH_TOKEN_EXPIRE_IN_DAYS=14
 SECRET_KEY=XXX
 
+# Verbose (debug-level) logging for requests and background jobs. RUST_LOG still overrides this.
+DEBUG_LOG=1
+
 # --- Telegram integration ---
 TELEGRAM_API_BASE_URL=https://api.telegram.org
 

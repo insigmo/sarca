@@ -190,6 +190,7 @@ mod tests {
             smtp_password: None,
             smtp_from: String::new(),
             smtp_tls: "starttls".into(),
+            debug_log: false,
         }
     }
 

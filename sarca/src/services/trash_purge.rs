@@ -28,6 +28,7 @@ impl TrashPurgeService {
             files_repo.list_expired_trashed_ids(retention).await.map_err(|e| e.to_string())?;
 
         if expired.is_empty() {
+            tracing::debug!("[TRASH PURGE] tick: nothing expired");
             return Ok(());
         }
 

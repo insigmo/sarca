@@ -51,17 +51,34 @@ async fn main() {
         .await
         .unwrap_or_else(|e| die(format!("failed to create WORK_DIR {}: {e}", config.work_dir)));
 
+    let default_filter = if config.debug_log {
+        "sarca=debug,tower_http=debug,axum::rejection=trace"
+    } else {
+        "sarca=info,tower_http=info,axum::rejection=trace"
+    };
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "sarca=info,tower_http=info,axum::rejection=trace".into()),
+                .unwrap_or_else(|_| default_filter.into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // Panics in spawned tasks don't kill the process (panic=unwind default), but they
+    // were previously invisible under docker's `restart: unless-stopped` — only a bare
+    // stderr line, easy to lose. Log every panic at error level with a backtrace so a
+    // crash-looping deploy is diagnosable from `docker logs` alone.
+    std::panic::set_hook(Box::new(|info| {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        tracing::error!("{info}\n{backtrace}");
+    }));
+
     let port = config.port;
     eprintln!("starting Sarca (PORT={port} from config)…");
     tracing::info!("starting Sarca on port {port}");
+    if config.debug_log {
+        tracing::info!("DEBUG_LOG=1 — verbose request/action logging enabled");
+    }
 
     let db_timeout = Duration::from_secs(10);
     let (tx, rx) = mpsc::channel::<ClientMessage>(config.channel_capacity.into());

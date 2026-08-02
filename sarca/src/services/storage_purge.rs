@@ -53,6 +53,7 @@ impl StoragePurgeService {
             return;
         }
 
+        tracing::info!("[STORAGE PURGE] tick processing {} message(s)", batch.len());
         let mut had_telegram_error = false;
         for row in batch {
             let api = TelegramBotApi::new(base_url, StorageWorkersScheduler::new(db, rate_limit));
