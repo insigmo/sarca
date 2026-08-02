@@ -365,6 +365,10 @@ pub async fn update_session(
     email: Option<String>,
     email_verified: Option<bool>,
 ) -> Result<SessionDto, String> {
+    client_log::write_line(
+        state.data_dir(),
+        &format!("update_session email={email:?} email_verified={email_verified:?}"),
+    );
     state
         .apply_webview_session(access_token, refresh_token, email, email_verified)
         .await?;
@@ -382,6 +386,10 @@ pub async fn connect(
     state: State<'_, AppSyncState>,
     server_url: String,
 ) -> Result<SessionDto, String> {
+    client_log::write_line(
+        state.data_dir(),
+        &format!("connect server_url={server_url}"),
+    );
     let base = normalize_server_url(&server_url).map_err(|e| e.to_string())?;
 
     // Remember the server origin; authentication happens on the website login page.
@@ -424,6 +432,7 @@ pub async fn connect(
 
 #[tauri::command]
 pub async fn disconnect(app: AppHandle, state: State<'_, AppSyncState>) -> Result<(), String> {
+    client_log::write_line(state.data_dir(), "disconnect");
     let cfg = ServerConfig::default();
     state.save_server(&cfg).await.map_err(|e| e.to_string())?;
     if let Ok(mut guard) = state.pending_inject.lock() {
@@ -434,6 +443,7 @@ pub async fn disconnect(app: AppHandle, state: State<'_, AppSyncState>) -> Resul
 
 #[tauri::command]
 pub async fn open_app(app: AppHandle, state: State<'_, AppSyncState>) -> Result<(), String> {
+    client_log::write_line(state.data_dir(), "open_app");
     let cfg = state.server.lock().await.clone();
     if !cfg.is_connected() {
         return Err("Not connected".into());
@@ -615,6 +625,7 @@ pub async fn list_storages(
     app: AppHandle,
     state: State<'_, AppSyncState>,
 ) -> Result<Vec<StorageDto>, String> {
+    client_log::write_line(state.data_dir(), "list_storages");
     let cfg = ensure_sync_session(&app, &state).await?;
     let api = SarcaApi::new(&cfg.base_url, &cfg.access_token);
     let list = api.list_storages().await.map_err(|e| e.to_string())?;
@@ -635,6 +646,10 @@ pub async fn ensure_remote_folder(
     parent: String,
     name: String,
 ) -> Result<String, String> {
+    client_log::write_line(
+        state.data_dir(),
+        &format!("ensure_remote_folder storage_id={storage_id} parent={parent} name={name}"),
+    );
     let cfg = ensure_sync_session(&app, &state).await?;
     let name = name.trim().to_owned();
     if name.is_empty() {
@@ -677,6 +692,13 @@ pub async fn add_binding(
     local_path: String,
     mode: String,
 ) -> Result<Binding, String> {
+    client_log::write_line(
+        state.data_dir(),
+        &format!(
+            "add_binding storage_id={storage_id} remote_root={remote_root} \
+             local_path={local_path} mode={mode}"
+        ),
+    );
     let _ = ensure_sync_session(&app, &state).await;
     let binding =
         new_binding(&storage_id, remote_root, local_path, &mode).map_err(|e| e.to_string())?;
@@ -704,6 +726,7 @@ pub async fn add_binding(
 
 #[tauri::command]
 pub fn remove_binding(state: State<'_, AppSyncState>, id: String) -> Result<(), String> {
+    client_log::write_line(state.data_dir(), &format!("remove_binding id={id}"));
     state.engine.remove_binding(&id).map_err(|e| e.to_string())
 }
 
@@ -752,6 +775,10 @@ pub fn update_binding_local_path(
     id: String,
     local_path: String,
 ) -> Result<Binding, String> {
+    client_log::write_line(
+        state.data_dir(),
+        &format!("update_binding_local_path id={id} local_path={local_path}"),
+    );
     let mut binding = state
         .engine
         .list_bindings()
@@ -774,6 +801,10 @@ pub fn update_binding_remote_root(
     id: String,
     remote_root: String,
 ) -> Result<Binding, String> {
+    client_log::write_line(
+        state.data_dir(),
+        &format!("update_binding_remote_root id={id} remote_root={remote_root}"),
+    );
     let mut binding = state
         .engine
         .list_bindings()
@@ -796,6 +827,10 @@ pub async fn sync_now(
     state: State<'_, AppSyncState>,
     binding_id: Option<String>,
 ) -> Result<(), String> {
+    client_log::write_line(
+        state.data_dir(),
+        &format!("sync_now binding_id={binding_id:?}"),
+    );
     let _ = ensure_sync_session(&app, &state).await;
     // Re-check (and, if needed, re-prompt for) media permission before every
     // manual sync: the app-startup prompt is fire-and-forget from the
@@ -853,6 +888,7 @@ pub fn set_client_prefs(
     prefs: ClientPrefs,
 ) -> Result<ClientPrefs, String> {
     save_prefs(&state, &prefs)?;
+    client_log::write_line(state.data_dir(), "set_client_prefs saved");
     Ok(prefs)
 }
 
@@ -926,6 +962,7 @@ pub fn get_cache_size(state: State<'_, AppSyncState>) -> Result<CacheDto, String
 
 #[tauri::command]
 pub fn clear_local_cache(state: State<'_, AppSyncState>) -> Result<CacheDto, String> {
+    client_log::write_line(state.data_dir(), "clear_local_cache");
     let cache = cache_root(&state);
     fs::create_dir_all(&cache).map_err(|e| e.to_string())?;
     remove_dir_contents(&cache)?;

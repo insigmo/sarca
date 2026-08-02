@@ -189,7 +189,21 @@ async fn generate_pdf(file_path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// Reject images whose decoded pixel buffer would be implausibly large before
+/// handing them to the decoder — an attacker-controlled file can advertise
+/// huge dimensions in a tiny compressed payload (decompression bomb) and blow
+/// up memory during `image::load_from_memory`.
+const MAX_DECODE_PIXELS: u64 = 40_000_000; // ~40MP, well above any real photo/scan
+
 fn resize_to_jpeg(raw: &[u8], max_edge: u32, quality: u8) -> Result<Vec<u8>, String> {
+    if let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(raw)).with_guessed_format() {
+        if let Ok((w, h)) = reader.into_dimensions() {
+            let pixels = u64::from(w) * u64::from(h);
+            if pixels > MAX_DECODE_PIXELS {
+                return Err(format!("image too large to decode ({w}x{h} = {pixels} px)"));
+            }
+        }
+    }
     let img = image::load_from_memory(raw).map_err(|e| format!("decode image: {e}"))?;
     let (w, h) = img.dimensions();
     let resized = if w <= max_edge && h <= max_edge {
