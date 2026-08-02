@@ -13,7 +13,9 @@ use tower_http::{
     cors,
     services::{ServeDir, ServeFile},
     set_header::SetResponseHeaderLayer,
+    trace::{DefaultOnRequest, TraceLayer},
 };
+use tracing::Level;
 
 use crate::{
     common::routing::app_state::AppState,
@@ -94,6 +96,44 @@ impl Server {
             .fallback(|| async { (StatusCode::NOT_FOUND, "Not Found") })
             .layer(ConcurrencyLimitLayer::new(workers))
             .layer(app_cors)
+            .layer(Self::request_trace_layer())
+    }
+
+    /// Per-API-request span. Span itself + request-start line stay debug (only
+    /// visible with `DEBUG_LOG=1` / `RUST_LOG`), but the response line's level
+    /// tracks the actual status: 5xx → error, 4xx → warn, else debug — so real
+    /// failures surface without needing verbose logging on all the time.
+    #[allow(clippy::type_complexity)]
+    fn request_trace_layer() -> TraceLayer<
+        tower_http::classify::SharedClassifier<tower_http::classify::ServerErrorsAsFailures>,
+        impl Fn(&axum::http::Request<axum::body::Body>) -> tracing::Span + Clone,
+        DefaultOnRequest,
+        impl Fn(&axum::http::Response<axum::body::Body>, std::time::Duration, &tracing::Span) + Clone,
+    > {
+        TraceLayer::new_for_http()
+            .make_span_with(|request: &axum::http::Request<axum::body::Body>| {
+                tracing::debug_span!(
+                    "http",
+                    method = %request.method(),
+                    path = %request.uri().path(),
+                )
+            })
+            .on_request(DefaultOnRequest::new().level(Level::DEBUG))
+            .on_response(
+                |response: &axum::http::Response<axum::body::Body>,
+                 latency: std::time::Duration,
+                 _span: &tracing::Span| {
+                    let status = response.status();
+                    let latency_ms = latency.as_millis();
+                    if status.is_server_error() {
+                        tracing::error!(%status, latency_ms, "request failed");
+                    } else if status.is_client_error() {
+                        tracing::warn!(%status, latency_ms, "request rejected");
+                    } else {
+                        tracing::debug!(%status, latency_ms, "request completed");
+                    }
+                },
+            )
     }
 
     /// Plain HTTP on `PORT` (e2e / dev when `SARCA_PLAIN_HTTP=1` or no TLS config).
