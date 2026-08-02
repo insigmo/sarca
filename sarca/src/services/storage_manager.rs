@@ -205,7 +205,13 @@ impl<'d> StorageManagerService<'d> {
     ) -> SarcaResult<()> {
         let file = self.files_repo.get_by_id(file_id).await?;
 
-        let jpeg = match thumbnails::generate(file_path, &file.path).await {
+        let jpeg = match thumbnails::generate(
+            file_path,
+            &file.path,
+            file.chunk_size_bytes.and_then(|n| u64::try_from(n).ok()).unwrap_or(u64::MAX),
+        )
+        .await
+        {
             Ok(Some(bytes)) => bytes,
             Ok(None) => return Ok(()),
             Err(e) => {
