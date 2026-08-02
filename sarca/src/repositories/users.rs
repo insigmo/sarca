@@ -180,6 +180,7 @@ mod tests {
             secret_key: "test-secret".into(),
             telegram_api_base_url: "https://api.telegram.org".into(),
             telegram_rate_limit: 18,
+            upload_concurrency: 4,
             work_dir: String::new(),
             telegram_chunk_size_mb: 20,
             telegram_video_chunk_size_mb: 20,

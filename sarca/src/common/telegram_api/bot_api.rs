@@ -129,7 +129,31 @@ impl SendPermit {
     /// Record a flood wait so subsequent acquires use a longer send gap.
     async fn note_flood(&self) {
         *self.gate.flood_cooldown_until.lock().await = Some(Instant::now() + FLOOD_PACING_WINDOW);
+        note_global_flood();
     }
+}
+
+/// Process-wide flood window, mirroring the per-token one. The storage manager
+/// reads it to shrink file-level upload concurrency: per-token pacing alone does
+/// not help when several tokens of the same storage are all being throttled.
+fn global_flood_until() -> &'static std::sync::Mutex<Option<Instant>> {
+    static UNTIL: OnceLock<std::sync::Mutex<Option<Instant>>> = OnceLock::new();
+    UNTIL.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+fn note_global_flood() {
+    if let Ok(mut slot) = global_flood_until().lock() {
+        *slot = Some(Instant::now() + FLOOD_PACING_WINDOW);
+    }
+}
+
+/// True while any token flooded within the last `FLOOD_PACING_WINDOW`.
+pub fn flood_active() -> bool {
+    global_flood_until()
+        .lock()
+        .ok()
+        .and_then(|slot| *slot)
+        .is_some_and(|until| Instant::now() < until)
 }
 
 fn send_gates() -> &'static Mutex<HashMap<String, Arc<TokenSendGate>>> {

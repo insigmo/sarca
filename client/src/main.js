@@ -69,4 +69,9 @@ window.addEventListener("DOMContentLoaded", async () => {
       button.textContent = "Connect";
     }
   });
+
+  // The form markup is static, so "the input exists" says nothing about the
+  // submit handler being attached. Anything driving this page (e2e) waits on
+  // this flag instead, or its click submits the form the plain HTML way.
+  document.body.dataset.shimReady = "1";
 });

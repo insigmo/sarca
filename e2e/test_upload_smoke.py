@@ -1,48 +1,31 @@
-"""Live Telegram upload smoke (opt-in).
+"""Upload smoke: a real image and a real video go all the way through.
 
-Skipped in CI / when no storage workers are configured.
-Run manually: `task smoke` or `pytest -m smoke e2e/test_upload_smoke.py`
+Unlike the scenario suites this one uploads media rather than octet-streams, so
+it exercises the photo/video paths of the Telegram sender (thumbnails, video
+chunking, streamed progress). It runs everywhere now:
+
+* default (mock Bot API): part of the normal suite and of CI;
+* `SARCA_E2E_TELEGRAM=real ...`: same asserts against live Telegram;
+* `SARCA_BASE_URL=... pytest -m smoke`: against an already-deployed server,
+  using whatever storage its first worker serves.
 """
 
 from __future__ import annotations
 
-import io
 import os
 import struct
 import time
 import zlib
 from pathlib import Path
 
-import httpx
 import pytest
 
-pytestmark = pytest.mark.smoke
+from helpers.api import SarcaClient
 
-ROOT = Path(__file__).resolve().parents[1]
+pytestmark = [pytest.mark.smoke, pytest.mark.slow]
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
-
-
-def _load_conf_value(key: str) -> str | None:
-    for conf in (
-        ROOT / "sarca.conf",
-        Path.home() / ".local/share/sarca/sarca.conf",
-    ):
-        if not conf.is_file():
-            continue
-        for line in conf.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            if k.strip() == key:
-                return v.strip().strip('"').strip("'")
-    return None
-
-
-BASE_URL = os.environ.get("SARCA_BASE_URL", "http://127.0.0.1:8001").rstrip("/")
-# Prefer sarca.conf over ambient env (agent shells often export e2e@… credentials).
-EMAIL = _load_conf_value("SUPERUSER_EMAIL") or os.environ.get("SUPERUSER_EMAIL")
-PASSWORD = _load_conf_value("SUPERUSER_PASS") or os.environ.get("SUPERUSER_PASS")
+EXTERNAL_BASE_URL = os.environ.get("SARCA_BASE_URL")
 
 
 def _minimal_png(width: int = 8, height: int = 8) -> bytes:
@@ -64,9 +47,6 @@ def _minimal_png(width: int = 8, height: int = 8) -> bytes:
 
 
 def _minimal_mp4() -> bytes:
-    fixture = FIXTURES / "smoke.mp4"
-    if fixture.is_file() and fixture.stat().st_size > 32:
-        return fixture.read_bytes()
     ftyp = b"isom" + struct.pack(">I", 0) + b"isomiso2mp41"
     ftyp_box = struct.pack(">I", 8 + len(ftyp)) + b"ftyp" + ftyp
     mdat_payload = b"\x00" * 64
@@ -74,110 +54,62 @@ def _minimal_mp4() -> bytes:
     return ftyp_box + mdat_box
 
 
-@pytest.fixture(scope="module")
-def client() -> httpx.Client:
-    if not EMAIL or not PASSWORD:
-        pytest.skip("SUPERUSER_EMAIL/PASS missing (env or sarca.conf)")
-    deadline = time.time() + 60
-    last = None
-    while time.time() < deadline:
-        try:
-            r = httpx.post(
-                f"{BASE_URL}/api/auth/login",
-                json={"email": "probe@example.com", "password": "x"},
-                timeout=2.0,
-            )
-            if r.status_code in (200, 401, 403, 422):
-                break
-        except Exception as e:  # noqa: BLE001
-            last = e
-        time.sleep(1)
-    else:
-        pytest.skip(f"API not ready at {BASE_URL}: {last}")
-
-    with httpx.Client(base_url=BASE_URL, timeout=120.0) as c:
-        yield c
+def _fixture_or(name: str, fallback) -> bytes:
+    path = FIXTURES / name
+    if path.is_file() and path.stat().st_size > 32:
+        return path.read_bytes()
+    return fallback()
 
 
 @pytest.fixture(scope="module")
-def auth_headers(client: httpx.Client) -> dict[str, str]:
-    r = client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD})
-    if r.status_code != 200:
-        pytest.skip(f"login failed: {r.status_code} {r.text}")
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+def smoke_storage(sarca: SarcaClient, shared_storage: str) -> str:
+    """Where the smoke uploads land.
 
-
-@pytest.fixture(scope="module")
-def storage_id(client: httpx.Client, auth_headers: dict[str, str]) -> str:
-    workers = client.get("/api/storage_workers", headers=auth_headers)
+    Against a deployed server there is no bot token to hand out, so the first
+    configured storage worker is used instead of creating a storage.
+    """
+    if not EXTERNAL_BASE_URL:
+        return shared_storage
+    workers = sarca.get("/api/storage_workers")
     if workers.status_code != 200 or not workers.json():
-        pytest.skip("no storage workers — attach a Telegram bot before upload smoke")
-    sid = workers.json()[0]["storage_id"]
-    return sid
+        pytest.skip("no storage workers - attach a Telegram bot before upload smoke")
+    return workers.json()[0]["storage_id"]
 
 
-def _upload(
-    client: httpx.Client,
-    headers: dict[str, str],
-    storage_id: str,
-    filename: str,
-    content: bytes,
-    content_type: str,
-    parent: str = "",
-) -> None:
-    files = {"file": (filename, io.BytesIO(content), content_type)}
-    data = {"path": parent}
-    r = client.post(
-        f"/api/storages/{storage_id}/files/upload",
-        headers=headers,
-        files=files,
-        data=data,
-    )
-    assert r.status_code == 201, f"upload {filename} failed: {r.status_code} {r.text}"
-    assert '"phase":"done"' in r.text or '"phase": "done"' in r.text, r.text
+def test_upload_image_and_video_smoke(sarca: SarcaClient, smoke_storage: str) -> None:
+    png = _fixture_or("smoke.png", _minimal_png)
+    mp4 = _fixture_or("smoke.mp4", _minimal_mp4)
 
-
-def test_upload_image_and_video_smoke(
-    client: httpx.Client, auth_headers: dict[str, str], storage_id: str
-) -> None:
-    png = (
-        (FIXTURES / "smoke.png").read_bytes()
-        if (FIXTURES / "smoke.png").is_file()
-        else _minimal_png()
-    )
-    mp4 = (
-        (FIXTURES / "smoke.mp4").read_bytes()
-        if (FIXTURES / "smoke.mp4").is_file()
-        else _minimal_mp4()
-    )
     stamp = str(int(time.time()))
     img_name = f"smoke-{stamp}.png"
     vid_name = f"smoke-{stamp}.mp4"
+    nested_name = f"nested-{stamp}.png"
 
-    _upload(client, auth_headers, storage_id, img_name, png, "image/png")
-    _upload(client, auth_headers, storage_id, vid_name, mp4, "video/mp4")
+    for name, blob, content_type, path in (
+        (img_name, png, "image/png", ""),
+        (vid_name, mp4, "video/mp4", ""),
+        (nested_name, png, "image/png", f"smoke-dir-{stamp}/"),
+    ):
+        result = sarca.upload(smoke_storage, name, blob, path=path, content_type=content_type)
+        assert result.ok, f"upload {name} failed: {result.error}"
+        assert result.phases[-1] == "done", result.phases
 
-    nested = f"nested-{stamp}.png"
-    _upload(
-        client,
-        auth_headers,
-        storage_id,
-        nested,
-        png,
-        "image/png",
-        parent="smoke-dir/",
-    )
+    root = {e["name"]: e["is_file"] for e in sarca.tree(smoke_storage)}
+    assert root.get(img_name) is True, root
+    assert root.get(vid_name) is True, root
+    assert root.get(f"smoke-dir-{stamp}") is False, root
 
-    r = client.get(f"/api/storages/{storage_id}/files/tree/", headers=auth_headers)
-    assert r.status_code == 200, r.text
-    names = {e["name"]: e["is_file"] for e in r.json()}
-    assert names.get(img_name) is True, names
-    assert names.get(vid_name) is True, names
-    assert names.get("smoke-dir") is False, names
+    nested = {e["name"]: e["is_file"] for e in sarca.tree(smoke_storage, f"smoke-dir-{stamp}")}
+    assert nested.get(nested_name) is True, nested
 
-    r = client.get(
-        f"/api/storages/{storage_id}/files/tree/smoke-dir", headers=auth_headers
-    )
-    assert r.status_code == 200, r.text
-    nested_names = {e["name"]: e["is_file"] for e in r.json()}
-    assert nested_names.get(nested) is True, nested_names
+
+def test_uploaded_image_downloads_byte_for_byte(
+    sarca: SarcaClient, smoke_storage: str
+) -> None:
+    """Media takes the photo path through Telegram; the bytes must still return."""
+    png = _fixture_or("smoke.png", _minimal_png)
+    name = f"smoke-roundtrip-{int(time.time())}.png"
+
+    result = sarca.upload(smoke_storage, name, png, content_type="image/png")
+    assert result.ok, result.error
+    assert sarca.download_bytes(smoke_storage, name) == png

@@ -64,6 +64,9 @@ class MockState:
     bytes_received: int = 0
     next_message_id: int = 1000
     latency: dict[str, float] = field(default_factory=dict)
+    # method -> requests being served right now / peak seen so far
+    in_flight: dict[str, int] = field(default_factory=dict)
+    max_in_flight: dict[str, int] = field(default_factory=dict)
     # method -> [(kind, count, extra)] injected failures
     injected: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     updates: list[dict[str, Any]] = field(default_factory=list)
@@ -236,18 +239,31 @@ class _Handler(BaseHTTPRequestHandler):
             self.state.bytes_received += len(body)
         if self._maybe_inject(method):
             return
-        self._sleep(method)
 
-        if method == "sendDocument":
-            self._send_document(body)
-        elif method == "copyMessage":
-            self._copy_message(body)
-        elif method == "deleteMessage":
-            self._delete_message(body)
-        elif method == "deleteWebhook":
-            self._send_json({"ok": True, "result": True})
-        else:
-            self._error(400, f"Bad Request: method not found ({method})")
+        # Peak overlap per method, so tests can tell "Sarca relayed these files in
+        # parallel" from "it just did them quickly". Counted around the artificial
+        # latency, which is what gives the overlap a window to be observed in.
+        with self.state.lock:
+            self.state.in_flight[method] = self.state.in_flight.get(method, 0) + 1
+            self.state.max_in_flight[method] = max(
+                self.state.max_in_flight.get(method, 0), self.state.in_flight[method]
+            )
+        try:
+            self._sleep(method)
+
+            if method == "sendDocument":
+                self._send_document(body)
+            elif method == "copyMessage":
+                self._copy_message(body)
+            elif method == "deleteMessage":
+                self._delete_message(body)
+            elif method == "deleteWebhook":
+                self._send_json({"ok": True, "result": True})
+            else:
+                self._error(400, f"Bad Request: method not found ({method})")
+        finally:
+            with self.state.lock:
+                self.state.in_flight[method] -= 1
 
     # ---------------------------------------------------------------- handlers
     def _send_document(self, body: bytes) -> None:
@@ -381,6 +397,7 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             if action == "reset":
                 self.state.calls.clear()
+                self.state.max_in_flight.clear()
                 self.state.bytes_sent = 0
                 self.state.bytes_received = 0
                 self.state.injected.clear()
@@ -493,6 +510,12 @@ class MockTelegram:
     def reset_calls(self) -> None:
         with self.state.lock:
             self.state.calls.clear()
+            self.state.max_in_flight.clear()
+
+    def max_concurrent(self, method: str = "sendDocument") -> int:
+        """Highest number of `method` requests served at the same time."""
+        with self.state.lock:
+            return self.state.max_in_flight.get(method, 0)
 
     def set_latency(self, **kwargs: float) -> None:
         with self.state.lock:
@@ -513,6 +536,11 @@ class MockTelegram:
             self.state.injected.setdefault(method, []).append(
                 {"kind": "fail", "times": times, "status": status, "description": "boom"}
             )
+
+    def clear_injections(self) -> None:
+        """Drop queued flood/failure injections (they are consumed per request)."""
+        with self.state.lock:
+            self.state.injected.clear()
 
     def document_bytes(self, file_id: str) -> bytes:
         return (self.state.root / "documents" / f"{file_id}.bin").read_bytes()
