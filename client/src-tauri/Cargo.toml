@@ -14,6 +14,11 @@ categories = ["gui"]
 name = "sarca_client_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Embeds tauri-plugin-pilot so `tauri-pilot` can drive the app in e2e tests.
+# Off by default: release bundles never compile the plugin or its deps.
+pilot = ["dep:tauri-plugin-pilot"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -26,8 +31,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 network-interface = "2"
 tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-dialog = "2"
+tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
 tauri-plugin-notification = "2"
+# e2e driver plugin — see the `pilot` feature. `press` is dropped: the e2e suite
+# drives the UI through click/fill/eval, and enigo pulls in X11/Wayland input
+# stacks that CI containers do not have.
+tauri-plugin-pilot = { git = "https://github.com/mpiton/tauri-pilot", tag = "v0.7.2", default-features = false, optional = true }
 tauri-plugin-shell = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
