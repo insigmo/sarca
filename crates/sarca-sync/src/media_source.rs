@@ -58,16 +58,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fs_media_source_errors_on_missing_root() {
+    async fn fs_media_source_recreates_missing_root() {
         let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
         let binding = Binding {
             id: "b1".into(),
             storage_id: Uuid::new_v4(),
             remote_root: "Root".into(),
-            local_path: dir.path().join("missing").to_string_lossy().into(),
+            local_path: missing.to_string_lossy().into(),
             mode: BindingMode::FolderUpload,
             enabled: true,
         };
-        assert!(FsMediaSource.list_candidates(&binding).await.is_err());
+        let got = FsMediaSource.list_candidates(&binding).await.unwrap();
+        assert!(got.is_empty());
+        assert!(missing.is_dir());
     }
 }
