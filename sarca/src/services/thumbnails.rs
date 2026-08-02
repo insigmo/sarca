@@ -32,7 +32,10 @@ fn build_thumb_and_preview(raw: &[u8], include_preview: bool) -> Result<ThumbAnd
     } else {
         None
     };
-    Ok(ThumbAndPreview { thumb, preview })
+    Ok(ThumbAndPreview {
+        thumb,
+        preview,
+    })
 }
 
 /// Try to build a JPEG thumbnail for the given file.
@@ -69,9 +72,10 @@ pub async fn generate(
     };
 
     let include_preview = kind == ThumbKind::Video;
-    let result = tokio::task::spawn_blocking(move || build_thumb_and_preview(&raw, include_preview))
-        .await
-        .map_err(|e| e.to_string())??;
+    let result =
+        tokio::task::spawn_blocking(move || build_thumb_and_preview(&raw, include_preview))
+            .await
+            .map_err(|e| e.to_string())??;
 
     Ok(Some(result))
 }
