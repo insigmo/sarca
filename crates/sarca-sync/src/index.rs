@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -18,6 +19,19 @@ pub struct IndexEntry {
     pub content_hash: Option<String>,
     pub remote_file_id: Option<Uuid>,
     pub last_cursor: i64,
+}
+
+/// A file whose upload failed, with the retry schedule that keeps it from
+/// being attempted on every single tick. `next_attempt_ms` is a wall-clock
+/// epoch millisecond deadline — before it passes the file is filtered out of
+/// the pending set entirely, so one unuploadable file cannot occupy the head
+/// of the queue forever.
+#[derive(Debug, Clone)]
+pub struct UploadFailure {
+    pub relative_path: String,
+    pub fail_count: i64,
+    pub next_attempt_ms: i64,
+    pub last_error: Option<String>,
 }
 
 /// Local SQLite index. `Connection` is wrapped in a mutex so the engine can be
@@ -79,6 +93,14 @@ impl LocalIndex {
               remote_hash TEXT,
               PRIMARY KEY (binding_id, relative_path)
             );
+            CREATE TABLE IF NOT EXISTS upload_failures (
+              binding_id TEXT NOT NULL,
+              relative_path TEXT NOT NULL,
+              fail_count INTEGER NOT NULL DEFAULT 0,
+              next_attempt_ms INTEGER NOT NULL DEFAULT 0,
+              last_error TEXT,
+              PRIMARY KEY (binding_id, relative_path)
+            );
             "#,
         )?;
         Ok(())
@@ -135,6 +157,10 @@ impl LocalIndex {
         let conn = self.lock()?;
         conn.execute("DELETE FROM entries WHERE binding_id = ?1", params![id])?;
         conn.execute("DELETE FROM conflicts WHERE binding_id = ?1", params![id])?;
+        conn.execute(
+            "DELETE FROM upload_failures WHERE binding_id = ?1",
+            params![id],
+        )?;
         conn.execute("DELETE FROM bindings WHERE id = ?1", params![id])?;
         Ok(())
     }
@@ -276,9 +302,145 @@ impl LocalIndex {
         Ok(n as usize)
     }
 
+    pub fn get_upload_failure(
+        &self,
+        binding_id: &str,
+        relative_path: &str,
+    ) -> Result<Option<UploadFailure>> {
+        self.lock()?
+            .query_row(
+                r#"
+                SELECT relative_path, fail_count, next_attempt_ms, last_error
+                FROM upload_failures WHERE binding_id = ?1 AND relative_path = ?2
+                "#,
+                params![binding_id, relative_path],
+                |row| {
+                    Ok(UploadFailure {
+                        relative_path: row.get(0)?,
+                        fail_count: row.get(1)?,
+                        next_attempt_ms: row.get(2)?,
+                        last_error: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn set_upload_failure(
+        &self,
+        binding_id: &str,
+        relative_path: &str,
+        fail_count: i64,
+        next_attempt_ms: i64,
+        last_error: &str,
+    ) -> Result<()> {
+        self.lock()?.execute(
+            r#"
+            INSERT INTO upload_failures (binding_id, relative_path, fail_count, next_attempt_ms, last_error)
+            VALUES (?1, ?2, ?3, ?4, ?5)
+            ON CONFLICT(binding_id, relative_path) DO UPDATE SET
+              fail_count = excluded.fail_count,
+              next_attempt_ms = excluded.next_attempt_ms,
+              last_error = excluded.last_error
+            "#,
+            params![binding_id, relative_path, fail_count, next_attempt_ms, last_error],
+        )?;
+        Ok(())
+    }
+
+    /// Drops the failure row for a file that finally went through. Called on
+    /// every successful (or no-op) upload so a file that failed once and then
+    /// succeeded starts from a clean slate if it ever fails again.
+    pub fn clear_upload_failure(&self, binding_id: &str, relative_path: &str) -> Result<()> {
+        self.lock()?.execute(
+            "DELETE FROM upload_failures WHERE binding_id = ?1 AND relative_path = ?2",
+            params![binding_id, relative_path],
+        )?;
+        Ok(())
+    }
+
+    /// Whole backoff map for one binding: relative path → earliest epoch ms at
+    /// which the file may be retried. Read once per scan rather than one query
+    /// per candidate — a Camera roll can hold tens of thousands of them.
+    pub fn load_upload_backoff(&self, binding_id: &str) -> Result<HashMap<String, i64>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT relative_path, next_attempt_ms FROM upload_failures WHERE binding_id = ?1",
+        )?;
+        let rows = stmt.query_map(params![binding_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let (path, next) = r?;
+            out.insert(path, next);
+        }
+        Ok(out)
+    }
+
+    /// Wipes the whole binding's retry backoff, so the next scan reconsiders
+    /// every previously-failed file immediately. This is the "Upload now"
+    /// escape hatch — an explicit user action, never something a background
+    /// tick does on its own.
+    pub fn clear_upload_backoff(&self, binding_id: &str) -> Result<usize> {
+        let n = self.lock()?.execute(
+            "DELETE FROM upload_failures WHERE binding_id = ?1",
+            params![binding_id],
+        )?;
+        Ok(n)
+    }
+
+    pub fn upload_failure_count(&self, binding_id: &str) -> Result<usize> {
+        let n: i64 = self.lock()?.query_row(
+            "SELECT COUNT(*) FROM upload_failures WHERE binding_id = ?1",
+            params![binding_id],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
+    /// Worst offenders first (most consecutive failures), for the UI hint.
+    pub fn list_upload_failures(
+        &self,
+        binding_id: &str,
+        limit: usize,
+    ) -> Result<Vec<UploadFailure>> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            r#"
+            SELECT relative_path, fail_count, next_attempt_ms, last_error
+            FROM upload_failures WHERE binding_id = ?1
+            ORDER BY fail_count DESC, relative_path
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(params![binding_id, limit as i64], |row| {
+            Ok(UploadFailure {
+                relative_path: row.get(0)?,
+                fail_count: row.get(1)?,
+                next_attempt_ms: row.get(2)?,
+                last_error: row.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     pub fn default_path(data_dir: &Path) -> PathBuf {
         data_dir.join("sync-index.sqlite")
     }
+}
+
+/// Wall-clock epoch milliseconds. Used for upload retry deadlines.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 fn mode_str(mode: BindingMode) -> &'static str {

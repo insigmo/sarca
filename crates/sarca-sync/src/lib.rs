@@ -21,7 +21,7 @@ pub use engine::{
     SyncEngineConfig,
 };
 pub use hash::sha256_file;
-pub use index::LocalIndex;
+pub use index::{now_ms, LocalIndex, UploadFailure};
 pub use media_source::{FsMediaSource, LocalMediaSource};
 pub use scheduler::BindingScheduler;
 pub use transfer::{TransferDirection, TransferItem, TransferQueueSnapshot, TransferStatus};
