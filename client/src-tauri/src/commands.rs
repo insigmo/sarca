@@ -851,6 +851,18 @@ pub async fn sync_now(
         }
         true
     };
+    // This is the user asking, explicitly, right now — so drop the retry
+    // backoff first. A file deferred for hours because it kept failing is
+    // exactly what someone pressing "Upload now" wants reconsidered, and they
+    // cannot see the deadline to wait it out. Background ticks never do this.
+    match state.engine.retry_failed_uploads(binding_id.as_deref()) {
+        Ok(0) => {}
+        Ok(n) => client_log::write_line(
+            state.data_dir(),
+            &format!("sync_now cleared retry backoff for {n} file(s)"),
+        ),
+        Err(e) => tracing::warn!(error = %e, "clearing upload backoff before sync_now failed"),
+    }
     match binding_id {
         Some(id) => state
             .engine
