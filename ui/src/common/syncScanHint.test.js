@@ -26,4 +26,21 @@ describe('syncScanHint', () => {
 	it('returns null when pending > 0 even if unfinished is 0', () => {
 		expect(syncScanHint({ scanned: 5, pending: 2 }, { unfinishedUploads: 0 })).toBeNull()
 	})
+	it('names deferred files ahead of the error banner', () => {
+		// A held-back file is invisible otherwise: it is not pending, not
+		// transferring, and its deadline is not shown anywhere.
+		expect(syncScanHint({ scanned: 5, pending: 0, deferred: 3 })).toBe(
+			'3 files failed to upload and will be retried automatically — use Upload now to retry immediately',
+		)
+		expect(
+			syncScanHint({ last_error: 'connection refused', scanned: 5, deferred: 1 }),
+		).toBe(
+			'1 file failed to upload and will be retried automatically — use Upload now to retry immediately',
+		)
+	})
+	it('ignores deferred when zero or absent', () => {
+		expect(syncScanHint({ scanned: 5, pending: 0, deferred: 0 })).toBe(
+			'5 media files found, all already uploaded',
+		)
+	})
 })

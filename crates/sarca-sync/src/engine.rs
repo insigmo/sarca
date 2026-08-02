@@ -13,19 +13,47 @@ use crate::{
     api::SarcaApi,
     candidate::LocalCandidate,
     hash::sha256_file,
-    index::{mtime_ms_from_system, IndexEntry, LocalIndex},
+    index::{mtime_ms_from_system, now_ms, IndexEntry, LocalIndex, UploadFailure},
     media_source::LocalMediaSource,
     scheduler::BindingScheduler,
     transfer::{TransferDirection, TransferQueue, TransferQueueSnapshot},
     types::{Binding, BindingMode, SyncStatus},
 };
 
-/// How many files one binding uploads at the same time. Chunks within a file stay
-/// sequential — this only overlaps distinct files, which is where the wall-clock
-/// time goes (each upload is a full client → Sarca → Telegram round trip). Past ~4
-/// the server's per-bot-token send gate is the limit anyway, and every extra
-/// in-flight file is one more spool file on the server's disk.
-const UPLOAD_PARALLELISM: usize = 4;
+/// How many files one binding uploads at the same time. One: overlapping files
+/// does not actually buy throughput here, because the server funnels every file
+/// through the same per-bot-token Telegram send gate. Asking for more only
+/// pushes that gate into flood control, whose backoff is far more expensive than
+/// the round trips the overlap was meant to hide, and holds one spool file per
+/// in-flight upload on the server's disk. Chunks within a file are sequential
+/// regardless.
+const UPLOAD_PARALLELISM: usize = 1;
+
+/// Retry delay after a file's upload fails, indexed by consecutive failure
+/// count: 1 min, 5 min, 30 min, 1 h, then 6 h forever.
+///
+/// The point is head-of-line isolation, not politeness. Before this ladder a
+/// file that could never upload (too large for Telegram, unreadable, rejected
+/// by the server) was re-attempted first on every single tick, and since a
+/// failure aborted the whole batch, every file behind it was starved forever.
+/// Now the failure is recorded, the file drops out of the pending set until its
+/// deadline passes, and the rest of the backlog moves.
+const UPLOAD_BACKOFF_MS: [i64; 5] = [
+    60_000,     // 1 min
+    300_000,    // 5 min
+    1_800_000,  // 30 min
+    3_600_000,  // 1 h
+    21_600_000, // 6 h
+];
+
+/// How long to wait before retrying a file that has failed `fail_count` times
+/// in a row. Saturates at the last rung — a file is never given up on
+/// permanently, because most causes (server down, no network, flood control,
+/// full disk) are transient and clear on their own.
+fn upload_backoff_ms(fail_count: i64) -> i64 {
+    let rung = fail_count.max(1) as usize - 1;
+    UPLOAD_BACKOFF_MS[rung.min(UPLOAD_BACKOFF_MS.len() - 1)]
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictChoice {
@@ -86,6 +114,11 @@ struct PushLocalResult {
     uploaded: usize,
     scanned: usize,
     pending: usize,
+    /// Files attempted this tick whose upload failed. Each is recorded in the
+    /// index with a retry deadline; none of them aborts the batch.
+    failed: usize,
+    /// First failure's message, for the status banner.
+    first_error: Option<String>,
 }
 
 impl SyncEngine {
@@ -124,6 +157,34 @@ impl SyncEngine {
         self.clear_status(id);
         self.clear_transfers(id);
         Ok(())
+    }
+
+    /// Clears the retry backoff so previously-failed files are reconsidered on
+    /// the very next scan. Bound to the explicit "Upload now" action: a user
+    /// who just fixed the cause (freed space, reconnected, deleted the bad
+    /// file) should not have to wait out a deadline they cannot see. `None`
+    /// clears every binding. Returns how many failure records were dropped.
+    pub fn retry_failed_uploads(&self, binding_id: Option<&str>) -> Result<usize> {
+        let ids: Vec<String> = match binding_id {
+            Some(id) => vec![id.to_string()],
+            None => self
+                .index
+                .list_bindings()?
+                .into_iter()
+                .map(|b| b.id)
+                .collect(),
+        };
+        let mut cleared = 0usize;
+        for id in ids {
+            cleared += self.index.clear_upload_backoff(&id)?;
+        }
+        Ok(cleared)
+    }
+
+    /// Files currently held back by the retry backoff, worst first. Drives the
+    /// UI hint that names what is stuck instead of silently doing nothing.
+    pub fn failed_uploads(&self, binding_id: &str, limit: usize) -> Result<Vec<UploadFailure>> {
+        self.index.list_upload_failures(binding_id, limit)
     }
 
     pub fn set_binding_enabled(&self, id: &str, enabled: bool) -> Result<()> {
@@ -182,24 +243,11 @@ impl SyncEngine {
         self.transfers.write().await.abandon(id);
     }
 
-    /// Called when `push_local` exits early (error) with candidates still sitting
-    /// in the queue as Waiting. Deletes any ephemeral (cache-copy) files backing
-    /// them so they don't leak — they'll be re-materialized fresh on the next
-    /// tick if still needed.
-    ///
-    /// Deliberately does NOT remove the Waiting entries from the transfer queue:
-    /// they aren't stuck (the next tick's `push_local` re-runs `enqueue_waiting`
-    /// for the same relative paths, replacing these entries in place), so
-    /// clearing them here only made the "Uploading N" count lie — snapping to 0
-    /// while a real backlog was still queued and would keep draining across
-    /// ticks (e.g. during a string of transient failures from server restarts).
-    async fn cleanup_abandoned_ephemeral(&self, rest: Vec<(LocalCandidate, Option<String>)>) {
-        for (candidate, _) in &rest {
-            if candidate.ephemeral {
-                tokio::fs::remove_file(&candidate.absolute_path).await.ok();
-            }
-        }
-    }
+    // `cleanup_abandoned_ephemeral` used to live here, for the case where
+    // `push_local` bailed out mid-batch and left candidates unattempted. There
+    // is no such case any more: every candidate in the pending set is now
+    // attempted, and `push_one` deletes its own ephemeral file on every exit
+    // path, success or failure.
 
     /// Promote a previously-enqueued Waiting transfer to Active. Falls back
     /// to [`begin`](TransferQueue::begin) if there was no waiting id (e.g.
@@ -357,7 +405,10 @@ impl SyncEngine {
             cursor = self.bootstrap_snapshot(binding).await?;
         }
 
-        // Push local changes (both modes).
+        // Push local changes (both modes). Individual upload failures are
+        // recorded and skipped, not propagated — a file the server will not
+        // take must not stop the pull below, which is what made a single bad
+        // photo look like "nothing syncs at all".
         let push = self.push_local(binding).await?;
         let (_scanned, pending, already_synced) =
             crate::types::scan_counters(push.scanned, push.pending);
@@ -370,13 +421,15 @@ impl SyncEngine {
         Ok(SyncStatus {
             binding_id: binding.id.clone(),
             cursor,
-            last_error: None,
+            last_error: push.first_error,
             uploading: push.uploaded,
             downloading,
             conflicts: self.index.conflict_count(&binding.id)?,
             scanned: push.scanned,
             pending,
             already_synced,
+            failed: push.failed,
+            deferred: self.index.upload_failure_count(&binding.id)?,
         })
     }
 
@@ -491,30 +544,49 @@ impl SyncEngine {
         };
 
         let mut uploaded = 0usize;
+        let mut failed = 0usize;
+        let mut first_error: Option<String> = None;
         let mut pending_iter = pending.into_iter();
-        // Files leave in waves instead of strictly one at a time. Only whole files
-        // overlap: each `push_one` still hashes, uploads and indexes its own file in
-        // order, and the server keeps every chunk of a single file sequential. A wave
-        // is joined before the next one starts so a failure still stops the batch,
-        // leaving the untouched candidates Waiting for the next tick.
+        // Files leave in waves (of `UPLOAD_PARALLELISM`, currently one). A failing
+        // file is recorded with a retry deadline and the batch keeps going: it must
+        // not abort the wave, the batch, or — via `sync_binding`'s `?` — the whole
+        // tick, because that let a single unuploadable file at the head of the scan
+        // order block every file behind it and stop downloads too, forever.
         loop {
             let wave: Vec<_> = pending_iter.by_ref().take(UPLOAD_PARALLELISM).collect();
             if wave.is_empty() {
                 break;
             }
 
+            let rels: Vec<String> = wave.iter().map(|(c, _)| c.relative_path.clone()).collect();
             let results = futures::future::join_all(
                 wave.into_iter()
                     .map(|(candidate, waiting_id)| self.push_one(binding, candidate, waiting_id)),
             )
             .await;
 
-            let mut failure = None;
-            for result in results {
+            for (rel, result) in rels.into_iter().zip(results) {
                 match result {
-                    Ok(true) => uploaded += 1,
-                    Ok(false) => {},
-                    Err(e) => failure = failure.or(Some(e)),
+                    // Sent, or already up to date: either way this path is
+                    // healthy, so any earlier failure recorded against it is
+                    // stale and the ladder should restart from the bottom.
+                    Ok(sent) => {
+                        if sent {
+                            uploaded += 1;
+                        }
+                        if let Err(e) = self.index.clear_upload_failure(&binding.id, &rel) {
+                            warn!(binding = %binding.id, path = %rel, error = %e,
+                                "clearing upload failure failed");
+                        }
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        let msg = format!("{e:#}");
+                        self.note_upload_failure(&binding.id, &rel, &msg);
+                        if first_error.is_none() {
+                            first_error = Some(msg);
+                        }
+                    }
                 }
             }
 
@@ -523,13 +595,9 @@ impl SyncEngine {
                 let mut guard = self.statuses.write().await;
                 if let Some(s) = guard.iter_mut().find(|s| s.binding_id == binding.id) {
                     s.uploading = uploaded;
-                    s.last_error = None;
+                    s.failed = failed;
+                    s.last_error = first_error.clone();
                 }
-            }
-
-            if let Some(e) = failure {
-                self.cleanup_abandoned_ephemeral(pending_iter.collect()).await;
-                return Err(e);
             }
         }
 
@@ -544,7 +612,39 @@ impl SyncEngine {
             uploaded,
             scanned,
             pending: pending_n,
+            failed,
+            first_error,
         })
+    }
+
+    /// Records a failed upload and schedules its next attempt. Best-effort: if
+    /// the index write itself fails the file simply gets retried next tick,
+    /// which is the old behaviour and still forward progress for everything
+    /// else in the batch.
+    fn note_upload_failure(&self, binding_id: &str, relative_path: &str, error: &str) {
+        let previous = self
+            .index
+            .get_upload_failure(binding_id, relative_path)
+            .unwrap_or(None);
+        let fail_count = previous.map_or(0, |f| f.fail_count) + 1;
+        let next_attempt_ms = now_ms() + upload_backoff_ms(fail_count);
+        warn!(
+            binding = %binding_id,
+            path = %relative_path,
+            fail_count,
+            error,
+            "upload failed; deferring retry"
+        );
+        if let Err(e) = self.index.set_upload_failure(
+            binding_id,
+            relative_path,
+            fail_count,
+            next_attempt_ms,
+            error,
+        ) {
+            warn!(binding = %binding_id, path = %relative_path, error = %e,
+                "recording upload failure failed");
+        }
     }
 
     /// Uploads a single candidate. `Ok(true)` means bytes reached the server,
@@ -794,23 +894,37 @@ impl SyncEngine {
 }
 
 /// Filters `candidates` down to those whose size/mtime differ from the
-/// index (or have no index entry yet). Pure index reads — callers should not
-/// hold the transfer queue lock while calling this so a slow/large scan
-/// cannot starve concurrent readers of the queue (see `push_local`).
+/// index (or have no index entry yet), minus any file still inside its retry
+/// backoff window. Pure index reads — callers should not hold the transfer
+/// queue lock while calling this so a slow/large scan cannot starve concurrent
+/// readers of the queue (see `push_local`).
+///
+/// The backoff is time-based only. A user who does not want to wait out a
+/// deadline has an explicit escape hatch: "Upload now" clears the whole
+/// binding's backoff before ticking (see [`SyncEngine::retry_failed_uploads`]).
 fn filter_pending_candidates(
     index: &LocalIndex,
     binding_id: &str,
     candidates: &[LocalCandidate],
 ) -> Result<Vec<LocalCandidate>> {
+    let backoff = index.load_upload_backoff(binding_id)?;
+    let now = now_ms();
     let mut out = Vec::new();
     for c in candidates {
         let existing = index.get_entry(binding_id, &c.relative_path)?;
         let needs = existing
             .as_ref()
             .is_none_or(|e| e.size != c.size || e.mtime_ms != c.mtime_ms);
-        if needs {
-            out.push(c.clone());
+        if !needs {
+            continue;
         }
+        if backoff
+            .get(&c.relative_path)
+            .is_some_and(|next| *next > now)
+        {
+            continue;
+        }
+        out.push(c.clone());
     }
     Ok(out)
 }
@@ -1071,135 +1185,226 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn push_local_error_keeps_remaining_batch_waiting() {
-        // Regression test: if an upload fails partway through a batch, only
-        // the candidates that were actually attempted drop out of the queue.
-        // Everything still queued stays Waiting (not cleared to 0) because the
-        // very next tick's push_local re-enqueues the same relative paths in
-        // place — they are not "stuck", so the UI count should keep
-        // reflecting the real backlog instead of lying about it being empty.
-        // One wave (UPLOAD_PARALLELISM files) goes out and fails; the extra two
-        // are never started, so they must survive.
-        const EXTRA: usize = 2;
-        let dir = tempfile::tempdir().unwrap();
-        let pics = dir.path().join("pics");
-        std::fs::create_dir_all(&pics).unwrap();
-        for i in 0..UPLOAD_PARALLELISM + EXTRA {
-            std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
-        }
-        let engine = SyncEngine::open(
+    /// Engine wired to port 9 ("discard"), which is never bound in test
+    /// environments — every upload fails fast with connection-refused instead
+    /// of a slow timeout (same trick used by api.rs's own tests).
+    fn unreachable_engine(dir: &std::path::Path) -> SyncEngine {
+        SyncEngine::open(
             SyncEngineConfig {
                 poll_interval: Duration::from_secs(30),
-                // Port 9 ("discard") is never bound in test environments, so
-                // this fails fast with connection-refused instead of a slow
-                // timeout (same trick used by api.rs's own tests).
                 api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
                     "http://127.0.0.1:9",
                     "",
                 ))),
-                data_dir: dir.path().to_path_buf(),
+                data_dir: dir.to_path_buf(),
                 media_source: Arc::new(crate::media_source::FsMediaSource),
             },
             Arc::new(KeepBothPrompt),
         )
-        .unwrap();
-        let binding = Binding {
+        .unwrap()
+    }
+
+    fn cam_binding(local_path: &std::path::Path) -> Binding {
+        Binding {
             id: "cam".into(),
             storage_id: uuid::Uuid::new_v4(),
             remote_root: "Camera".into(),
-            local_path: pics.to_string_lossy().into(),
+            local_path: local_path.to_string_lossy().into(),
             mode: BindingMode::AutoUpload,
             enabled: true,
-        };
+        }
+    }
 
-        let result = engine.push_local(&binding).await;
-        assert!(
-            result.is_err(),
-            "upload must fail against an unreachable API"
+    #[test]
+    fn upload_backoff_climbs_then_saturates() {
+        assert_eq!(upload_backoff_ms(1), 60_000);
+        assert_eq!(upload_backoff_ms(2), 300_000);
+        assert_eq!(upload_backoff_ms(5), 21_600_000);
+        // Never grows past the last rung, and never returns 0 (which would be
+        // no backoff at all — the bug this ladder exists to prevent).
+        assert_eq!(upload_backoff_ms(99), 21_600_000);
+        assert_eq!(upload_backoff_ms(0), 60_000);
+    }
+
+    #[tokio::test]
+    async fn push_local_attempts_every_candidate_despite_failures() {
+        // Regression test for "nothing syncs": an upload failure used to abort
+        // the whole batch (and, via sync_binding's `?`, the whole tick), so one
+        // unuploadable file at the head of the scan order starved every file
+        // behind it forever. Now every candidate is attempted and the failures
+        // are reported, not raised.
+        const FILES: usize = 5;
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        for i in 0..FILES {
+            std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
+        }
+        let engine = unreachable_engine(dir.path());
+        let binding = cam_binding(&pics);
+
+        let result = engine.push_local(&binding).await.expect(
+            "per-file upload failures must not surface as a batch error, or the tick aborts and \
+             downloads never run",
+        );
+        assert_eq!(result.failed, FILES, "every candidate must be attempted");
+        assert_eq!(result.uploaded, 0);
+        assert!(result.first_error.is_some(), "failures must be reported");
+    }
+
+    #[tokio::test]
+    async fn failed_upload_is_deferred_then_retried_after_backoff() {
+        // The point of the backoff: a file that just failed drops out of the
+        // next scan's pending set, so it cannot re-occupy the head of the queue
+        // on every 30s tick. Once its deadline passes it comes back.
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        std::fs::write(pics.join("bad.jpg"), b"x").unwrap();
+        let engine = unreachable_engine(dir.path());
+        let binding = cam_binding(&pics);
+
+        let first = engine.push_local(&binding).await.unwrap();
+        assert_eq!(first.failed, 1);
+
+        let recorded = engine
+            .index
+            .get_upload_failure(&binding.id, "bad.jpg")
+            .unwrap()
+            .expect("failure must be recorded");
+        assert_eq!(recorded.fail_count, 1);
+        assert!(recorded.next_attempt_ms > now_ms());
+
+        // Second tick right away: still inside the window, so the file is not
+        // even attempted and the failure count does not climb.
+        let second = engine.push_local(&binding).await.unwrap();
+        assert_eq!(second.pending, 0, "deferred file must not be re-attempted");
+        assert_eq!(second.failed, 0);
+        assert_eq!(
+            engine
+                .index
+                .get_upload_failure(&binding.id, "bad.jpg")
+                .unwrap()
+                .unwrap()
+                .fail_count,
+            1,
+            "a deferred file must not accrue failures it never attempted"
         );
 
-        let snap = engine.transfer_queue().await;
+        // Deadline in the past — back in the running, and the ladder advances.
+        engine
+            .index
+            .set_upload_failure(&binding.id, "bad.jpg", 1, now_ms() - 1, "stale")
+            .unwrap();
+        let third = engine.push_local(&binding).await.unwrap();
+        assert_eq!(third.failed, 1, "an expired deadline must retry the file");
         assert_eq!(
-            snap.uploading, EXTRA,
-            "only the attempted wave should drop out; the rest stay Waiting for the next tick"
+            engine
+                .index
+                .get_upload_failure(&binding.id, "bad.jpg")
+                .unwrap()
+                .unwrap()
+                .fail_count,
+            2
         );
     }
 
     #[tokio::test]
-    async fn push_local_uploads_files_in_parallel() {
-        // A wave must actually overlap: without UPLOAD_PARALLELISM the engine opens
-        // one connection at a time and peak concurrency stays at 1. The stub answers
-        // 500 after a delay — the point is when the requests arrive, not that they
-        // succeed, and a failing wave still starts every file in it.
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        use tokio::io::AsyncWriteExt;
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let live = Arc::new(AtomicUsize::new(0));
-        let peak = Arc::new(AtomicUsize::new(0));
-        {
-            let live = live.clone();
-            let peak = peak.clone();
-            tokio::spawn(async move {
-                while let Ok((mut sock, _)) = listener.accept().await {
-                    let live = live.clone();
-                    let peak = peak.clone();
-                    tokio::spawn(async move {
-                        let now = live.fetch_add(1, Ordering::SeqCst) + 1;
-                        peak.fetch_max(now, Ordering::SeqCst);
-                        tokio::time::sleep(Duration::from_millis(300)).await;
-                        let _ = sock
-                            .write_all(
-                                b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: \
-                                  0\r\nconnection: close\r\n\r\n",
-                            )
-                            .await;
-                        let _ = sock.shutdown().await;
-                        live.fetch_sub(1, Ordering::SeqCst);
-                    });
-                }
-            });
-        }
-
+    async fn one_bad_file_does_not_block_the_rest_of_the_backlog() {
+        // The head-of-line case, end to end: a file that is deferred must let
+        // files discovered later through on the very next scan.
         let dir = tempfile::tempdir().unwrap();
         let pics = dir.path().join("pics");
         std::fs::create_dir_all(&pics).unwrap();
-        for i in 0..UPLOAD_PARALLELISM {
-            std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
-        }
-        let engine = SyncEngine::open(
-            SyncEngineConfig {
-                poll_interval: Duration::from_secs(30),
-                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
-                    &format!("http://{addr}"),
-                    // Non-empty: the API refuses to send anything without a token,
-                    // and this test is about what reaches the wire.
-                    "e2e-token",
-                ))),
-                data_dir: dir.path().to_path_buf(),
-                media_source: Arc::new(crate::media_source::FsMediaSource),
-            },
-            Arc::new(KeepBothPrompt),
-        )
-        .unwrap();
-        let binding = Binding {
-            id: "cam".into(),
-            storage_id: uuid::Uuid::new_v4(),
-            remote_root: "Camera".into(),
-            local_path: pics.to_string_lossy().into(),
-            mode: BindingMode::AutoUpload,
-            enabled: true,
-        };
+        std::fs::write(pics.join("0-bad.jpg"), b"x").unwrap();
+        let engine = unreachable_engine(dir.path());
+        let binding = cam_binding(&pics);
 
-        let _ = engine.push_local(&binding).await;
+        engine.push_local(&binding).await.unwrap();
 
+        // New photo arrives while the bad one is still deferred.
+        std::fs::write(pics.join("1-new.jpg"), b"y").unwrap();
+        let next = engine.push_local(&binding).await.unwrap();
+        assert_eq!(
+            next.pending, 1,
+            "the new file must be picked up while the deferred one is skipped"
+        );
+        assert_eq!(next.failed, 1, "and it must actually be attempted");
+    }
+
+    #[tokio::test]
+    async fn retry_failed_uploads_clears_the_backoff() {
+        // "Upload now" escape hatch: the user cannot see the deadline, so an
+        // explicit request must reconsider deferred files immediately.
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        std::fs::write(pics.join("bad.jpg"), b"x").unwrap();
+        let engine = unreachable_engine(dir.path());
+        let binding = cam_binding(&pics);
+        engine.index.upsert_binding(&binding).unwrap();
+
+        engine.push_local(&binding).await.unwrap();
+        assert_eq!(engine.push_local(&binding).await.unwrap().pending, 0);
+
+        assert_eq!(engine.retry_failed_uploads(Some(&binding.id)).unwrap(), 1);
+        assert_eq!(
+            engine.push_local(&binding).await.unwrap().pending,
+            1,
+            "clearing the backoff must put the file back in the pending set"
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_upload_clears_a_previous_failure() {
+        // A file that failed once and then went through must not keep its
+        // record, or its next failure would start partway up the ladder.
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        let path = pics.join("photo.jpg");
+        std::fs::write(&path, b"x").unwrap();
+        let engine = unreachable_engine(dir.path());
+        let binding = cam_binding(&pics);
+
+        engine.push_local(&binding).await.unwrap();
+        assert!(engine
+            .index
+            .get_upload_failure(&binding.id, "photo.jpg")
+            .unwrap()
+            .is_some());
+
+        // Pre-seed the index with the file's current content hash so push_one
+        // takes the "content unchanged" path — a success that sends no bytes,
+        // which must still count as the file being healthy.
+        let hash = crate::hash::sha256_file(&path).await.unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        let mtime = mtime_ms_from_system(meta.modified().unwrap());
+        engine
+            .index
+            .upsert_entry(
+                &binding.id,
+                &IndexEntry {
+                    relative_path: "photo.jpg".into(),
+                    size: 0, // differs, so the file is still a candidate
+                    mtime_ms: mtime,
+                    content_hash: Some(hash),
+                    remote_file_id: None,
+                    last_cursor: 0,
+                },
+            )
+            .unwrap();
+        engine.retry_failed_uploads(Some(&binding.id)).unwrap();
+
+        let result = engine.push_local(&binding).await.unwrap();
+        assert_eq!(result.failed, 0);
         assert!(
-            peak.load(Ordering::SeqCst) > 1,
-            "uploads must overlap; peak concurrent requests was {}",
-            peak.load(Ordering::SeqCst)
+            engine
+                .index
+                .get_upload_failure(&binding.id, "photo.jpg")
+                .unwrap()
+                .is_none(),
+            "a healthy file must not keep a stale failure record"
         );
     }
 
