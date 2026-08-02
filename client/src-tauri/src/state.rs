@@ -493,22 +493,7 @@ pub const OPEN_SYNC_JS: &str = r#"
       return putViaTauri().catch(function(tauriErr){
         if (!__sarcaIsBridgeError(tauriErr)) throw tauriErr;
         return __sarcaFetchInvoke(cmd, args || {});
-      }).catch(function(err){
-        try {
-          fetch('http://127.0.0.1:7619/ingest/e2232703-04e1-41c2-8559-9d4963f1fe58',{
-            method:'POST',
-            headers:{'Content-Type':'application/json','X-Debug-Session-Id':'4d2da0'},
-            body:JSON.stringify({
-              sessionId:'4d2da0',
-              runId:'client-preview',
-              hypothesisId:'B',
-              location:'state.rs:__sarcaInvoke',
-              message:'cache_put_preview_soft_fail',
-              data:{err:String((err&&err.message)||err)},
-              timestamp:Date.now()
-            })
-          }).catch(function(){});
-        } catch (_) {}
+      }).catch(function(){
         return null;
       });
     }
@@ -604,7 +589,7 @@ pub struct ClientPrefs {
     pub app_lock_enabled: bool,
     #[serde(default)]
     pub app_lock_pin: Option<String>,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub enable_logs: bool,
     #[serde(default = "default_cache_limit_bytes")]
     pub cache_limit_bytes: u64,
@@ -625,7 +610,7 @@ impl Default for ClientPrefs {
             background_sync: true,
             app_lock_enabled: false,
             app_lock_pin: None,
-            enable_logs: false,
+            enable_logs: true,
             cache_limit_bytes: default_cache_limit_bytes(),
         }
     }
