@@ -1431,7 +1431,7 @@ fn parse_bytes_range(header: Option<&str>, file_size: u64) -> Result<Option<(u64
 
 #[cfg(test)]
 mod construct_path_tests {
-    use super::{preview_allowed, FilesRouter};
+    use super::{FilesRouter, preview_allowed};
     use crate::errors::SarcaError;
 
     #[test]
