@@ -19,7 +19,6 @@ import {
 	displayCameraRemoteRoot,
 	needsCameraRootMigration,
 	resolveCameraToggle,
-	withBackgroundSyncOn,
 } from '../common/autoUploadActions'
 import { sortTransferItems } from '../common/syncTransferQueue'
 import { syncScanHint } from '../common/syncScanHint'
@@ -50,8 +49,8 @@ function writeCachedCameraEnabled(enabled) {
 }
 
 /**
- * Sync tab: Camera media auto-upload + manage existing folder bindings.
- * Storage is locked to the currently open Files storage.
+ * Sync tab: Camera media auto-upload. Storage is locked to the currently
+ * open Files storage.
  * @param {{ storageId?: string, storageName?: string }} props
  */
 const SettingsSyncPanel = (props) => {
@@ -65,7 +64,6 @@ const SettingsSyncPanel = (props) => {
 	const [statuses, setStatuses] = createSignal([])
 	const [prefs, setPrefs] = createSignal({
 		wifi_only: true,
-		background_sync: true,
 		app_lock_enabled: false,
 		app_lock_pin: null,
 	})
@@ -115,10 +113,6 @@ const SettingsSyncPanel = (props) => {
 			unfinishedUploads: Number(transferSnap().uploading) || 0,
 		})
 	})
-	const folderBindings = () =>
-		bindings().filter(
-			(b) => b.mode === 'folder_upload' || b.mode === 'sync',
-		)
 	const desiredCameraRemoteRoot = () =>
 		displayCameraRemoteRoot(deviceLabel(), platform())
 
@@ -223,7 +217,6 @@ const SettingsSyncPanel = (props) => {
 			if (prefsDto && typeof prefsDto === 'object') {
 				setPrefs({
 					wifi_only: prefsDto.wifi_only !== false,
-					background_sync: prefsDto.background_sync !== false,
 					app_lock_enabled: Boolean(prefsDto.app_lock_enabled),
 					app_lock_pin: prefsDto.app_lock_pin ?? null,
 				})
@@ -320,30 +313,6 @@ const SettingsSyncPanel = (props) => {
 		await nativeInvoke('set_client_prefs', { prefs: next })
 	}
 
-	// Turning a binding on always wants background_sync enabled, but naively
-	// saving `withBackgroundSyncOn(prefs())` before the first successful
-	// `refresh()` would persist the signal's hardcoded defaults (in
-	// particular app_lock_enabled/app_lock_pin) over whatever the user
-	// actually has saved, silently disabling their app lock. Fetch a fresh
-	// base straight from native prefs whenever we haven't loaded real prefs
-	// yet, and skip the save entirely if that also fails.
-	const enableBackgroundSyncSafely = async () => {
-		if (prefsLoaded()) {
-			await savePrefs(withBackgroundSyncOn(prefs()))
-			return
-		}
-		try {
-			const fresh = await nativeInvoke('get_client_prefs')
-			if (fresh && typeof fresh === 'object') {
-				setPrefsLoaded(true)
-				await savePrefs(withBackgroundSyncOn(fresh))
-			}
-		} catch {
-			// No reliable prefs source — skip rather than risk overwriting
-			// real prefs (e.g. app lock) with defaults.
-		}
-	}
-
 	const pickFolder = async (current) => {
 		setBusy(true)
 		setMsg('')
@@ -421,7 +390,6 @@ const SettingsSyncPanel = (props) => {
 							remoteRoot: expectedRoot,
 						})
 					}
-					await enableBackgroundSyncSafely()
 				}
 				await refresh()
 				if (decision.enabled) kickSyncNow()
@@ -464,7 +432,6 @@ const SettingsSyncPanel = (props) => {
 					binding,
 				])
 			}
-			await enableBackgroundSyncSafely()
 			await refresh()
 			kickSyncNow()
 		} catch (e) {
@@ -476,41 +443,10 @@ const SettingsSyncPanel = (props) => {
 		}
 	}
 
-	const removeBinding = async (id) => {
-		setBusy(true)
-		try {
-			await nativeInvoke('remove_binding', { id })
-			await refresh()
-		} catch (e) {
-			addAlert(String(e), 'error')
-		} finally {
-			setBusy(false)
-		}
-	}
-
-	const toggleFolderBinding = async (id, enabled) => {
-		setBusy(true)
-		try {
-			await nativeInvoke('set_binding_enabled', { id, enabled })
-			await refresh()
-		} catch (e) {
-			addAlert(String(e), 'error')
-		} finally {
-			setBusy(false)
-		}
-	}
-
 	const runSyncNow = () => {
 		setMsg('')
 		addAlert('Upload started', 'success')
 		kickSyncNow()
-	}
-
-	const modeLabel = (mode) => {
-		if (mode === 'auto_upload') return 'Camera auto-upload'
-		if (mode === 'folder_upload') return 'Folder auto-upload'
-		if (mode === 'sync') return 'Legacy two-way sync'
-		return mode
 	}
 
 	return (
@@ -581,7 +517,6 @@ const SettingsSyncPanel = (props) => {
 											enabled: true,
 										})
 									}
-									await enableBackgroundSyncSafely()
 									kickSyncNow()
 									await refresh()
 								} else {
@@ -613,18 +548,6 @@ const SettingsSyncPanel = (props) => {
 				</div>
 			</Show>
 
-			<div class="settings-toggle">
-				<span>Background backup / sync</span>
-				<SettingsSwitch
-					id="settings-background-switch"
-					checked={prefs().background_sync !== false}
-					disabled={busy()}
-					onChange={(checked) =>
-						savePrefs({ ...prefs(), background_sync: checked })
-					}
-				/>
-			</div>
-
 			<div class="settings-sync-panel__section">
 				<Typography variant="subtitle2" sx={{ mb: 1 }}>
 					Upload &amp; download
@@ -655,54 +578,6 @@ const SettingsSyncPanel = (props) => {
 				</div>
 			</div>
 
-			<div class="settings-sync-panel__section">
-				<Typography variant="subtitle2" sx={{ mb: 1 }}>
-					Folder bindings
-				</Typography>
-				<Show
-					when={folderBindings().length}
-					fallback={
-						<p class="settings-account__hint">No folder bindings.</p>
-					}
-				>
-					<ul class="settings-sync-panel__list">
-						<For each={folderBindings()}>
-							{(b) => (
-								<li>
-									<div>
-										<strong>{modeLabel(b.mode)}</strong>
-										<div class="settings-account__hint">{b.local_path}</div>
-										<div class="settings-account__hint">
-											{b.remote_root || '(root)'}
-										</div>
-									</div>
-									<div class="settings-sync-panel__row">
-										<SettingsSwitch
-											id={`settings-folder-switch-${b.id}`}
-											ariaLabel={`${modeLabel(b.mode)}: ${b.local_path}`}
-											checked={b.enabled === true}
-											disabled={busy()}
-											onChange={(checked) =>
-												toggleFolderBinding(b.id, checked)
-											}
-										/>
-										<Button
-											size="small"
-											color="error"
-											variant="outlined"
-											disabled={busy()}
-											onClick={() => removeBinding(b.id)}
-										>
-											Remove
-										</Button>
-									</div>
-								</li>
-							)}
-						</For>
-					</ul>
-				</Show>
-			</div>
-
 			<div class="settings-sync-panel__row">
 				<Button
 					variant="contained"
@@ -714,11 +589,6 @@ const SettingsSyncPanel = (props) => {
 				</Button>
 			</div>
 
-			<Show when={statuses().length}>
-				<pre class="settings-sync-panel__status">
-					{JSON.stringify(statuses(), null, 2)}
-				</pre>
-			</Show>
 			<Show when={statuses().some((s) => s.last_error)}>
 				<p class="settings-bot-hint" role="alert">
 					{statuses()

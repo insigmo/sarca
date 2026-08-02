@@ -53,14 +53,6 @@ export function resolveCameraToggle(bindings, enable, currentStorageId = '') {
 }
 
 /**
- * @param {Record<string, unknown>} prefs
- * @returns {Record<string, unknown>}
- */
-export function withBackgroundSyncOn(prefs) {
-	return { ...prefs, background_sync: true }
-}
-
-/**
  * Builds remote camera path per device: `Camera/<device>`.
  * @param {string} deviceLabel
  * @returns {string}

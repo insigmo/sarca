@@ -109,6 +109,11 @@
 	box-sizing: border-box;
 }
 
+::selection {
+	background: color-mix(in srgb, var(--sarca-teal) 35%, transparent);
+	color: var(--sarca-ink);
+}
+
 html,
 body,
 #root {
@@ -542,7 +547,7 @@ a.default-link:hover {
 	-webkit-user-select: none !important;
 }
 
-.files-shell *::selection {
+.files-shell *:not(input):not(textarea):not(select):not([contenteditable='true']):not(.allow-text-select):not(.allow-text-select *)::selection {
 	background: transparent !important;
 	color: inherit !important;
 }
