@@ -31,6 +31,12 @@ pub struct Config {
     pub telegram_api_base_url: String,
     pub telegram_rate_limit: u8,
 
+    /// How many files the storage manager relays to Telegram at once. Chunks of a
+    /// single file always stay sequential, and the per-token send gate still paces
+    /// each bot, so this only buys parallelism across distinct worker tokens.
+    /// Halved automatically while a flood wait is in effect.
+    pub upload_concurrency: u8,
+
     /// Where to spool uploads and other temporary data.
     pub work_dir: String,
 
@@ -107,6 +113,10 @@ impl Config {
             "https://api.telegram.org".to_owned(),
         )?;
         let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 18)?;
+        // 4 is the useful ceiling: beyond that the per-token send gate, not the
+        // manager, is what everyone queues behind. 0 would wedge the manager.
+        let upload_concurrency =
+            Self::get_env_var_with_default("UPLOAD_CONCURRENCY", 4u8)?.clamp(1, 16);
         let telegram_chunk_size_mb =
             Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", 20u32)?;
         let telegram_video_chunk_size_mb =
@@ -141,6 +151,7 @@ impl Config {
             secret_key,
             telegram_api_base_url,
             telegram_rate_limit,
+            upload_concurrency,
             work_dir,
             telegram_chunk_size_mb,
             telegram_video_chunk_size_mb,

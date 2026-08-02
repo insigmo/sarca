@@ -20,6 +20,13 @@ use crate::{
     types::{Binding, BindingMode, SyncStatus},
 };
 
+/// How many files one binding uploads at the same time. Chunks within a file stay
+/// sequential — this only overlaps distinct files, which is where the wall-clock
+/// time goes (each upload is a full client → Sarca → Telegram round trip). Past ~4
+/// the server's per-bot-token send gate is the limit anyway, and every extra
+/// in-flight file is one more spool file on the server's disk.
+const UPLOAD_PARALLELISM: usize = 4;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictChoice {
     KeepLocal,
@@ -485,7 +492,71 @@ impl SyncEngine {
 
         let mut uploaded = 0usize;
         let mut pending_iter = pending.into_iter();
-        while let Some((candidate, waiting_id)) = pending_iter.next() {
+        // Files leave in waves instead of strictly one at a time. Only whole files
+        // overlap: each `push_one` still hashes, uploads and indexes its own file in
+        // order, and the server keeps every chunk of a single file sequential. A wave
+        // is joined before the next one starts so a failure still stops the batch,
+        // leaving the untouched candidates Waiting for the next tick.
+        loop {
+            let wave: Vec<_> = pending_iter.by_ref().take(UPLOAD_PARALLELISM).collect();
+            if wave.is_empty() {
+                break;
+            }
+
+            let results = futures::future::join_all(
+                wave.into_iter()
+                    .map(|(candidate, waiting_id)| self.push_one(binding, candidate, waiting_id)),
+            )
+            .await;
+
+            let mut failure = None;
+            for result in results {
+                match result {
+                    Ok(true) => uploaded += 1,
+                    Ok(false) => {},
+                    Err(e) => failure = failure.or(Some(e)),
+                }
+            }
+
+            // Live progress for long Camera / folder uploads (Telegram is slow).
+            if upload_only {
+                let mut guard = self.statuses.write().await;
+                if let Some(s) = guard.iter_mut().find(|s| s.binding_id == binding.id) {
+                    s.uploading = uploaded;
+                    s.last_error = None;
+                }
+            }
+
+            if let Some(e) = failure {
+                self.cleanup_abandoned_ephemeral(pending_iter.collect()).await;
+                return Err(e);
+            }
+        }
+
+        // Indexed files missing on disk are left untouched — no delete on the
+        // server, and no automatic redownload either. Local absence (folder
+        // wiped, file removed by hand) is not user intent to delete server
+        // data, but it is not a download request either: the only way
+        // content ever moves is an explicit user action (upload, or a
+        // deliberate download elsewhere in the app), never something
+        // inferred from local disk state.
+        Ok(PushLocalResult {
+            uploaded,
+            scanned,
+            pending: pending_n,
+        })
+    }
+
+    /// Uploads a single candidate. `Ok(true)` means bytes reached the server,
+    /// `Ok(false)` that there was nothing to send (content unchanged). On error only
+    /// this candidate is cleaned up; the caller handles the rest of the batch.
+    async fn push_one(
+        &self,
+        binding: &Binding,
+        candidate: LocalCandidate,
+        waiting_id: Option<String>,
+    ) -> Result<bool> {
+        {
             let LocalCandidate {
                 relative_path: rel,
                 absolute_path: path,
@@ -512,7 +583,6 @@ impl SyncEngine {
                     if ephemeral {
                         tokio::fs::remove_file(&path).await.ok();
                     }
-                    self.cleanup_abandoned_ephemeral(pending_iter.collect()).await;
                     return Err(e).with_context(|| format!("hash {}", path.display()));
                 }
             };
@@ -528,7 +598,7 @@ impl SyncEngine {
                 if ephemeral {
                     tokio::fs::remove_file(&path).await.ok();
                 }
-                continue;
+                return Ok(false);
             }
 
             let (parent, filename) = split_parent_name(&rel);
@@ -538,7 +608,6 @@ impl SyncEngine {
                 if ephemeral {
                     tokio::fs::remove_file(&path).await.ok();
                 }
-                self.cleanup_abandoned_ephemeral(pending_iter.collect()).await;
                 return Err(e);
             }
             let upload_result = self
@@ -558,7 +627,6 @@ impl SyncEngine {
                 if ephemeral {
                     tokio::fs::remove_file(&path).await.ok();
                 }
-                self.cleanup_abandoned_ephemeral(pending_iter.collect()).await;
                 return Err(e).with_context(|| {
                     format!("upload {} → {}/{}", path.display(), remote_parent, filename)
                 });
@@ -578,29 +646,9 @@ impl SyncEngine {
             if ephemeral {
                 tokio::fs::remove_file(&path).await.ok();
             }
-            uploaded += 1;
-            // Live progress for long Camera / folder uploads (Telegram is slow).
-            if upload_only {
-                let mut guard = self.statuses.write().await;
-                if let Some(s) = guard.iter_mut().find(|s| s.binding_id == binding.id) {
-                    s.uploading = uploaded;
-                    s.last_error = None;
-                }
-            }
         }
 
-        // Indexed files missing on disk are left untouched — no delete on the
-        // server, and no automatic redownload either. Local absence (folder
-        // wiped, file removed by hand) is not user intent to delete server
-        // data, but it is not a download request either: the only way
-        // content ever moves is an explicit user action (upload, or a
-        // deliberate download elsewhere in the app), never something
-        // inferred from local disk state.
-        Ok(PushLocalResult {
-            uploaded,
-            scanned,
-            pending: pending_n,
-        })
+        Ok(true)
     }
 
     async fn pull_remote(&self, binding: &Binding, cursor: &mut i64) -> Result<usize> {
@@ -1026,15 +1074,18 @@ mod tests {
     #[tokio::test]
     async fn push_local_error_keeps_remaining_batch_waiting() {
         // Regression test: if an upload fails partway through a batch, only
-        // the failed candidate's transfer entry is dropped. The rest of the
-        // batch stays Waiting in the queue (not cleared to 0) because the
+        // the candidates that were actually attempted drop out of the queue.
+        // Everything still queued stays Waiting (not cleared to 0) because the
         // very next tick's push_local re-enqueues the same relative paths in
         // place — they are not "stuck", so the UI count should keep
         // reflecting the real backlog instead of lying about it being empty.
+        // One wave (UPLOAD_PARALLELISM files) goes out and fails; the extra two
+        // are never started, so they must survive.
+        const EXTRA: usize = 2;
         let dir = tempfile::tempdir().unwrap();
         let pics = dir.path().join("pics");
         std::fs::create_dir_all(&pics).unwrap();
-        for i in 0..3 {
+        for i in 0..UPLOAD_PARALLELISM + EXTRA {
             std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
         }
         let engine = SyncEngine::open(
@@ -1070,8 +1121,85 @@ mod tests {
 
         let snap = engine.transfer_queue().await;
         assert_eq!(
-            snap.uploading, 2,
-            "only the failed candidate should drop out; the other 2 stay Waiting for the next tick"
+            snap.uploading, EXTRA,
+            "only the attempted wave should drop out; the rest stay Waiting for the next tick"
+        );
+    }
+
+    #[tokio::test]
+    async fn push_local_uploads_files_in_parallel() {
+        // A wave must actually overlap: without UPLOAD_PARALLELISM the engine opens
+        // one connection at a time and peak concurrency stays at 1. The stub answers
+        // 500 after a delay — the point is when the requests arrive, not that they
+        // succeed, and a failing wave still starts every file in it.
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        {
+            let live = live.clone();
+            let peak = peak.clone();
+            tokio::spawn(async move {
+                while let Ok((mut sock, _)) = listener.accept().await {
+                    let live = live.clone();
+                    let peak = peak.clone();
+                    tokio::spawn(async move {
+                        let now = live.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(now, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        let _ = sock
+                            .write_all(
+                                b"HTTP/1.1 500 Internal Server Error\r\ncontent-length: \
+                                  0\r\nconnection: close\r\n\r\n",
+                            )
+                            .await;
+                        let _ = sock.shutdown().await;
+                        live.fetch_sub(1, Ordering::SeqCst);
+                    });
+                }
+            });
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        for i in 0..UPLOAD_PARALLELISM {
+            std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
+        }
+        let engine = SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
+                    &format!("http://{addr}"),
+                    // Non-empty: the API refuses to send anything without a token,
+                    // and this test is about what reaches the wire.
+                    "e2e-token",
+                ))),
+                data_dir: dir.path().to_path_buf(),
+                media_source: Arc::new(crate::media_source::FsMediaSource),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap();
+        let binding = Binding {
+            id: "cam".into(),
+            storage_id: uuid::Uuid::new_v4(),
+            remote_root: "Camera".into(),
+            local_path: pics.to_string_lossy().into(),
+            mode: BindingMode::AutoUpload,
+            enabled: true,
+        };
+
+        let _ = engine.push_local(&binding).await;
+
+        assert!(
+            peak.load(Ordering::SeqCst) > 1,
+            "uploads must overlap; peak concurrent requests was {}",
+            peak.load(Ordering::SeqCst)
         );
     }
 

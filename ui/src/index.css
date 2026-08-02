@@ -1626,7 +1626,7 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	position: relative;
 	display: flex;
 	align-items: center;
-	gap: 14px;
+	gap: 10px;
 	padding: 12px 14px;
 	border-radius: 12px;
 	cursor: pointer;
@@ -1716,6 +1716,14 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 .fs-list-item .file-type-icon--bare {
 	background: none;
 	border: none;
+	/*
+	 * Glyph icons (folder.svg and the file-type set) draw inside a 16x16
+	 * viewBox with the shape spanning x 1..15, so `object-fit: contain` bakes
+	 * ~6% dead space into each side. Without this the row gap measures 10px
+	 * but reads noticeably wider than next to a thumbnail, which fills its box
+	 * edge to edge. Pull the glyph box in so both optically align.
+	 */
+	margin-inline-end: -3px;
 }
 
 .fs-list-item .file-type-icon__glyph,

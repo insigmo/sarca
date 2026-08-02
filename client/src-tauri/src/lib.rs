@@ -134,6 +134,14 @@ pub fn run() {
             let _ = webview.eval(state::native_chrome_js());
         });
 
+    // e2e driver. Compiled only under `--features pilot` (never in a release
+    // bundle) and further gated on a debug build so a `--release --features
+    // pilot` slip cannot open the control socket in a shipped binary.
+    #[cfg(all(desktop, debug_assertions, feature = "pilot"))]
+    {
+        builder = builder.plugin(tauri_plugin_pilot::init());
+    }
+
     // process + autostart are desktop-oriented.
     #[cfg(desktop)]
     {
@@ -151,6 +159,13 @@ pub fn run() {
             remote_ipc::handle_protocol(ctx, request, responder);
         })
         .setup(|app| {
+            // Kept out of capabilities/ on purpose: that directory is scanned at
+            // build time, and `pilot:default` does not exist unless the optional
+            // plugin is compiled in. Registering at runtime keeps release builds
+            // buildable without the git dependency.
+            #[cfg(all(desktop, debug_assertions, feature = "pilot"))]
+            app.add_capability(include_str!("../e2e/pilot-capability.json"))?;
+
             let sync_state = AppSyncState::new(app.handle())?;
             let reconnect = {
                 let cfg = tauri::async_runtime::block_on(sync_state.server.lock()).clone();

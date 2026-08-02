@@ -112,7 +112,7 @@ tasks:
       - "{{.ROOT_DIR}}/scripts/db-reset.sh"
 
   smoke:
-    desc: Upload sample image+video against running API (SARCA_BASE_URL)
+    desc: Upload sample image+video against running API (SARCA_BASE_URL); `task e2e` covers it on the mock
     cmds:
       - |
         cd "{{.ROOT_DIR}}"
@@ -135,6 +135,28 @@ tasks:
         cd e2e
         env -u SUPERUSER_EMAIL -u SUPERUSER_PASS -u PORT -u SARCA_BASE_URL \
           SARCA_SKIP_BUILD=1 ../.venv/bin/python -m pytest {{.CLI_ARGS}}
+
+  e2e:gui:
+    desc: GUI e2e — drives the real Tauri client through tauri-pilot (Xvfb when headless)
+    deps: [ui, client:ui]
+    cmds:
+      - |
+        cd "{{.ROOT_DIR}}"
+        if [ ! -d .venv ]; then python3 -m venv .venv; fi
+        .venv/bin/pip install -q -r e2e/requirements.txt
+        command -v tauri-pilot >/dev/null 2>&1 || cargo install tauri-pilot-cli --locked
+        cargo build --release -p sarca
+        # The pilot plugin is debug-only and feature-gated, so the client the
+        # tests drive is a debug build with `--features pilot`.
+        cargo build -p sarca-client --features pilot
+        cd e2e
+        CMD="env -u SUPERUSER_EMAIL -u SUPERUSER_PASS -u PORT -u SARCA_BASE_URL \
+          SARCA_SKIP_BUILD=1 ../.venv/bin/python -m pytest -m gui {{.CLI_ARGS}}"
+        if [ -n "${DISPLAY}${WAYLAND_DISPLAY}" ]; then
+          sh -c "$CMD"
+        else
+          xvfb-run -a -s "-screen 0 1280x900x24" sh -c "$CMD"
+        fi
 
   client:install:
     desc: Install client frontend deps (pnpm)

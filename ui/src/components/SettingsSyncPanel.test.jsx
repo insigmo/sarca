@@ -98,10 +98,12 @@ const callsFor = (cmd) =>
 
 beforeEach(() => {
 	pickLocalFolder.mockReset()
-	try {
-		sessionStorage.removeItem('sarca.client.cameraAutoUploadEnabled')
-	} catch {
-		// ignore
+	for (const store of [localStorage, sessionStorage]) {
+		try {
+			store.removeItem('sarca.client.cameraAutoUploadEnabled')
+		} catch {
+			// ignore
+		}
 	}
 })
 
@@ -563,7 +565,7 @@ describe('SettingsSyncPanel', () => {
 	})
 
 	it('shows cached camera ON immediately while list_bindings is slow', async () => {
-		sessionStorage.setItem('sarca.client.cameraAutoUploadEnabled', '1')
+		localStorage.setItem('sarca.client.cameraAutoUploadEnabled', '1')
 		let release
 		const gate = new Promise((resolve) => {
 			release = resolve
@@ -612,15 +614,18 @@ describe('SettingsSyncPanel', () => {
 			return el
 		})
 		expect(sw.getAttribute('aria-checked')).toBe('true')
-		expect(sw.disabled).toBe(true)
+		// Interactive from the first paint — a slow list_bindings must not lock
+		// the switch, that is exactly what read as "the toggle hangs".
+		expect(sw.disabled).toBe(false)
 
 		release()
-		await waitFor(() => expect(sw.disabled).toBe(false))
+		await waitFor(() => expect(callsFor('list_bindings').length).toBeGreaterThan(0))
+		expect(sw.disabled).toBe(false)
 		expect(sw.getAttribute('aria-checked')).toBe('true')
 	})
 
 	it('does not flash camera OFF before slow list_bindings when cache says ON', async () => {
-		sessionStorage.setItem('sarca.client.cameraAutoUploadEnabled', '1')
+		localStorage.setItem('sarca.client.cameraAutoUploadEnabled', '1')
 		const seen = []
 		let release
 		const gate = new Promise((resolve) => {
@@ -676,6 +681,112 @@ describe('SettingsSyncPanel', () => {
 			expect(
 				container.querySelector('#settings-camera-switch')?.disabled,
 			).toBe(false),
+		)
+	})
+
+	it('renders an enabled OFF switch instantly on a cold client, never a spinner', async () => {
+		// No cache entry at all — a client that has never touched auto-upload.
+		// The old panel showed a CircularProgress until list_bindings landed,
+		// which is what "the toggle hangs when I open Sync settings" was.
+		let release
+		const gate = new Promise((resolve) => {
+			release = resolve
+		})
+		nativeInvoke.mockReset()
+		nativeInvoke.mockImplementation(async (cmd) => {
+			if (cmd === 'list_bindings') {
+				await gate
+				return []
+			}
+			switch (cmd) {
+				case 'platform_label':
+					return ''
+				case 'device_label':
+					return 'Pixel 8'
+				case 'get_client_prefs':
+					return { wifi_only: true, app_lock_enabled: false, app_lock_pin: null }
+				case 'sync_statuses':
+					return []
+				case 'sync_transfer_queue':
+					return { uploading: 0, downloading: 0, items: [] }
+				default:
+					return null
+			}
+		})
+
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+
+		const sw = container.querySelector('#settings-camera-switch')
+		expect(sw).toBeTruthy()
+		expect(sw.getAttribute('aria-checked')).toBe('false')
+		expect(sw.disabled).toBe(false)
+		expect(
+			container.querySelector('[aria-label="Loading auto-upload state"]'),
+		).toBeNull()
+
+		release()
+		await waitFor(() => expect(callsFor('list_bindings').length).toBeGreaterThan(0))
+		expect(sw.getAttribute('aria-checked')).toBe('false')
+	})
+
+	it('persists the toggle across a remount, without re-reading bindings first', async () => {
+		// Cold-start survival: sessionStorage was cleared on every app restart,
+		// so a client with auto-upload ON came back up rendering OFF (or a
+		// spinner) until IPC answered. localStorage keeps the last known value.
+		mockNativeInvoke([])
+		const first = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		await waitFor(() => expect(callsFor('list_bindings').length).toBeGreaterThan(0))
+		fireEvent.click(first.container.querySelector('#settings-camera-switch'))
+		await waitFor(() => expect(callsFor('add_binding').length).toBe(1))
+		await waitFor(() =>
+			expect(
+				first.container
+					.querySelector('#settings-camera-switch')
+					.getAttribute('aria-checked'),
+			).toBe('true'),
+		)
+		first.unmount()
+
+		expect(localStorage.getItem('sarca.client.cameraAutoUploadEnabled')).toBe('1')
+
+		// Remount against a native layer that never answers: only the cache can
+		// drive the first paint.
+		nativeInvoke.mockReset()
+		nativeInvoke.mockImplementation(() => new Promise(() => {}))
+		const second = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		const sw = second.container.querySelector('#settings-camera-switch')
+		expect(sw.getAttribute('aria-checked')).toBe('true')
+		expect(sw.disabled).toBe(false)
+	})
+
+	it('records OFF in the cache so a disabled client stays disabled on restart', async () => {
+		mockNativeInvoke([
+			{
+				id: '1',
+				mode: 'auto_upload',
+				enabled: true,
+				local_path: '/p',
+				remote_root: 'Camera/Pixel 8',
+			},
+		])
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		const sw = container.querySelector('#settings-camera-switch')
+		await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('true'))
+
+		fireEvent.click(sw)
+		await waitFor(() => expect(callsFor('set_binding_enabled').length).toBe(1))
+		await waitFor(() =>
+			expect(localStorage.getItem('sarca.client.cameraAutoUploadEnabled')).toBe(
+				'0',
+			),
 		)
 	})
 })
