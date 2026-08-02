@@ -5,7 +5,8 @@
 //! cargo run -p sarca-sync --example headless -- \
 //!   --server http://127.0.0.1:8000 --email a@b.c --password secret \
 //!   --storage-id <uuid> --local /tmp/dcim --remote-root Camera \
-//!   --mode auto_upload --ticks 2 --data-dir /tmp/sync-state
+//!   --mode auto_upload --ticks 2 --data-dir /tmp/sync-state \
+//!   --retry-failed 1
 //! ```
 //!
 //! Prints one JSON object on stdout: bindings, per-binding statuses and the
@@ -88,6 +89,12 @@ async fn main() -> Result<()> {
         mode,
         enabled: true,
     })?;
+
+    // Mirrors the "Upload now" action: drop the retry backoff so files that
+    // failed on an earlier run are reconsidered immediately.
+    if args.get("retry-failed").map(String::as_str) == Some("1") {
+        engine.retry_failed_uploads(Some(&binding_id))?;
+    }
 
     let mut tick_errors: Vec<String> = Vec::new();
     for _ in 0..ticks {
