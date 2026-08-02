@@ -17,13 +17,31 @@ enum ThumbKind {
     Pdf,
 }
 
+/// Result of generating a file's thumbnail (and, for video, a
+/// screen-sized preview from the same extracted keyframe — one ffmpeg
+/// invocation instead of two).
+pub struct ThumbAndPreview {
+    pub thumb: Vec<u8>,
+    pub preview: Option<Vec<u8>>,
+}
+
+fn build_thumb_and_preview(raw: &[u8], include_preview: bool) -> Result<ThumbAndPreview, String> {
+    let thumb = resize_to_jpeg(raw, THUMB_MAX_EDGE, THUMB_JPEG_QUALITY)?;
+    let preview = if include_preview {
+        Some(resize_to_jpeg(raw, PREVIEW_MAX_EDGE, PREVIEW_JPEG_QUALITY)?)
+    } else {
+        None
+    };
+    Ok(ThumbAndPreview { thumb, preview })
+}
+
 /// Try to build a JPEG thumbnail for the given file.
 /// Returns `Ok(None)` when the type is unsupported or helpers are missing.
 pub async fn generate(
     file_path: &Path,
     logical_path: &str,
     chunk_size_bytes: u64,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<Option<ThumbAndPreview>, String> {
     let Some(kind) = detect_kind(logical_path) else {
         return Ok(None);
     };
@@ -50,13 +68,12 @@ pub async fn generate(
         },
     };
 
-    let jpeg = tokio::task::spawn_blocking(move || {
-        resize_to_jpeg(&raw, THUMB_MAX_EDGE, THUMB_JPEG_QUALITY)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+    let include_preview = kind == ThumbKind::Video;
+    let result = tokio::task::spawn_blocking(move || build_thumb_and_preview(&raw, include_preview))
+        .await
+        .map_err(|e| e.to_string())??;
 
-    Ok(Some(jpeg))
+    Ok(Some(result))
 }
 
 const THUMB_JPEG_QUALITY: u8 = 75;
@@ -418,5 +435,27 @@ mod tests {
 
         let jpeg = generate_video(&video, 4096).await.unwrap();
         assert!(jpeg.starts_with(&[0xFF, 0xD8, 0xFF]));
+    }
+
+    #[test]
+    fn build_thumb_and_preview_without_preview() {
+        let raw = sample_png(800, 600);
+        let result = build_thumb_and_preview(&raw, false).unwrap();
+
+        let thumb = image::load_from_memory(&result.thumb).unwrap();
+        assert!(thumb.width() <= THUMB_MAX_EDGE && thumb.height() <= THUMB_MAX_EDGE);
+        assert!(result.preview.is_none());
+    }
+
+    #[test]
+    fn build_thumb_and_preview_with_preview() {
+        let raw = sample_png(3000, 2000);
+        let result = build_thumb_and_preview(&raw, true).unwrap();
+
+        let thumb = image::load_from_memory(&result.thumb).unwrap();
+        assert!(thumb.width() <= THUMB_MAX_EDGE && thumb.height() <= THUMB_MAX_EDGE);
+
+        let preview = image::load_from_memory(result.preview.as_ref().unwrap()).unwrap();
+        assert!(preview.width() <= PREVIEW_MAX_EDGE && preview.height() <= PREVIEW_MAX_EDGE);
     }
 }
