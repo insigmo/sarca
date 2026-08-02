@@ -57,6 +57,47 @@ pub async fn generate(file_path: &Path, logical_path: &str) -> Result<Option<Vec
 
 const THUMB_JPEG_QUALITY: u8 = 75;
 
+const KEYFRAME_TARGET: u32 = 10;
+
+/// Candidate keyframe filenames in preference order: highest-numbered
+/// (latest-extracted) first, matching the existing `kf_%02d.jpg` ffmpeg
+/// output pattern. Picking the highest-numbered file that actually exists
+/// is how we select "the 10th keyframe if present, else the last one
+/// ffmpeg managed to extract."
+fn keyframe_candidate_names(count: u32) -> Vec<String> {
+    (1..=count).rev().map(|n| format!("kf_{n:02}.jpg")).collect()
+}
+
+fn pick_existing_keyframe(dir: &Path, names: &[String]) -> Option<PathBuf> {
+    names.iter().map(|name| dir.join(name)).find(|p| p.exists())
+}
+
+/// Copy at most `max_bytes` from the start of `src` into `dst`. Used to
+/// run ffmpeg against just the first upload chunk of a video instead of
+/// the full file, so keyframe extraction cost is bounded independent of
+/// video length.
+async fn truncate_prefix(src: &Path, dst: &Path, max_bytes: u64) -> Result<(), String> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut input = tokio::fs::File::open(src).await.map_err(|e| format!("open source: {e}"))?;
+    let mut output =
+        tokio::fs::File::create(dst).await.map_err(|e| format!("create prefix file: {e}"))?;
+
+    let mut remaining = max_bytes;
+    let mut buf = [0u8; 64 * 1024];
+    while remaining > 0 {
+        let want = remaining.min(buf.len() as u64) as usize;
+        let n = input.read(&mut buf[..want]).await.map_err(|e| format!("read source: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        output.write_all(&buf[..n]).await.map_err(|e| format!("write prefix: {e}"))?;
+        remaining -= n as u64;
+    }
+    output.flush().await.map_err(|e| format!("flush prefix: {e}"))?;
+    Ok(())
+}
+
 /// Whether the logical path is a raster image we can preview-encode.
 pub fn is_preview_image(logical_path: &str) -> bool {
     matches!(detect_kind(logical_path), Some(ThumbKind::Image))
@@ -266,5 +307,57 @@ mod tests {
         assert!(is_preview_image("dir/x.webp"));
         assert!(!is_preview_image("clip.mp4"));
         assert!(!is_preview_image("doc.pdf"));
+    }
+
+    #[test]
+    fn keyframe_candidate_names_orders_high_to_low() {
+        let names = keyframe_candidate_names(10);
+        assert_eq!(names.len(), 10);
+        assert_eq!(names.first().unwrap(), "kf_10.jpg");
+        assert_eq!(names.last().unwrap(), "kf_01.jpg");
+    }
+
+    #[test]
+    fn pick_existing_keyframe_prefers_highest_present() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("kf_05.jpg"), b"x").unwrap();
+        std::fs::write(dir.path().join("kf_03.jpg"), b"x").unwrap();
+        let names = keyframe_candidate_names(10);
+        let picked = pick_existing_keyframe(dir.path(), &names).unwrap();
+        assert_eq!(picked.file_name().unwrap(), "kf_05.jpg");
+    }
+
+    #[test]
+    fn pick_existing_keyframe_none_when_nothing_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let names = keyframe_candidate_names(10);
+        assert!(pick_existing_keyframe(dir.path(), &names).is_none());
+    }
+
+    #[tokio::test]
+    async fn truncate_prefix_copies_only_requested_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.bin");
+        let dst = dir.path().join("dst.bin");
+        let data: Vec<u8> = (0u8..=255).cycle().take(1000).collect();
+        std::fs::write(&src, &data).unwrap();
+
+        truncate_prefix(&src, &dst, 100).await.unwrap();
+
+        let out = std::fs::read(&dst).unwrap();
+        assert_eq!(out.len(), 100);
+        assert_eq!(out, data[..100]);
+    }
+
+    #[tokio::test]
+    async fn truncate_prefix_copies_whole_file_when_smaller_than_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src.bin");
+        let dst = dir.path().join("dst.bin");
+        std::fs::write(&src, b"short").unwrap();
+
+        truncate_prefix(&src, &dst, 1_000_000).await.unwrap();
+
+        assert_eq!(std::fs::read(&dst).unwrap(), b"short");
     }
 }
