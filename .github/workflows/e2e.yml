@@ -91,6 +91,11 @@ jobs:
       - name: Build server
         run: cargo +stable build --release -p sarca
 
+      # test_03/test_09 drive the real sync engine through this example, so the
+      # e2e job (which has no toolchain) gets it prebuilt as well.
+      - name: Build headless sync driver
+        run: cargo +stable build -p sarca-sync --example headless
+
       - uses: actions/upload-artifact@v6
         with:
           name: server-bin
@@ -98,38 +103,30 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - uses: actions/upload-artifact@v6
+        with:
+          name: sync-headless
+          path: target/debug/examples/headless
+          if-no-files-found: error
+          retention-days: 1
+
+  # The hermetic harness: conftest.py starts its own `sarca` process against a
+  # fake Telegram Bot API, exactly like `task e2e` does locally. Nothing is
+  # excluded here — the smoke suite runs on the mock too.
   e2e:
     needs: [checks, build-ui, build-server]
     runs-on: ubuntu-latest
 
     env:
-      PORT: "8000"
-      WORKERS: "2"
-      CHANNEL_CAPACITY: "8"
-      SUPERUSER_EMAIL: e2e@sarca.test
-      SUPERUSER_PASS: e2e-password
-      ACCESS_TOKEN_EXPIRE_IN_SECS: "1800"
-      REFRESH_TOKEN_EXPIRE_IN_DAYS: "14"
-      SECRET_KEY: e2e-secret-key-for-ci-only-not-production
-      TELEGRAM_API_BASE_URL: https://api.telegram.org
-      TELEGRAM_RATE_LIMIT: "18"
-      TELEGRAM_CHUNK_SIZE_MB: "20"
-      TELEGRAM_VIDEO_CHUNK_SIZE_MB: "20"
-      WORK_DIR: ${{ github.workspace }}/work
-      SQLITE_PATH: ${{ github.workspace }}/runtime/sarca.sqlite
-      SARCA_PLAIN_HTTP: "1"
-      SARCA_BASE_URL: http://127.0.0.1:8000
-      # e2e/helpers/server.py's build_binary() reruns `cargo build --release` unless
-      # this is set — this job has no Rust toolchain/cache, and the binary is already
-      # built by the build-server job (downloaded below to target/release/sarca).
+      # helpers/server.py and helpers/sync_client.py rebuild with cargo unless
+      # this is set; this job has no toolchain and both binaries are downloaded.
       SARCA_SKIP_BUILD: "1"
 
     steps:
       - uses: actions/checkout@v5
 
-      # e2e/helpers/server.py's ui_dist() looks for <repo_root>/ui/dist/index.html
-      # (used to symlink UI for managed server instances spawned directly by tests,
-      # e.g. test_04_http3.py / test_06_settings.py) — download straight into place.
+      # helpers/server.py's ui_dist() looks for <repo_root>/ui/dist/index.html
+      # and symlinks it into every managed server instance.
       - uses: actions/download-artifact@v7
         with:
           name: ui-dist
@@ -141,68 +138,108 @@ jobs:
           name: server-bin
           path: target/release
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: sync-headless
+          path: target/debug/examples
+
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: e2e/requirements.txt
 
-      - name: Prepare runtime dir
-        run: |
-          mkdir -p "$WORK_DIR" runtime/ui
-          cp -a ui/dist/. runtime/ui/
-          chmod +x target/release/sarca
-          cp target/release/sarca runtime/sarca
-          chmod +x runtime/sarca
-          # Binary self-loads sarca.conf (production-like).
-          {
-            echo "PORT=${PORT}"
-            echo "WORKERS=${WORKERS}"
-            echo "CHANNEL_CAPACITY=${CHANNEL_CAPACITY}"
-            echo "SUPERUSER_EMAIL=${SUPERUSER_EMAIL}"
-            echo "SUPERUSER_PASS=${SUPERUSER_PASS}"
-            echo "ACCESS_TOKEN_EXPIRE_IN_SECS=${ACCESS_TOKEN_EXPIRE_IN_SECS}"
-            echo "REFRESH_TOKEN_EXPIRE_IN_DAYS=${REFRESH_TOKEN_EXPIRE_IN_DAYS}"
-            echo "SECRET_KEY=${SECRET_KEY}"
-            echo "TELEGRAM_API_BASE_URL=${TELEGRAM_API_BASE_URL}"
-            echo "TELEGRAM_RATE_LIMIT=${TELEGRAM_RATE_LIMIT}"
-            echo "TELEGRAM_CHUNK_SIZE_MB=${TELEGRAM_CHUNK_SIZE_MB}"
-            echo "TELEGRAM_VIDEO_CHUNK_SIZE_MB=${TELEGRAM_VIDEO_CHUNK_SIZE_MB}"
-            echo "WORK_DIR=${WORK_DIR}"
-            echo "SQLITE_PATH=${SQLITE_PATH}"
-            echo "SARCA_PLAIN_HTTP=${SARCA_PLAIN_HTTP}"
-          } > runtime/sarca.conf
-
-      - name: Start server
-        working-directory: runtime
-        run: |
-          env -i HOME="$HOME" PATH="$PATH" \
-            ./sarca >"$GITHUB_WORKSPACE/server.log" 2>&1 &
-          echo $! >"$GITHUB_WORKSPACE/server.pid"
-          for i in $(seq 1 45); do
-            if grep -q "Sarca is running" "$GITHUB_WORKSPACE/server.log" 2>/dev/null; then
-              exit 0
-            fi
-            if ! kill -0 "$(cat "$GITHUB_WORKSPACE/server.pid")" 2>/dev/null; then
-              echo "server exited early:"; cat "$GITHUB_WORKSPACE/server.log"; exit 1
-            fi
-            sleep 1
-          done
-          echo "server did not become ready:"; cat "$GITHUB_WORKSPACE/server.log"; exit 1
-
       - name: Install e2e deps
-        run: pip install -r e2e/requirements.txt
+        run: |
+          chmod +x target/release/sarca target/debug/examples/headless
+          pip install -r e2e/requirements.txt
 
       - name: Run e2e tests
-        env:
-          SARCA_SERVER_LOG: ${{ github.workspace }}/server.log
-        # Exclude @pytest.mark.smoke (needs a live Telegram storage worker).
-        run: pytest -q e2e/ -m "not smoke"
+        working-directory: e2e
+        run: python -m pytest -q
 
-      - name: Dump server log on failure
+  # Drives the real desktop client through tauri-pilot. Kept apart from the API
+  # suite: it needs GTK/WebKit, a display, and its own debug client build.
+  e2e-gui:
+    needs: [checks, build-ui, build-server]
+    runs-on: ubuntu-latest
+
+    env:
+      CARGO_TERM_COLOR: always
+      SARCA_SKIP_BUILD: "1"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ui-dist
+          path: ui/dist
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: server-bin
+          path: target/release
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: sync-headless
+          path: target/debug/examples
+
+      - name: Install GTK/WebKit and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libsoup-3.0-dev xvfb dbus-x11
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: e2e-gui
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.17.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: e2e/requirements.txt
+
+      - name: Install tauri-pilot CLI
+        run: cargo install tauri-pilot-cli --locked
+
+      # The client's own webview bundle; the tests serve it at the debug build's
+      # devUrl so the connect screen works without `pnpm dev`.
+      - name: Build client webview UI
+        working-directory: client
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
+      # The pilot plugin is compiled in only for debug builds with this feature.
+      - name: Build client (debug, pilot)
+        run: cargo build -p sarca-client --features pilot
+
+      - name: Install e2e deps
+        run: |
+          chmod +x target/release/sarca target/debug/examples/headless
+          pip install -r e2e/requirements.txt
+
+      - name: Run GUI e2e tests
+        working-directory: e2e
+        run: xvfb-run -a -s "-screen 0 1280x900x24" python -m pytest -q -m gui
+
+      - name: Client log on failure
         if: failure()
-        run: cat "$GITHUB_WORKSPACE/server.log" || true
-
-      - name: Stop server
-        if: always()
-        run: kill "$(cat "$GITHUB_WORKSPACE/server.pid")" 2>/dev/null || true
+        run: find /tmp -name 'client.log' -newermt '-30 minutes' -exec tail -n 200 {} + || true

@@ -1,0 +1,17 @@
+{
+	"$schema": "https://schema.tauri.app/config/2/capability",
+	"identifier": "pilot",
+	"description": "tauri-pilot e2e driver. Registered at runtime, debug + --features pilot only, so it is absent from release ACLs entirely.",
+	"windows": [
+		"main"
+	],
+	"remote": {
+		"urls": [
+			"http://*:*/*",
+			"https://*:*/*"
+		]
+	},
+	"permissions": [
+		"pilot:default"
+	]
+}

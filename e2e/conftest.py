@@ -254,3 +254,60 @@ def server_log_path(server: SarcaServer | None) -> str | None:
 @pytest.fixture(scope="session")
 def repo() -> Path:
     return repo_root()
+
+
+# --------------------------------------------------------------------------- gui
+# Desktop-client fixtures. Everything here is lazy: importing pilot helpers or
+# building the client only happens once a `gui`-marked test asks for them.
+
+
+@pytest.fixture(scope="session")
+def gui_available() -> None:
+    from helpers.pilot import pilot_binary
+
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        pytest.skip("no display: run under Xvfb (task e2e:gui)")
+    if pilot_binary() is None:
+        pytest.skip("tauri-pilot not installed (cargo install tauri-pilot-cli)")
+
+
+@pytest.fixture(scope="session")
+def client_binary(gui_available: None) -> Path:
+    from helpers.pilot import build_client
+
+    return build_client()
+
+
+@pytest.fixture(scope="session")
+def shim(gui_available: None):
+    """Serves client/dist at the debug build's devUrl."""
+    from helpers.pilot import ShimServer
+
+    dist = repo_root() / "client" / "dist"
+    if not (dist / "index.html").exists():
+        pytest.skip("client/dist not built (task client:ui)")
+    server = ShimServer(dist).start()
+    yield server
+    server.stop()
+
+
+@pytest.fixture
+def app(client_binary: Path, shim, tmp_path: Path):
+    """A client with an empty HOME: nothing configured, nothing remembered."""
+    from helpers.pilot import ClientApp, PilotError
+
+    instance = ClientApp(binary=client_binary, root=tmp_path / "client")
+    try:
+        instance.start()
+    except PilotError:
+        instance.close()
+        raise
+    yield instance
+    instance.close()
+
+
+@pytest.fixture
+def signed_in(app, base_url: str, credentials: tuple[str, str]):
+    app.connect(base_url)
+    app.login(*credentials)
+    return app

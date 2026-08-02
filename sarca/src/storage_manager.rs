@@ -1,13 +1,19 @@
+use std::sync::Arc;
+
 use sqlx::SqlitePool;
+use tokio::sync::Semaphore;
 
 use crate::{
-    common::channels::{
-        ClientData,
-        ClientMessage,
-        StorageManagerData,
-        StorageManagerListener,
-        StorageManagerMessage,
-        UploadFileData,
+    common::{
+        channels::{
+            ClientData,
+            ClientMessage,
+            StorageManagerData,
+            StorageManagerListener,
+            StorageManagerMessage,
+            UploadFileData,
+        },
+        telegram_api::bot_api::flood_active,
     },
     config::Config,
     services::storage_manager::StorageManagerService,
@@ -29,28 +35,56 @@ impl StorageManager {
     }
 
     pub async fn run(&mut self) {
-        // One message at a time: Telegram phase for file N fully finishes (all chunks +
-        // optional thumb) before file N+1 starts, even when the UI pipelines spool+telegram.
+        // Files run in parallel, chunks of one file do not: a single `upload()` call
+        // still sends its chunks (and thumb) strictly in order. Parallelism is safe
+        // because every mutating Telegram call goes through the per-token send gate,
+        // which serializes and paces each bot on its own — so this only overlaps work
+        // belonging to *different* worker tokens, which is exactly where the time goes.
+        let limit = usize::from(self.config.upload_concurrency.max(1));
+        let gate = Arc::new(Semaphore::new(limit));
+
         while let Some(msg) = self.rx.recv().await {
             tracing::debug!("got msg");
-            self.handle_msg(msg).await;
+
+            // Adaptive backoff: while any token is inside a flood window, take the
+            // whole gate so the in-flight file finishes alone. Telegram's `retry_after`
+            // is still honored inside the API layer; this just stops us from spending
+            // the wait queuing more concurrent floods.
+            let weight = if flood_active() {
+                tracing::debug!("flood window active, uploading one file at a time");
+                u32::try_from(limit).unwrap_or(u32::MAX)
+            } else {
+                1
+            };
+
+            let Ok(permit) = gate.clone().acquire_many_owned(weight).await else {
+                tracing::error!("upload gate closed");
+                return;
+            };
+
+            let db = self.db.clone();
+            let config = self.config.clone();
+            tokio::spawn(async move {
+                let _permit = permit;
+                Self::handle_msg(&db, &config, msg).await;
+            });
         }
     }
 
-    async fn handle_msg(&self, msg: ClientMessage) {
+    async fn handle_msg(db: &SqlitePool, config: &Config, msg: ClientMessage) {
         let result = match msg.data {
-            ClientData::UploadFile(data) => self.upload(data).await,
+            ClientData::UploadFile(data) => Self::upload(db, config, data).await,
         };
         let msg_back = StorageManagerMessage::new(result);
         let _ = msg.tx.send(msg_back);
     }
 
-    async fn upload(&self, data: UploadFileData) -> StorageManagerData {
+    async fn upload(db: &SqlitePool, config: &Config, data: UploadFileData) -> StorageManagerData {
         let result = StorageManagerService::new(
-            &self.db,
-            &self.config.telegram_api_base_url,
-            self.config.telegram_rate_limit,
-            &self.config.work_dir,
+            db,
+            &config.telegram_api_base_url,
+            config.telegram_rate_limit,
+            &config.work_dir,
         )
         .upload(data)
         .await;

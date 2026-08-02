@@ -128,9 +128,33 @@ impl<'d> FilesService<'d> {
             if let Ok(existing) =
                 self.repo.get_file_by_path(&in_file.path, in_file.storage_id).await
             {
-                if existing.is_uploaded && existing.content_hash.as_deref() == Some(hash) {
-                    let _ = tokio::fs::remove_file(&file_path).await;
-                    return Ok(());
+                if existing.content_hash.as_deref() == Some(hash) {
+                    if existing.is_uploaded {
+                        let _ = tokio::fs::remove_file(&file_path).await;
+                        return Ok(());
+                    }
+
+                    // Same bytes at the same path, but the previous attempt never
+                    // reached set_as_uploaded and never ran the failure purge either
+                    // — the client's connection dropped mid-relay, so this handler
+                    // was cancelled before its cleanup. That abandoned row still
+                    // holds the path, which would push this retry to "name (1).ext".
+                    // Purge it (refcount GC also drops whatever chunks it managed to
+                    // store) so the retry reclaims the original name.
+                    //
+                    // If the earlier attempt is somehow still running, it fails at
+                    // set_as_uploaded and purges its own (already gone) id — the same
+                    // double-upload the "(1)" rename used to cause, minus the rename.
+                    if let Err(e) =
+                        purge_file_ids(self.db, self.base_url, self.rate_limit, &[existing.id])
+                            .await
+                    {
+                        tracing::warn!(
+                            "failed to purge abandoned upload {} at {}: {e}",
+                            existing.id,
+                            existing.path
+                        );
+                    }
                 }
             }
         }
@@ -157,8 +181,9 @@ impl<'d> FilesService<'d> {
             })?;
 
         // Signal spool+DB ready before queuing Telegram so the client can pipeline
-        // the next file's client→Sarca transfer. Storage Manager still serializes
-        // Telegram uploads one at a time.
+        // the next file's client→Sarca transfer. Storage Manager runs up to
+        // `UPLOAD_CONCURRENCY` files at once; chunks of one file stay in order, and
+        // the per-token send gate still paces each bot.
         if let Some(ref tx) = progress {
             let _ = tx.send(UploadProgressEvent::spooled(file_size.max(0) as u64)).await;
         }
