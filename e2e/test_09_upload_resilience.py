@@ -106,7 +106,7 @@ def test_sync_retry_after_failed_relay_keeps_original_name(
     (gallery / "IMG_0001.jpg").write_bytes(b"\xff\xd8\xff" + b"a" * 4096)
     (gallery / "IMG_0002.jpg").write_bytes(b"\xff\xd8\xff" + b"b" * 4096)
 
-    def sync():
+    def sync(*, retry_failed: bool = False):
         return run_sync(
             base_url=sarca.base_url,
             email="e2e@sarca.test",
@@ -115,6 +115,7 @@ def test_sync_retry_after_failed_relay_keeps_original_name(
             local_dir=gallery,
             data_dir=tmp_path / "sync-state",
             remote_root="Camera",
+            retry_failed=retry_failed,
         )
 
     # More than the API layer's own 5xx retry budget, so one file really fails.
@@ -123,7 +124,10 @@ def test_sync_retry_after_failed_relay_keeps_original_name(
     assert first.errors, "expected the injected Telegram failure to surface"
 
     mock.clear_injections()
-    second = sync()
+    # The failure armed the retry backoff (60s on the first strike). A user
+    # would press "Upload now"; the driver does the same so the retry is not
+    # silently deferred past the test.
+    second = sync(retry_failed=True)
     assert not second.errors, second.errors
 
     names = sorted(e["name"] for e in sarca.tree(storage, "Camera"))

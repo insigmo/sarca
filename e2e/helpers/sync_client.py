@@ -88,6 +88,7 @@ def run_sync(
     mode: str = "auto_upload",
     ticks: int = 1,
     binding_id: str = "e2e-binding",
+    retry_failed: bool = False,
     timeout: float = 240.0,
 ) -> SyncRun:
     driver = build_driver()
@@ -104,6 +105,7 @@ def run_sync(
             "--ticks", str(ticks),
             "--data-dir", str(data_dir),
             "--binding-id", binding_id,
+            "--retry-failed", "1" if retry_failed else "0",
         ],
         cwd=ROOT,
         capture_output=True,
