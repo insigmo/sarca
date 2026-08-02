@@ -31,6 +31,24 @@ BUILD_TIMEOUT_S = 1800
 # Cold start pays for GTK + WebKit + the sync engine's first scan.
 START_TIMEOUT_S = 60.0
 
+# Writing through the prototype's value setter and firing `input` is what a
+# framework-controlled field listens for; assigning `.value` alone leaves Solid
+# holding the old signal and the next render wipes the text.
+_FILL_JS = """
+(() => {
+  const el = document.querySelector(%(selector)s);
+  if (!el) return 'missing';
+  const value = %(value)s;
+  const setter = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(el), 'value'
+  )?.set;
+  if (setter) setter.call(el, value); else el.value = value;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return el.value === value ? 'ok' : 'lost';
+})()
+"""
+
 
 class PilotError(RuntimeError):
     """A tauri-pilot command failed."""
@@ -297,22 +315,25 @@ class ClientApp:
     def url(self) -> str:
         return self.run("url")
 
-    def fill(self, selector: str, value: str, timeout_ms: int = 15000) -> None:
-        """Wait for a field, then type into it.
+    def fill(self, selector: str, value: str, timeout_s: float = 20.0) -> None:
+        """Put a value into an input and make sure it stayed there.
 
-        A plain `fill` races the framework: the node can be replaced between
-        two fills while the login form finishes hydrating (seen on CI runners),
-        and the CLI then reports "No element". Waiting first, and retrying once
-        on that specific error, makes the flow deterministic.
+        `tauri-pilot fill` races the framework twice over: the node it matched
+        can be swapped out while the page is still mounting ("No element"), and
+        a value written into the old node is simply lost when Solid re-renders
+        the form. Writing through the native setter with an `input` event feeds
+        the same signal a keystroke would, and the result is read back, so a
+        lost value is retried instead of silently submitting an empty form.
         """
-        self.wait_for(selector, timeout_ms=timeout_ms)
-        try:
-            self.run("fill", selector, value)
-        except PilotError as first:
-            if "No element" not in str(first):
-                raise
-            self.wait_for(selector, timeout_ms=timeout_ms)
-            self.run("fill", selector, value)
+        script = _FILL_JS % {"selector": json.dumps(selector), "value": json.dumps(value)}
+        deadline = time.monotonic() + timeout_s
+        outcome = "missing"
+        while time.monotonic() < deadline:
+            outcome = self.eval_js(script)
+            if outcome == "ok":
+                return
+            time.sleep(0.25)
+        raise PilotError(f"could not fill {selector}: {outcome}")
 
     # ------------------------------------------------------------- app flows
 
@@ -343,26 +364,31 @@ class ClientApp:
         self.wait_for("input[name=email]", timeout_ms=30000)
 
     def login(self, email: str, password: str) -> None:
-        self.fill("input[name=email]", email, timeout_ms=30000)
-        self.fill("input[name=password]", password, timeout_ms=30000)
         # requestSubmit() instead of clicking: the button lives inside a SUID
         # wrapper, and the form's own submit handler is what does the work.
-        # Both fields are re-read here, so a value lost to a re-render is
-        # caught before the request goes out.
-        submitted = self.eval_js(
-            """
-            (() => {
-              const form = document.querySelector('form');
-              const email = document.querySelector('input[name=email]');
-              const password = document.querySelector('input[name=password]');
-              if (!form || !email || !password) return 'missing';
-              if (!email.value || !password.value) return 'empty';
-              form.requestSubmit();
-              return 'ok';
-            })()
-            """
-        )
-        if submitted != "ok":
+        # Both fields are re-read right before submitting, so a value the form
+        # dropped on a re-render is refilled instead of sent empty.
+        submitted = ""
+        for _ in range(5):
+            self.fill("input[name=email]", email, timeout_s=30)
+            self.fill("input[name=password]", password, timeout_s=30)
+            submitted = self.eval_js(
+                """
+                (() => {
+                  const form = document.querySelector('form');
+                  const email = document.querySelector('input[name=email]');
+                  const password = document.querySelector('input[name=password]');
+                  if (!form || !email || !password) return 'missing';
+                  if (!email.value || !password.value) return 'empty';
+                  form.requestSubmit();
+                  return 'ok';
+                })()
+                """
+            )
+            if submitted == "ok":
+                break
+            time.sleep(0.5)
+        else:
             raise PilotError(f"login form was not ready to submit: {submitted!r}")
 
         deadline = time.monotonic() + 30
