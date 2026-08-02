@@ -1,5 +1,6 @@
 import { useLocation, useNavigate } from '@solidjs/router'
 import createLocalStore from '../../libs'
+import { safeRedirectPath } from './auth'
 
 export function checkAuth() {
 	const [store, setStore] = createLocalStore()
@@ -7,7 +8,7 @@ export function checkAuth() {
 	const location = useLocation()
 
 	if (!store.access_token) {
-		setStore('redirect', location.pathname)
+		setStore('redirect', safeRedirectPath(location.pathname))
 
 		navigate('/login')
 	}

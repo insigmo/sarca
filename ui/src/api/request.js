@@ -1,5 +1,6 @@
 import { alertStore } from '../components/AlertStack'
 import createLocalStore from '../../libs'
+import { safeRedirectPath } from '../common/auth'
 
 // Same-origin by default so production / Docker UI talks to the Sarca that
 // served the page. Override with VITE_API_BASE for `pnpm dev` against a remote API.
@@ -48,7 +49,7 @@ const forceReLogin = () => {
 	const [, setStore, remove] = createLocalStore()
 	remove('access_token')
 	remove('refresh_token')
-	setStore('redirect', window.location.pathname)
+	setStore('redirect', safeRedirectPath(window.location.pathname))
 	window.location.assign('/login')
 }
 
