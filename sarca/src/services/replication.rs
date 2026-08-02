@@ -120,7 +120,9 @@ impl ReplicationService {
         tokio::spawn(async move {
             loop {
                 let processed = Self::run_once(&db, &base_url, rate_limit).await;
-                if processed == 0 {
+                if processed > 0 {
+                    tracing::info!("[REPLICATION] tick replicated {processed} chunk(s)");
+                } else {
                     tokio::time::sleep(idle_interval).await;
                 }
             }

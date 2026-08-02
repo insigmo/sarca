@@ -42,6 +42,10 @@ impl ChannelHealthService {
             },
         };
 
+        tracing::debug!(
+            "[CHANNEL HEALTH] tick probing {} active channel(s)",
+            channels.iter().filter(|c| c.is_active()).count()
+        );
         for channel in channels.iter().filter(|c| c.is_active()) {
             let scheduler = StorageWorkersScheduler::new(db, rate_limit);
             let api = TelegramBotApi::new(base_url, scheduler);

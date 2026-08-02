@@ -50,6 +50,9 @@ pub struct Config {
     pub smtp_from: String,
     /// `starttls` | `none` | `tls`
     pub smtp_tls: String,
+
+    /// Verbose (debug-level) tracing for requests and background jobs. `RUST_LOG` still wins.
+    pub debug_log: bool,
 }
 
 impl Config {
@@ -118,6 +121,8 @@ impl Config {
         let smtp_from =
             Self::get_env_var_with_default("SMTP_FROM", "Sarca <noreply@example.com>".to_owned())?;
         let smtp_tls = Self::get_env_var_with_default("SMTP_TLS", "starttls".to_owned())?;
+        let debug_log = Self::get_optional_env_var("DEBUG_LOG")
+            .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
         Ok(Self {
             sqlite_path,
@@ -146,6 +151,7 @@ impl Config {
             smtp_password,
             smtp_from,
             smtp_tls,
+            debug_log,
         })
     }
 

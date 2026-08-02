@@ -175,23 +175,21 @@ impl SyncEngine {
         self.transfers.write().await.abandon(id);
     }
 
-    /// Called when `push_local` exits early (error) with candidates still
-    /// sitting in the queue as Waiting. Without this, an aborted upload run
-    /// leaves a stale "Uploading N" count in the UI forever, since nothing
-    /// else ever promotes/completes those ids. Also deletes any ephemeral
-    /// (cache-copy) files backing the abandoned candidates so they don't
-    /// leak — they'll be re-materialized fresh on the next tick if still
-    /// needed.
-    async fn abandon_pending(&self, rest: Vec<(LocalCandidate, Option<String>)>) {
+    /// Called when `push_local` exits early (error) with candidates still sitting
+    /// in the queue as Waiting. Deletes any ephemeral (cache-copy) files backing
+    /// them so they don't leak — they'll be re-materialized fresh on the next
+    /// tick if still needed.
+    ///
+    /// Deliberately does NOT remove the Waiting entries from the transfer queue:
+    /// they aren't stuck (the next tick's `push_local` re-runs `enqueue_waiting`
+    /// for the same relative paths, replacing these entries in place), so
+    /// clearing them here only made the "Uploading N" count lie — snapping to 0
+    /// while a real backlog was still queued and would keep draining across
+    /// ticks (e.g. during a string of transient failures from server restarts).
+    async fn cleanup_abandoned_ephemeral(&self, rest: Vec<(LocalCandidate, Option<String>)>) {
         for (candidate, _) in &rest {
             if candidate.ephemeral {
                 tokio::fs::remove_file(&candidate.absolute_path).await.ok();
-            }
-        }
-        let mut queue = self.transfers.write().await;
-        for (_, waiting_id) in rest {
-            if let Some(id) = waiting_id {
-                queue.abandon(&id);
             }
         }
     }
@@ -515,7 +513,7 @@ impl SyncEngine {
                     if ephemeral {
                         tokio::fs::remove_file(&path).await.ok();
                     }
-                    self.abandon_pending(pending_iter.collect()).await;
+                    self.cleanup_abandoned_ephemeral(pending_iter.collect()).await;
                     return Err(e).with_context(|| format!("hash {}", path.display()));
                 }
             };
@@ -541,7 +539,7 @@ impl SyncEngine {
                 if ephemeral {
                     tokio::fs::remove_file(&path).await.ok();
                 }
-                self.abandon_pending(pending_iter.collect()).await;
+                self.cleanup_abandoned_ephemeral(pending_iter.collect()).await;
                 return Err(e);
             }
             let upload_result = self
@@ -561,7 +559,7 @@ impl SyncEngine {
                 if ephemeral {
                     tokio::fs::remove_file(&path).await.ok();
                 }
-                self.abandon_pending(pending_iter.collect()).await;
+                self.cleanup_abandoned_ephemeral(pending_iter.collect()).await;
                 return Err(e).with_context(|| {
                     format!("upload {} → {}/{}", path.display(), remote_parent, filename)
                 });
@@ -1035,11 +1033,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn push_local_error_clears_stale_waiting_and_uploading_count() {
-        // Regression test for the "stuck Uploading N" bug: if an upload
-        // fails partway through a batch, every candidate still sitting in
-        // the queue as Waiting must be cleared — not left there forever
-        // with nothing to ever promote/complete it.
+    async fn push_local_error_keeps_remaining_batch_waiting() {
+        // Regression test: if an upload fails partway through a batch, only
+        // the failed candidate's transfer entry is dropped. The rest of the
+        // batch stays Waiting in the queue (not cleared to 0) because the
+        // very next tick's push_local re-enqueues the same relative paths in
+        // place — they are not "stuck", so the UI count should keep
+        // reflecting the real backlog instead of lying about it being empty.
         let dir = tempfile::tempdir().unwrap();
         let pics = dir.path().join("pics");
         std::fs::create_dir_all(&pics).unwrap();
@@ -1079,8 +1079,8 @@ mod tests {
 
         let snap = engine.transfer_queue().await;
         assert_eq!(
-            snap.uploading, 0,
-            "no Waiting/Active transfers should remain stuck after push_local errors out"
+            snap.uploading, 2,
+            "only the failed candidate should drop out; the other 2 stay Waiting for the next tick"
         );
     }
 

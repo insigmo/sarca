@@ -216,8 +216,7 @@ pub fn run() {
                 let app_menu = Menu::with_items(app, &[&app_submenu])?;
                 let _ = app.set_menu(app_menu);
 
-                let tray_menu =
-                    Menu::with_items(app, &[&tray_show, &tray_disconnect, &tray_quit])?;
+                let tray_menu = Menu::with_items(app, &[&tray_show, &tray_disconnect, &tray_quit])?;
 
                 let _tray = TrayIconBuilder::new()
                     .icon(app.default_window_icon().unwrap().clone())
