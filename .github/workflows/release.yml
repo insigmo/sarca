@@ -208,6 +208,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: release-server-${{ matrix.target }}
+
       - name: Build release binary
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
@@ -853,8 +858,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # GITHUB_TOKEN cannot trigger other workflows on release:published — call Docker directly.
+  # Only needs the resolved tag (needs.version.outputs.tag), not release's published
+  # assets, so it runs parallel to build-client/build-client-android/release instead
+  # of waiting behind them.
   docker:
-    needs: [version, release]
+    needs: [version, package]
     uses: ./.github/workflows/docker-image.yml
     with:
       version: ${{ needs.version.outputs.tag }}

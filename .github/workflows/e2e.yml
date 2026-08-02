@@ -9,7 +9,97 @@ permissions:
   contents: read
 
 jobs:
+  # rustfmt + clippy + unit/integration tests. Independent of build-server's
+  # release-profile compile, so it runs on its own runner in parallel.
+  checks:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: e2e-checks
+
+      - name: rustfmt (strict / nightly)
+        run: cargo +nightly fmt -p sarca -- --check
+
+      - name: clippy (deny pedantic/nursery/cargo)
+        # Pin stable: installing nightly above would otherwise make bare `cargo` use nightly
+        # (often without the clippy component) and fail immediately.
+        run: cargo +stable clippy -p sarca --all-targets --all-features -- -D warnings
+
+      - name: Unit + integration tests
+        run: cargo +stable test -p sarca
+
+  # No Rust involved — runs in parallel with checks/build-server.
+  build-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11.17.0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: ui/pnpm-lock.yaml
+
+      - name: Build UI
+        working-directory: ui
+        env:
+          VITE_API_BASE: /api
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ui-dist
+          path: ui/dist
+          retention-days: 1
+
+  # Release-profile compile — separate cargo profile from checks' debug
+  # build, so it doesn't need to wait behind clippy/test compilation.
+  build-server:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          shared-key: e2e-build-server
+
+      - name: Build server
+        run: cargo +stable build --release -p sarca
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: server-bin
+          path: target/release/sarca
+          if-no-files-found: error
+          retention-days: 1
+
   e2e:
+    needs: [checks, build-ui, build-server]
     runs-on: ubuntu-latest
 
     env:
@@ -29,40 +119,19 @@ jobs:
       SQLITE_PATH: ${{ github.workspace }}/runtime/sarca.sqlite
       SARCA_PLAIN_HTTP: "1"
       SARCA_BASE_URL: http://127.0.0.1:8000
-      CARGO_TERM_COLOR: always
 
     steps:
       - uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v7
         with:
-          components: rustfmt, clippy
+          name: ui-dist
+          path: ui-dist
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: actions/download-artifact@v7
         with:
-          components: rustfmt
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: . -> target
-
-      - name: rustfmt (strict / nightly)
-        run: cargo +nightly fmt -p sarca -- --check
-
-      - name: clippy (deny pedantic/nursery/cargo)
-        # Pin stable: installing nightly above would otherwise make bare `cargo` use nightly
-        # (often without the clippy component) and fail immediately.
-        run: cargo +stable clippy -p sarca --all-targets --all-features -- -D warnings
-
-      - uses: pnpm/action-setup@v6
-        with:
-          version: 11.17.0
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: ui/pnpm-lock.yaml
+          name: server-bin
+          path: server-bin
 
       - uses: actions/setup-python@v6
         with:
@@ -70,25 +139,11 @@ jobs:
           cache: pip
           cache-dependency-path: e2e/requirements.txt
 
-      - name: Unit + integration tests
-        run: cargo +stable test -p sarca
-
-      - name: Build UI
-        working-directory: ui
-        env:
-          VITE_API_BASE: /api
-        run: |
-          pnpm install --frozen-lockfile
-          pnpm run build
-
-      - name: Build server
-        run: cargo +stable build --release -p sarca
-
       - name: Prepare runtime dir
         run: |
           mkdir -p "$WORK_DIR" runtime/ui
-          cp -a ui/dist/. runtime/ui/
-          cp target/release/sarca runtime/sarca
+          cp -a ui-dist/. runtime/ui/
+          cp server-bin/sarca runtime/sarca
           chmod +x runtime/sarca
           # Binary self-loads sarca.conf (production-like).
           {
