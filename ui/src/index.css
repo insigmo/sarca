@@ -3995,76 +3995,23 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	border-radius: 6px;
 }
 
-.settings-sync-panel__queue {
-	border: 1px solid color-mix(in srgb, var(--sarca-ink, #1b1a19) 12%, transparent);
-	border-radius: 8px;
-	overflow: hidden;
-	background: color-mix(in srgb, var(--sarca-ink, #1b1a19) 3%, transparent);
-}
-
-.settings-sync-panel__queue-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 12px;
-	width: 100%;
-	margin: 0;
-	padding: 12px 14px;
-	border: none;
-	border-bottom: 1px solid color-mix(in srgb, var(--sarca-ink, #1b1a19) 10%, transparent);
-	background: transparent;
-	font: inherit;
-	font-size: 0.95rem;
-	color: var(--sarca-ink, #1b1a19);
-	cursor: pointer;
-	text-align: left;
-}
-
-.settings-sync-panel__queue-row:last-child {
-	border-bottom: none;
-}
-
-.settings-sync-panel__queue-row:hover {
-	background: color-mix(in srgb, var(--sarca-ink, #1b1a19) 5%, transparent);
-}
-
-.settings-sync-panel__queue-row:focus-visible {
-	outline: 2px solid var(--sarca-teal, #0078d4);
-	outline-offset: -2px;
-}
-
 .settings-sync-panel__queue-count {
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
+	margin-left: 8px;
 	color: var(--sarca-muted, #605e5c);
 	font-variant-numeric: tabular-nums;
-}
-
-.settings-sync-panel__transfer-back {
-	display: inline-flex;
-	align-items: center;
-	gap: 4px;
-	margin: 0 0 12px;
-	padding: 4px 0;
-	border: none;
-	background: transparent;
-	font: inherit;
-	font-size: 0.95rem;
-	font-weight: 600;
-	color: var(--sarca-ink, #1b1a19);
-	cursor: pointer;
-}
-
-.settings-sync-panel__transfer-back:focus-visible {
-	outline: 2px solid var(--sarca-teal, #0078d4);
-	outline-offset: 2px;
 }
 
 .settings-sync-panel__transfer-list {
 	list-style: none;
 	margin: 0;
-	padding: 0;
+	padding: 0 8px 0 0;
+	/* The queue lives inline under the buttons now: cap it so a long upload
+	   run never pushes the rest of the Sync tab off-screen. */
+	max-height: 240px;
+	overflow-y: auto;
 }
 
 .settings-sync-panel__transfer-item {
