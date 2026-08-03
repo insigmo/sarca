@@ -33,6 +33,9 @@ import SharedLinksPanel from '../../components/SharedLinksPanel'
 import { filesChromeStore } from '../../common/filesChrome'
 import { attachPullToRefresh } from '../../common/pullToRefresh'
 import { clearThumbQueue } from '../../common/thumbQueue'
+import { warmPreview } from '../../common/previewLoader'
+import { fileKind } from '../../common/fileKind'
+import { isNativeClient } from '../../common/nativeClient'
 import { sortFsElements, sortLabel } from '../../common/sortFs'
 import { formatBulkDeleteMessage } from '../../common/bulkDeleteMessage'
 import { createRafBatcher } from '../../common/rafBatch'
@@ -310,6 +313,23 @@ const Files = () => {
 	const params = useParams()
 	const navigate = useNavigate()
 	const basePath = `/storages/${params.id}/files`
+
+	/**
+	 * Warm a photo's preview on hover / press-down, before the viewer mounts.
+	 * The viewer's own loader shares the in-flight request, so this only ever
+	 * moves the download earlier — it never causes a second one.
+	 * @param {import("../../api").FSElement} el
+	 */
+	const prefetchViewerPreview = (el) => {
+		if (!el?.is_file || !params.id) return
+		if (fileKind(el.name, el.is_file) !== 'image') return
+		warmPreview({
+			scope: params.id,
+			path: el.path,
+			resolveUrl: () => API.files.getPreviewUrl(params.id, el.path),
+			native: isNativeClient(),
+		})
+	}
 
 	let uploadFileInputElement
 	/** @type {HTMLInputElement} */
@@ -2068,6 +2088,7 @@ const Files = () => {
 									storageId={params.id}
 									onDelete={refreshCurrent}
 									onOpen={(file) => setViewerFile(file)}
+									onPrefetch={prefetchViewerPreview}
 									trashMode={trashMode()}
 									flatMode={flatMode()}
 									layout={viewMode}
