@@ -33,6 +33,25 @@ fn focus_main_window(app: &impl Manager<tauri::Wry>) {
     }
 }
 
+/// Relax `script-src` to allow `eval` on the bundled shell pages, but only in
+/// debug builds carrying the `pilot` e2e driver: `tauri-pilot` steers the app
+/// through `webview.eval`, which the shipped `script-src 'self'` refuses. A
+/// release build never takes this branch, so the shipped CSP is unchanged.
+#[allow(unused_mut)]
+fn pilot_context(mut context: tauri::Context) -> tauri::Context {
+    #[cfg(all(desktop, debug_assertions, feature = "pilot"))]
+    {
+        use tauri::utils::config::{Csp, CspDirectiveSources};
+        if let Some(Csp::DirectiveMap(map)) = context.config_mut().app.security.csp.as_mut() {
+            map.insert(
+                "script-src".to_owned(),
+                CspDirectiveSources::List(vec!["'self'".to_owned(), "'unsafe-eval'".to_owned()]),
+            );
+        }
+    }
+    context
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "android")]
@@ -344,7 +363,7 @@ pub fn run() {
             commands::cache_get_preview,
             commands::cache_put_preview,
         ])
-        .build(tauri::generate_context!())
+        .build(pilot_context(tauri::generate_context!()))
         .expect("error while building Sarca client")
         .run(|app_handle, event| {
             #[cfg(target_os = "macos")]

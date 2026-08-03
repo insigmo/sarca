@@ -257,6 +257,14 @@ fn cors_layer() -> cors::CorsLayer {
     layer.allow_origin(origins)
 }
 
+/// `SARCA_ALLOW_EVAL=1` — e2e/dev escape hatch that adds `'unsafe-eval'` to
+/// `script-src` so `tauri-pilot` can evaluate scripts in the remote-origin UI.
+fn allow_unsafe_eval() -> bool {
+    std::env::var("SARCA_ALLOW_EVAL")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
 /// Response headers that hold for everything this server serves.
 ///
 /// The SPA shipped without any of these: no CSP, so a single injection turned
@@ -281,8 +289,32 @@ fn with_security_headers(router: Router) -> Router {
          form-action 'self'; \
          frame-ancestors 'none'";
 
+    // e2e only: `tauri-pilot` drives the GUI with `webview.eval`, which the
+    // shipped `script-src 'self'` refuses. Opt-in via env so a production
+    // deployment can never end up with 'unsafe-eval' by accident.
+    const CSP_EVAL: &str = "default-src 'self'; \
+         script-src 'self' 'unsafe-eval'; \
+         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+         font-src 'self' data: https://fonts.gstatic.com; \
+         img-src 'self' data: blob:; \
+         media-src 'self' data: blob:; \
+         connect-src 'self'; \
+         worker-src 'self' blob:; \
+         frame-src 'none'; \
+         object-src 'none'; \
+         base-uri 'self'; \
+         form-action 'self'; \
+         frame-ancestors 'none'";
+
+    let csp = if allow_unsafe_eval() {
+        tracing::warn!("SARCA_ALLOW_EVAL=1 — CSP relaxed with 'unsafe-eval' (e2e/dev only)");
+        CSP_EVAL
+    } else {
+        CSP
+    };
+
     let headers: [(HeaderName, &'static str); 5] = [
-        (HeaderName::from_static("content-security-policy"), CSP),
+        (HeaderName::from_static("content-security-policy"), csp),
         (HeaderName::from_static("x-content-type-options"), "nosniff"),
         (HeaderName::from_static("x-frame-options"), "DENY"),
         (HeaderName::from_static("referrer-policy"), "strict-origin-when-cross-origin"),
