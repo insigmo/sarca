@@ -13,9 +13,16 @@ import FullscreenIcon from '@suid/icons-material/Fullscreen'
 import FullscreenExitIcon from '@suid/icons-material/FullscreenExit'
 import ChevronLeftIcon from '@suid/icons-material/ChevronLeft'
 import ChevronRightIcon from '@suid/icons-material/ChevronRight'
+import ZoomInIcon from '@suid/icons-material/ZoomIn'
+import ZoomOutIcon from '@suid/icons-material/ZoomOut'
 
 import API from '../api'
 import { fileKind } from '../common/fileKind'
+import {
+	ZOOM_MAX,
+	ZOOM_MIN,
+	createImageZoom,
+} from '../common/imageZoom'
 import { convertSize } from '../common/size_converter'
 import { nativeInvoke } from '../common/nativeBridge'
 import { nativeClientStore } from '../common/nativeClient'
@@ -23,6 +30,9 @@ import { getCachedPreview, putCachedPreview } from '../common/previewCache'
 import FileTypeIcon from './FileTypeIcon'
 import LoadingDots from './LoadingDots'
 import { alertStore } from './AlertStack'
+
+/** How far one arrow-key press slides a zoomed photo. */
+const PAN_STEP_PX = 80
 
 const formatTime = (sec) => {
 	if (!Number.isFinite(sec) || sec < 0) return '0:00'
@@ -92,11 +102,15 @@ const FileViewer = (props) => {
 	const [isFullscreen, setIsFullscreen] = createSignal(false)
 	const [navPeekLeft, setNavPeekLeft] = createSignal(false)
 	const [navPeekRight, setNavPeekRight] = createSignal(false)
+	const [zoom, setZoom] = createSignal(ZOOM_MIN)
+	const [zoomOffset, setZoomOffset] = createSignal({ x: 0, y: 0 })
 
 	/** @type {HTMLVideoElement | HTMLAudioElement | undefined} */
 	let mediaEl
 	/** @type {HTMLElement | undefined} */
 	let viewerEl
+	/** @type {HTMLImageElement | undefined} */
+	let imageEl
 	/** @type {ReturnType<typeof setTimeout> | null} */
 	let hideChromeTimer = null
 	let chromePinned = false
@@ -159,6 +173,75 @@ const FileViewer = (props) => {
 		if (!hasNext() || !props.onNavigate) return
 		props.onNavigate(viewableFiles()[currentIndex() + 1])
 	}
+
+	/** @type {HTMLElement | undefined} */
+	let zoomSurfaceEl
+	/** @type {(() => void) | null} */
+	let detachZoom = null
+
+	const isZoomable = () => kind() === 'image'
+
+	/**
+	 * The photo's painted box at 1x. `object-fit: contain` letterboxes it, and
+	 * panning has to stop at the picture's edge, not the viewport's.
+	 */
+	const paintedImageSize = () => {
+		if (!imageEl || !zoomSurfaceEl) return null
+		const nw = imageEl.naturalWidth
+		const nh = imageEl.naturalHeight
+		const rect = zoomSurfaceEl.getBoundingClientRect()
+		if (!nw || !nh || !rect.width || !rect.height) return null
+		const fit = Math.min(rect.width / nw, rect.height / nh)
+		return { width: nw * fit, height: nh * fit }
+	}
+
+	const zoomer = createImageZoom({
+		onChange: ({ scale, offset }) => {
+			setZoom(scale)
+			setZoomOffset(offset)
+		},
+		onSwipe: (direction) => {
+			if (direction === 'next') goNext()
+			else goPrev()
+		},
+		onDismiss: () => props.onClose(),
+		onTap: (e) => {
+			// Tapping the empty bars around an unzoomed photo closes, exactly as
+			// clicking the backdrop does.
+			if (zoomer.scale > ZOOM_MIN) return
+			if (imageEl && isLetterboxClick(imageEl, e.clientX, e.clientY)) props.onClose()
+		},
+		isEnabled: isZoomable,
+		getContentSize: paintedImageSize,
+	})
+
+	const zoomIn = () => zoomer.zoomIn()
+	const zoomOut = () => zoomer.zoomOut()
+	const resetZoom = () => zoomer.reset()
+	const panBy = (dx, dy) => zoomer.panBy(dx, dy)
+	const zoomPercent = () => `${Math.round(zoom() * 100)}%`
+
+	const attachZoom = (el) => {
+		zoomSurfaceEl = el
+		detachZoom?.()
+		detachZoom = el ? zoomer.attach(el) : null
+	}
+
+	const releaseZoom = () => {
+		detachZoom?.()
+		detachZoom = null
+		zoomSurfaceEl = undefined
+		imageEl = undefined
+	}
+
+	// Closing the viewer unmounts the surface, but Solid never calls a ref with
+	// null, so without this its listeners and its hold on the decoded photo
+	// would outlive it. Reopening runs the ref again and re-attaches.
+	createEffect(() => {
+		if (!props.open) releaseZoom()
+	})
+
+	onCleanup(releaseZoom)
 
 	const inlineUrlFor = async (path) =>
 		props.resolveInlineUrl
@@ -358,6 +441,7 @@ const FileViewer = (props) => {
 			setLoading(false)
 			setOfficeMode(false)
 			resetMediaState()
+			resetZoom()
 			return
 		}
 
@@ -374,6 +458,7 @@ const FileViewer = (props) => {
 		setHtmlDoc('')
 		setOfficeMode(false)
 		resetMediaState()
+		resetZoom()
 
 		const onKey = (e) => {
 			if (e.key === 'Escape') {
@@ -381,16 +466,49 @@ const FileViewer = (props) => {
 					document.exitFullscreen().catch(() => {})
 					return
 				}
+				if (zoomer.scale > ZOOM_MIN) {
+					resetZoom()
+					return
+				}
 				props.onClose()
 				return
 			}
+			if (k === 'image') {
+				if (e.key === '+' || e.key === '=') {
+					e.preventDefault()
+					zoomIn()
+					return
+				}
+				if (e.key === '-' || e.key === '_') {
+					e.preventDefault()
+					zoomOut()
+					return
+				}
+				if (e.key === '0') {
+					e.preventDefault()
+					resetZoom()
+					return
+				}
+			}
+			// While zoomed the arrows drive the pan; stepping to the next file
+			// would throw away what the user is looking at.
 			if (e.key === 'ArrowLeft') {
 				e.preventDefault()
-				goPrev()
+				if (zoomer.scale > ZOOM_MIN) panBy(PAN_STEP_PX, 0)
+				else goPrev()
 			}
 			if (e.key === 'ArrowRight') {
 				e.preventDefault()
-				goNext()
+				if (zoomer.scale > ZOOM_MIN) panBy(-PAN_STEP_PX, 0)
+				else goNext()
+			}
+			if (e.key === 'ArrowUp' && zoomer.scale > ZOOM_MIN) {
+				e.preventDefault()
+				panBy(0, PAN_STEP_PX)
+			}
+			if (e.key === 'ArrowDown' && zoomer.scale > ZOOM_MIN) {
+				e.preventDefault()
+				panBy(0, -PAN_STEP_PX)
 			}
 		}
 
@@ -788,6 +906,7 @@ const FileViewer = (props) => {
 					classList={{
 						'file-viewer--chrome-hidden': kind() === 'video' && !chromeVisible(),
 						'file-viewer--doc-nav': isDocNavKind(),
+						'file-viewer--zoomed': zoom() > ZOOM_MIN,
 					}}
 					role="dialog"
 					aria-modal="true"
@@ -817,6 +936,48 @@ const FileViewer = (props) => {
 							</span>
 						</div>
 						<div class="file-viewer__actions">
+							<Show when={isZoomable()}>
+								{/*
+								  * The buttons carry `aria-disabled`, not `disabled`: a real
+								  * disabled attribute drops focus to the body the moment the
+								  * zoom reaches the end of its range, and a keyboard user has
+								  * to tab in from the top of the document all over again.
+								  * Every handler already clamps, so a press at the end is a
+								  * no-op.
+								  */}
+								<div class="file-viewer__zoom" role="group" aria-label="Zoom">
+									<button
+										type="button"
+										class="file-viewer__zoom-btn"
+										aria-label="Zoom out"
+										title="Zoom out (-)"
+										aria-disabled={zoom() <= ZOOM_MIN}
+										onClick={zoomOut}
+									>
+										<ZoomOutIcon fontSize="inherit" />
+									</button>
+									<button
+										type="button"
+										class="file-viewer__zoom-level"
+										aria-label="Reset zoom"
+										title="Reset zoom (0)"
+										aria-disabled={zoom() === ZOOM_MIN}
+										onClick={resetZoom}
+									>
+										{zoomPercent()}
+									</button>
+									<button
+										type="button"
+										class="file-viewer__zoom-btn"
+										aria-label="Zoom in"
+										title="Zoom in (+)"
+										aria-disabled={zoom() >= ZOOM_MAX}
+										onClick={zoomIn}
+									>
+										<ZoomInIcon fontSize="inherit" />
+									</button>
+								</div>
+							</Show>
 							<button
 								type="button"
 								class="file-viewer__download"
@@ -934,20 +1095,33 @@ const FileViewer = (props) => {
 
 						<Show when={!loading() && !error()}>
 							<Show when={kind() === 'image' && mediaUrl()}>
-								<img
-									class="file-viewer__image"
-									src={mediaUrl()}
-									alt={props.file.name}
-									onError={() => {
-										setError('Could not open this file')
-										addAlert('Could not open this file', 'error')
+								{/* Pinch, double-tap, drag and swipe all land here; the
+								    magnifier buttons drive the same state. */}
+								<div
+									class="file-viewer__zoom-surface"
+									classList={{
+										'file-viewer__zoom-surface--zoomed': zoom() > ZOOM_MIN,
 									}}
-									onClick={(e) => {
-										if (isLetterboxClick(e.currentTarget, e.clientX, e.clientY)) {
-											props.onClose()
-										}
-									}}
-								/>
+									ref={attachZoom}
+									data-zoom={zoom()}
+								>
+									<img
+										ref={(el) => {
+											imageEl = el
+										}}
+										class="file-viewer__image"
+										src={mediaUrl()}
+										alt={props.file.name}
+										draggable={false}
+										style={{
+											transform: `translate(${zoomOffset().x}px, ${zoomOffset().y}px) scale(${zoom()})`,
+										}}
+										onError={() => {
+											setError('Could not open this file')
+											addAlert('Could not open this file', 'error')
+										}}
+									/>
+								</div>
 							</Show>
 
 							<Show when={kind() === 'video' && mediaUrl()}>
