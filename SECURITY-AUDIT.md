@@ -600,6 +600,10 @@ if !user.session_is_live(auth_user.issued_at) {
 
 **`FluentIcon`** имеет проп `src`, который попадает в raw innerHTML. Вызовов с этим пропом сейчас нет, но это скрытая поверхность — стоит либо удалить проп, либо прогонять через `sanitizeHtml`.
 
+> **Поправка (раунд 2).** Утверждение «вызовов с этим пропом сейчас нет» было
+> неверным: `FilesSidebar.jsx` использовал `src` в пяти местах. Проп удалён,
+> вызовы переведены на `name`. См. раунд 2, находка R2-4.
+
 ---
 
 ## 4. Что нужно сделать вручную
@@ -615,3 +619,254 @@ if !user.session_is_live(auth_user.issued_at) {
 6. **Проверить настройки SMTP на продакшене.** `SMTP_TLS` должен быть `starttls` или `tls`; при `none` сервер теперь предупреждает в логе, но не отказывается работать.
 7. **Решить по Isolation Pattern, updater и подписи релизов** — см. раздел 3.
 8. **Проверить права на уже существующие файлы состояния клиента.** `write_private` чинит их при следующей записи, но пока запись не произошла, старый файл остаётся с прежним режимом. `chmod 600` на каталог данных клиента вручную ускорит это.
+
+---
+---
+
+# Раунд 2
+
+Повторный аудит по тому же чек-listу, база `ca6bf0f`. Находки раунда 1 не
+перепроверялись построчно и здесь не повторяются — ниже только то, что раунд 1
+пропустил или описал неверно.
+
+## R2.1 Таблица находок
+
+| # | Найдено | Риск | Файл | Исправление |
+|---|---------|------|------|-------------|
+| R2-1 | Приватный ключ подписи Android лежит в репозитории (`sarca-sideload.p12`, пароль `sarca-sideload` в открытом виде в скриптах), и релизный пайплайн **молча откатывался на него**, когда секреты `ANDROID_KEYSTORE_*` не заданы | **Critical** | `.github/workflows/release.yml`, `client/scripts/sign-android-apk.sh` | Релиз падает с ошибкой вместо отката. Локальный скрипт требует явного `SARCA_ALLOW_PUBLIC_KEYSTORE=1` |
+| R2-2 | Адрес сервера без схемы превращался в `http://` — включая публичные хосты. `sarca.example.com` уходил по открытому HTTP вместе с access/refresh-токенами | **High** | `crates/sarca-sync/src/api.rs` | `is_local_host()`: loopback/LAN остаются на `http://`, всё маршрутизируемое получает `https://` |
+| R2-3 | Origin Vite dev-сервера (`localhost:1420`) считался доверенной оболочкой **и в релизной сборке** | **High** | `client/src-tauri/src/state.rs` | Ветка закрыта `#[cfg(debug_assertions)]` |
+| R2-4 | Проп `FluentIcon src` попадал в `innerHTML` без санитизации. Раунд 1 записал его как «вызовов нет» — вызовы были, 5 штук | **Medium** | `ui/src/components/FluentIcon.jsx`, `ui/src/components/FilesSidebar.jsx` | Проп удалён; вызовы переведены на `name`; поиск по таблице через `Object.hasOwn` |
+| R2-5 | Неиспользуемая devDependency `solid-devtools` тянула уязвимый `@babel/core@7.23.3` / `@babel/helpers@7.23.4` (GHSA-968p-4wvh-cqc8, GHSA-4x5r-pxfx-6jf8) | **Medium** | `ui/package.json` | Зависимость удалена; обе уязвимые копии ушли из lock-файла |
+| R2-6 | В CI не было постоянной проверки зависимостей (незакрытый пункт 4 из раздела «вручную» раунда 1) | **Medium** | `.github/workflows/audit.yml` | Новый workflow: `cargo audit` + `pnpm audit`, по PR, по push и еженедельно |
+| R2-7 | `cache_get_preview` не ограничивал длину ключа, в отличие от парного `cache_put_preview` | **Low** | `client/src-tauri/src/commands.rs` | Та же проверка `MAX_CACHE_KEY_LEN` |
+
+## R2.2 Диффы
+
+### R2-1. Публичный ключ подписи как запасной вариант релиза
+
+Риск конкретный, и он не про утечку файла. Android определяет «то же самое
+приложение» по подписи. Ключ и пароль лежат в репозитории, значит любой может
+собрать APK, подписать им, и система примет этот APK как **обновление**
+установленной Sarca — с доступом ко всем её данным. Пока `release.yml` молча
+откатывался на этот ключ, достаточно было один раз выпустить релиз без
+настроенных секретов, чтобы раздать пользователям сборку с публично известным
+ключом. Дальше отозвать его нельзя: сменить ключ подписи можно только
+переустановкой приложения вручную.
+
+```diff
+-          if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
+-            ...
+-            ALIAS="${ANDROID_KEY_ALIAS:-sarca}"
+-            echo "Using ANDROID_KEYSTORE_* secrets for APK signing."
+-          else
+-            KS_PATH="${GITHUB_WORKSPACE}/client/mobile/sarca-sideload.p12"
+-            STORE_PASS="sarca-sideload"
+-            KEY_PASS="sarca-sideload"
+-            ALIAS="sarca"
+-            echo "Using committed sideload keystore for APK signing."
+-          fi
++          if [[ -z "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
++            echo "::error::ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD are not set." >&2
++            echo "Refusing to publish a release APK signed with the public committed keystore." >&2
++            echo "Generate a release key and add it to repository secrets:" >&2
++            echo "  keytool -genkeypair -v -keystore release.p12 -storetype PKCS12 \\" >&2
++            echo "    -alias sarca -keyalg RSA -keysize 4096 -validity 10000" >&2
++            echo "  base64 -w0 release.p12   # -> secret ANDROID_KEYSTORE_BASE64" >&2
++            exit 1
++          fi
++          KS_PATH="${GITHUB_WORKSPACE}/client/src-tauri/release.keystore"
++          echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${KS_PATH}"
++          STORE_PASS="${ANDROID_KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD required}"
++          KEY_PASS="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
++          ALIAS="${ANDROID_KEY_ALIAS:-sarca}"
+```
+
+`sign-android-apk.sh` теперь тоже не берёт публичный keystore сам:
+
+```diff
+-else
++elif [[ "${SARCA_ALLOW_PUBLIC_KEYSTORE:-0}" == "1" ]]; then
+   KS="$DEFAULT_KS"
+   ALIAS="$DEFAULT_ALIAS"
+   STORE_PASS="$DEFAULT_PASS"
+   KEY_PASS="$DEFAULT_PASS"
++  echo "WARNING: signing with the PUBLIC committed sideload keystore: $KS" >&2
++  echo "WARNING: the private key and password are in the repository. Never distribute this APK." >&2
++else
++  # ...инструкция по keytool + base64 -w0...
++  exit 1
+ fi
+```
+
+`client.yml` (smoke-артефакт, который никогда не публикуется) явно
+подтверждает согласие через `SARCA_ALLOW_PUBLIC_KEYSTORE: "1"`.
+
+### R2-2. Неявный `http://` для публичного хоста
+
+```diff
+ fn normalize_server_url(raw: &str) -> Result<String> {
+     let with_scheme = if trimmed.contains("://") {
+         trimmed.to_owned()
+     } else {
+-        format!("http://{trimmed}")
++        // Parse once against a placeholder scheme just to isolate the host.
++        let host_only = reqwest::Url::parse(&format!("http://{trimmed}"))
++            .ok()
++            .and_then(|u| u.host_str().map(str::to_owned))
++            .unwrap_or_default();
++        if is_local_host(&host_only) {
++            format!("http://{trimmed}")
++        } else {
++            format!("https://{trimmed}")
++        }
+     };
+```
+
+`is_local_host()` покрывает loopback, RFC1918, link-local, `.local`,
+`.internal`, `.home.arpa`, ULA `fc00::/7` и `fe80::/10`. Самостоятельный хостинг
+в локальной сети не ломается: `192.168.1.40:8001` по-прежнему `http://`. Явный
+`http://sarca.example.com` тоже уважается — понижение происходило только при
+неявном выборе схемы за пользователя.
+
+### R2-3. Dev-origin в релизной сборке
+
+`is_shell_url` определяет, какие страницы получают полный набор команд
+оболочки, включая `connect`, `update_session` и `get_url_history`. Порт 1420 в
+релизном бинарнике никогда не является Vite: это просто локальный порт, который
+может занять любой процесс пользователя.
+
+```diff
+-            // Vite `devUrl` in tauri.conf.json (port 1420) only.
++            // Vite `devUrl` in tauri.conf.json (port 1420). Debug builds only:
++            // in a shipped binary this would hand full shell trust — and with it
++            // `connect`, `update_session` and `get_url_history` — to any local
++            // process that manages to bind port 1420 before the user browses to
++            // it. A release bundle never loads the dev server.
++            #[cfg(debug_assertions)]
+             Some("localhost") | Some("127.0.0.1") => url.port() == Some(1420),
+```
+
+### R2-4. `FluentIcon`: удалён raw-innerHTML проп
+
+```diff
+ const FluentIcon = (props) => {
+ 	const svg = () => {
+-		if (props.src) return props.src
+-		if (props.name && fluentIcons[props.name]) return fluentIcons[props.name]
++		if (props.name && Object.hasOwn(fluentIcons, props.name)) {
++			return fluentIcons[props.name]
++		}
+ 		return ''
+ 	}
+```
+
+Переход на `Object.hasOwn` закрывает заодно обращение по цепочке прототипов:
+`name="toString"` раньше возвращал функцию `Object.prototype.toString`, она
+проходила проверку на truthy и уезжала в `innerHTML`.
+
+Вызовы в `FilesSidebar.jsx` переведены с SVG-строк на имена:
+
+```diff
+-{item('browse', 'All files', fluentIcons.folder, fluentIcons.folderFilled)}
++{item('browse', 'All files', 'folder', 'folderFilled')}
+```
+
+Проверено статически: 88 имён во всех `name=` по `ui/src` резолвятся в таблице,
+ни одного оставшегося `src=`.
+
+### R2-5 и R2-6. Зависимости и постоянная проверка в CI
+
+`solid-devtools` не импортировался ни в `vite.config.js`, ни в исходниках —
+только висел в `devDependencies` и удерживал старый Babel. Удалён.
+
+Новый `.github/workflows/audit.yml`: `permissions: contents: read`, запуск по
+PR, push в `master`, вручную и еженедельно. Rust-часть — `cargo audit` с одним
+исключением, JS-часть — `pnpm audit --audit-level=moderate` по `ui` и `client`.
+
+### R2-7. Ограничение длины ключа кэша
+
+```diff
+ ) -> Result<Option<String>, String> {
++    // Same bound as `cache_put_preview`: the keys are hashed, so an unbounded
++    // one only buys the caller hashing work on a multi-megabyte string.
++    if scope.len() > MAX_CACHE_KEY_LEN || path.len() > MAX_CACHE_KEY_LEN {
++        return Err("preview cache key too long".into());
++    }
+```
+
+## R2.3 Что проверено и чем
+
+В отличие от раунда 1, `cargo audit` и `pnpm audit` в этот раз были **запущены**,
+а не только рекомендованы.
+
+| Проверка | Команда | Результат |
+|---|---|---|
+| Rust advisories | `cargo audit` (v0.22.2) | 1 vulnerability, 17 unmaintained, 2 unsound |
+| Достижимость `rsa` | `cargo tree -i rsa -e normal` | «nothing to print» — в сборку не попадает |
+| JS advisories, до фикса | `pnpm audit` в `ui` | 1 moderate + 1 low (оба Babel, dev-only) |
+| JS advisories, после | `pnpm audit` в `ui` и `client` | `No known vulnerabilities found` |
+| Тесты sarca-sync | `task client:check-sync` | 55 passed |
+| Тесты клиента | `cargo test -p sarca-client --lib` | 68 passed |
+| Тесты UI | `pnpm test` в `ui` | 165 passed, 26 файлов |
+| Сборка UI | `pnpm build` | успешно |
+| Линт | `task lint` | чисто |
+| Синтаксис workflow | `yaml.safe_load` + `bash -n` | чисто |
+
+Единственное исключение в `cargo audit` — `RUSTSEC-2023-0071` (Marvin, `rsa`
+0.9.x, патча нет). Оно попадает в lock-файл только через отключённую
+optional-фичу `sqlx-mysql` и в бинарник не идёт, что подтверждено `cargo tree`.
+Все 19 остальных — `unmaintained` / `unsound`; `cargo audit` без флага `-D` на
+них не падает, поэтому в список исключений они не внесены: новое
+**настоящее** уязвимое место уронит job.
+
+`task lint` покрывает только пакет `sarca`. `cargo +nightly fmt` по
+`sarca-sync` и `sarca-client` показывает 8 расхождений, но они предшествуют
+этим правкам — тот же результат на чистом дереве через `git stash`. Не трогал:
+к безопасности отношения не имеет, а шум в диффе мешал бы ревью.
+
+## R2.4 Осознанно не исправлено
+
+**Android: `cleartextTrafficPermitted="true"` глобально**
+(`client/mobile/android/res/xml/network_security_config.xml`). Разрешает
+открытый HTTP к любому хосту, а не только к локальной сети. Правильнее было бы:
+
+```xml
+<base-config cleartextTrafficPermitted="false" />
+<domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="true">192.168.0.0</domain>
+    ...
+</domain-config>
+```
+
+Не применил: Android не поддерживает CIDR в `<domain>`, поэтому честного
+«разрешить всю локальную сеть» здесь не выразить, а перечислять конкретные
+адреса — значит сломать заявленный сценарий самостоятельного хостинга у
+пользователей с произвольным адресом сервера. R2-2 уже снимает основную часть
+риска: теперь до открытого HTTP дело доходит только когда пользователь либо
+указал LAN-адрес, либо явно написал `http://`. Решение — за владельцем
+продукта.
+
+## R2.5 Что осталось проверить вручную
+
+Пункты 1, 2, 3, 5, 6, 7, 8 из раздела 4 раунда 1 остаются в силе. Пункт 4
+(`cargo audit` / `pnpm audit` в CI) закрыт находкой R2-6. Дополнительно:
+
+1. **Ротировать ключ подписи Android, если релиз уже выходил без секретов.**
+   Проверить по опубликованным APK: `apksigner verify --print-certs` и сравнить
+   отпечаток с `sarca-sideload.p12`. Если совпал — ключ публичный, и
+   пользователей нужно переводить на новый ключ переустановкой. Смена ключа
+   подписи без переустановки в Android невозможна.
+2. **Завести секреты `ANDROID_KEYSTORE_BASE64` и `ANDROID_KEYSTORE_PASSWORD`.**
+   До этого момента релизный Android-job будет падать — это и есть задуманное
+   поведение, но релиз без них теперь не соберётся.
+3. **Удалить `client/mobile/sarca-sideload.p12` из репозитория и из истории git.**
+   Сейчас он остаётся для локальных sideload-сборок за явным флагом. Если он не
+   нужен — вычистить историю (`git filter-repo`), потому что ключ, лежавший в
+   публичной истории, скомпрометирован навсегда.
+4. **Пентест сетевого API** — как в раунде 1: IDOR по `storage_id` / `file_id` /
+   токенам ссылок, гонки на квотах, границы Range-запросов.
+5. **Проверить sidebar после R2-4 глазами.** Иконки резолвятся статически и
+   тесты проходят, но подмена SVG-строк на имена — визуальное изменение;
+   стоит открыть список файлов и убедиться, что все пять иконок на месте в
+   обоих состояниях (обычном и активном).
