@@ -57,15 +57,22 @@ impl<'d> AuthService<'d> {
 
     pub async fn refresh(&self, refresh_token: &str, config: &Config) -> SarcaResult<TokenSchema> {
         let auth = JWTManager::validate_refresh(refresh_token, &config.secret_key)?;
-        let user =
-            self.repo.get_by_email(&auth.email).await.map_err(|_| SarcaError::NotAuthenticated)?;
-        // Re-issue from the DB row, never from the old claims: after a db-reset the
-        // email still resolves but `users.id` is new, and reusing the stale id would
-        // mint tokens whose `user_id` matches no row (access checks then fail with a
-        // bogus "storage does not exist").
+        // Resolve by `sub`, not by the claim email: an account deleted and later
+        // recreated under the same address would otherwise accept the old
+        // account's refresh token.
+        let user = self.repo.get_by_id(auth.id).await.map_err(|_| SarcaError::NotAuthenticated)?;
+        if !user.email.eq_ignore_ascii_case(&auth.email) || !user.session_is_live(auth.issued_at) {
+            return Err(SarcaError::NotAuthenticated);
+        }
+        // Re-issue from the DB row, never from the old claims.
         let email_verified = user.email_verified();
         let auth = AuthUser::new(user.id, user.email);
         Ok(Self::issue_tokens(auth, email_verified, config))
+    }
+
+    /// Invalidate every token already issued for this user.
+    pub async fn logout(&self, user: &AuthUser) -> SarcaResult<()> {
+        self.repo.revoke_sessions(user.id).await
     }
 
     pub async fn me(&self, user: &AuthUser, config: &Config) -> SarcaResult<MeSchema> {

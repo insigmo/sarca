@@ -26,6 +26,7 @@ import {
 import { convertSize } from '../common/size_converter'
 import { nativeClientStore } from '../common/nativeClient'
 import { loadPreview } from '../common/previewLoader'
+import { sanitizeHtml } from '../common/sanitizeHtml'
 import FileTypeIcon from './FileTypeIcon'
 import LoadingDots from './LoadingDots'
 import { alertStore } from './AlertStack'
@@ -587,7 +588,7 @@ const FileViewer = (props) => {
 						breaks: true,
 					})
 					if (cancelled) return
-					setMarkdownHtml(html || '<p><em>Empty document</em></p>')
+					setMarkdownHtml(await sanitizeHtml(html) || '<p><em>Empty document</em></p>')
 				} else if (k === 'html') {
 					const raw = await blob.text()
 					if (cancelled) return
@@ -599,7 +600,7 @@ const FileViewer = (props) => {
 					const arrayBuffer = await blob.arrayBuffer()
 					const result = await mammoth.convertToHtml({ arrayBuffer })
 					if (cancelled) return
-					setDocxHtml(result.value || '<p><em>Empty document</em></p>')
+					setDocxHtml(await sanitizeHtml(result.value) || '<p><em>Empty document</em></p>')
 				}
 			} catch (err) {
 				console.error(err)
