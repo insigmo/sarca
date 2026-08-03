@@ -311,3 +311,31 @@ def signed_in(app, base_url: str, credentials: tuple[str, str]):
     app.connect(base_url)
     app.login(*credentials)
     return app
+
+
+@pytest.fixture(scope="session")
+def gui_app(client_binary: Path, shim, e2e_tmp: Path):
+    """One client for the whole session.
+
+    A cold start costs GTK + WebKit + the sync engine's first scan, so paying it
+    per scenario would put the flow suite well past a minute of pure startup.
+    Scenarios that need a never-configured client keep using `app`/`signed_in`.
+    """
+    from helpers.pilot import ClientApp, PilotError
+
+    instance = ClientApp(binary=client_binary, root=e2e_tmp / "gui-session-client")
+    try:
+        instance.start()
+    except PilotError:
+        instance.close()
+        raise
+    yield instance
+    instance.close()
+
+
+@pytest.fixture(scope="session")
+def gui(gui_app, base_url: str, credentials: tuple[str, str]):
+    """The session client, signed in as the superuser."""
+    gui_app.connect(base_url)
+    gui_app.login(*credentials)
+    return gui_app
