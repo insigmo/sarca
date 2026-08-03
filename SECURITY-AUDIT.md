@@ -640,6 +640,7 @@ if !user.session_is_live(auth_user.issued_at) {
 | R2-5 | Неиспользуемая devDependency `solid-devtools` тянула уязвимый `@babel/core@7.23.3` / `@babel/helpers@7.23.4` (GHSA-968p-4wvh-cqc8, GHSA-4x5r-pxfx-6jf8) | **Medium** | `ui/package.json` | Зависимость удалена; обе уязвимые копии ушли из lock-файла |
 | R2-6 | В CI не было постоянной проверки зависимостей (незакрытый пункт 4 из раздела «вручную» раунда 1) | **Medium** | `.github/workflows/audit.yml` | Новый workflow: `cargo audit` + `pnpm audit`, по PR, по push и еженедельно |
 | R2-7 | `cache_get_preview` не ограничивал длину ключа, в отличие от парного `cache_put_preview` | **Low** | `client/src-tauri/src/commands.rs` | Та же проверка `MAX_CACHE_KEY_LEN` |
+| R2-8 | Регрессионный guard в CI **требовал** статический wildcard `remote.urls: ["http://*:*"]` — то есть охранял ровно ту дыру, которую раунд 1 закрыл, и ронял CI за её отсутствие | **Medium** | `client/scripts/check-remote-acl.py` | Переписан: теперь запрещает статический `remote.urls` в любом capability-файле и проверяет runtime-список `REMOTE_SETTINGS_COMMANDS` в обе стороны |
 
 ## R2.2 Диффы
 
@@ -795,6 +796,74 @@ PR, push в `master`, вручную и еженедельно. Rust-часть 
 +    }
 ```
 
+### R2-8. Guard, охранявший саму дыру
+
+`client/scripts/check-remote-acl.py` ронял CI на `ca6bf0f`:
+
+```
+FAIL: remote.urls must include host:port wildcards (*:*); got [].
+      Plain http://* does not match http://host:port/
+```
+
+Скрипт был написан под старую, статическую модель ACL и утверждал, что
+`capabilities/default.json` **обязан** содержать `"remote": {"urls":
+["http://*:*"]}`. Раунд 1 этот блок удалил и перенёс выдачу прав в
+`grant_remote_capability`, где они привязаны к одному origin, на который
+пользователь реально подключился. То есть проверка не просто устарела: она
+требовала вернуть широкий грант, отдающий Sync/Security-команды любому http
+origin, куда получится увести webview.
+
+Переписан так, чтобы держать обе стороны инварианта:
+
+```python
+FORBIDDEN_REMOTE = ["connect", "get_url_history"]
+
+# (2) No static remote grant, in this or any other capability file.
+for path in sorted(CAP_DIR.glob("*.json")):
+    data = json.loads(path.read_text())
+    urls = (data.get("remote") or {}).get("urls") or []
+    if urls:
+        failures.append(
+            f"{path.name} declares a static remote.urls grant {urls!r}. "
+            "Remote access must be granted at runtime by "
+            "grant_remote_capability, scoped to the connected origin."
+        )
+```
+
+Проверяется четыре вещи: 17 нужных `allow-*` на месте; статического
+`remote.urls` нет ни в одном `capabilities/*.json`; runtime-список
+`REMOTE_SETTINGS_COMMANDS` (парсится регуляркой из `remote_ipc.rs`) покрывает
+эти команды; `connect` и `get_url_history` в нём **отсутствуют** — иначе
+удалённая страница смогла бы сама передвинуть границу доверия.
+
+Проверено в обе стороны: возврат `"urls": ["http://*:*"]` в `default.json` даёт
+`FAIL: default.json declares a static remote.urls grant [...]`, добавление
+`connect` в список — `FAIL: REMOTE_SETTINGS_COMMANDS must not expose 'connect'
+to remote pages`. На чистом дереве: `OK: 17 Sync/Security allows present; 30
+runtime remote commands; no static remote.urls grant`.
+
+### Побочно: порядок шагов в `e2e-gui`
+
+Второй упавший job к безопасности отношения не имеет, но чинится тем же
+заходом. `.github/workflows/e2e.yml`, job `e2e-gui`:
+
+```
+chmod: cannot access 'target/release/sarca': No such file or directory
+```
+
+Два `download-artifact` клали бинарники в `target/release` и
+`target/debug/examples` **до** шага `Swatinem/rust-cache@v2`, который
+восстанавливает `target/` целиком. В логе упавшего запуска: `Cache hit for
+restore-key ... Cache restored successfully`. Оба шага скачивания
+отработали (`Total of 1 artifact(s) downloaded` трижды), а до `chmod` файлы не
+дожили. Поэтому job падал только на запусках с попаданием в кэш и выглядел
+плавающим, а не сломанным по порядку.
+
+Оба скачивания перенесены после шага кэша; `ui-dist` (в `ui/dist`, вне
+`target/`) остался на месте. Порядок шагов подтверждён по логу; внутренний
+механизм, которым rust-cache стирает содержимое `target/`, до конца не
+разбирался — на корректность порядка это не влияет.
+
 ## R2.3 Что проверено и чем
 
 В отличие от раунда 1, `cargo audit` и `pnpm audit` в этот раз были **запущены**,
@@ -812,6 +881,7 @@ PR, push в `master`, вручную и еженедельно. Rust-часть 
 | Сборка UI | `pnpm build` | успешно |
 | Линт | `task lint` | чисто |
 | Синтаксис workflow | `yaml.safe_load` + `bash -n` | чисто |
+| Guard remote-ACL | `python3 client/scripts/check-remote-acl.py` | OK; негативные тесты в обе стороны падают как задумано |
 
 Единственное исключение в `cargo audit` — `RUSTSEC-2023-0071` (Marvin, `rsa`
 0.9.x, патча нет). Оно попадает в lock-файл только через отключённую
