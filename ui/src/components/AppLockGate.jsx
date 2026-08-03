@@ -28,7 +28,7 @@ const AppLockGate = (props) => {
 		for (let attempt = 0; attempt < 40 && isNative(); attempt++) {
 			try {
 				const prefs = await nativeInvoke('get_client_prefs')
-				if (prefs?.app_lock_enabled && prefs?.app_lock_pin) {
+				if (prefs?.app_lock_enabled && prefs?.app_lock_pin_set) {
 					setNeeded(true)
 				}
 				return
@@ -38,11 +38,15 @@ const AppLockGate = (props) => {
 		}
 	})
 
+	// The PIN never leaves Rust: `get_client_prefs` only reports whether one is
+	// set, and the comparison happens in `verify_app_lock_pin` (salted hash,
+	// constant time, throttled). Comparing here would have meant handing the
+	// PIN to every page that can reach the bridge.
 	const unlock = async () => {
 		setError('')
 		try {
-			const prefs = await nativeInvoke('get_client_prefs')
-			if (pin().trim() === prefs?.app_lock_pin) {
+			const ok = await nativeInvoke('verify_app_lock_pin', { pin: pin().trim() })
+			if (ok) {
 				sessionStorage.setItem('sarca_unlocked', '1')
 				setNeeded(false)
 				return

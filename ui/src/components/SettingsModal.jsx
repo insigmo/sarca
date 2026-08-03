@@ -62,6 +62,13 @@ const SettingsModal = () => {
 	const [logsBusy, setLogsBusy] = createSignal(false)
 	const [pinDraft, setPinDraft] = createSignal('')
 	const [pinConfirm, setPinConfirm] = createSignal('')
+	// Whether a PIN is stored natively. The PIN itself is never readable from
+	// JS: `get_client_prefs` reports this flag only, changing or clearing the
+	// PIN requires `current_app_lock_pin`, and unlocking goes through
+	// `verify_app_lock_pin`. Any page reaching the bridge would otherwise have
+	// been able to read the PIN straight out of the prefs.
+	const [pinSet, setPinSet] = createSignal(false)
+	const [pinCurrent, setPinCurrent] = createSignal('')
 	const [securityMsg, setSecurityMsg] = createSignal('')
 	/** @type {[import("solid-js").Accessor<boolean>, any]} */
 	const [isSuperuser, setIsSuperuser] = createSignal(!!store.user?.is_superuser)
@@ -255,7 +262,10 @@ const SettingsModal = () => {
 	createEffect(() => {
 		if (!isOpen() || tab() !== 'security' || !isNative()) return
 		nativeInvoke('get_client_prefs')
-			.then((p) => setLockEnabled(Boolean(p?.app_lock_enabled)))
+			.then((p) => {
+				setLockEnabled(Boolean(p?.app_lock_enabled))
+				setPinSet(Boolean(p?.app_lock_pin_set))
+			})
 			.catch(() => {})
 	})
 
@@ -325,10 +335,24 @@ const SettingsModal = () => {
 		}
 	}
 
+	const clearPinFields = () => {
+		setPinDraft('')
+		setPinConfirm('')
+		setPinCurrent('')
+	}
+
+	// Rust owns the comparison: a wrong `current_app_lock_pin` comes back as an
+	// error from `set_client_prefs`, so there is nothing to check here beyond
+	// the shape of the new PIN.
 	const saveAppLock = async (enabled) => {
 		setSecurityMsg('')
 		try {
 			const prefs = (await nativeInvoke('get_client_prefs')) || {}
+			const current = pinCurrent().trim()
+			if (pinSet() && !current) {
+				setSecurityMsg('Enter your current PIN')
+				return
+			}
 			if (enabled) {
 				const pin = pinDraft().trim()
 				const confirm = pinConfirm().trim()
@@ -345,30 +369,27 @@ const SettingsModal = () => {
 						...prefs,
 						app_lock_enabled: true,
 						app_lock_pin: pin,
+						current_app_lock_pin: current || null,
 					},
 				})
 				setLockEnabled(true)
+				setPinSet(true)
 				setEnablingLock(false)
-				setPinDraft('')
-				setPinConfirm('')
+				clearPinFields()
 				addAlert('App lock enabled', 'success')
 			} else {
-				const pin = pinDraft().trim()
-				if (!pin || pin !== prefs.app_lock_pin) {
-					setSecurityMsg('Enter current PIN to disable')
-					return
-				}
 				await nativeInvoke('set_client_prefs', {
 					prefs: {
 						...prefs,
 						app_lock_enabled: false,
 						app_lock_pin: null,
+						current_app_lock_pin: current || null,
 					},
 				})
 				setLockEnabled(false)
+				setPinSet(false)
 				setEnablingLock(false)
-				setPinDraft('')
-				setPinConfirm('')
+				clearPinFields()
 				addAlert('App lock disabled', 'success')
 			}
 		} catch (e) {
@@ -956,16 +977,25 @@ const SettingsModal = () => {
 														// "entering PIN" UI, nothing to disable natively.
 														setEnablingLock(false)
 														setSecurityMsg('')
-														setPinDraft('')
-														setPinConfirm('')
+														clearPinFields()
 													}
 												}}
 											/>
+											<Show when={pinSet()}>
+												<TextField
+													label="Current PIN"
+													type="password"
+													size="small"
+													fullWidth
+													sx={{ mt: 1 }}
+													value={pinCurrent()}
+													onChange={(_, v) => setPinCurrent(v)}
+													inputProps={{ inputMode: 'numeric', maxLength: 8 }}
+												/>
+											</Show>
 											<TextField
 												label={
-													lockEnabled()
-														? 'PIN (new or current)'
-														: 'PIN (4–8 digits)'
+													pinSet() ? 'New PIN (4–8 digits)' : 'PIN (4–8 digits)'
 												}
 												type="password"
 												size="small"

@@ -14,6 +14,11 @@ on:
       - "ui/**"
       - ".github/workflows/ui.yml"
 
+# Least privilege: this workflow only reads the tree. Without the block the
+# job would inherit whatever the repository default is, which can be write.
+permissions:
+  contents: read
+
 concurrency:
   group: ui-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

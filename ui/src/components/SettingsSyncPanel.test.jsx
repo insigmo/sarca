@@ -43,7 +43,7 @@ function mockNativeInvoke(initialBindings = []) {
 				return {
 					wifi_only: true,
 					app_lock_enabled: false,
-					app_lock_pin: null,
+					app_lock_pin_set: false,
 				}
 			case 'sync_statuses':
 				return []
@@ -396,7 +396,7 @@ describe('SettingsSyncPanel', () => {
 					return {
 						wifi_only: true,
 						app_lock_enabled: false,
-						app_lock_pin: null,
+						app_lock_pin_set: false,
 					}
 				case 'sync_statuses':
 					return []
@@ -457,7 +457,7 @@ describe('SettingsSyncPanel', () => {
 					return {
 						wifi_only: true,
 						app_lock_enabled: false,
-						app_lock_pin: null,
+						app_lock_pin_set: false,
 					}
 				case 'sync_statuses':
 					return []
@@ -513,7 +513,7 @@ describe('SettingsSyncPanel', () => {
 					return {
 						wifi_only: true,
 						app_lock_enabled: false,
-						app_lock_pin: null,
+						app_lock_pin_set: false,
 					}
 				case 'sync_statuses':
 					return []
@@ -581,7 +581,7 @@ describe('SettingsSyncPanel', () => {
 					return {
 						wifi_only: true,
 						app_lock_enabled: false,
-						app_lock_pin: null,
+						app_lock_pin_set: false,
 					}
 				case 'sync_statuses':
 					return [
@@ -683,7 +683,7 @@ describe('SettingsSyncPanel', () => {
 					return {
 						wifi_only: true,
 						app_lock_enabled: false,
-						app_lock_pin: null,
+						app_lock_pin_set: false,
 					}
 				case 'sync_statuses':
 					return []
@@ -744,7 +744,7 @@ describe('SettingsSyncPanel', () => {
 					return {
 						wifi_only: true,
 						app_lock_enabled: false,
-						app_lock_pin: null,
+						app_lock_pin_set: false,
 					}
 				case 'sync_statuses':
 					await gate
@@ -795,7 +795,7 @@ describe('SettingsSyncPanel', () => {
 				case 'device_label':
 					return 'Pixel 8'
 				case 'get_client_prefs':
-					return { wifi_only: true, app_lock_enabled: false, app_lock_pin: null }
+					return { wifi_only: true, app_lock_enabled: false, app_lock_pin_set: false }
 				case 'sync_statuses':
 					return []
 				case 'sync_transfer_queue':

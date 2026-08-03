@@ -86,12 +86,24 @@ impl JWTManager {
         Self::validate_with_type(token, secret_key, TOKEN_TYPE_REFRESH)
     }
 
+    /// HS256 only, with `exp` and `sub` demanded rather than merely checked.
+    ///
+    /// Naming the algorithm keeps a token whose header says `alg: none` (or
+    /// any asymmetric algorithm) from being accepted, and requiring the claims
+    /// means a token that simply omits `exp` cannot slip through as
+    /// "never expires".
+    fn validation() -> Validation {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_required_spec_claims(&["exp", "sub"]);
+        validation
+    }
+
     fn validate_with_type(
         token: &str,
         secret_key: &str,
         expected_type: &str,
     ) -> SarcaResult<AuthUser> {
-        let validation = Validation::new(Algorithm::HS256);
+        let validation = Self::validation();
         let decoding_key = DecodingKey::from_secret(secret_key.as_bytes());
 
         decode::<Claims>(token, &decoding_key, &validation)
@@ -133,7 +145,7 @@ impl JWTManager {
         share_token: &str,
         secret_key: &str,
     ) -> SarcaResult<()> {
-        let validation = Validation::new(Algorithm::HS256);
+        let validation = Self::validation();
         let decoding_key = DecodingKey::from_secret(secret_key.as_bytes());
 
         let token_data = decode::<ShareUnlockClaims>(unlock_jwt, &decoding_key, &validation)
@@ -146,5 +158,101 @@ impl JWTManager {
             return Err(SarcaError::NotAuthenticated);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SECRET: &str = "test-secret-value";
+
+    fn user() -> AuthUser {
+        AuthUser::new(Uuid::nil(), "user@example.com".to_owned())
+    }
+
+    fn access_token() -> String {
+        JWTManager::generate(user(), Duration::from_mins(1), SECRET, TOKEN_TYPE_ACCESS)
+    }
+
+    #[test]
+    fn a_valid_access_token_round_trips() {
+        let auth = JWTManager::validate(&access_token(), SECRET).expect("valid token");
+        assert_eq!(auth.id, Uuid::nil());
+        assert_eq!(auth.email, "user@example.com");
+        assert!(auth.issued_at > 0, "iat must be carried through for session revocation");
+    }
+
+    #[test]
+    fn another_secret_cannot_mint_a_token() {
+        let forged =
+            JWTManager::generate(user(), Duration::from_mins(1), "other-secret", TOKEN_TYPE_ACCESS);
+        assert!(JWTManager::validate(&forged, SECRET).is_err());
+    }
+
+    #[test]
+    fn an_expired_token_is_refused() {
+        // Beyond the default 60s leeway.
+        let claims = Claims {
+            sub: Uuid::nil().into(),
+            email: "user@example.com".to_owned(),
+            exp: 1,
+            token_type: Some(TOKEN_TYPE_ACCESS.to_owned()),
+            iat: 0,
+        };
+        let token =
+            encode(&Header::default(), &claims, &EncodingKey::from_secret(SECRET.as_bytes()))
+                .unwrap();
+        assert!(JWTManager::validate(&token, SECRET).is_err());
+    }
+
+    // A refresh token lives far longer than an access token, so letting one be
+    // used as the other would stretch the access window to the refresh window.
+    #[test]
+    fn the_two_token_types_are_not_interchangeable() {
+        let refresh =
+            JWTManager::generate(user(), Duration::from_mins(1), SECRET, TOKEN_TYPE_REFRESH);
+        assert!(JWTManager::validate(&refresh, SECRET).is_err());
+        assert!(JWTManager::validate_refresh(&access_token(), SECRET).is_err());
+    }
+
+    #[test]
+    fn an_unsigned_token_is_refused() {
+        // The classic JWT bypass: header `{"alg":"none","typ":"JWT"}`, a
+        // well-formed unexpired access-token body for the nil UUID, and an
+        // empty signature.
+        const ALG_NONE: &str = concat!(
+            "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.",
+            "eyJzdWIiOiIwMDAwMDAwMC0wMDAwLTAwMDAtMDAwMC0wMDAwMDAwMDAwMDAiLCJlbWFpbCI6InVzZXJAZXhh",
+            "bXBsZS5jb20iLCJleHAiOjk5OTk5OTk5OTksInRva2VuX3R5cGUiOiJhY2Nlc3MiLCJpYXQiOjF9.",
+        );
+        assert!(JWTManager::validate(ALG_NONE, SECRET).is_err());
+    }
+
+    #[test]
+    fn a_share_unlock_cookie_only_opens_its_own_share() {
+        let jwt = JWTManager::generate_share_unlock("share-a", Duration::from_mins(1), SECRET);
+        assert!(JWTManager::validate_share_unlock(&jwt, "share-a", SECRET).is_ok());
+        assert!(JWTManager::validate_share_unlock(&jwt, "share-b", SECRET).is_err());
+    }
+
+    // An access token and an unlock cookie are signed with the same key, so the
+    // `token_type` claim is the only thing keeping one from being replayed as
+    // the other.
+    #[test]
+    fn an_access_token_is_not_a_share_unlock_cookie() {
+        // `sub` is deliberately the share token, so `token_type` is the only
+        // thing left that can reject it.
+        let claims = Claims {
+            sub: "share-a".to_owned(),
+            email: "user@example.com".to_owned(),
+            exp: 9_999_999_999,
+            token_type: Some(TOKEN_TYPE_ACCESS.to_owned()),
+            iat: 1,
+        };
+        let token =
+            encode(&Header::default(), &claims, &EncodingKey::from_secret(SECRET.as_bytes()))
+                .unwrap();
+        assert!(JWTManager::validate_share_unlock(&token, "share-a", SECRET).is_err());
     }
 }
