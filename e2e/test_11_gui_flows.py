@@ -101,7 +101,7 @@ def set_sort(app: ClientApp, field: str, direction: str) -> None:
 
 
 def test_sign_in_survives_a_relaunch_and_log_out_clears_it(
-    signed_in: ClientApp, base_url: str
+    signed_in: ClientApp, base_url: str, storage: str
 ) -> None:
     """The session is the thing a user never wants to redo.
 
@@ -118,6 +118,10 @@ def test_sign_in_survives_a_relaunch_and_log_out_clears_it(
     signed_in.wait_for_url("/storages", "/setup")
     assert signed_in.local_storage("access_token"), "the session did not survive a relaunch"
 
+    # An account with no storages is bounced to the setup wizard, which has no
+    # sidebar. The `storage` fixture is here to keep the list non-empty, and
+    # this puts the app back on the page whose sidebar owns Log out.
+    signed_in.goto_until("/storages")
     signed_in.sidebar_click("Log out")
     signed_in.wait_for_url("/login")
     assert not signed_in.local_storage("access_token"), "log out left the token behind"
