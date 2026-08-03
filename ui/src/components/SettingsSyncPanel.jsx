@@ -1,326 +1,36 @@
-import { For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js'
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js'
 import Button from '@suid/material/Button'
 import Typography from '@suid/material/Typography'
 import AccessTimeIcon from '@suid/icons-material/AccessTime'
 import CheckIcon from '@suid/icons-material/Check'
 import LoadingDots from './LoadingDots'
 
-import {
-	formatBytes,
-	isMobileNativePlatform,
-	nativeInvoke,
-	pickLocalFolder,
-} from '../common/nativeBridge'
-import {
-	bindingStorageId,
-	cameraBinding,
-	cameraRemoteRoot,
-	displayCameraRemoteRoot,
-	needsCameraRootMigration,
-	resolveCameraToggle,
-} from '../common/autoUploadActions'
-import { sortTransferItems } from '../common/syncTransferQueue'
-import { syncScanHint } from '../common/syncScanHint'
+import { formatBytes, isMobileNativePlatform } from '../common/nativeBridge'
+import { syncSettingsStore } from '../common/syncSettingsStore'
 import { filesChromeStore } from '../common/filesChrome'
-import { alertStore } from './AlertStack'
-import FluentIcon from './FluentIcon'
 import SettingsSwitch from './SettingsSwitch'
-
-const CAMERA_ENABLED_CACHE_KEY = 'sarca.client.cameraAutoUploadEnabled'
-
-/**
- * localStorage first so the toggle keeps its value across app restarts, then
- * sessionStorage for webviews that block persistent storage. Reading both on
- * load also migrates clients that only ever wrote the session copy.
- * @returns {Array<Storage>}
- */
-function cacheStores() {
-	const stores = []
-	try {
-		if (typeof localStorage !== 'undefined') stores.push(localStorage)
-	} catch {
-		// blocked storage
-	}
-	try {
-		if (typeof sessionStorage !== 'undefined') stores.push(sessionStorage)
-	} catch {
-		// blocked storage
-	}
-	return stores
-}
-
-/**
- * Last known auto-upload state, or `null` when this client has never been told.
- * `null` means OFF for rendering purposes — auto-upload is opt-in everywhere.
- * @returns {boolean | null}
- */
-function readCachedCameraEnabled() {
-	for (const store of cacheStores()) {
-		try {
-			const v = store.getItem(CAMERA_ENABLED_CACHE_KEY)
-			if (v === '1') return true
-			if (v === '0') return false
-		} catch {
-			// private mode / blocked storage
-		}
-	}
-	return null
-}
-
-function writeCachedCameraEnabled(enabled) {
-	for (const store of cacheStores()) {
-		try {
-			store.setItem(CAMERA_ENABLED_CACHE_KEY, enabled ? '1' : '0')
-		} catch {
-			// ignore
-		}
-	}
-}
 
 /**
  * Sync tab: Camera media auto-upload. Storage is locked to the currently
- * open Files storage.
+ * open Files storage. All state and IPC live in {@link syncSettingsStore} so
+ * closing and reopening Settings never restarts a cold load.
  * @param {{ storageId?: string, storageName?: string }} props
  */
 const SettingsSyncPanel = (props) => {
-	const { addAlert } = alertStore
 	const chrome = filesChromeStore
-	const [platform, setPlatform] = createSignal('')
-	const [deviceLabel, setDeviceLabel] = createSignal('')
-	const [bindings, setBindings] = createSignal([])
-	const [bindingsLoaded, setBindingsLoaded] = createSignal(false)
-	const [cachedCameraOn, setCachedCameraOn] = createSignal(readCachedCameraEnabled())
-	const [statuses, setStatuses] = createSignal([])
-	const [prefs, setPrefs] = createSignal({
-		wifi_only: true,
-		app_lock_enabled: false,
-		app_lock_pin: null,
-	})
-	const [prefsLoaded, setPrefsLoaded] = createSignal(false)
-	const [localPath, setLocalPath] = createSignal('')
-	const [busy, setBusy] = createSignal(false)
-	const [msg, setMsg] = createSignal('')
-	const [cameraRootMigrateTried, setCameraRootMigrateTried] = createSignal(false)
-	const [staleStorageMigrateTried, setStaleStorageMigrateTried] = createSignal(false)
-	/** @type {import('solid-js').Accessor<'upload' | 'download' | null>} */
-	const [queueView, setQueueView] = createSignal(null)
-	const [transferSnap, setTransferSnap] = createSignal({
-		uploading: 0,
-		downloading: 0,
-		items: [],
+	const sync = syncSettingsStore
+	const [platform, setPlatform] = createSignal(sync.platform())
+
+	createEffect(() => setPlatform(sync.platform()))
+	createEffect(() => {
+		sync.setStorageId(props.storageId || chrome.storageId() || '')
 	})
 
 	const isMobile = () => isMobileNativePlatform(platform())
 
-	const lockedStorageId = () => props.storageId || chrome.storageId() || ''
-
-	// Camera row can exist while soft-disabled — never removed on toggle-off.
-	const autoBinding = () => cameraBinding(bindings())
-	// Until the first successful list_bindings, show the cached value. A client
-	// that has never enabled auto-upload has no cache entry and renders OFF —
-	// the toggle is opt-in, so "unknown" and "off" are the same picture and the
-	// panel never has to block on IPC to draw itself.
-	const cameraOn = () => {
-		if (!bindingsLoaded()) {
-			return cachedCameraOn() === true
-		}
-		return autoBinding()?.enabled === true
-	}
-
-	const applyBindings = (raw) => {
-		const list = Array.isArray(raw) ? raw : []
-		setBindings(list)
-		setBindingsLoaded(true)
-		const enabled = cameraBinding(list)?.enabled === true
-		setCachedCameraOn(enabled)
-		writeCachedCameraEnabled(enabled)
-		return list
-	}
-	const desiredCameraRemoteRoot = () =>
-		displayCameraRemoteRoot(deviceLabel(), platform())
-
-	const resolveExpectedCameraRoot = async () => {
-		// Prefer a fresh native label (cached on disk after startup) so binding
-		// creation never races the UI signal and writes Camera/Unknown device.
-		try {
-			const live = String((await nativeInvoke('device_label')) || '').trim()
-			if (live) {
-				setDeviceLabel(live)
-				return cameraRemoteRoot(live)
-			}
-		} catch {
-			// fall through
-		}
-		const fromUi = desiredCameraRemoteRoot()
-		if (fromUi) return fromUi
-		const plat = platform().trim() || String((await nativeInvoke('platform_label').catch(() => '')) || '').trim()
-		if (plat) {
-			setPlatform(plat)
-			return cameraRemoteRoot(plat)
-		}
-		return cameraRemoteRoot('')
-	}
-
-	const maybeMigrateLegacyCameraRoot = async (liveBindings) => {
-		if (cameraRootMigrateTried()) return
-		const sid = lockedStorageId()
-		if (!sid) return
-		const existing = cameraBinding(liveBindings)
-		if (!existing) return
-		const expectedRoot = await resolveExpectedCameraRoot()
-		if (!needsCameraRootMigration(existing.remote_root, expectedRoot)) return
-		setCameraRootMigrateTried(true)
-		try {
-			await nativeInvoke('ensure_remote_folder', {
-				storageId: sid,
-				parent: 'Camera',
-				name: expectedRoot.replace(/^Camera\//, ''),
-			})
-			await nativeInvoke('update_binding_remote_root', {
-				id: existing.id,
-				remoteRoot: expectedRoot,
-			})
-			await refresh()
-		} catch {
-			// Keep compatibility with clients that don't expose this command yet.
-		}
-	}
-
-	const refreshTransfers = async () => {
-		try {
-			const snap = await nativeInvoke('sync_transfer_queue')
-			if (snap && typeof snap === 'object') {
-				setTransferSnap({
-					uploading: Number(snap.uploading) || 0,
-					downloading: Number(snap.downloading) || 0,
-					items: Array.isArray(snap.items) ? snap.items : [],
-				})
-			}
-		} catch {
-			// Older clients may not expose this command yet.
-		}
-	}
-
-	const refreshLabels = async () => {
-		const [label, device] = await Promise.all([
-			nativeInvoke('platform_label').catch(() => ''),
-			nativeInvoke('device_label').catch(() => ''),
-		])
-		setPlatform(String(label || ''))
-		setDeviceLabel(String(device || ''))
-	}
-
-	const refresh = async () => {
-		try {
-			// Kick labels off in parallel, but never let a slow device_label IPC
-			// block bindings — that left the auto-upload toggle looking off.
-			const labelsP = refreshLabels()
-			// Apply bindings as soon as list_bindings resolves — do not wait for
-			// sync_statuses / transfer queue (those can stall for seconds while a
-			// large upload tick holds the index), or the camera toggle flashes OFF.
-			const bindsP = nativeInvoke('list_bindings').then(
-				(v) => {
-					const list = applyBindings(v)
-					return { ok: true, value: list }
-				},
-				(e) => ({ ok: false, error: e }),
-			)
-			const prefsP = nativeInvoke('get_client_prefs').catch(() => null)
-			const statusP = nativeInvoke('sync_statuses').catch(() => [])
-			const [bindsResult, prefsDto, statusList] = await Promise.all([
-				bindsP,
-				prefsP,
-				statusP,
-			])
-			if (!bindsResult.ok) {
-				setMsg(String(bindsResult.error))
-			}
-			setStatuses(Array.isArray(statusList) ? statusList : [])
-			await refreshTransfers()
-			if (prefsDto && typeof prefsDto === 'object') {
-				setPrefs({
-					wifi_only: prefsDto.wifi_only !== false,
-					app_lock_enabled: Boolean(prefsDto.app_lock_enabled),
-					app_lock_pin: prefsDto.app_lock_pin ?? null,
-				})
-				setPrefsLoaded(true)
-			}
-			const binds = bindsResult.ok ? bindsResult.value : bindings()
-			const auto = binds.find((b) => b.mode === 'auto_upload')
-			if (auto?.local_path) setLocalPath(auto.local_path)
-			else if (!localPath()) {
-				try {
-					const gallery = await nativeInvoke('default_gallery_path')
-					if (gallery) setLocalPath(String(gallery))
-				} catch {
-					// ignore
-				}
-			}
-			await labelsP
-			await maybeMigrateLegacyCameraRoot(binds)
-			await maybeMigrateStaleCameraStorage(binds)
-		} catch (e) {
-			setMsg(String(e))
-		}
-	}
-
-	const maybeMigrateStaleCameraStorage = async (liveBindings) => {
-		if (staleStorageMigrateTried()) return
-		const sid = lockedStorageId()
-		if (!sid) return
-		const existing = cameraBinding(liveBindings)
-		if (!existing) return
-		const boundSid = bindingStorageId(existing)
-		// Only "different storage than bound" is a candidate for migration —
-		// this alone does NOT mean the bound storage is gone: Settings can be
-		// opened from any storage's own settings, or from Files while browsing
-		// a storage other than the one Camera auto-upload targets. Confirm the
-		// bound storage was actually deleted before touching the binding.
-		if (!boundSid || boundSid === sid) return
-		setStaleStorageMigrateTried(true)
-		try {
-			const storages = await nativeInvoke('list_storages')
-			// Can't confirm deletion (bad response) — do nothing rather than
-			// risk rebinding a storage that's actually still there.
-			if (!Array.isArray(storages)) return
-			const stillExists = storages.some((s) => String(s?.id) === boundSid)
-			if (stillExists) return
-			// Re-run enable path: remove stale binding + add for current storage.
-			await setAutoUpload(true)
-		} catch {
-			setStaleStorageMigrateTried(false)
-		}
-	}
-
 	onMount(() => {
-		refresh()
-		const id = window.setInterval(() => {
-			refresh()
-		}, 8000)
-		const fast = window.setInterval(() => {
-			refreshTransfers()
-		}, 2000)
-		onCleanup(() => {
-			window.clearInterval(id)
-			window.clearInterval(fast)
-		})
-	})
-
-	// "Nothing is happening" is ambiguous: idle because everything is uploaded,
-	// or idle because the scan found nothing? Say which.
-	const scanHint = createMemo(() => {
-		const binding = autoBinding()
-		if (!binding) return null
-		const status = statuses().find((s) => s.binding_id === binding.id)
-		return syncScanHint(status, { unfinishedUploads: transferSnap().uploading })
-	})
-
-	const queueItems = createMemo(() => {
-		const dir = queueView()
-		if (!dir) return []
-		return sortTransferItems(
-			(transferSnap().items || []).filter((i) => i.direction === dir),
-		)
+		sync.start()
+		onCleanup(() => sync.stop())
 	})
 
 	const statusIcon = (status) => {
@@ -340,209 +50,36 @@ const SettingsSyncPanel = (props) => {
 		return <CheckIcon sx={{ fontSize: 16, color: 'success.main' }} />
 	}
 
-	const savePrefs = async (next) => {
-		setPrefs(next)
-		await nativeInvoke('set_client_prefs', { prefs: next })
-	}
-
-	const pickFolder = async (current) => {
-		setBusy(true)
-		setMsg('')
-		try {
-			const path = await pickLocalFolder(current || '')
-			if (path) return String(path)
-			setMsg('No folder selected')
-			return null
-		} catch (e) {
-			const text = String(e?.message || e)
-			setMsg(text)
-			addAlert(text || 'Folder picker failed', 'error')
-			return null
-		} finally {
-			setBusy(false)
-		}
-	}
-
-	const kickSyncNow = () => {
-		// Do not await: a full upload can take minutes and used to keep the
-		// checkbox disabled/unchecked until sync finished (refresh ran only after).
-		nativeInvoke('sync_now')
-			.then(() => refresh())
-			.catch((syncErr) => {
-				addAlert(String(syncErr), 'error')
-				refresh()
-			})
-	}
-
-	const setAutoUpload = async (enable) => {
-		setBusy(true)
-		setMsg('')
-		try {
-			const sid = lockedStorageId()
-			if (!sid) throw new Error('Open a storage in Files first')
-
-			// Prefer live native list — local state can be empty after a failed refresh
-			// while the binding is still in SQLite (looked like "off" in the UI).
-			let live = []
-			try {
-				const listed = await nativeInvoke('list_bindings')
-				live = Array.isArray(listed) ? listed : []
-			} catch {
-				live = bindings()
-			}
-
-			const decision = resolveCameraToggle(live, enable, sid)
-
-			if (decision.action === 'noop') {
-				setBindings(live)
-				return
-			}
-
-			if (decision.action === 'rebind') {
-				await nativeInvoke('remove_binding', { id: decision.id })
-				// fall through to add for current storage
-			} else if (decision.action === 'set_enabled') {
-				// Soft-disable / re-enable in place — never remove_binding, so the
-				// index and remote mapping survive a toggle-off/on cycle.
-				await nativeInvoke('set_binding_enabled', {
-					id: decision.id,
-					enabled: decision.enabled,
-				})
-				if (decision.enabled) {
-					const existing = live.find((b) => b.id === decision.id) || null
-					const expectedRoot = await resolveExpectedCameraRoot()
-					if (existing && String(existing.remote_root || '') !== expectedRoot) {
-						await nativeInvoke('ensure_remote_folder', {
-							storageId: sid,
-							parent: 'Camera',
-							name: expectedRoot.replace(/^Camera\//, ''),
-						})
-						await nativeInvoke('update_binding_remote_root', {
-							id: existing.id,
-							remoteRoot: expectedRoot,
-						})
-					}
-				}
-				await refresh()
-				if (decision.enabled) kickSyncNow()
-				return
-			}
-
-			// decision.action === 'add'
-			let path = localPath().trim()
-			if (!path) {
-				path = String((await nativeInvoke('default_gallery_path')) || '')
-				if (!path) {
-					path = String((await pickLocalFolder('')) || '')
-				}
-				if (path) setLocalPath(path)
-			}
-			if (!path) throw new Error('Choose a local gallery / Pictures folder')
-			await nativeInvoke('ensure_remote_folder', {
-				storageId: sid,
-				parent: '',
-				name: 'Camera',
-			})
-			const expectedRoot = await resolveExpectedCameraRoot()
-			await nativeInvoke('ensure_remote_folder', {
-				storageId: sid,
-				parent: 'Camera',
-				name: expectedRoot.replace(/^Camera\//, ''),
-			})
-			const binding = await nativeInvoke('add_binding', {
-				storageId: sid,
-				remoteRoot: expectedRoot,
-				localPath: path,
-				mode: 'auto_upload',
-			})
-			// Optimistic UI so the toggle stays on while the engine catches up.
-			if (binding && typeof binding === 'object') {
-				setBindings((prev) => [
-					...(Array.isArray(prev)
-						? prev.filter((b) => b.mode !== 'auto_upload')
-						: []),
-					binding,
-				])
-			}
-			await refresh()
-			kickSyncNow()
-		} catch (e) {
-			setMsg(String(e))
-			addAlert(String(e), 'error')
-			await refresh()
-		} finally {
-			setBusy(false)
-		}
-	}
-
-	const runSyncNow = () => {
-		setMsg('')
-		addAlert('Upload started', 'success')
-		kickSyncNow()
-	}
-
 	return (
 		<div class="settings-sync-panel">
-			<Show
-				when={queueView()}
-				fallback={
-					<>
 			<div class="settings-toggle">
 				<span>Enable photo and video auto-upload</span>
 				{/*
-				  * Always interactive: never gate on bindingsLoaded(). The panel
-				  * used to render a spinner (cold start, empty cache) and then a
-				  * disabled switch until list_bindings returned, which reads as a
-				  * hang whenever the sync engine is busy. setAutoUpload() re-reads
-				  * live bindings itself, so acting before the background refresh
-				  * lands is safe.
+				  * Always interactive, never disabled while the native work runs:
+				  * the switch renders the user's intent immediately and the store
+				  * reverts it only if the native call actually fails.
 				  */}
 				<SettingsSwitch
 					id="settings-camera-switch"
-					checked={cameraOn()}
-					disabled={busy()}
-					onChange={(checked) => setAutoUpload(checked)}
+					checked={sync.cameraOn()}
+					onChange={(checked) => sync.setAutoUpload(checked)}
 				/>
 			</div>
 
-			<Show when={autoBinding()}>
+			<Show when={sync.autoBinding()}>
 				<p class="settings-sync-panel__meta">
-					{autoBinding().local_path} → {autoBinding().remote_root || 'Camera'}
+					{sync.autoBinding().local_path} →{' '}
+					{sync.autoBinding().remote_root || 'Camera'}
 				</p>
 				<div class="settings-sync-panel__row">
 					<Button
 						variant="outlined"
 						size="small"
-						disabled={busy()}
+						disabled={sync.busy()}
 						onClick={async () => {
-							const path = await pickFolder(localPath())
+							const path = await sync.pickFolder(sync.localPath())
 							if (!path) return
-							setLocalPath(path)
-							try {
-								const existing = cameraBinding(
-									await nativeInvoke('list_bindings'),
-								)
-								if (existing) {
-									await nativeInvoke('update_binding_local_path', {
-										id: existing.id,
-										localPath: path,
-									})
-									if (!existing.enabled) {
-										await nativeInvoke('set_binding_enabled', {
-											id: existing.id,
-											enabled: true,
-										})
-									}
-									kickSyncNow()
-									await refresh()
-								} else {
-									await setAutoUpload(true)
-								}
-							} catch (e) {
-								setMsg(String(e))
-								addAlert(String(e), 'error')
-								await refresh()
-							}
+							await sync.changeLocalFolder(path)
 						}}
 					>
 						Change local folder
@@ -550,132 +87,89 @@ const SettingsSyncPanel = (props) => {
 				</div>
 			</Show>
 
-			<Show when={autoBinding() && isMobile()}>
+			<Show when={sync.autoBinding() && isMobile()}>
 				<div class="settings-toggle">
 					<span>Upload on Wi‑Fi only</span>
 					<SettingsSwitch
 						id="settings-wifi-switch"
-						checked={prefs().wifi_only !== false}
-						disabled={busy()}
+						checked={sync.prefs().wifi_only !== false}
 						onChange={(checked) =>
-							savePrefs({ ...prefs(), wifi_only: checked })
+							sync.savePrefs({ ...sync.prefs(), wifi_only: checked })
 						}
 					/>
 				</div>
 			</Show>
 
-			<div class="settings-sync-panel__section">
-				<Typography variant="subtitle2" sx={{ mb: 1 }}>
-					Upload &amp; download
-				</Typography>
-				<div class="settings-sync-panel__queue">
-					<button
-						type="button"
-						class="settings-sync-panel__queue-row"
-						onClick={() => setQueueView('download')}
-					>
-						<span>Downloading</span>
-						<span class="settings-sync-panel__queue-count">
-							{transferSnap().downloading}
-							<FluentIcon name="chevronRight" size={16} aria-hidden="true" />
-						</span>
-					</button>
-					<button
-						type="button"
-						class="settings-sync-panel__queue-row"
-						onClick={() => setQueueView('upload')}
-					>
-						<span>Uploading</span>
-						<span class="settings-sync-panel__queue-count">
-							{transferSnap().uploading}
-							<FluentIcon name="chevronRight" size={16} aria-hidden="true" />
-						</span>
-					</button>
-				</div>
-			</div>
-
 			<div class="settings-sync-panel__row">
 				<Button
 					variant="contained"
 					color="secondary"
-					disabled={busy()}
-					onClick={runSyncNow}
+					onClick={() => sync.runSyncNow()}
 				>
 					Upload now
 				</Button>
 			</div>
 
-			<Show when={scanHint()}>
-				<p class="settings-account__hint">{scanHint()}</p>
+			{/* Inline, right under the buttons: the queue is the answer to "is it
+			    working?", so it must not be hidden behind another tap. */}
+			<div class="settings-sync-panel__section">
+				<Typography variant="subtitle2" sx={{ mb: 1 }}>
+					Uploading
+					<span class="settings-sync-panel__queue-count">
+						{sync.transferSnap().uploading}
+					</span>
+				</Typography>
+				<Show
+					when={sync.uploadItems().length}
+					fallback={<p class="settings-account__hint">No transfers yet.</p>}
+				>
+					<ul class="settings-sync-panel__transfer-list">
+						<For each={sync.uploadItems()}>
+							{(item) => (
+								<li class="settings-sync-panel__transfer-item">
+									<div class="settings-sync-panel__transfer-meta">
+										<Show when={item.path}>
+											<div class="settings-account__hint">{item.path}/</div>
+										</Show>
+										<div class="settings-sync-panel__transfer-name">
+											{item.name}
+										</div>
+										<Show when={item.size != null}>
+											<div class="settings-account__hint">
+												{formatBytes(Number(item.size) || 0)}
+											</div>
+										</Show>
+									</div>
+									<div
+										class="settings-sync-panel__transfer-status"
+										aria-label={item.status}
+									>
+										{statusIcon(item.status)}
+									</div>
+								</li>
+							)}
+						</For>
+					</ul>
+				</Show>
+			</div>
+
+			<Show when={sync.scanHint()}>
+				<p class="settings-account__hint">{sync.scanHint()}</p>
 			</Show>
 
-			<Show when={statuses().some((s) => s.last_error)}>
+			<Show when={sync.statuses().some((s) => s.last_error)}>
 				<p class="settings-bot-hint" role="alert">
-					{statuses()
+					{sync
+						.statuses()
 						.filter((s) => s.last_error)
 						.map((s) => s.last_error)
 						.join(' · ')}
 				</p>
 			</Show>
-			<Show when={msg()}>
+			<Show when={sync.msg()}>
 				<p class="settings-bot-hint" role="status">
-					{msg()}
+					{sync.msg()}
 				</p>
-			</Show>
-			<p class="settings-account__hint" style={{ display: 'none' }}>
-				{formatBytes(0)}
-			</p>
-					</>
-				}
-			>
-				<div class="settings-sync-panel__transfer">
-					<button
-						type="button"
-						class="settings-sync-panel__transfer-back"
-						onClick={() => setQueueView(null)}
-					>
-						<FluentIcon name="chevronLeft" size={18} aria-hidden="true" />
-						<span>
-							{queueView() === 'upload' ? 'Upload list' : 'Download list'}
-						</span>
-					</button>
-					<Show
-						when={queueItems().length}
-						fallback={
-							<p class="settings-account__hint">No transfers yet.</p>
-						}
-					>
-						<ul class="settings-sync-panel__transfer-list">
-							<For each={queueItems()}>
-								{(item) => (
-									<li class="settings-sync-panel__transfer-item">
-										<div class="settings-sync-panel__transfer-meta">
-											<Show when={item.path}>
-												<div class="settings-account__hint">
-													{item.path}/
-												</div>
-											</Show>
-											<div class="settings-sync-panel__transfer-name">
-												{item.name}
-											</div>
-											<Show when={item.size != null}>
-												<div class="settings-account__hint">
-													{formatBytes(Number(item.size) || 0)}
-												</div>
-											</Show>
-										</div>
-										<div
-											class="settings-sync-panel__transfer-status"
-											aria-label={item.status}
-										>
-											{statusIcon(item.status)}
-										</div>
-									</li>
-								)}
-							</For>
-						</ul>
-					</Show>
-				</div>
 			</Show>
 		</div>
 	)
