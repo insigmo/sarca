@@ -3104,6 +3104,90 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	object-fit: contain;
 	border-radius: 0;
 	box-shadow: none;
+	transform-origin: center center;
+	user-select: none;
+	-webkit-user-select: none;
+	-webkit-user-drag: none;
+}
+
+/* Gesture layer for photos: pinch, double tap, drag, swipe. `touch-action:
+   none` is what stops the browser from panning/zooming the page instead. */
+.file-viewer__zoom-surface {
+	position: absolute;
+	inset: 0;
+	overflow: hidden;
+	touch-action: none;
+	cursor: zoom-in;
+}
+.file-viewer__zoom-surface--zoomed {
+	cursor: grab;
+}
+.file-viewer__zoom-surface--zoomed:active {
+	cursor: grabbing;
+}
+
+.file-viewer__zoom {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 2px;
+	border: 1px solid rgba(255, 255, 255, 0.22);
+	border-radius: 999px;
+	background: rgba(12, 16, 40, 0.45);
+	backdrop-filter: blur(18px);
+	-webkit-backdrop-filter: blur(18px);
+	box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+	flex-shrink: 0;
+}
+.file-viewer__zoom-btn {
+	width: 32px;
+	height: 32px;
+	border: 0;
+	border-radius: 50%;
+	display: grid;
+	place-items: center;
+	cursor: pointer;
+	font-size: 1.05rem;
+	line-height: 1;
+	color: #fff;
+	background: transparent;
+	transition: background 0.18s ease, color 0.18s ease;
+}
+.file-viewer__zoom-btn:hover:not([aria-disabled='true']) {
+	background: rgba(124, 92, 191, 0.35);
+}
+.file-viewer__zoom-level {
+	min-width: 52px;
+	height: 32px;
+	padding: 0 6px;
+	border: 0;
+	border-radius: 999px;
+	cursor: pointer;
+	color: #fff;
+	background: transparent;
+	font: inherit;
+	font-size: 0.78rem;
+	font-variant-numeric: tabular-nums;
+	transition: background 0.18s ease;
+}
+.file-viewer__zoom-level:hover:not([aria-disabled='true']) {
+	background: rgba(124, 92, 191, 0.35);
+}
+.file-viewer__zoom-btn[aria-disabled='true'],
+.file-viewer__zoom-level[aria-disabled='true'] {
+	opacity: 0.42;
+	cursor: default;
+}
+/* Phones zoom with their fingers, so the magnifier cluster only earns its
+   space in the header once the photo is actually zoomed. A tablet with a mouse
+   attached reports a fine pointer and keeps the buttons. */
+@media (hover: none) and (pointer: coarse) {
+	.file-viewer__zoom {
+		display: none;
+	}
+	.file-viewer--zoomed .file-viewer__zoom {
+		display: flex;
+	}
 }
 
 .file-viewer__controls {
