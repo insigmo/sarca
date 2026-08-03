@@ -45,6 +45,7 @@ fake-Telegram documents) after the run, `SARCA_E2E_RUST_LOG` overrides `RUST_LOG
 | `test_api.py`, `test_features.py`, `test_ui.py` | Pre-existing suites (auth, FS ops, trash, shares, favorites, UI serving), now running against this harness. |
 | `test_09_upload_resilience.py` | A retried upload keeps its original name (no `(1)` suffix), parallel file uploads actually overlap, and concurrency backs off on flood control. |
 | `test_10_client_ui.py` | The desktop client itself, driven through `tauri-pilot`: sync settings paint the auto-upload toggle with no spinner, it defaults to off, the cached state lives in localStorage across a relaunch, and folder rows keep their name tight to the icon. |
+| `test_11_gui_flows.py` | Sixteen journeys through the client's own UI: sign in and stay signed in, storages, folders, upload, tile/list view, sort, search, favorites, trash and restore, rename, move, the viewer, sharing by link, bulk select and delete, settings (account/users/trash retention), and photo zoom by magnifier plus swipe between photos. Each one is confirmed on screen and, where it is server state, through the API. |
 | `test_upload_smoke.py` | Image + video upload smoke. Runs on the mock by default (so it is in CI); point it at real Telegram or a deployed server for a live check. |
 
 ## Harness
@@ -61,7 +62,10 @@ helpers/h3.py              HTTP/3 client (aioquic)
 helpers/media.py           deterministic photos / PNGs / blobs / video fixture
 helpers/pilot.py           builds and drives the desktop client (tauri-pilot):
                            private DBus session, isolated HOME/XDG dirs, a static
-                           server standing in for `pnpm dev`, connect/login flows
+                           server standing in for `pnpm dev`, connect/login flows,
+                           and a UI layer for the scenarios — rows, context-menu
+                           actions, modals, keyboard, uploads, localStorage,
+                           text/alert waits, and `reset()` back to a clean stage
 ```
 
 Markers: `slow` (multi-second), `mock_only` (needs the fake Bot API), `smoke`
