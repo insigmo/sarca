@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
+    extract::{OriginalUri, State},
     http::{Method, Request, StatusCode, header::AUTHORIZATION},
     middleware::Next,
     response::Response,
@@ -71,6 +71,20 @@ fn authenticate_request(
     Err(SarcaError::NotAuthenticated)
 }
 
+/// The request path as the client sent it.
+///
+/// This middleware is applied on nested routers, and `nest` strips the matched
+/// prefix from `req.uri()`: inside the files router the same request reads as
+/// `/preview/one.png`, with `/api/storages/{id}/files` gone. Matching on that
+/// stripped path made [`is_media_get`] answer `false` on the inner pass and
+/// 401 every `<img>`/`<video>` load. `OriginalUri` is the untouched URI axum
+/// stashes on the first nest.
+fn request_path(req: &Request<axum::body::Body>) -> &str {
+    req.extensions()
+        .get::<OriginalUri>()
+        .map_or_else(|| req.uri().path(), |original| original.0.path())
+}
+
 /// `GET /api/storages/{id}/files/{download,thumb,preview}/…` — the endpoints
 /// loaded directly by `<video>` / `<img>` / `<iframe>`, which cannot send an
 /// `Authorization` header.
@@ -78,7 +92,7 @@ fn is_media_get(req: &Request<axum::body::Body>) -> bool {
     if req.method() != Method::GET {
         return false;
     }
-    let path = req.uri().path();
+    let path = request_path(req);
     let Some((_, rest)) = path.split_once("/files/") else {
         return false;
     };
@@ -121,5 +135,41 @@ mod query_token_scope_tests {
         assert!(!is_media_get(&req(Method::GET, "/api/setup/storages")));
         // A path that merely *mentions* an action must not qualify.
         assert!(!is_media_get(&req(Method::GET, "/api/users/download")));
+    }
+
+    /// The files router is nested, so by the time this middleware runs there
+    /// `req.uri()` has lost the `/api/storages/{id}/files` prefix. The query
+    /// token must still be honoured, or every preview/thumb/download `<img>`
+    /// 401s.
+    #[test]
+    fn a_nested_media_get_is_recognised_by_its_original_uri() {
+        let mut request = req(Method::GET, "/preview/one.png");
+        request.extensions_mut().insert(OriginalUri(
+            "/api/storages/11111111-1111-1111-1111-111111111111/files/preview/one.png"
+                .parse()
+                .unwrap(),
+        ));
+        assert!(is_media_get(&request));
+    }
+
+    #[test]
+    fn a_query_token_authenticates_a_media_get() {
+        let secret = "test-secret-value";
+        let token = JWTManager::generate(
+            AuthUser::new(uuid::Uuid::new_v4(), "user@sarca.test".to_owned()),
+            std::time::Duration::from_mins(10),
+            secret,
+            crate::common::jwt_manager::TOKEN_TYPE_ACCESS,
+        );
+        let stripped = format!("/preview/one.png?access_token={token}");
+        let mut request = req(Method::GET, &stripped);
+        request.extensions_mut().insert(OriginalUri(
+            format!(
+                "/api/storages/11111111-1111-1111-1111-111111111111/files/preview/one.png?access_token={token}"
+            )
+            .parse()
+            .unwrap(),
+        ));
+        assert!(authenticate_request(&request, secret).is_ok());
     }
 }
