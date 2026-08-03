@@ -27,10 +27,15 @@ pub async fn logged_in_required(
     let auth_user = authenticate_request(&req, &state.config.secret_key)
         .map_err(<(StatusCode, String)>::from)?;
 
+    // Only a *missing* user means the token is stale. Every other failure here
+    // is the database being unavailable (pool `acquire_timeout`, `SQLITE_BUSY`
+    // under a busy grid), and answering 401 to those made the client discard a
+    // perfectly good session: a burst of concurrent thumb/preview requests
+    // logged the whole app out. Those must surface as 5xx and be retried.
     let user = UsersRepository::new(&state.db)
         .get_by_id(auth_user.id)
         .await
-        .map_err(|_| <(StatusCode, String)>::from(SarcaError::NotAuthenticated))?;
+        .map_err(|e| <(StatusCode, String)>::from(user_lookup_failure(e)))?;
 
     // Reject tokens minted before the last password reset / logout.
     if !user.session_is_live(auth_user.issued_at) {
@@ -100,6 +105,17 @@ fn is_media_get(req: &Request<axum::body::Body>) -> bool {
     matches!(action, "download" | "thumb" | "preview")
 }
 
+/// Why a user lookup failed, in auth terms.
+///
+/// A missing row is the only outcome that says anything about the token; see
+/// the call site for why the rest must not be flattened into a 401.
+fn user_lookup_failure(e: SarcaError) -> SarcaError {
+    match e {
+        SarcaError::DoesNotExist(_) => SarcaError::NotAuthenticated,
+        other => other,
+    }
+}
+
 fn bearer_token(req: &Request<axum::body::Body>) -> Option<String> {
     req.headers()
         .get(AUTHORIZATION)
@@ -150,6 +166,19 @@ mod query_token_scope_tests {
                 .unwrap(),
         ));
         assert!(is_media_get(&request));
+    }
+
+    /// A database hiccup (pool `acquire_timeout`, `SQLITE_BUSY`) must not read
+    /// as "your session is gone" — the client reacts to 401 by logging out.
+    #[test]
+    fn a_database_failure_is_not_reported_as_a_dead_session() {
+        let (status, _) = <(StatusCode, String)>::from(user_lookup_failure(SarcaError::Unknown));
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let (status, _) = <(StatusCode, String)>::from(user_lookup_failure(
+            SarcaError::DoesNotExist("such user".into()),
+        ));
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
     }
 
     #[test]
