@@ -6,6 +6,7 @@ mod client_log;
 mod commands;
 mod folder_picker;
 mod mediastore;
+mod paths;
 mod remote_ipc;
 mod startup;
 mod state;
@@ -334,6 +335,7 @@ pub fn run() {
             commands::sync_transfer_queue,
             commands::get_client_prefs,
             commands::set_client_prefs,
+            commands::verify_app_lock_pin,
             commands::export_logs,
             commands::is_on_wifi,
             commands::get_about,

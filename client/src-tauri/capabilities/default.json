@@ -1,16 +1,11 @@
 {
   "$schema": "https://schema.tauri.app/config/2/capability",
   "identifier": "default",
-  "description": "Default Sarca client capabilities (local shell + remote server UI)",
+  "description": "Local shell only. Remote pages get no ACL from this file: the Sarca server the user connects to is granted a narrower, origin-scoped capability at runtime (see remote_ipc::grant_remote_capability), and everything else reaches the bridge through nothing at all.",
+  "local": true,
   "windows": [
     "main"
   ],
-  "remote": {
-    "urls": [
-      "http://*:*/*",
-      "https://*:*/*"
-    ]
-  },
   "permissions": [
     "core:default",
     "dialog:default",
@@ -40,6 +35,7 @@
     "allow-sync-transfer-queue",
     "allow-get-client-prefs",
     "allow-set-client-prefs",
+    "allow-verify-app-lock-pin",
     "allow-export-logs",
     "allow-is-on-wifi",
     "allow-get-about",

@@ -84,6 +84,12 @@ impl<'c> Mailer<'c> {
         let tls = self.config.smtp_tls.to_ascii_lowercase();
         let mut builder = match tls.as_str() {
             "none" => {
+                if self.config.smtp_password.is_some() {
+                    tracing::warn!(
+                        "SMTP_TLS=none with SMTP credentials set: the SMTP password and every \
+                         reset link are sent to {host} in clear text"
+                    );
+                }
                 AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(host)
                     .port(self.config.smtp_port)
             },

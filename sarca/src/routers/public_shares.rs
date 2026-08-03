@@ -11,7 +11,7 @@ use axum::{
 use percent_encoding::percent_decode_str;
 
 use crate::{
-    common::{jwt_manager::JWTManager, routing::app_state::AppState},
+    common::{jwt_manager::JWTManager, routing::app_state::AppState, throttle::keys},
     errors::SarcaError,
     models::share_links::ShareLink,
     repositories::files::FilesRepository,
@@ -85,11 +85,17 @@ impl PublicSharesRouter {
         Ok(Json(meta).into_response())
     }
 
+    /// The only unauthenticated password check in the public surface, so it is
+    /// throttled per share token: share passwords are short by nature and this
+    /// endpoint would otherwise answer guesses as fast as bcrypt runs.
     async fn unlock(
         State(state): State<Arc<AppState>>,
         Path(token): Path<String>,
         Json(body): Json<UnlockShareSchema>,
     ) -> Result<Response, Response> {
+        let throttle_key = keys::share_unlock(&token);
+        state.throttle.check(&throttle_key).await.map_err(err_response)?;
+
         let svc = Self::service(&state);
         let link = svc.load_available(&token).await.map_err(err_response)?;
 
@@ -99,6 +105,7 @@ impl PublicSharesRouter {
         }
 
         PublicSharesService::verify_password(&link, &body.password).map_err(|e| {
+            state.throttle.record_failure(&throttle_key);
             match e {
                 SarcaError::NotAuthenticated => {
                     (StatusCode::UNAUTHORIZED, Json(NeedPasswordSchema::yes())).into_response()
@@ -106,6 +113,7 @@ impl PublicSharesRouter {
                 other => err_response(other),
             }
         })?;
+        state.throttle.record_success(&throttle_key);
 
         let max_age = PublicSharesService::unlock_max_age_secs(&link);
         if max_age == 0 {

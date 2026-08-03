@@ -19,6 +19,12 @@ on:
       - "Cargo.lock"
       - ".github/workflows/client.yml"
 
+# Least privilege: these jobs build and test, they never write to the repo.
+# Artifacts are uploaded through actions/upload-artifact, which does not need
+# `contents: write`.
+permissions:
+  contents: read
+
 concurrency:
   group: client-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
