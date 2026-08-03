@@ -258,6 +258,53 @@ def test_favorites_missing_file(
     assert r.status_code in (400, 404), r.text
 
 
+def test_favorites_star_then_unstar_round_trip(
+    client: httpx.Client, auth_headers: dict[str, str], shared_storage: str
+) -> None:
+    """Unstarring used to 500: the DELETE was written in Postgres' `DELETE ...
+    USING` form, which SQLite does not parse."""
+    import uuid
+
+    storage_id = shared_storage
+    name = f"fav-{uuid.uuid4().hex[:8]}.txt"
+    r = client.post(
+        f"/api/storages/{storage_id}/files/upload",
+        headers=auth_headers,
+        files={"file": (name, b"star me\n", "text/plain")},
+        data={"path": ""},
+        timeout=120.0,
+    )
+    assert r.status_code == 201, r.text
+    if b'"phase":"error"' in r.content or b'"phase": "error"' in r.content:
+        pytest.skip(f"upload failed: {r.text[:300]}")
+
+    r = client.put(
+        f"/api/storages/{storage_id}/favorites",
+        headers=auth_headers,
+        json={"path": name},
+    )
+    assert r.status_code == 204, r.text
+
+    r = client.get(f"/api/storages/{storage_id}/favorites", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert any(el["path"] == name for el in r.json()), r.text
+
+    r = client.delete(
+        f"/api/storages/{storage_id}/favorites/{name}", headers=auth_headers
+    )
+    assert r.status_code == 204, r.text
+
+    r = client.get(f"/api/storages/{storage_id}/favorites", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    assert not any(el["path"] == name for el in r.json()), r.text
+
+    # Unstarring twice is a no-op, not a 500.
+    r = client.delete(
+        f"/api/storages/{storage_id}/favorites/{name}", headers=auth_headers
+    )
+    assert r.status_code == 204, r.text
+
+
 # ---------------------------------------------------------------------------
 # Public share links (folders)
 # ---------------------------------------------------------------------------
