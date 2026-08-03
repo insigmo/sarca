@@ -500,22 +500,28 @@ jobs:
           # Mobile ACL: drop desktop-only process permission if regenerated.
           python3 -c "import json,pathlib; p=pathlib.Path('src-tauri/capabilities/default.json'); data=json.loads(p.read_text()); data['permissions']=[x for x in data.get('permissions',[]) if not str(x).startswith('process:')]; p.write_text(json.dumps(data,indent=2)+'\n')"
 
-          # Always configure Gradle signing: secrets if present, else committed sideload keystore.
+          # A published release APK must be signed with a key nobody else holds.
+          # The committed `mobile/sarca-sideload.p12` and its password are public
+          # (they are in this repository), so an APK signed with it can be forged
+          # by anyone: Android would accept the forgery as an in-place update of
+          # the installed Sarca and hand it the app's storage, permissions and
+          # data directory. It is a throwaway key for local/CI smoke builds only.
           mkdir -p src-tauri/gen/android
-          if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
-            KS_PATH="${GITHUB_WORKSPACE}/client/src-tauri/release.keystore"
-            echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${KS_PATH}"
-            STORE_PASS="${ANDROID_KEYSTORE_PASSWORD}"
-            KEY_PASS="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
-            ALIAS="${ANDROID_KEY_ALIAS:-sarca}"
-            echo "Using ANDROID_KEYSTORE_* secrets for APK signing."
-          else
-            KS_PATH="${GITHUB_WORKSPACE}/client/mobile/sarca-sideload.p12"
-            STORE_PASS="sarca-sideload"
-            KEY_PASS="sarca-sideload"
-            ALIAS="sarca"
-            echo "Using committed sideload keystore for APK signing."
+          if [[ -z "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD are not set." >&2
+            echo "Refusing to publish a release APK signed with the public committed keystore." >&2
+            echo "Generate a release key and add it to repository secrets:" >&2
+            echo "  keytool -genkeypair -v -keystore release.p12 -storetype PKCS12 \\" >&2
+            echo "    -alias sarca -keyalg RSA -keysize 4096 -validity 10000" >&2
+            echo "  base64 -w0 release.p12   # -> secret ANDROID_KEYSTORE_BASE64" >&2
+            exit 1
           fi
+          KS_PATH="${GITHUB_WORKSPACE}/client/src-tauri/release.keystore"
+          echo "${ANDROID_KEYSTORE_BASE64}" | base64 -d > "${KS_PATH}"
+          STORE_PASS="${ANDROID_KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD required}"
+          KEY_PASS="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          ALIAS="${ANDROID_KEY_ALIAS:-sarca}"
+          echo "Using ANDROID_KEYSTORE_* secrets for APK signing."
           {
             echo "storePassword=${STORE_PASS}"
             echo "keyPassword=${KEY_PASS}"
