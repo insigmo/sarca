@@ -84,6 +84,20 @@ const refresh = async (refresh_token) => {
 }
 
 /**
+ * Revoke every token issued for this account server-side. Best effort: the
+ * local session is cleared either way, but without this the old refresh token
+ * would stay usable until it expires.
+ * @returns {Promise<void>}
+ */
+const logout = async () => {
+	try {
+		await apiRequest('/auth/logout', 'post', getAuthToken())
+	} catch {
+		// Offline or already-invalid token: nothing left to revoke.
+	}
+}
+
+/**
  * @returns {Promise<AuthMe>}
  */
 const me = async () => {
@@ -1340,6 +1354,7 @@ const API = {
 	},
 	auth: {
 		login,
+		logout,
 		refresh,
 		me,
 		meSilent,

@@ -615,8 +615,14 @@ impl<'d> FilesService<'d> {
         Self::validate_path(path) && !path.ends_with('/')
     }
 
+    /// Logical paths are keys in the database, but sync clients and zip
+    /// archives map them straight onto a filesystem. A stored `..` segment
+    /// therefore becomes an arbitrary write on every consumer, so reject
+    /// relative segments here, where every rename / move / copy passes.
     fn validate_path(path: &str) -> bool {
-        !path.starts_with('/') && !path.contains(r"//")
+        !path.starts_with('/')
+            && !path.contains(r"//")
+            && !path.split('/').any(|seg| seg == ".." || seg == ".")
     }
 }
 
@@ -632,4 +638,28 @@ async fn live_conflict_at(
         return Ok(true);
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod path_validation_tests {
+    use super::FilesService;
+
+    #[test]
+    fn ordinary_relative_paths_are_accepted() {
+        assert!(FilesService::validate_path("a.txt"));
+        assert!(FilesService::validate_path("docs/notes/a.txt"));
+        assert!(FilesService::validate_path("docs/"));
+        assert!(FilesService::validate_path("..hidden/a.txt"));
+        assert!(FilesService::validate_path("a..b/c.txt"));
+    }
+
+    #[test]
+    fn escaping_paths_are_rejected() {
+        assert!(!FilesService::validate_path("/etc/passwd"));
+        assert!(!FilesService::validate_path("a//b"));
+        assert!(!FilesService::validate_path(".."));
+        assert!(!FilesService::validate_path("../../etc/passwd"));
+        assert!(!FilesService::validate_path("docs/../../../etc/passwd"));
+        assert!(!FilesService::validate_path("docs/./a.txt"));
+    }
 }

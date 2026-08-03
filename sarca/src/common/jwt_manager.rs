@@ -20,6 +20,11 @@ struct Claims {
     pub(self) exp: usize,
     #[serde(default)]
     pub(self) token_type: Option<String>,
+    /// Issue time. Compared against `users.sessions_valid_after` so that a
+    /// password reset or an explicit logout can evict already-issued tokens,
+    /// which are otherwise stateless and unrevocable.
+    #[serde(default)]
+    pub(self) iat: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -34,6 +39,9 @@ struct ShareUnlockClaims {
 pub struct AuthUser {
     pub id: Uuid,
     pub email: String,
+    /// `iat` of the token this identity came from; `0` when it was not built
+    /// from a token (freshly issued identities).
+    pub issued_at: i64,
 }
 
 impl AuthUser {
@@ -41,6 +49,7 @@ impl AuthUser {
         Self {
             id,
             email,
+            issued_at: 0,
         }
     }
 }
@@ -54,13 +63,15 @@ impl JWTManager {
         secret_key: &str,
         token_type: &str,
     ) -> String {
-        let expire_date = SystemTime::now() + expire_in;
+        let now = SystemTime::now();
+        let expire_date = now + expire_in;
         let expire_timestamp = expire_date.duration_since(UNIX_EPOCH).unwrap().as_secs() as usize;
         let claims = Claims {
             sub: user.id.into(),
             email: user.email,
             exp: expire_timestamp,
             token_type: Some(token_type.to_owned()),
+            iat: now.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
         };
         let key = EncodingKey::from_secret(secret_key.as_bytes());
 
@@ -92,8 +103,10 @@ impl JWTManager {
                     return Err(SarcaError::NotAuthenticated);
                 }
                 let id = token_data.claims.sub;
-                let id = Uuid::from_str(&id).unwrap(); // token is valid so uuid is too
-                Ok(AuthUser::new(id, token_data.claims.email))
+                let id = Uuid::from_str(&id).map_err(|_| SarcaError::NotAuthenticated)?;
+                let mut auth = AuthUser::new(id, token_data.claims.email);
+                auth.issued_at = token_data.claims.iat;
+                Ok(auth)
             })
     }
 
