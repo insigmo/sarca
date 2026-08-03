@@ -26,8 +26,9 @@ use crate::{
         channels::UploadProgressEvent,
         chunk_cache::ChunkCache,
         jwt_manager::AuthUser,
-        preview_cache::PreviewCache,
+        media_cache::MediaCache,
         routing::{app_state::AppState, middlewares::auth::logged_in_required},
+        single_flight::SingleFlight,
         telegram_api::bot_api::{TelegramBotApi, is_chat_dead_error},
     },
     errors::{SarcaError, SarcaResult},
@@ -165,6 +166,7 @@ impl FilesRouter {
         let mut source_mtime = None::<chrono::DateTime<chrono::Utc>>;
         let mut source_created_at = None::<chrono::DateTime<chrono::Utc>>;
         let mut content_hash = None::<String>;
+        let mut client_thumb = None::<Vec<u8>>;
 
         while let Some(mut field) = multipart.next_field().await.map_err(|_| {
             cleanup_tmp(&tmp_path);
@@ -238,6 +240,28 @@ impl FilesRouter {
                     })?;
                     source_created_at = Self::parse_epoch_millis(&raw);
                 },
+                "thumb" => {
+                    // Grid thumbnail built by the client from the picture it is
+                    // uploading. Stored verbatim; the server never decodes the
+                    // original for it. Anything bigger than a 128px JPEG could
+                    // plausibly be is not a thumbnail, so drop it.
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = field.chunk().await.map_err(|_| {
+                        cleanup_tmp(&tmp_path);
+                        (StatusCode::BAD_REQUEST, "Invalid thumb stream".to_owned())
+                    })? {
+                        bytes.extend_from_slice(&chunk);
+                        if bytes.len() > MAX_CLIENT_THUMB_BYTES {
+                            bytes.clear();
+                            break;
+                        }
+                    }
+                    if is_jpeg(&bytes) {
+                        client_thumb = Some(bytes);
+                    } else if !bytes.is_empty() {
+                        tracing::warn!("client thumb ignored: not a JPEG");
+                    }
+                },
                 "content_hash" => {
                     let raw = field.text().await.map_err(|_| {
                         cleanup_tmp(&tmp_path);
@@ -302,6 +326,7 @@ impl FilesRouter {
                     file_size,
                     &user,
                     Some(progress_tx),
+                    client_thumb,
                 )
                 .await;
             if result.is_err() {
@@ -932,6 +957,10 @@ impl FilesRouter {
             return Err((StatusCode::NOT_FOUND, "Thumbnail not found".to_owned()));
         };
 
+        // No server-side thumb cache on purpose: the client that uploaded the
+        // photo built this tile and keeps it in its own store, so a request here
+        // only happens on a device that has never seen the file. The response is
+        // `max-age`d, so even that device asks once.
         let scheduler = StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
         let bytes = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
             .download(thumb_id, storage_id)
@@ -977,14 +1006,19 @@ impl FilesRouter {
             ));
         }
 
-        let preview_cache = PreviewCache::new(&state.config.work_dir);
-        let cache_key = PreviewCache::cache_key(storage_id, path);
+        let preview_cache = MediaCache::previews(&state.config.work_dir);
+        let cache_key = preview_cache.key(storage_id, path);
 
-        if let Some(bytes) = preview_cache.get(&cache_key).await {
-            if is_jpeg(&bytes) {
-                return Ok(preview_jpeg_response(bytes));
-            }
-            preview_cache.remove(&cache_key).await;
+        if let Some(bytes) = cached_jpeg(&preview_cache, &cache_key).await {
+            return Ok(preview_jpeg_response(bytes));
+        }
+
+        // The viewer and its neighbor prefetch race for the same photo, and the
+        // slow path below costs a full-file download plus a re-encode. One
+        // request pays it; the rest wait here and read the result off disk.
+        let _flight = SingleFlight::global().acquire(&format!("preview:{cache_key}")).await;
+        if let Some(bytes) = cached_jpeg(&preview_cache, &cache_key).await {
+            return Ok(preview_jpeg_response(bytes));
         }
 
         // Preview built at upload time: one small Telegram document instead of
@@ -1288,12 +1322,28 @@ async fn assemble_file_bytes(
     Ok(out)
 }
 
+/// Ceiling for a client-supplied thumbnail. A 128px JPEG is a few KB; this is
+/// loose enough for any encoder and tight enough that the field cannot be used
+/// to push a second copy of the photo through.
+const MAX_CLIENT_THUMB_BYTES: usize = 256 * 1024;
+
 fn is_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 3 && bytes[0..3] == [0xFF, 0xD8, 0xFF]
 }
 
 fn preview_allowed(path: &str, has_stored_preview: bool) -> bool {
     has_stored_preview || thumbnails::is_preview_image(path)
+}
+
+/// Cached JPEG for `key`, dropping the entry if it turns out not to be one
+/// (a truncated write, or bytes from before the format was pinned).
+async fn cached_jpeg(cache: &MediaCache, key: &str) -> Option<Vec<u8>> {
+    let bytes = cache.get(key).await?;
+    if is_jpeg(&bytes) {
+        return Some(bytes);
+    }
+    cache.remove(key).await;
+    None
 }
 
 fn preview_jpeg_response(bytes: Vec<u8>) -> Response {

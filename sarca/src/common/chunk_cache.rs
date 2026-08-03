@@ -1,13 +1,33 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use futures::StreamExt;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::{
-    common::telegram_api::bot_api::TelegramBotApi,
+    common::{
+        media_cache::{evict_oldest, touch},
+        single_flight::SingleFlight,
+        telegram_api::bot_api::TelegramBotApi,
+    },
     errors::{SarcaError, SarcaResult},
 };
+
+/// Cap on `WORK_DIR/chunk_cache`.
+///
+/// Chunks are whole Telegram documents, so this grows fast when several large
+/// videos get streamed; least-recently-used entries are dropped once the
+/// directory passes the cap.
+pub const CHUNK_CACHE_LIMIT_BYTES: u64 = 8 << 30;
+
+/// Eviction grace period.
+///
+/// A chunk touched within this window is never evicted: a Range response may be
+/// holding its path without having opened the file yet.
+const CHUNK_EVICT_GRACE: Duration = Duration::from_mins(2);
 
 /// On-disk cache of Telegram file payloads under `WORK_DIR/chunk_cache`.
 ///
@@ -51,18 +71,16 @@ impl ChunkCache {
         })?;
 
         let dest = self.path_for(telegram_file_id);
-        if dest.is_file() {
-            // Stale root-owned cache from a previous privileged run must be rebuilt.
-            match tokio::fs::File::open(&dest).await {
-                Ok(_) => return Ok(dest),
-                Err(e) => {
-                    tracing::warn!(
-                        "[CHUNK CACHE] cached file unreadable ({e}), re-downloading {}",
-                        dest.display()
-                    );
-                    let _ = tokio::fs::remove_file(&dest).await;
-                },
-            }
+        if let Some(hit) = Self::hit(&dest).await {
+            return Ok(hit);
+        }
+
+        // A seeking player fires several overlapping Range requests at the same
+        // chunk. Without this they would each download the whole document from
+        // Telegram; queued behind the lock, the rest find it already on disk.
+        let _flight = SingleFlight::global().acquire(&format!("chunk:{}", dest.display())).await;
+        if let Some(hit) = Self::hit(&dest).await {
+            return Ok(hit);
         }
 
         let tmp = self.root.join(format!("{}.tmp", Uuid::new_v4()));
@@ -95,7 +113,34 @@ impl ChunkCache {
 
         if result.is_err() {
             let _ = tokio::fs::remove_file(&tmp).await;
+        } else if let Err(e) =
+            evict_oldest(&self.root, CHUNK_CACHE_LIMIT_BYTES, CHUNK_EVICT_GRACE).await
+        {
+            tracing::warn!("[CHUNK CACHE] eviction skipped: {e}");
         }
         result
+    }
+
+    /// Cached copy, if present and readable. Touches it so eviction treats a
+    /// chunk that is still being streamed as hot.
+    async fn hit(dest: &Path) -> Option<PathBuf> {
+        if !dest.is_file() {
+            return None;
+        }
+        // Stale root-owned cache from a previous privileged run must be rebuilt.
+        match tokio::fs::File::open(dest).await {
+            Ok(_) => {
+                touch(dest).await;
+                Some(dest.to_path_buf())
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "[CHUNK CACHE] cached file unreadable ({e}), re-downloading {}",
+                    dest.display()
+                );
+                let _ = tokio::fs::remove_file(dest).await;
+                None
+            },
+        }
     }
 }

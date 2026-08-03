@@ -102,6 +102,8 @@ impl<'d> FilesService<'d> {
         Self::check_storage_workers(self, storage_id).await
     }
 
+    /// `client_thumb`: grid thumbnail already built by the uploading client.
+    /// When present the server stores it as-is instead of decoding the original.
     pub async fn upload_anyway_from_path_with_progress(
         &self,
         in_file: InFile,
@@ -109,6 +111,7 @@ impl<'d> FilesService<'d> {
         file_size: i64,
         user: &AuthUser,
         progress: Option<mpsc::Sender<UploadProgressEvent>>,
+        client_thumb: Option<Vec<u8>>,
     ) -> SarcaResult<()> {
         // 0. checking access
         check_access(&self.access_repo, user.id, in_file.storage_id, &AccessType::W).await?;
@@ -162,7 +165,7 @@ impl<'d> FilesService<'d> {
         // 2. saving file in db
         let file = self.repo.create_file_anyway(in_file).await?;
 
-        self.upload_from_path(file, file_path, file_size, progress).await
+        self.upload_from_path(file, file_path, file_size, progress, client_thumb).await
     }
 
     async fn upload_from_path(
@@ -171,6 +174,7 @@ impl<'d> FilesService<'d> {
         file_path: PathBuf,
         file_size: i64,
         progress: Option<mpsc::Sender<UploadProgressEvent>>,
+        client_thumb: Option<Vec<u8>>,
     ) -> SarcaResult<()> {
         let (resp_tx, resp_rx) = oneshot::channel();
 
@@ -195,6 +199,7 @@ impl<'d> FilesService<'d> {
                 file_size,
                 chunk_size,
                 progress,
+                client_thumb,
             }),
             tx: resp_tx,
         };
