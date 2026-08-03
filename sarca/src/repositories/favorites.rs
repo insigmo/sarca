@@ -99,13 +99,16 @@ impl<'d> FavoritesRepository<'d> {
         sqlx::query(
             format!(
                 "
-                DELETE FROM {TABLE} fav
-                USING {FILES_TABLE} f
-                WHERE fav.file_id = f.id
-                  AND fav.user_id = $1
-                  AND fav.storage_id = $2
-                  AND f.path = $3
-                "
+                DELETE FROM {TABLE}
+                WHERE user_id = $1
+                  AND storage_id = $2
+                  AND file_id IN (
+                      SELECT f.id
+                      FROM {FILES_TABLE} f
+                      WHERE f.path = $3
+                        AND f.storage_id = $2
+                  )
+"
             )
             .as_str(),
         )
