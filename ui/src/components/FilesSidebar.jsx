@@ -15,7 +15,7 @@ import { isNativeClient } from '../common/nativeClient'
 import { nativeInvoke } from '../common/nativeBridge'
 import { alertStore } from './AlertStack'
 import ActionConfirmDialog from './ActionConfirmDialog'
-import FluentIcon, { fluentIcons } from './FluentIcon'
+import FluentIcon from './FluentIcon'
 
 const STORAGE_KEY = 'sarca.filesSidebarCollapsed'
 
@@ -86,6 +86,9 @@ const SidebarNewButton = (props) => {
 }
 
 const SidebarNav = (props) => {
+	// `regular` / `filled` are icon *names* from the FluentIcon table, not SVG
+	// markup: FluentIcon renders through innerHTML, so nothing but a key it
+	// controls itself may reach it.
 	const item = (mode, label, regular, filled) => (
 		<button
 			type="button"
@@ -100,7 +103,7 @@ const SidebarNav = (props) => {
 			onClick={() => props.onSelect(mode)}
 		>
 			<FluentIcon
-				src={props.mode === mode ? filled : regular}
+				name={props.mode === mode ? filled : regular}
 				size={20}
 			/>
 			<span class="files-sidebar__label">{label}</span>
@@ -133,11 +136,11 @@ const SidebarNav = (props) => {
 						onUploadFolder={props.onUploadFolder}
 						onAfterAction={props.onAfterAction}
 					/>
-					{item('browse', 'All files', fluentIcons.folder, fluentIcons.folderFilled)}
-					{item('favorites', 'Favorites', fluentIcons.star, fluentIcons.starFilled)}
-					{item('recent', 'Recent', fluentIcons.history, fluentIcons.historyFilled)}
-					{item('shared', 'Shared', fluentIcons.link, fluentIcons.linkFilled)}
-					{item('trash', 'Trash', fluentIcons.delete, fluentIcons.deleteFilled)}
+					{item('browse', 'All files', 'folder', 'folderFilled')}
+					{item('favorites', 'Favorites', 'star', 'starFilled')}
+					{item('recent', 'Recent', 'history', 'historyFilled')}
+					{item('shared', 'Shared', 'link', 'linkFilled')}
+					{item('trash', 'Trash', 'delete', 'deleteFilled')}
 				</Show>
 				<Show when={props.variant === 'storages'}>
 					<A

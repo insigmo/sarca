@@ -1,0 +1,81 @@
+name: Dependency audit
+
+# Supply-chain drift check. The previous security review ran `cargo audit` and
+# an OSV scan by hand once; a scheduled job is what keeps a newly published
+# advisory from sitting unnoticed in `Cargo.lock` / `pnpm-lock.yaml`.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "**/package.json"
+      - "**/pnpm-lock.yaml"
+      - ".github/workflows/audit.yml"
+  push:
+    branches: ["master"]
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - "**/package.json"
+      - "**/pnpm-lock.yaml"
+  schedule:
+    # Advisories land continuously; a weekly run catches them without a push.
+    - cron: "17 6 * * 1"
+
+# Least privilege: this workflow only reads the tree.
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit Cargo.lock
+        # Without `-D`, cargo-audit fails only on real vulnerabilities;
+        # `unmaintained` and `unsound` advisories print as warnings. That is the
+        # bar we want, so the GTK3-binding and `event-listener` notices tracked
+        # in SECURITY-AUDIT.md section 3 need no ignore entries.
+        #
+        # The single exception below is a genuine vulnerability with no patched
+        # release: RUSTSEC-2023-0071 (Marvin, `rsa` 0.9.x). It reaches the
+        # lockfile only through sqlx's optional `sqlx-mysql` feature, which this
+        # workspace never enables, so it is not in the built binary --
+        # `cargo tree -i rsa -e normal` prints "nothing to print". Re-check that
+        # if this line ever has to be removed.
+        run: cargo audit --ignore RUSTSEC-2023-0071
+
+  npm-audit:
+    name: pnpm audit (${{ matrix.dir }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        dir: [ui, client]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.17.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Audit ${{ matrix.dir }}
+        working-directory: ${{ matrix.dir }}
+        # Both trees audit clean at the time of writing, dev dependencies
+        # included, so `moderate` is a bar we actually meet rather than an
+        # aspiration. Deliberately not `--prod`: the two advisories this job was
+        # added to catch (GHSA-968p-4wvh-cqc8, GHSA-4x5r-pxfx-6jf8) arrived
+        # through a build-only devDependency, and a compromised build tool ships
+        # whatever it likes in the bundle.
+        run: pnpm audit --audit-level=moderate

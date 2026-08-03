@@ -662,8 +662,45 @@ fn ndjson_error_message(body: &[u8]) -> Option<String> {
     None
 }
 
+/// True when `host` can only be reached from the local machine or the local
+/// network, so plaintext HTTP to it does not cross an untrusted path.
+///
+/// Everything else — a public hostname, a routable address — is assumed to be
+/// reachable over the internet, where an implied `http://` would put the
+/// session's bearer tokens on the wire in the clear for any on-path attacker.
+fn is_local_host(host: &str) -> bool {
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    if bare.eq_ignore_ascii_case("localhost")
+        || bare.to_ascii_lowercase().ends_with(".localhost")
+        || bare.to_ascii_lowercase().ends_with(".local")
+        || bare.to_ascii_lowercase().ends_with(".internal")
+        || bare.to_ascii_lowercase().ends_with(".home.arpa")
+    {
+        return true;
+    }
+    match bare.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => {
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+        }
+        Ok(std::net::IpAddr::V6(v6)) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                // fc00::/7 unique-local and fe80::/10 link-local.
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+        Err(_) => false,
+    }
+}
+
 /// Normalize a Sarca server base URL.
-/// Accepts `http://…`, `https://…`, or a host/IP without scheme (defaults to `http://`).
+///
+/// Accepts `http://…`, `https://…`, or a host/IP without a scheme. A missing
+/// scheme resolves to `https://` for anything routable and only falls back to
+/// `http://` for loopback / LAN hosts, where self-hosted Sarca commonly runs
+/// without TLS. Typing `sarca.example.com` must not silently downgrade the
+/// connection that carries the access and refresh tokens; an explicit
+/// `http://sarca.example.com` still works for users who mean it.
 pub fn normalize_server_url(raw: &str) -> Result<String> {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
@@ -672,7 +709,16 @@ pub fn normalize_server_url(raw: &str) -> Result<String> {
     let with_scheme = if trimmed.contains("://") {
         trimmed.to_owned()
     } else {
-        format!("http://{trimmed}")
+        // Parse once against a placeholder scheme just to isolate the host.
+        let host_only = reqwest::Url::parse(&format!("http://{trimmed}"))
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned))
+            .unwrap_or_default();
+        if is_local_host(&host_only) {
+            format!("http://{trimmed}")
+        } else {
+            format!("https://{trimmed}")
+        }
     };
     let parsed = reqwest::Url::parse(&with_scheme).map_err(|_| {
         anyhow::anyhow!("Invalid server URL. Use http:// or https:// and a valid host.")
@@ -786,10 +832,43 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_bare_host_to_http() {
+    fn normalizes_bare_lan_host_to_http() {
+        for raw in [
+            "192.168.1.40:8001",
+            "10.0.0.5",
+            "172.16.4.4:8001",
+            "127.0.0.1:8001",
+            "localhost:8001",
+            "sarca.local",
+        ] {
+            let got = normalize_server_url(raw).unwrap();
+            assert!(got.starts_with("http://"), "{raw} -> {got}");
+        }
+    }
+
+    #[test]
+    fn bare_public_host_defaults_to_https_not_http() {
+        // A missing scheme must never downgrade a routable host: the base URL
+        // carries the access and refresh tokens on every request.
         assert_eq!(
-            normalize_server_url("192.168.1.40:8001").unwrap(),
-            "http://192.168.1.40:8001"
+            normalize_server_url("sarca.example.com").unwrap(),
+            "https://sarca.example.com"
+        );
+        assert_eq!(
+            normalize_server_url("sarca.example.com:8443").unwrap(),
+            "https://sarca.example.com:8443"
+        );
+        assert_eq!(
+            normalize_server_url("203.0.113.10").unwrap(),
+            "https://203.0.113.10"
+        );
+    }
+
+    #[test]
+    fn explicit_http_is_still_honoured() {
+        assert_eq!(
+            normalize_server_url("http://sarca.example.com").unwrap(),
+            "http://sarca.example.com"
         );
     }
 
