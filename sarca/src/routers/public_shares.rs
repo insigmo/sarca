@@ -118,11 +118,16 @@ impl PublicSharesRouter {
             &state.config.secret_key,
         );
 
+        // `Secure` whenever the deployment serves TLS: the plain-HTTP ACME
+        // listener on the same host would otherwise put the unlock token on
+        // the wire in clear text.
+        let secure = if state.config.tls_hostname.is_some() { "; Secure" } else { "" };
         let cookie = format!(
-            "{}={}; Path=/api/public/shares/{}; HttpOnly; SameSite=Lax; Max-Age={}",
+            "{}={}; Path=/api/public/shares/{}; HttpOnly; SameSite=Lax{}; Max-Age={}",
             unlock_cookie_name(&token),
             jwt,
             token,
+            secure,
             max_age
         );
 

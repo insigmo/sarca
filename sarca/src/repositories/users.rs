@@ -51,6 +51,7 @@ impl<'d> UsersRepository<'d> {
             email: in_obj.email,
             password_hash: in_obj.password_hash,
             email_verified_at: in_obj.email_verified_at,
+            sessions_valid_after: 0,
         })
     }
 
@@ -116,18 +117,37 @@ impl<'d> UsersRepository<'d> {
         user_id: Uuid,
         password_hash: &str,
     ) -> SarcaResult<()> {
-        let res = sqlx::query("UPDATE users SET password_hash = $2 WHERE id = $1")
+        // Changing the password must also evict every token already issued for
+        // this account, otherwise a stolen refresh token survives the reset.
+        let res = sqlx::query(
+            "UPDATE users SET password_hash = $2, sessions_valid_after = $3 WHERE id = $1",
+        )
+        .bind(user_id)
+        .bind(password_hash)
+        .bind(Utc::now().timestamp())
+        .execute(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+        if res.rows_affected() == 0 {
+            return Err(SarcaError::DoesNotExist("user".into()));
+        }
+        Ok(())
+    }
+
+    /// Invalidate every token issued so far for this user (logout everywhere).
+    pub async fn revoke_sessions(&self, user_id: Uuid) -> SarcaResult<()> {
+        sqlx::query("UPDATE users SET sessions_valid_after = $2 WHERE id = $1")
             .bind(user_id)
-            .bind(password_hash)
+            .bind(Utc::now().timestamp())
             .execute(self.db)
             .await
             .map_err(|e| {
                 tracing::error!("{e}");
                 SarcaError::Unknown
             })?;
-        if res.rows_affected() == 0 {
-            return Err(SarcaError::DoesNotExist("user".into()));
-        }
         Ok(())
     }
 

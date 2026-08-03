@@ -1159,12 +1159,12 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 }
 
 .settings-nav {
-	width: 188px;
+	width: 168px;
 	flex-shrink: 0;
 	display: flex;
 	flex-direction: column;
-	gap: 4px;
-	padding: 8px 14px 14px;
+	gap: 2px;
+	padding: 6px 8px 8px;
 	background: color-mix(in srgb, var(--sarca-ink) 4%, transparent);
 	border-right: 1px solid color-mix(in srgb, var(--sarca-ink) 8%, transparent);
 	min-height: 0;
@@ -1172,8 +1172,8 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 }
 
 .settings-nav__label {
-	margin: 0 0 4px 4px;
-	font-size: 0.68rem;
+	margin: 0 0 2px 4px;
+	font-size: 0.62rem;
 	font-weight: 700;
 	letter-spacing: 0.08em;
 	text-transform: uppercase;
@@ -1184,14 +1184,14 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 .settings-nav__item {
 	display: flex;
 	align-items: center;
-	gap: 10px;
+	gap: 8px;
 	width: 100%;
 	flex-shrink: 0;
 	border: 1px solid transparent;
 	background: transparent;
 	color: var(--sarca-ink-soft);
-	border-radius: 12px;
-	padding: 6px 10px;
+	border-radius: 10px;
+	padding: 4px 8px;
 	font: inherit;
 	cursor: pointer;
 	text-align: left;
@@ -1207,13 +1207,18 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	width: 28px;
-	height: 28px;
+	width: 22px;
+	height: 22px;
 	flex-shrink: 0;
-	border-radius: 9px;
+	border-radius: 7px;
 	background: color-mix(in srgb, var(--sarca-ink) 6%, transparent);
 	color: inherit;
 	transition: background 0.18s ease, color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.settings-nav__icon svg {
+	width: 16px;
+	height: 16px;
 }
 
 .settings-nav__text {
@@ -1224,17 +1229,20 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 }
 
 .settings-nav__title {
-	font-size: 0.92rem;
+	font-size: 0.82rem;
 	font-weight: 700;
-	line-height: 1.2;
+	line-height: 1.15;
 	color: inherit;
 }
 
 .settings-nav__desc {
-	font-size: 0.68rem;
+	font-size: 0.62rem;
 	font-weight: 500;
-	line-height: 1.2;
+	line-height: 1.15;
 	opacity: 0.75;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .settings-nav__item:hover {
