@@ -17,7 +17,43 @@ use crate::types::{ChangelogResponse, SnapshotResponse};
 /// Whether the sync client was built to prefer HTTP/3 (reqwest `http3` + `reqwest_unstable`).
 pub const HTTP3_PREFERRED: bool = cfg!(all(feature = "http3-client", reqwest_unstable));
 
+/// Budget for a whole control-plane call (login, snapshot, changelog, delete).
+/// These answer immediately or not at all, so a short deadline is right.
 const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Handshake budget. Unreachable servers must still fail fast even though the
+/// transfer deadlines below are measured in minutes.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Longest silence tolerated between two reads of a response body.
+///
+/// This is what actually guards file transfers: an upload's NDJSON progress
+/// stream heartbeats every 15s (see the server's `HEARTBEAT_SECS`), so a
+/// connection that goes quiet for this long is dead, no matter how long the
+/// transfer as a whole is allowed to take.
+const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Floor for one file transfer, whatever its size.
+const TRANSFER_MIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Ceiling for one file transfer — a stop so a wedged connection that keeps
+/// trickling bytes cannot occupy a sync slot forever.
+const TRANSFER_MAX_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Worst-case sustained throughput assumed when sizing a transfer deadline.
+const TRANSFER_MIN_BYTES_PER_SEC: u64 = 32 * 1024;
+
+/// Total deadline for transferring `bytes`, clamped to
+/// `[TRANSFER_MIN_TIMEOUT, TRANSFER_MAX_TIMEOUT]`.
+///
+/// A single flat deadline cannot work here: the server answers an upload only
+/// after it has pushed the file to Telegram, which routinely takes longer than
+/// a control call ever should. Sizing the deadline by payload keeps small
+/// files from hanging around forever while giving large ones room to finish.
+pub fn transfer_timeout(bytes: u64) -> Duration {
+    let by_size = Duration::from_secs(bytes / TRANSFER_MIN_BYTES_PER_SEC);
+    by_size.clamp(TRANSFER_MIN_TIMEOUT, TRANSFER_MAX_TIMEOUT)
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct LoginResponse {
@@ -248,9 +284,15 @@ impl SarcaApi {
             "{}/api/storages/{storage_id}/files/download/{encoded}",
             self.base_url
         );
+        // Size is unknown before the response arrives, and the server may have
+        // to pull the file back from Telegram first — same reason uploads get a
+        // long deadline. `READ_IDLE_TIMEOUT` is what catches a dead connection.
         let resp = self
             .send_authed("GET", &url, |client, version| {
-                client.get(&url).version(version)
+                client
+                    .get(&url)
+                    .version(version)
+                    .timeout(TRANSFER_MAX_TIMEOUT)
             })
             .await?
             .error_for_status()?;
@@ -330,7 +372,14 @@ impl SarcaApi {
             if let Some(hash) = params.content_hash {
                 form = form.text("content_hash", hash.to_owned());
             }
-            Ok(api.auth(client.post(url).version(version).multipart(form)))
+            // Override the client-wide control-plane deadline: the server only
+            // answers once the file is through Telegram, which is minutes, not
+            // seconds. Without this the response body read died mid-stream with
+            // "error decoding response body: operation timed out" and the file
+            // was reported as failed even though the server kept going.
+            Ok(api
+                .auth(client.post(url).version(version).multipart(form))
+                .timeout(transfer_timeout(meta.len())))
         }
 
         let h3_client = if h3_version == Version::HTTP_3 {
@@ -369,7 +418,7 @@ impl SarcaApi {
                 log_response_protocol("POST", &url, resp.version());
                 resp
             }
-            Err(err) => return Err(err.into()),
+            Err(err) => return Err(describe_transfer_error("upload", err)),
         };
         if !resp.status().is_success() {
             let status = resp.status();
@@ -378,7 +427,10 @@ impl SarcaApi {
         }
         // Status is sent before Telegram delivery even starts — the real
         // outcome is a `phase` line in the streamed NDJSON body.
-        let body = resp.bytes().await?;
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|e| describe_transfer_error("upload", e))?;
         if let Some(msg) = ndjson_error_message(&body) {
             bail!("upload failed: {msg}");
         }
@@ -417,6 +469,19 @@ impl SarcaApi {
     }
 }
 
+/// Turns a transport failure during a file transfer into something the Sync
+/// panel can show. reqwest's own wording ("error decoding response body:
+/// request or response body error: operation timed out") names the layer that
+/// noticed, not what went wrong.
+fn describe_transfer_error(action: &str, err: reqwest::Error) -> anyhow::Error {
+    if err.is_timeout() {
+        return anyhow::anyhow!(
+            "{action} timed out — the server stopped responding. It will be retried."
+        );
+    }
+    anyhow::Error::from(err).context(format!("{action} failed"))
+}
+
 /// Pair of HTTP clients: QUIC/HTTP/3 (ALPN `h3`) and TCP HTTPS fallback.
 #[derive(Clone)]
 pub struct HttpClients {
@@ -427,6 +492,8 @@ pub struct HttpClients {
 fn build_tcp_client(timeout: Duration) -> Result<Client> {
     Client::builder()
         .timeout(timeout)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(READ_IDLE_TIMEOUT)
         .build()
         .context("failed to create TCP HTTP client")
 }
@@ -436,6 +503,8 @@ fn build_h3_prior_client(timeout: Duration) -> Result<Client> {
     {
         Client::builder()
             .timeout(timeout)
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_IDLE_TIMEOUT)
             .http3_prior_knowledge()
             .build()
             .context("failed to create HTTP/3 client")
@@ -632,6 +701,62 @@ pub fn normalize_server_url(raw: &str) -> Result<String> {
 mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn transfer_timeout_never_drops_to_the_control_plane_deadline() {
+        // The bug this guards: a 200 KB photo failed with "operation timed
+        // out" because the whole request shared the 20s control-plane budget
+        // while the server was still handing the file to Telegram.
+        assert_eq!(transfer_timeout(0), TRANSFER_MIN_TIMEOUT);
+        assert_eq!(transfer_timeout(209_800), TRANSFER_MIN_TIMEOUT);
+        assert!(transfer_timeout(u64::MAX) <= TRANSFER_MAX_TIMEOUT);
+    }
+
+    #[test]
+    fn transfer_timeout_grows_with_payload() {
+        // 512 MiB at the assumed floor throughput sits between the two bounds.
+        let bytes = 512 * 1024 * 1024;
+        assert!(transfer_timeout(bytes) > TRANSFER_MIN_TIMEOUT);
+        assert_eq!(
+            transfer_timeout(bytes),
+            Duration::from_secs(bytes / TRANSFER_MIN_BYTES_PER_SEC)
+        );
+        // Past the cap it stops growing — a wedged transfer cannot hold a sync
+        // slot indefinitely.
+        assert_eq!(transfer_timeout(64 * bytes), TRANSFER_MAX_TIMEOUT);
+    }
+
+    #[tokio::test]
+    async fn timeout_errors_are_described_in_plain_words() {
+        // A server that accepts the connection and then says nothing — the
+        // shape of the failure users hit while Telegram delivery hangs.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accepted = tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            drop(sock);
+        });
+
+        let client = Client::builder()
+            .timeout(Duration::from_millis(150))
+            .build()
+            .unwrap();
+        let err = client
+            .get(format!("http://{addr}/"))
+            .send()
+            .await
+            .expect_err("server never answers");
+        assert!(err.is_timeout(), "expected a timeout, got: {err}");
+
+        let described = describe_transfer_error("upload", err).to_string();
+        assert!(described.contains("upload timed out"), "got: {described}");
+        assert!(
+            !described.contains("decoding response body"),
+            "reqwest's wording leaked into the UI message: {described}"
+        );
+        accepted.abort();
+    }
 
     #[test]
     fn http3_preference_enabled_in_default_build() {
