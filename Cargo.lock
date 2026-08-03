@@ -4708,7 +4708,7 @@ dependencies = [
 
 [[package]]
 name = "sarca"
-version = "0.0.111"
+version = "0.0.112"
 dependencies = [
  "async-stream",
  "axum",
@@ -4754,7 +4754,7 @@ dependencies = [
 
 [[package]]
 name = "sarca-client"
-version = "0.0.111"
+version = "0.0.112"
 dependencies = [
  "android_logger",
  "anyhow",
