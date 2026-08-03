@@ -955,6 +955,15 @@ pub fn select_pending_uploads(
 
 fn strip_remote_root(path: &str, remote_root: &str) -> Option<String> {
     let path = path.trim_start_matches('/');
+    // The result is joined onto the local sync root, so a remote path with a
+    // relative segment (or a Windows drive / UNC prefix) would escape it.
+    // Server-supplied paths are not trusted here.
+    if path.split('/').any(|seg| seg == ".." || seg == ".")
+        || path.contains('\\')
+        || path.chars().nth(1) == Some(':')
+    {
+        return None;
+    }
     let root = remote_root.trim().trim_matches('/');
     if root.is_empty() {
         return Some(path.trim_end_matches('/').to_owned());
@@ -1011,6 +1020,15 @@ mod tests {
             Some("a.txt".into())
         );
         assert_eq!(strip_remote_root("other/a.txt", "docs"), None);
+    }
+
+    #[test]
+    fn strip_root_rejects_paths_that_escape_the_local_root() {
+        assert_eq!(strip_remote_root("../../etc/passwd", ""), None);
+        assert_eq!(strip_remote_root("docs/../../../etc/passwd", "docs"), None);
+        assert_eq!(strip_remote_root("a/./b.txt", ""), None);
+        assert_eq!(strip_remote_root(r"..\windows\system32", ""), None);
+        assert_eq!(strip_remote_root("C:/windows/system32", ""), None);
     }
 
     #[test]
