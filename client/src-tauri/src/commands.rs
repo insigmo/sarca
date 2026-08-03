@@ -19,9 +19,11 @@ use crate::startup::{
     is_usable_device_label, is_useless_hostname, read_device_label_cache, sanitize_device_label,
     write_device_label_cache,
 };
+use crate::paths::validate_local_dir;
 use crate::state::{
     navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding,
-    read_webview_session, session_ready_for_sync, AppSyncState, ClientPrefs, ServerConfig,
+    read_webview_session, session_ready_for_sync, write_private, AppSyncState, ClientPrefs,
+    ClientPrefsDto, ServerConfig,
 };
 
 #[derive(Serialize)]
@@ -65,6 +67,12 @@ fn preview_cache_path(state: &AppSyncState, scope: &str, logical_path: &str) -> 
         .join(sanitize_cache_scope(scope))
         .join(format!("{digest}.jpg"))
 }
+
+/// Ceiling for a cached preview: 8 MiB decoded, plus base64's 4/3 expansion.
+const MAX_PREVIEW_BYTES: usize = 8 * 1024 * 1024;
+const MAX_PREVIEW_B64_LEN: usize = MAX_PREVIEW_BYTES / 3 * 4 + 4;
+/// Cache keys are hashed, so their length only bounds the work we do.
+const MAX_CACHE_KEY_LEN: usize = 4096;
 
 fn sanitize_cache_scope(scope: &str) -> String {
     scope
@@ -150,17 +158,71 @@ fn prefs_path(state: &AppSyncState) -> PathBuf {
 }
 
 pub fn load_prefs(state: &AppSyncState) -> ClientPrefs {
-    fs::read_to_string(prefs_path(state))
+    let mut prefs: ClientPrefs = fs::read_to_string(prefs_path(state))
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    // Upgrade a file written before the PIN was hashed, so the plaintext stops
+    // existing on disk the first time the app reads it.
+    if prefs.migrate_legacy_pin() {
+        let _ = save_prefs(state, &prefs);
+    }
+    prefs
 }
 
 fn save_prefs(state: &AppSyncState, prefs: &ClientPrefs) -> Result<(), String> {
     let json = serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?;
-    fs::write(prefs_path(state), json).map_err(|e| e.to_string())?;
+    // Holds the app-lock hash: keep it out of reach of other local accounts.
+    write_private(&prefs_path(state), json.as_bytes()).map_err(|e| e.to_string())?;
     client_log::set_enabled(prefs.enable_logs, state.data_dir());
     Ok(())
+}
+
+/// Roots a sync binding's local folder may live under.
+///
+/// Anything outside them is refused by [`validate_local_dir`], so a hostile
+/// `add_binding` cannot point the engine at `/etc`, another user's home, or a
+/// mounted network share.
+fn allowed_sync_roots(app: &AppHandle) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(home) = app.path().home_dir() {
+        roots.push(home);
+    }
+    #[cfg(target_os = "android")]
+    {
+        // Android shared storage is not under the app's HOME.
+        for root in ["/storage/emulated/0", "/sdcard"] {
+            let path = PathBuf::from(root);
+            if path.is_dir() {
+                roots.push(path);
+            }
+        }
+    }
+    roots.retain(|p| p.is_dir());
+    roots
+}
+
+/// Application-owned directories: binding one would upload the session tokens
+/// and the sync database itself.
+fn denied_sync_roots(app: &AppHandle, state: &AppSyncState) -> Vec<PathBuf> {
+    let path = app.path();
+    let mut roots = vec![state.data_dir().clone()];
+    for dir in [
+        path.app_data_dir(),
+        path.app_config_dir(),
+        path.app_local_data_dir(),
+        path.app_cache_dir(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        roots.push(dir);
+    }
+    roots
+}
+
+fn check_local_path(app: &AppHandle, state: &AppSyncState, raw: &str) -> Result<String, String> {
+    validate_local_dir(raw, &allowed_sync_roots(app), &denied_sync_roots(app, state))
 }
 
 fn dir_size(path: &Path) -> u64 {
@@ -736,6 +798,9 @@ pub async fn add_binding(
              local_path={local_path} mode={mode}"
         ),
     );
+    // The folder arrives from the WebView. Canonicalize and confine it before
+    // the engine starts walking (and uploading) whatever it points at.
+    let local_path = check_local_path(&app, &state, &local_path)?;
     let _ = ensure_sync_session(&app, &state).await;
     let binding =
         new_binding(&storage_id, remote_root, local_path, &mode).map_err(|e| e.to_string())?;
@@ -812,6 +877,7 @@ fn ensure_remote_root_change_allowed(mode: BindingMode) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn update_binding_local_path(
+    app: AppHandle,
     state: State<'_, AppSyncState>,
     id: String,
     local_path: String,
@@ -820,6 +886,7 @@ pub async fn update_binding_local_path(
         state.data_dir(),
         &format!("update_binding_local_path id={id} local_path={local_path}"),
     );
+    let local_path = check_local_path(&app, &state, &local_path)?;
     on_engine(&state, move |engine| {
         let mut binding = engine
             .list_bindings()
@@ -936,18 +1003,37 @@ pub async fn sync_transfer_queue(
 }
 
 #[tauri::command]
-pub fn get_client_prefs(state: State<'_, AppSyncState>) -> Result<ClientPrefs, String> {
-    Ok(load_prefs(&state))
+pub fn get_client_prefs(state: State<'_, AppSyncState>) -> Result<ClientPrefsDto, String> {
+    Ok(load_prefs(&state).to_dto())
 }
 
 #[tauri::command]
 pub fn set_client_prefs(
     state: State<'_, AppSyncState>,
-    prefs: ClientPrefs,
-) -> Result<ClientPrefs, String> {
-    save_prefs(&state, &prefs)?;
+    prefs: ClientPrefsDto,
+) -> Result<ClientPrefsDto, String> {
+    let mut stored = load_prefs(&state);
+    stored.apply_dto(prefs)?;
+    save_prefs(&state, &stored)?;
     client_log::write_line(state.data_dir(), "set_client_prefs saved");
-    Ok(prefs)
+    Ok(stored.to_dto())
+}
+
+/// Check an app-lock PIN.
+///
+/// The comparison lives here because the PIN never leaves the Rust side; the
+/// WebView used to receive it from `get_client_prefs` and compare in JS, which
+/// meant reading the lock screen's own secret was enough to walk past it.
+#[tauri::command]
+pub fn verify_app_lock_pin(state: State<'_, AppSyncState>, pin: String) -> Result<bool, String> {
+    let prefs = load_prefs(&state);
+    if !prefs.app_lock_enabled || !prefs.has_pin() {
+        return Ok(true);
+    }
+    // Rate-limit guessing. A 4-digit PIN is 10k combinations; without a delay a
+    // script walks the whole space in well under a second.
+    std::thread::sleep(std::time::Duration::from_millis(250));
+    Ok(prefs.verify_pin(&pin))
 }
 
 #[derive(Serialize)]
@@ -1057,8 +1143,21 @@ pub fn cache_put_preview(
     path: String,
     bytes_b64: String,
 ) -> Result<(), String> {
+    // A preview is a downscaled JPEG. Without a cap, a caller that reaches this
+    // command can fill the disk one oversized "preview" at a time — eviction
+    // only runs against the configured limit, which it would blow past in a
+    // single write.
+    if bytes_b64.len() > MAX_PREVIEW_B64_LEN {
+        return Err("preview too large to cache".into());
+    }
+    if scope.len() > MAX_CACHE_KEY_LEN || path.len() > MAX_CACHE_KEY_LEN {
+        return Err("preview cache key too long".into());
+    }
     let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, bytes_b64)
         .map_err(|e| format!("invalid preview cache payload: {e}"))?;
+    if bytes.len() > MAX_PREVIEW_BYTES {
+        return Err("preview too large to cache".into());
+    }
     let dest = preview_cache_path(&state, &scope, &path);
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;

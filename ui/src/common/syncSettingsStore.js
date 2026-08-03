@@ -89,10 +89,14 @@ function createSyncSettingsStore() {
 	 */
 	const [pendingCameraOn, setPendingCameraOn] = createSignal(null)
 	const [statuses, setStatuses] = createSignal([])
+	// `app_lock_pin_set` is a read-only flag from Rust: the PIN itself never
+	// crosses the bridge. Writing a PIN means sending `app_lock_pin` (plus
+	// `current_app_lock_pin` when one already exists), which this store never
+	// does — only the Security tab in SettingsModal does.
 	const [prefs, setPrefs] = createSignal({
 		wifi_only: true,
 		app_lock_enabled: false,
-		app_lock_pin: null,
+		app_lock_pin_set: false,
 	})
 	const [localPath, setLocalPath] = createSignal('')
 	const [busy, setBusy] = createSignal(false)
@@ -273,7 +277,7 @@ function createSyncSettingsStore() {
 				setPrefs({
 					wifi_only: prefsDto.wifi_only !== false,
 					app_lock_enabled: Boolean(prefsDto.app_lock_enabled),
-					app_lock_pin: prefsDto.app_lock_pin ?? null,
+					app_lock_pin_set: Boolean(prefsDto.app_lock_pin_set),
 				})
 			}
 			const binds = bindsResult.ok ? bindsResult.value : bindings()
@@ -537,7 +541,11 @@ function createSyncSettingsStore() {
 		setCachedCameraOn(readCachedCameraEnabled())
 		setPendingCameraOn(null)
 		setStatuses([])
-		setPrefs({ wifi_only: true, app_lock_enabled: false, app_lock_pin: null })
+		setPrefs({
+			wifi_only: true,
+			app_lock_enabled: false,
+			app_lock_pin_set: false,
+		})
 		setLocalPath('')
 		setBusy(false)
 		setMsg('')

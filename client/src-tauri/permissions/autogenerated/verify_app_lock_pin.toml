@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-verify-app-lock-pin"
+description = "Enables the verify_app_lock_pin command without any pre-configured scope."
+commands.allow = ["verify_app_lock_pin"]
+
+[[permission]]
+identifier = "deny-verify-app-lock-pin"
+description = "Denies the verify_app_lock_pin command without any pre-configured scope."
+commands.deny = ["verify_app_lock_pin"]

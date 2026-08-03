@@ -39,13 +39,19 @@ import { nativeInvoke } from '../common/nativeBridge'
 import { settingsStore } from '../common/settings'
 import SettingsModal from './SettingsModal'
 
-/** @param {{ app_lock_enabled?: boolean }} [prefs] */
+/** @param {{ app_lock_enabled?: boolean, app_lock_pin_set?: boolean }} [prefs] */
 function mockNativeInvoke(prefs = {}) {
 	nativeInvoke.mockReset()
 	nativeInvoke.mockImplementation(async (cmd) => {
 		switch (cmd) {
 			case 'get_client_prefs':
-				return { app_lock_enabled: false, app_lock_pin: null, ...prefs }
+				// Mirrors ClientPrefsDto: the PIN itself is never readable, only
+				// the flag saying one exists.
+				return {
+					app_lock_enabled: false,
+					app_lock_pin_set: false,
+					...prefs,
+				}
 			default:
 				return null
 		}
@@ -81,9 +87,44 @@ describe('SettingsModal app lock state machine', () => {
 	})
 
 	it('reflects a previously persisted lock as checked on load', async () => {
-		mockNativeInvoke({ app_lock_enabled: true })
+		mockNativeInvoke({ app_lock_enabled: true, app_lock_pin_set: true })
 		const { getByRole } = render(() => <SettingsModal />)
 		const sw = await waitFor(() => getByRole('switch'))
 		await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'))
+	})
+
+	// Disabling the lock used to compare the typed PIN against a plaintext
+	// `app_lock_pin` handed out by get_client_prefs. Now the current PIN goes
+	// to Rust, which verifies it against a salted hash and refuses on mismatch.
+	it('sends the current PIN to Rust when disabling a persisted lock', async () => {
+		mockNativeInvoke({ app_lock_enabled: true, app_lock_pin_set: true })
+		const { getByRole, getByLabelText, findByText } = render(() => (
+			<SettingsModal />
+		))
+		const sw = await waitFor(() => getByRole('switch'))
+		await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'))
+
+		// No current PIN typed: refused locally, nothing persisted.
+		fireEvent.click(sw)
+		expect(await findByText('Enter your current PIN')).toBeInTheDocument()
+		expect(nativeInvoke).not.toHaveBeenCalledWith(
+			'set_client_prefs',
+			expect.anything(),
+		)
+
+		const current = await waitFor(() => getByLabelText('Current PIN'))
+		// SUID's InputBase listens for `input`, not `change`.
+		fireEvent.input(current, { target: { value: '1234' } })
+		fireEvent.click(sw)
+
+		await waitFor(() =>
+			expect(nativeInvoke).toHaveBeenCalledWith('set_client_prefs', {
+				prefs: expect.objectContaining({
+					app_lock_enabled: false,
+					app_lock_pin: null,
+					current_app_lock_pin: '1234',
+				}),
+			}),
+		)
 	})
 })
