@@ -44,7 +44,11 @@ export async function pickLocalFolder(existing = '') {
 		/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')
 
 	try {
-		const path = await nativeInvoke('pick_local_folder')
+		// Hand the dialog a start directory: the Linux portal otherwise opens
+		// on "Recent" and stalls for seconds enumerating it.
+		const path = await nativeInvoke('pick_local_folder', {
+			current: existing || '',
+		})
 		// null/undefined = user cancelled — do not fall through to prompt
 		if (path) return String(path)
 		return null

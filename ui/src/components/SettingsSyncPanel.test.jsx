@@ -20,6 +20,7 @@ vi.mock('./AlertStack', () => ({
 }))
 
 import { nativeInvoke, pickLocalFolder } from '../common/nativeBridge'
+import { syncSettingsStore } from '../common/syncSettingsStore'
 import SettingsSyncPanel from './SettingsSyncPanel'
 
 /**
@@ -105,9 +106,100 @@ beforeEach(() => {
 			// ignore
 		}
 	}
+	// Sync state is a module singleton on purpose (it survives Settings being
+	// closed), so each test has to start it from scratch — after the cache
+	// keys above are gone, since reset() re-reads them.
+	syncSettingsStore.reset()
 })
 
 describe('SettingsSyncPanel', () => {
+	it('flips the switch before the native work finishes', async () => {
+		// The enable path does several IPC round trips (list_bindings,
+		// ensure_remote_folder over the network, add_binding). Waiting for them
+		// before repainting is what made the toggle feel stuck.
+		let release
+		const gate = new Promise((resolve) => {
+			release = resolve
+		})
+		const state = mockNativeInvoke([])
+		const stateful = nativeInvoke.getMockImplementation()
+		nativeInvoke.mockImplementation(async (cmd, args = {}) => {
+			if (cmd === 'ensure_remote_folder' || cmd === 'add_binding') await gate
+			return stateful(cmd, args)
+		})
+
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		await waitFor(() => expect(callsFor('list_bindings').length).toBeGreaterThan(0))
+
+		const sw = container.querySelector('#settings-camera-switch')
+		fireEvent.click(sw)
+
+		// Still blocked on the native side, already ON on screen.
+		await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('true'))
+		expect(callsFor('add_binding').length).toBe(0)
+		expect(sw.disabled).toBe(false)
+
+		release()
+		await waitFor(() => expect(callsFor('add_binding').length).toBe(1))
+		expect(state.bindings.length).toBe(1)
+		expect(sw.getAttribute('aria-checked')).toBe('true')
+	})
+
+	it('reverts the switch when the native call fails', async () => {
+		mockNativeInvoke([])
+		const stateful = nativeInvoke.getMockImplementation()
+		nativeInvoke.mockImplementation(async (cmd, args = {}) => {
+			if (cmd === 'add_binding') throw new Error('nope')
+			return stateful(cmd, args)
+		})
+
+		const { container } = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		await waitFor(() => expect(callsFor('list_bindings').length).toBeGreaterThan(0))
+
+		const sw = container.querySelector('#settings-camera-switch')
+		fireEvent.click(sw)
+		await waitFor(() => expect(callsFor('add_binding').length).toBe(1))
+		await waitFor(() => expect(sw.getAttribute('aria-checked')).toBe('false'))
+	})
+
+	it('keeps its state across a Settings close and reopen', async () => {
+		mockNativeInvoke([
+			{
+				id: 'b1',
+				mode: 'auto_upload',
+				enabled: true,
+				local_path: '/p',
+				remote_root: 'Camera/Pixel 8',
+				storage_id: 'sid',
+			},
+		])
+		const first = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		await waitFor(() =>
+			expect(
+				first.container
+					.querySelector('#settings-camera-switch')
+					.getAttribute('aria-checked'),
+			).toBe('true'),
+		)
+		first.unmount()
+
+		// Reopening must paint from the store, not from a cold list_bindings.
+		nativeInvoke.mockImplementation(() => new Promise(() => {}))
+		const second = render(() => (
+			<SettingsSyncPanel storageId="sid" storageName="Test" />
+		))
+		const sw = second.container.querySelector('#settings-camera-switch')
+		expect(sw.getAttribute('aria-checked')).toBe('true')
+		expect(sw.disabled).toBe(false)
+		expect(second.getByText('/p → Camera/Pixel 8')).toBeTruthy()
+	})
+
 	it('enabling with no camera binding adds one', async () => {
 		mockNativeInvoke([])
 		const { container } = render(() => (
@@ -351,7 +443,7 @@ describe('SettingsSyncPanel', () => {
 		).toBeGreaterThanOrEqual(2)
 	})
 
-	it('shows Downloading/Uploading rows and opens upload list', async () => {
+	it('shows the upload list inline, without a download row', async () => {
 		const state = mockNativeInvoke([])
 		nativeInvoke.mockImplementation(async (cmd) => {
 			switch (cmd) {
@@ -393,21 +485,18 @@ describe('SettingsSyncPanel', () => {
 			}
 		})
 
-		const { container, getByText, findByText } = render(() => (
+		const { container, queryByText, findByText } = render(() => (
 			<SettingsSyncPanel storageId="sid" storageName="Test" />
 		))
 		await waitFor(() =>
 			expect(callsFor('sync_transfer_queue').length).toBeGreaterThan(0),
 		)
-		expect(getByText('Downloading')).toBeTruthy()
-		expect(getByText('Uploading')).toBeTruthy()
-		const uploadRow = [
-			...container.querySelectorAll('.settings-sync-panel__queue-row'),
-		].find((el) => el.textContent.includes('Uploading'))
-		expect(uploadRow?.textContent).toContain('1')
-		fireEvent.click(uploadRow)
-		expect(await findByText('Upload list')).toBeTruthy()
+		// The list is right there — no row to tap open, no download section.
 		expect(await findByText('a.jpg')).toBeTruthy()
+		expect(queryByText('Downloading')).toBeNull()
+		expect(
+			container.querySelector('.settings-sync-panel__queue-count')?.textContent,
+		).toContain('1')
 	})
 
 	it('shows unfinished upload count including waiting', async () => {
@@ -462,10 +551,12 @@ describe('SettingsSyncPanel', () => {
 		await waitFor(() =>
 			expect(callsFor('sync_transfer_queue').length).toBeGreaterThan(0),
 		)
-		const uploadRow = [
-			...container.querySelectorAll('.settings-sync-panel__queue-row'),
-		].find((el) => el.textContent.includes('Uploading'))
-		expect(uploadRow?.textContent).toContain('2')
+		await waitFor(() =>
+			expect(
+				container.querySelector('.settings-sync-panel__queue-count')
+					?.textContent,
+			).toContain('2'),
+		)
 	})
 
 	it('shows already-uploaded scan hint for Camera binding', async () => {
