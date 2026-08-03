@@ -137,7 +137,7 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             serde_json::to_value(list).map_err(|e| e.to_string())
         }
         "list_bindings" => {
-            let list = commands::list_bindings(state.clone())?;
+            let list = commands::list_bindings(state.clone()).await?;
             serde_json::to_value(list).map_err(|e| e.to_string())
         }
         "sync_statuses" => {
@@ -173,7 +173,7 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
         }
         "remove_binding" => {
             let id = arg_str(&args, "id", "id").ok_or_else(|| "id required".to_string())?;
-            commands::remove_binding(state.clone(), id)?;
+            commands::remove_binding(state.clone(), id).await?;
             Ok(json!(null))
         }
         "set_binding_enabled" => {
@@ -181,21 +181,23 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let enabled = arg_value(&args, "enabled", "enabled")
                 .and_then(|v| v.as_bool())
                 .ok_or_else(|| "enabled required".to_string())?;
-            commands::set_binding_enabled(state.clone(), id, enabled)?;
+            commands::set_binding_enabled(state.clone(), id, enabled).await?;
             Ok(json!(null))
         }
         "update_binding_local_path" => {
             let id = arg_str(&args, "id", "id").ok_or_else(|| "id required".to_string())?;
             let local_path = arg_str(&args, "local_path", "localPath")
                 .ok_or_else(|| "local_path required".to_string())?;
-            let binding = commands::update_binding_local_path(state.clone(), id, local_path)?;
+            let binding =
+                commands::update_binding_local_path(state.clone(), id, local_path).await?;
             serde_json::to_value(binding).map_err(|e| e.to_string())
         }
         "update_binding_remote_root" => {
             let id = arg_str(&args, "id", "id").ok_or_else(|| "id required".to_string())?;
             let remote_root = arg_str(&args, "remote_root", "remoteRoot")
                 .ok_or_else(|| "remote_root required".to_string())?;
-            let binding = commands::update_binding_remote_root(state.clone(), id, remote_root)?;
+            let binding =
+                commands::update_binding_remote_root(state.clone(), id, remote_root).await?;
             serde_json::to_value(binding).map_err(|e| e.to_string())
         }
         "ensure_remote_folder" => {
@@ -214,7 +216,8 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             Ok(json!(path))
         }
         "pick_local_folder" => {
-            let path = commands::pick_local_folder(app.clone()).await?;
+            let current = arg_str(&args, "current", "current");
+            let path = commands::pick_local_folder(app.clone(), current).await?;
             Ok(json!(path))
         }
         "get_cache_size" => {
