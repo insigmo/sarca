@@ -1122,6 +1122,11 @@ pub fn cache_get_preview(
     scope: String,
     path: String,
 ) -> Result<Option<String>, String> {
+    // Same bound as `cache_put_preview`: the keys are hashed, so an unbounded
+    // one only buys the caller hashing work on a multi-megabyte string.
+    if scope.len() > MAX_CACHE_KEY_LEN || path.len() > MAX_CACHE_KEY_LEN {
+        return Err("preview cache key too long".into());
+    }
     let dest = preview_cache_path(&state, &scope, &path);
     if !dest.is_file() {
         return Ok(None);
