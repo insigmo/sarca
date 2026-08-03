@@ -115,15 +115,19 @@ def server(e2e_tmp: Path, telegram: TelegramBackend) -> SarcaServer:
     """The Sarca process under test (skipped when SARCA_BASE_URL points elsewhere)."""
     if EXTERNAL_BASE_URL:
         pytest.skip("external server mode: no managed process")
-    env_extra: dict[str, str] = {}
+    # tauri-pilot drives the GUI with webview eval; the shipped CSP
+    # (script-src 'self') refuses it, so the server opts into 'unsafe-eval'.
+    env_extra: dict[str, str] = {"SARCA_ALLOW_EVAL": "1"}
     if telegram.is_mock:
         # 1 MB chunks keep multi-chunk tests small; the fake Bot API has no flood
         # control, so the proactive 2.2s inter-send gap is pure test latency.
-        env_extra = {
-            "TELEGRAM_CHUNK_SIZE_MB": "1",
-            "TELEGRAM_VIDEO_CHUNK_SIZE_MB": "1",
-            "SARCA_TELEGRAM_PACING_MS": "20",
-        }
+        env_extra.update(
+            {
+                "TELEGRAM_CHUNK_SIZE_MB": "1",
+                "TELEGRAM_VIDEO_CHUNK_SIZE_MB": "1",
+                "SARCA_TELEGRAM_PACING_MS": "20",
+            }
+        )
     srv = SarcaServer(
         root=e2e_tmp / "sarca",
         telegram_base_url=telegram.base_url,

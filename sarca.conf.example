@@ -46,6 +46,10 @@ ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory
 # Dev/e2e only: skip TLS and serve plain HTTP on PORT
 # SARCA_PLAIN_HTTP=1
 
+# Dev/e2e only: add 'unsafe-eval' to script-src so tauri-pilot can drive the UI.
+# Never set this on a real deployment — it removes an XSS barrier.
+# SARCA_ALLOW_EVAL=1
+
 # --- Auth: email verify / password reset ---
 # Public base URL used in email links
 PUBLIC_BASE_URL=http://127.0.0.1:8000

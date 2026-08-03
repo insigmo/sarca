@@ -66,6 +66,11 @@ pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "disconnect",
 ];
 
+/// Commands the bundled shell keeps to itself. `connect` picks the server the
+/// whole trust model is anchored on and `get_url_history` lists every server the
+/// user ever reached, so neither may be reachable from a remote page.
+pub const SHELL_ONLY_COMMANDS: &[&str] = &["connect", "get_url_history"];
+
 /// True when `cmd` is handled by [`dispatch`] (snake_case, exact match).
 pub fn is_dispatched_command(cmd: &str) -> bool {
     REMOTE_SETTINGS_COMMANDS.contains(&cmd)
@@ -101,6 +106,38 @@ pub fn grant_remote_capability(app: &AppHandle, origin: &str) -> Result<(), Stri
         builder = builder.permission(permission_for(cmd));
     }
     app.add_capability(builder).map_err(|e| e.to_string())
+}
+
+/// Decide whether a `__TAURI_INTERNALS__.invoke` call may run, based on the URL
+/// the calling webview is on *right now*.
+///
+/// Tauri 2.11 has `add_capability` and no matching `remove_capability`: the grant
+/// [`grant_remote_capability`] hands to a server survives `disconnect` and every
+/// later `connect`, for the whole process lifetime. So the ACL alone answers
+/// "was this origin ever connected?", not "is it connected now" — and after the
+/// user moves from server A to server B, a page still on A keeps a working
+/// bridge to `get_session` (server B's tokens), `update_session`, `add_binding`,
+/// `export_logs`. The `sarca-ipc` protocol handler and the cancelled-navigation
+/// path already re-check the origin per call; this closes the third door, the
+/// direct `invoke` the injected `__sarcaInvoke` prefers.
+///
+/// `url` is the webview's current URL — `None` means we could not read it, which
+/// is refused rather than trusted.
+pub fn authorize_invoke(app: &AppHandle, command: &str, url: Option<&tauri::Url>) -> bool {
+    let Some(url) = url else {
+        return false;
+    };
+    if crate::state::is_shell_url(url) {
+        return true;
+    }
+    let Some(state) = app.try_state::<AppSyncState>() else {
+        // Before `setup` managed the state nothing but the shell exists.
+        return false;
+    };
+    if !state.is_trusted_ipc_url(url) {
+        return false;
+    }
+    !SHELL_ONLY_COMMANDS.contains(&command)
 }
 
 fn arg_str(args: &Value, snake: &str, camel: &str) -> Option<String> {
