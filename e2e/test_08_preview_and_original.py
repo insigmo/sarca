@@ -222,6 +222,34 @@ def test_thumbnail_and_preview_are_separate_documents(
     assert max(media.image_size(thumb.content)) <= 128
 
 
+def test_client_supplied_thumb_is_stored_verbatim(sarca: SarcaClient, storage: str) -> None:
+    """The web client builds the grid tile itself; the server must not re-encode it."""
+    tile = media.recompress_jpeg(media.big_photo(128, 96), quality=75)
+    data = media.big_photo()
+    assert sarca.upload(storage, "client.jpg", data, content_type="image/jpeg", thumb=tile).ok
+    sarca.wait_for_file(storage, "client.jpg")
+
+    r = sarca.thumb(storage, "client.jpg")
+    assert r.status_code == 200
+    assert r.content == tile, "the stored thumb must be the exact bytes the client sent"
+
+
+def test_junk_client_thumb_falls_back_to_server_generation(
+    sarca: SarcaClient, storage: str
+) -> None:
+    """A non-JPEG `thumb` field is dropped, not stored: the server builds its own."""
+    data = media.big_photo()
+    assert sarca.upload(
+        storage, "junk.jpg", data, content_type="image/jpeg", thumb=b"not a jpeg at all"
+    ).ok
+    sarca.wait_for_file(storage, "junk.jpg")
+
+    r = sarca.thumb(storage, "junk.jpg")
+    assert r.status_code == 200
+    assert media.is_jpeg(r.content)
+    assert max(media.image_size(r.content)) <= 128
+
+
 def test_small_image_preview_is_not_upscaled(sarca: SarcaClient, storage: str) -> None:
     data = media.png(64, 48)
     assert sarca.upload(storage, "tiny.png", data, content_type="image/png").ok

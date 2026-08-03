@@ -131,10 +131,17 @@ class SarcaClient:
         content_type: str = "application/octet-stream",
         content_hash: str | None = None,
         mtime_ms: int | None = None,
+        thumb: bytes | None = None,
         timeout: float = 180.0,
     ) -> UploadResult:
-        """Upload one file and drain the NDJSON progress stream."""
+        """Upload one file and drain the NDJSON progress stream.
+
+        `thumb` mimics the web client, which builds the 128px grid tile itself
+        and ships it alongside the original so the server never decodes it.
+        """
         files = {"file": (filename, data, content_type)}
+        if thumb is not None:
+            files["thumb"] = ("thumb.jpg", thumb, "image/jpeg")
         form: dict[str, str] = {"path": path, "filename": filename}
         if content_hash:
             form["content_hash"] = content_hash
