@@ -18,27 +18,59 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 FROM fetch-base AS ffmpeg
 ARG TARGETARCH
 ARG FFMPEG_VERSION=7.0.2
-# Pins for johnvansickle 7.0.2 (site publishes MD5 only).
+# Two pinned sources, tried in order. johnvansickle is the small build we want
+# (~78MB binary) but its CDN sometimes answers a request with a short HTML page
+# and HTTP 200 — curl's own retries can't see that, so every attempt is checked
+# against the pinned size + SHA-256 and only then accepted. When the site is
+# unavailable altogether we fall back to a pinned BtbN GitHub asset (bigger
+# binary, same major version) so a flaky mirror can't fail the release.
 RUN set -eux; \
+    BTBN_TAG='autobuild-2026-08-02-13-17'; \
+    BTBN_BUILD='ffmpeg-n7.1.5-12-g1fdbca85aa'; \
     case "${TARGETARCH}" in \
       amd64) \
         SHA256='abda8d77ce8309141f83ab8edf0596834087c52467f6badf376a6a2a4c87cf67'; \
-        BYTES=41888096 ;; \
+        BYTES=41888096; \
+        BTBN_ASSET="${BTBN_BUILD}-linux64-gpl-7.1.tar.xz"; \
+        BTBN_SHA256='47b2cc48f8a6e9ac9afe3421f57b8ffe9bdf32953c89603603fcb2439c16ec58'; \
+        BTBN_BYTES=118999596 ;; \
       arm64) \
         SHA256='f4149bb2b0784e30e99bdda85471c9b5930d3402014e934a5098b41d0f7201b1'; \
-        BYTES=19337412 ;; \
+        BYTES=19337412; \
+        BTBN_ASSET="${BTBN_BUILD}-linuxarm64-gpl-7.1.tar.xz"; \
+        BTBN_SHA256='c567e86d9941f24217be41aa3a780c4f559fa5605ed80b9955e83a9dd0e86a2a'; \
+        BTBN_BYTES=101899284 ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     ARCHIVE="ffmpeg-${FFMPEG_VERSION}-${TARGETARCH}-static.tar.xz"; \
-    URL="https://johnvansickle.com/ffmpeg/releases/${ARCHIVE}"; \
-    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 30 \
-      -o /tmp/ffmpeg.tar.xz "${URL}"; \
-    ACTUAL_BYTES="$(wc -c </tmp/ffmpeg.tar.xz)"; \
-    if [ "${ACTUAL_BYTES}" != "${BYTES}" ]; then \
-      echo "ffmpeg archive size mismatch: got ${ACTUAL_BYTES} want ${BYTES}" >&2; \
-      exit 1; \
+    PRIMARY="https://johnvansickle.com/ffmpeg/releases/${ARCHIVE}"; \
+    FALLBACK="https://github.com/BtbN/FFmpeg-Builds/releases/download/${BTBN_TAG}/${BTBN_ASSET}"; \
+    fetch() { \
+      url="$1"; want_bytes="$2"; want_sha="$3"; \
+      rm -f /tmp/ffmpeg.tar.xz; \
+      curl -fsSL --connect-timeout 30 -o /tmp/ffmpeg.tar.xz "${url}" || return 1; \
+      got_bytes="$(wc -c </tmp/ffmpeg.tar.xz)"; \
+      if [ "${got_bytes}" != "${want_bytes}" ]; then \
+        echo "size mismatch from ${url}: got ${got_bytes} want ${want_bytes}" >&2; \
+        return 1; \
+      fi; \
+      echo "${want_sha}  /tmp/ffmpeg.tar.xz" | sha256sum -c - >/dev/null || return 1; \
+    }; \
+    ok=0; \
+    for attempt in 1 2 3 4 5; do \
+      if fetch "${PRIMARY}" "${BYTES}" "${SHA256}"; then ok=1; break; fi; \
+      echo "ffmpeg fetch attempt ${attempt} failed, retrying" >&2; \
+      sleep 5; \
+    done; \
+    if [ "${ok}" != "1" ]; then \
+      echo "falling back to ${FALLBACK}" >&2; \
+      for attempt in 1 2 3; do \
+        if fetch "${FALLBACK}" "${BTBN_BYTES}" "${BTBN_SHA256}"; then ok=1; break; fi; \
+        echo "ffmpeg fallback attempt ${attempt} failed, retrying" >&2; \
+        sleep 5; \
+      done; \
     fi; \
-    echo "${SHA256}  /tmp/ffmpeg.tar.xz" | sha256sum -c -; \
+    test "${ok}" = "1" || { echo "could not fetch a verified ffmpeg build" >&2; exit 1; }; \
     mkdir -p /out /tmp/ffextract; \
     tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ffextract; \
     FFMPEG_BIN="$(find /tmp/ffextract -type f -name ffmpeg | head -n 1)"; \
