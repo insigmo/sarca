@@ -261,8 +261,7 @@ fn cors_layer() -> cors::CorsLayer {
 /// `script-src` so `tauri-pilot` can evaluate scripts in the remote-origin UI.
 fn allow_unsafe_eval() -> bool {
     std::env::var("SARCA_ALLOW_EVAL")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 /// Response headers that hold for everything this server serves.
