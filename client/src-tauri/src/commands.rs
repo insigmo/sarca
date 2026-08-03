@@ -463,17 +463,31 @@ pub fn folder_path_from_picked_path(path: Option<std::path::PathBuf>) -> Option<
 }
 
 #[tauri::command]
-pub async fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String> {
+pub async fn pick_local_folder(
+    app: AppHandle,
+    current: Option<String>,
+) -> Result<Option<String>, String> {
     // Desktop: native OS folder dialog (async, non-blocking).
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let (tx, rx) = oneshot::channel();
-        app.dialog()
-            .file()
-            .set_title("Choose folder")
-            .pick_folder(move |folder| {
-                let _ = tx.send(folder);
-            });
+        let mut builder = app.dialog().file().set_title("Choose folder");
+        // Start in the folder we already sync. Without this the XDG portal
+        // opens on "Recent", which on Linux means enumerating recently-used
+        // entries and every gvfs mount before the window appears — seconds of
+        // apparent hang on the very dialog the user just asked for.
+        if let Some(dir) = current
+            .as_deref()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+            .map(PathBuf::from)
+            .filter(|d| d.is_dir())
+        {
+            builder = builder.set_directory(dir);
+        }
+        builder.pick_folder(move |folder| {
+            let _ = tx.send(folder);
+        });
         let folder = match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
             Ok(Ok(folder)) => folder,
             Ok(Err(e)) => return Err(e.to_string()),
@@ -485,15 +499,17 @@ pub async fn pick_local_folder(app: AppHandle) -> Result<Option<String>, String>
     }
 
     // Android: SAF document-tree picker → filesystem path when resolvable.
+    // SAF has no start-directory hint we can honour, so `current` is unused.
     #[cfg(target_os = "android")]
     {
+        let _ = current;
         return crate::folder_picker::pick_folder_android(&app).await;
     }
 
     // iOS: no reliable folder path for walkdir yet — typed path fallback.
     #[cfg(target_os = "ios")]
     {
-        let _ = app;
+        let _ = (app, current);
         Err("FOLDER_PICKER_USE_PROMPT".into())
     }
 }
@@ -678,9 +694,30 @@ async fn try_create_folder(
     api.create_folder(storage_id, parent, name).await
 }
 
+/// Runs a blocking index (SQLite) call off the UI thread.
+///
+/// Tauri dispatches *synchronous* commands on the main thread, so any command
+/// that waits on the index mutex freezes the whole window whenever a sync tick
+/// holds it — that is what made reopening Settings, flipping the auto-upload
+/// toggle and even opening the GTK folder dialog hang for seconds. Every
+/// index-touching command below is `async` + `spawn_blocking` for that reason.
+async fn on_engine<T, F>(state: &State<'_, AppSyncState>, f: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&sarca_sync::SyncEngine) -> Result<T, String> + Send + 'static,
+{
+    let engine = state.engine.clone();
+    tauri::async_runtime::spawn_blocking(move || f(&engine))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
-pub fn list_bindings(state: State<'_, AppSyncState>) -> Result<Vec<Binding>, String> {
-    state.engine.list_bindings().map_err(|e| e.to_string())
+pub async fn list_bindings(state: State<'_, AppSyncState>) -> Result<Vec<Binding>, String> {
+    on_engine(&state, |engine| {
+        engine.list_bindings().map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
@@ -705,33 +742,35 @@ pub async fn add_binding(
     // Only one Camera (media) auto-upload binding at a time — UI races used to leave
     // duplicates that re-uploaded the same gallery three times per tick.
     // Folder uploads may be many; they are not deduped here.
-    if matches!(binding.mode, BindingMode::AutoUpload) {
-        let existing = state.engine.list_bindings().map_err(|e| e.to_string())?;
-        for b in existing
-            .into_iter()
-            .filter(|b| matches!(b.mode, BindingMode::AutoUpload) && b.id != binding.id)
-        {
-            state
-                .engine
-                .remove_binding(&b.id)
-                .map_err(|e| e.to_string())?;
+    let dedupe = matches!(binding.mode, BindingMode::AutoUpload);
+    let stored = binding.clone();
+    on_engine(&state, move |engine| {
+        if dedupe {
+            let existing = engine.list_bindings().map_err(|e| e.to_string())?;
+            for b in existing
+                .into_iter()
+                .filter(|b| matches!(b.mode, BindingMode::AutoUpload) && b.id != stored.id)
+            {
+                engine.remove_binding(&b.id).map_err(|e| e.to_string())?;
+            }
         }
-    }
-    state
-        .engine
-        .upsert_binding(&binding)
-        .map_err(|e| e.to_string())?;
+        engine.upsert_binding(&stored).map_err(|e| e.to_string())
+    })
+    .await?;
     Ok(binding)
 }
 
 #[tauri::command]
-pub fn remove_binding(state: State<'_, AppSyncState>, id: String) -> Result<(), String> {
+pub async fn remove_binding(state: State<'_, AppSyncState>, id: String) -> Result<(), String> {
     client_log::write_line(state.data_dir(), &format!("remove_binding id={id}"));
-    state.engine.remove_binding(&id).map_err(|e| e.to_string())
+    on_engine(&state, move |engine| {
+        engine.remove_binding(&id).map_err(|e| e.to_string())
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn set_binding_enabled(
+pub async fn set_binding_enabled(
     state: State<'_, AppSyncState>,
     id: String,
     enabled: bool,
@@ -740,10 +779,12 @@ pub fn set_binding_enabled(
         state.data_dir(),
         &format!("set_binding_enabled id={id} enabled={enabled}"),
     );
-    state
-        .engine
-        .set_binding_enabled(&id, enabled)
-        .map_err(|e| e.to_string())
+    on_engine(&state, move |engine| {
+        engine
+            .set_binding_enabled(&id, enabled)
+            .map_err(|e| e.to_string())
+    })
+    .await
 }
 
 /// Two-way `Sync` bindings track per-file state (content hash, remote file
@@ -770,7 +811,7 @@ fn ensure_remote_root_change_allowed(mode: BindingMode) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn update_binding_local_path(
+pub async fn update_binding_local_path(
     state: State<'_, AppSyncState>,
     id: String,
     local_path: String,
@@ -779,24 +820,23 @@ pub fn update_binding_local_path(
         state.data_dir(),
         &format!("update_binding_local_path id={id} local_path={local_path}"),
     );
-    let mut binding = state
-        .engine
-        .list_bindings()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|b| b.id == id)
-        .ok_or_else(|| format!("binding not found: {id}"))?;
-    ensure_local_path_change_allowed(binding.mode)?;
-    binding.local_path = local_path;
-    state
-        .engine
-        .upsert_binding(&binding)
-        .map_err(|e| e.to_string())?;
-    Ok(binding)
+    on_engine(&state, move |engine| {
+        let mut binding = engine
+            .list_bindings()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|b| b.id == id)
+            .ok_or_else(|| format!("binding not found: {id}"))?;
+        ensure_local_path_change_allowed(binding.mode)?;
+        binding.local_path = local_path;
+        engine.upsert_binding(&binding).map_err(|e| e.to_string())?;
+        Ok(binding)
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn update_binding_remote_root(
+pub async fn update_binding_remote_root(
     state: State<'_, AppSyncState>,
     id: String,
     remote_root: String,
@@ -805,20 +845,19 @@ pub fn update_binding_remote_root(
         state.data_dir(),
         &format!("update_binding_remote_root id={id} remote_root={remote_root}"),
     );
-    let mut binding = state
-        .engine
-        .list_bindings()
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .find(|b| b.id == id)
-        .ok_or_else(|| format!("binding not found: {id}"))?;
-    ensure_remote_root_change_allowed(binding.mode)?;
-    binding.remote_root = remote_root.trim().trim_matches('/').to_owned();
-    state
-        .engine
-        .upsert_binding(&binding)
-        .map_err(|e| e.to_string())?;
-    Ok(binding)
+    on_engine(&state, move |engine| {
+        let mut binding = engine
+            .list_bindings()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|b| b.id == id)
+            .ok_or_else(|| format!("binding not found: {id}"))?;
+        ensure_remote_root_change_allowed(binding.mode)?;
+        binding.remote_root = remote_root.trim().trim_matches('/').to_owned();
+        engine.upsert_binding(&binding).map_err(|e| e.to_string())?;
+        Ok(binding)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -855,7 +894,14 @@ pub async fn sync_now(
     // backoff first. A file deferred for hours because it kept failing is
     // exactly what someone pressing "Upload now" wants reconsidered, and they
     // cannot see the deadline to wait it out. Background ticks never do this.
-    match state.engine.retry_failed_uploads(binding_id.as_deref()) {
+    let retry_id = binding_id.clone();
+    let retried = on_engine(&state, move |engine| {
+        engine
+            .retry_failed_uploads(retry_id.as_deref())
+            .map_err(|e| e.to_string())
+    })
+    .await;
+    match retried {
         Ok(0) => {}
         Ok(n) => client_log::write_line(
             state.data_dir(),
