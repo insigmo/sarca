@@ -260,8 +260,7 @@ fn cors_layer() -> cors::CorsLayer {
 /// `SARCA_ALLOW_EVAL=1` — e2e/dev escape hatch that adds `'unsafe-eval'` to
 /// `script-src` so `tauri-pilot` can evaluate scripts in the remote-origin UI.
 fn allow_unsafe_eval() -> bool {
-    std::env::var("SARCA_ALLOW_EVAL")
-        .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    std::env::var("SARCA_ALLOW_EVAL").is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 
 /// Response headers that hold for everything this server serves.
