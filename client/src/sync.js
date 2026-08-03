@@ -28,7 +28,7 @@ function cameraBinding(bindings) {
 async function enableBackgroundSync() {
   // If loading existing prefs fails, skip rather than call set_client_prefs
   // with a bare `{ background_sync: true }` — that would silently wipe any
-  // other saved prefs (e.g. app_lock_enabled/app_lock_pin) on disk.
+  // other saved prefs (e.g. app_lock_enabled, cache_limit_bytes) on disk.
   let prefs;
   try {
     prefs = await invoke("get_client_prefs");

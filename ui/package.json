@@ -16,9 +16,9 @@
     "@testing-library/jest-dom": "^7.0.0",
     "jsdom": "^29.1.1",
     "solid-devtools": "^0.27.3",
-    "vite": "^4.3.9",
-    "vite-plugin-solid": "^2.7.0",
-    "vitest": "^2.1.9"
+    "vite": "^7.3.6",
+    "vite-plugin-solid": "^2.11.14",
+    "vitest": "^3.2.7"
   },
   "dependencies": {
     "@fluentui/svg-icons": "^1.1.334",
@@ -30,7 +30,7 @@
     "mammoth": "^1.12.0",
     "marked": "^18.0.7",
     "material-icon-theme": "^5.37.0",
-    "solid-js": "^1.8.4"
+    "solid-js": "^1.9.14"
   },
   "packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72"
 }

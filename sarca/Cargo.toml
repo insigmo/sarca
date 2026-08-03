@@ -83,7 +83,11 @@ serde_json = "1.0"
 
 # auth
 pwhash = "1.0.0"
-jsonwebtoken = { version = "9", default-features = false, features = ["use_pem"] }
+# 10.x fixes GHSA-h395-gr6q-cpjc (claim type confusion skipped validation).
+# Exactly one crypto provider may be on, or every sign/verify panics; aws_lc_rs
+# is already in the tree via rustls, and picking it keeps the `rsa` crate
+# (RUSTSEC-2023-0071, Marvin) out of the build entirely. Only HS256 is used.
+jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 sha2 = "0.10"
 lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 
@@ -103,7 +107,7 @@ thiserror = "1.0.50"
 uuid = { version = "1.5.0", features = ["serde", "v4"] }
 
 # HTTP client (без native-tls — ок для musl)
-reqwest = { version = "0.11.22", default-features = false, features = ["multipart", "json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "stream", "rustls-tls"] }
 percent-encoding = "2.3"
 
 # thumbnails

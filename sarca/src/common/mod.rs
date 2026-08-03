@@ -9,4 +9,5 @@ pub mod password_manager;
 pub mod routing;
 pub mod single_flight;
 pub mod telegram_api;
+pub mod throttle;
 pub mod types;

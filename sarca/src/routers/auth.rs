@@ -15,6 +15,7 @@ use crate::{
     common::{
         jwt_manager::AuthUser,
         routing::{app_state::AppState, middlewares::auth::logged_in_required},
+        throttle::keys,
     },
     schemas::auth::{
         ForgotPasswordSchema,
@@ -48,12 +49,26 @@ impl AuthRouter {
             .with_state(state)
     }
 
+    /// Password guessing is throttled per target address: a few free tries,
+    /// then a growing delay, then 429. Without this, bcrypt is the only cost
+    /// an attacker pays and the endpoint is an open password oracle.
     async fn login(
         State(state): State<Arc<AppState>>,
         Json(login_data): Json<LoginSchema>,
     ) -> Result<(StatusCode, Json<TokenSchema>), (StatusCode, String)> {
-        let schema = AuthService::new(&state.db).login(login_data, &state.config).await?;
-        Ok((StatusCode::OK, Json(schema)))
+        let key = keys::login(&login_data.email);
+        state.throttle.check(&key).await?;
+
+        match AuthService::new(&state.db).login(login_data, &state.config).await {
+            Ok(schema) => {
+                state.throttle.record_success(&key);
+                Ok((StatusCode::OK, Json(schema)))
+            },
+            Err(e) => {
+                state.throttle.record_failure(&key);
+                Err(e.into())
+            },
+        }
     }
 
     async fn refresh(
@@ -105,11 +120,19 @@ impl AuthRouter {
         Ok(StatusCode::NO_CONTENT)
     }
 
+    /// Throttled per address so the endpoint cannot be used to flood someone's
+    /// inbox or to keep invalidating their pending reset token. The answer
+    /// stays 204 either way, including when throttled, so it still leaks
+    /// nothing about whether the account exists.
     async fn forgot_password(
         State(state): State<Arc<AppState>>,
         Json(body): Json<ForgotPasswordSchema>,
     ) -> StatusCode {
-        AuthService::new(&state.db).forgot_password(&body.email, &state.config).await;
+        let key = keys::forgot_password(&body.email);
+        if state.throttle.check(&key).await.is_ok() {
+            state.throttle.record_failure(&key);
+            AuthService::new(&state.db).forgot_password(&body.email, &state.config).await;
+        }
         StatusCode::NO_CONTENT
     }
 

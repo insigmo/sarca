@@ -4,8 +4,18 @@ use axum::{
     Router,
     http::{
         HeaderValue,
+        Method,
         StatusCode,
-        header::{CACHE_CONTROL, HeaderName},
+        header::{
+            ACCEPT,
+            AUTHORIZATION,
+            CACHE_CONTROL,
+            CONTENT_TYPE,
+            HeaderName,
+            IF_MODIFIED_SINCE,
+            IF_NONE_MATCH,
+            RANGE,
+        },
     },
 };
 use tower::{ServiceBuilder, limit::ConcurrencyLimitLayer};
@@ -64,6 +74,7 @@ impl Server {
             .nest("/api", Self::build_api_router(workers, app_state))
             .nest_service("/assets", serve_assets)
             .fallback_service(serve_ui);
+        let router = with_security_headers(router);
 
         Self {
             router,
@@ -73,10 +84,7 @@ impl Server {
 
     #[inline]
     fn build_api_router(workers: usize, app_state: Arc<AppState>) -> Router {
-        let app_cors = cors::CorsLayer::new()
-            .allow_methods(cors::Any)
-            .allow_headers(cors::Any)
-            .allow_origin(cors::Any);
+        let app_cors = cors_layer();
 
         Router::new()
             .nest("/users", UsersRouter::get_router(app_state.clone()))
@@ -185,6 +193,111 @@ impl Server {
     }
 }
 
+/// Origins allowed to read API responses cross-site, on top of same-origin
+/// requests (which carry no `Origin` and never need CORS).
+///
+/// The Tauri client loads the server UI in its `WebView`, so its API calls are
+/// same-origin; these cover the bundled shell pages (`index.html`/`sync.html`),
+/// which talk to the API from a `tauri://` origin.
+const SHELL_ORIGINS: &[&str] =
+    &["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"];
+
+/// Extra origins, comma-separated. `*` restores the old allow-anything
+/// behaviour and is only honoured because some deployments front the API with
+/// a separate web app; it is never the default.
+const CORS_ORIGINS_VAR: &str = "SARCA_CORS_ORIGINS";
+
+/// CORS policy for `/api`.
+///
+/// This used to be `allow_origin(Any)` with `allow_headers(Any)`, which let any
+/// website a user visited read every API response their browser could reach —
+/// including, on a fresh instance, `/api/setup`. Requests are now only readable
+/// cross-site from origins the operator names.
+fn cors_layer() -> cors::CorsLayer {
+    let layer = cors::CorsLayer::new()
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            ACCEPT,
+            AUTHORIZATION,
+            CONTENT_TYPE,
+            RANGE,
+            IF_MODIFIED_SINCE,
+            IF_NONE_MATCH,
+        ])
+        .max_age(std::time::Duration::from_mins(10));
+
+    let configured = std::env::var(CORS_ORIGINS_VAR).unwrap_or_default();
+    let configured: Vec<&str> =
+        configured.split(',').map(str::trim).filter(|o| !o.is_empty()).collect();
+
+    if configured.contains(&"*") {
+        tracing::warn!(
+            "{CORS_ORIGINS_VAR} contains '*': every website can read API responses. \
+             List explicit origins instead."
+        );
+        return layer.allow_origin(cors::Any);
+    }
+
+    let mut origins: Vec<HeaderValue> = Vec::new();
+    for origin in SHELL_ORIGINS.iter().copied().chain(configured) {
+        if let Ok(value) = HeaderValue::from_str(origin) {
+            origins.push(value);
+        } else {
+            tracing::warn!(origin, "ignoring unparsable {CORS_ORIGINS_VAR} entry");
+        }
+    }
+    layer.allow_origin(origins)
+}
+
+/// Response headers that hold for everything this server serves.
+///
+/// The SPA shipped without any of these: no CSP, so a single injection turned
+/// into script execution; no `X-Frame-Options`, so the UI could be framed and
+/// clickjacked; no `nosniff`, so an uploaded file served back could be sniffed
+/// into HTML and run on the app's own origin.
+fn with_security_headers(router: Router) -> Router {
+    // `style-src` needs 'unsafe-inline': SUID injects component styles as inline
+    // <style> at runtime. Scripts stay 'self' only, which is what stops XSS.
+    // Fonts come from Google Fonts (see ui/index.html).
+    const CSP: &str = "default-src 'self'; \
+         script-src 'self'; \
+         style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
+         font-src 'self' data: https://fonts.gstatic.com; \
+         img-src 'self' data: blob:; \
+         media-src 'self' data: blob:; \
+         connect-src 'self'; \
+         worker-src 'self' blob:; \
+         frame-src 'none'; \
+         object-src 'none'; \
+         base-uri 'self'; \
+         form-action 'self'; \
+         frame-ancestors 'none'";
+
+    let headers: [(HeaderName, &'static str); 5] = [
+        (HeaderName::from_static("content-security-policy"), CSP),
+        (HeaderName::from_static("x-content-type-options"), "nosniff"),
+        (HeaderName::from_static("x-frame-options"), "DENY"),
+        (HeaderName::from_static("referrer-policy"), "strict-origin-when-cross-origin"),
+        (
+            HeaderName::from_static("permissions-policy"),
+            "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), \
+             microphone=(), payment=(), usb=()",
+        ),
+    ];
+
+    headers.into_iter().fold(router, |router, (name, value)| {
+        router.layer(SetResponseHeaderLayer::overriding(name, HeaderValue::from_static(value)))
+    })
+}
+
 pub fn with_alt_svc(router: Router, https_port: u16) -> Router {
     let value =
         HeaderValue::from_str(&format!("h3=\":{https_port}\"; ma=86400")).expect("Alt-Svc header");
@@ -263,5 +376,87 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         assert!(find_ui_dir_among(&[root.join("ui")]).is_none());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    async fn response_headers(
+        router: Router,
+        request: axum::http::Request<axum::body::Body>,
+    ) -> axum::http::HeaderMap {
+        use tower::ServiceExt;
+        router.oneshot(request).await.expect("router responds").headers().clone()
+    }
+
+    fn cors_router() -> Router {
+        Router::new().route("/ping", axum::routing::get(|| async { "pong" })).layer(cors_layer())
+    }
+
+    fn get_with_origin(origin: &str) -> axum::http::Request<axum::body::Body> {
+        axum::http::Request::builder()
+            .uri("/ping")
+            .header("Origin", origin)
+            .body(axum::body::Body::empty())
+            .unwrap()
+    }
+
+    // Regression: the API answered `Access-Control-Allow-Origin: *`, so any page
+    // the user visited could read every response their browser could reach.
+    #[tokio::test]
+    async fn cors_refuses_unknown_origins() {
+        let headers =
+            response_headers(cors_router(), get_with_origin("https://evil.example.com")).await;
+        assert!(
+            headers.get("access-control-allow-origin").is_none(),
+            "an unlisted origin must not be echoed back: {headers:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_allows_the_native_shell_origin() {
+        let headers = response_headers(cors_router(), get_with_origin("tauri://localhost")).await;
+        assert_eq!(
+            headers.get("access-control-allow-origin").and_then(|v| v.to_str().ok()),
+            Some("tauri://localhost")
+        );
+        assert!(headers.get("vary").is_some(), "a per-origin reply must vary on Origin");
+    }
+
+    #[tokio::test]
+    async fn cors_never_allows_credentials() {
+        let headers = response_headers(cors_router(), get_with_origin("tauri://localhost")).await;
+        assert!(
+            headers.get("access-control-allow-credentials").is_none(),
+            "cookies must not ride along cross-site"
+        );
+    }
+
+    #[tokio::test]
+    async fn security_headers_are_applied_to_every_response() {
+        let router = with_security_headers(
+            Router::new().route("/ping", axum::routing::get(|| async { "pong" })),
+        );
+        let request =
+            axum::http::Request::builder().uri("/ping").body(axum::body::Body::empty()).unwrap();
+        let headers = response_headers(router, request).await;
+
+        let csp = headers
+            .get("content-security-policy")
+            .and_then(|v| v.to_str().ok())
+            .expect("CSP header");
+        assert!(csp.contains("script-src 'self'"));
+        assert!(!csp.contains("unsafe-eval"), "eval must stay blocked: {csp}");
+        assert!(
+            !csp.contains("script-src 'self' 'unsafe-inline'"),
+            "inline script must stay blocked: {csp}"
+        );
+        assert!(csp.contains("frame-ancestors 'none'"));
+        assert!(csp.contains("object-src 'none'"));
+
+        assert_eq!(
+            headers.get("x-content-type-options").and_then(|v| v.to_str().ok()),
+            Some("nosniff")
+        );
+        assert_eq!(headers.get("x-frame-options").and_then(|v| v.to_str().ok()), Some("DENY"));
+        assert!(headers.get("referrer-policy").is_some());
+        assert!(headers.get("permissions-policy").is_some());
     }
 }

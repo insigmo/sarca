@@ -591,6 +591,11 @@ pub fn native_chrome_js() -> String {
     )
 }
 
+/// On-disk client preferences.
+///
+/// The app-lock PIN is stored as a salted, iterated hash. It used to be kept in
+/// clear and handed back by `get_client_prefs`, so anything that reached the
+/// IPC bridge could read the PIN and walk straight past the lock screen.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientPrefs {
     #[serde(default = "default_true")]
@@ -598,7 +603,40 @@ pub struct ClientPrefs {
     #[serde(default)]
     pub app_lock_enabled: bool,
     #[serde(default)]
+    pub app_lock_pin_salt: Option<String>,
+    #[serde(default)]
+    pub app_lock_pin_hash: Option<String>,
+    /// Legacy plaintext PIN from before hashing. Read once on load, converted,
+    /// and dropped; never written back. The rename is what actually picks it
+    /// up: old prefs files spell the key `app_lock_pin`.
+    #[serde(rename = "app_lock_pin", default, skip_serializing)]
+    pub legacy_app_lock_pin: Option<String>,
+    #[serde(default = "default_true")]
+    pub enable_logs: bool,
+    #[serde(default = "default_cache_limit_bytes")]
+    pub cache_limit_bytes: u64,
+}
+
+/// What the WebView is allowed to see and send. No hash, no salt, and the PIN
+/// field is write-only.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClientPrefsDto {
+    #[serde(default = "default_true")]
+    pub wifi_only: bool,
+    #[serde(default)]
+    pub app_lock_enabled: bool,
+    /// True when a PIN is set. Lets the UI show "change PIN" vs "set PIN"
+    /// without ever learning the PIN itself.
+    #[serde(default, skip_deserializing)]
+    pub app_lock_pin_set: bool,
+    /// Write-only: present to (re)define the PIN, never serialized back out.
+    #[serde(default, skip_serializing)]
     pub app_lock_pin: Option<String>,
+    /// Write-only: the PIN currently on file. Required to change or remove an
+    /// existing PIN, so reaching `set_client_prefs` is not by itself enough to
+    /// switch the app lock off.
+    #[serde(default, skip_serializing)]
+    pub current_app_lock_pin: Option<String>,
     #[serde(default = "default_true")]
     pub enable_logs: bool,
     #[serde(default = "default_cache_limit_bytes")]
@@ -613,15 +651,170 @@ fn default_true() -> bool {
     true
 }
 
+/// Cap on cache size a caller may request: 64 GiB. Without it a hostile
+/// `set_client_prefs` could disable eviction by asking for `u64::MAX`.
+const MAX_CACHE_LIMIT_BYTES: u64 = 64 * 1024 * 1024 * 1024;
+const MIN_CACHE_LIMIT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// PIN rules. Short enough to stay a PIN, long enough not to be guessable in
+/// three taps; the length cap stops a caller from making us hash a huge string.
+const MIN_PIN_LEN: usize = 4;
+const MAX_PIN_LEN: usize = 64;
+/// Iteration count for the PIN hash. A PIN has little entropy, so this only
+/// buys time against someone who already reads `client_prefs.json`; the real
+/// protection is the 0600 file mode and never returning the secret over IPC.
+const PIN_HASH_ROUNDS: u32 = 120_000;
+
 impl Default for ClientPrefs {
     fn default() -> Self {
         Self {
             wifi_only: true,
             app_lock_enabled: false,
-            app_lock_pin: None,
+            app_lock_pin_salt: None,
+            app_lock_pin_hash: None,
+            legacy_app_lock_pin: None,
             enable_logs: true,
             cache_limit_bytes: default_cache_limit_bytes(),
         }
+    }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut acc, b| {
+        let _ = write!(acc, "{b:02x}");
+        acc
+    })
+}
+
+fn hash_pin(pin: &str, salt_hex: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut digest = Sha256::new();
+    digest.update(salt_hex.as_bytes());
+    digest.update(pin.as_bytes());
+    let mut out = digest.finalize();
+    for _ in 1..PIN_HASH_ROUNDS {
+        let mut next = Sha256::new();
+        next.update(salt_hex.as_bytes());
+        next.update(out);
+        out = next.finalize();
+    }
+    hex(&out)
+}
+
+/// Compare without leaking the position of the first differing byte.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+impl ClientPrefs {
+    /// Convert a legacy plaintext PIN into a hash. Returns true when the file
+    /// needs rewriting (the plaintext PIN must not survive on disk).
+    pub fn migrate_legacy_pin(&mut self) -> bool {
+        let Some(pin) = self.legacy_app_lock_pin.take() else {
+            return false;
+        };
+        if self.has_pin() {
+            // Already migrated; the leftover key just needs dropping.
+            return true;
+        }
+        if self.set_pin(pin.trim()).is_err() {
+            // Empty or otherwise unusable legacy PIN. Leaving `app_lock_enabled`
+            // on with nothing to verify against would make the gate wave
+            // everyone through, so turn the lock off instead.
+            self.clear_pin();
+        }
+        true
+    }
+
+    pub fn set_pin(&mut self, pin: &str) -> Result<(), String> {
+        let pin = pin.trim();
+        if pin.chars().count() < MIN_PIN_LEN {
+            return Err(format!("PIN must be at least {MIN_PIN_LEN} characters"));
+        }
+        if pin.chars().count() > MAX_PIN_LEN {
+            return Err(format!("PIN must be at most {MAX_PIN_LEN} characters"));
+        }
+        let salt = hex(Uuid::new_v4().as_bytes());
+        self.app_lock_pin_hash = Some(hash_pin(pin, &salt));
+        self.app_lock_pin_salt = Some(salt);
+        Ok(())
+    }
+
+    pub fn clear_pin(&mut self) {
+        self.app_lock_pin_hash = None;
+        self.app_lock_pin_salt = None;
+        self.app_lock_enabled = false;
+    }
+
+    pub fn has_pin(&self) -> bool {
+        self.app_lock_pin_hash.is_some() && self.app_lock_pin_salt.is_some()
+    }
+
+    pub fn verify_pin(&self, candidate: &str) -> bool {
+        let (Some(hash), Some(salt)) = (&self.app_lock_pin_hash, &self.app_lock_pin_salt) else {
+            return false;
+        };
+        let candidate = candidate.trim();
+        if candidate.is_empty() || candidate.chars().count() > MAX_PIN_LEN {
+            return false;
+        }
+        constant_time_eq(hash, &hash_pin(candidate, salt))
+    }
+
+    pub fn to_dto(&self) -> ClientPrefsDto {
+        ClientPrefsDto {
+            wifi_only: self.wifi_only,
+            app_lock_enabled: self.app_lock_enabled,
+            app_lock_pin_set: self.has_pin(),
+            app_lock_pin: None,
+            current_app_lock_pin: None,
+            enable_logs: self.enable_logs,
+            cache_limit_bytes: self.cache_limit_bytes,
+        }
+    }
+
+    /// Fold a request from the WebView into the stored prefs.
+    ///
+    /// The caller can never read the PIN, and it cannot change or remove one
+    /// that is already set without presenting it: otherwise merely reaching
+    /// `set_client_prefs` would be an app-lock bypass.
+    pub fn apply_dto(&mut self, dto: ClientPrefsDto) -> Result<(), String> {
+        let new_pin = dto.app_lock_pin.as_deref().map(str::trim).filter(|p| !p.is_empty());
+        let wants_pin_change = new_pin.is_some();
+        let wants_disable = self.app_lock_enabled && !dto.app_lock_enabled;
+
+        if self.has_pin() && (wants_pin_change || wants_disable) {
+            let current = dto.current_app_lock_pin.as_deref().unwrap_or_default();
+            if !self.verify_pin(current) {
+                return Err("Current PIN is incorrect".into());
+            }
+        }
+
+        self.wifi_only = dto.wifi_only;
+        self.enable_logs = dto.enable_logs;
+        self.cache_limit_bytes = dto
+            .cache_limit_bytes
+            .clamp(MIN_CACHE_LIMIT_BYTES, MAX_CACHE_LIMIT_BYTES);
+
+        if let Some(pin) = new_pin {
+            self.set_pin(pin)?;
+        }
+
+        if dto.app_lock_enabled {
+            if !self.has_pin() {
+                return Err("Set a PIN before turning on the app lock".into());
+            }
+            self.app_lock_enabled = true;
+        } else {
+            self.clear_pin();
+        }
+        Ok(())
     }
 }
 
@@ -630,6 +823,10 @@ pub struct AppSyncState {
     pub server: Arc<Mutex<ServerConfig>>,
     pub pending_inject: Arc<StdMutex<Option<SessionInject>>>,
     pub shell_url: Arc<StdMutex<Option<Url>>>,
+    /// Origin of the connected server, mirrored out of the async `server` mutex
+    /// so the synchronous navigation hook can authorise an IPC call without
+    /// blocking on a lock it cannot await.
+    trusted_origin: Arc<StdMutex<Option<String>>>,
     data_dir: PathBuf,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     /// Bumped to interrupt the background-loop sleep and run a tick soon
@@ -663,15 +860,53 @@ impl AppSyncState {
         let (shutdown_tx, _) = tokio::sync::watch::channel(false);
         let (wake_tx, _) = tokio::sync::watch::channel(0u64);
 
+        let trusted_origin = origin_of_base_url(&server.base_url);
+
         Ok(Self {
             engine,
             server: Arc::new(Mutex::new(server)),
             pending_inject: Arc::new(StdMutex::new(None)),
             shell_url: Arc::new(StdMutex::new(None)),
+            trusted_origin: Arc::new(StdMutex::new(trusted_origin)),
             data_dir,
             shutdown_tx,
             wake_tx,
         })
+    }
+
+    /// Origin of the connected server, or `None` while disconnected.
+    pub fn trusted_origin(&self) -> Option<String> {
+        self.trusted_origin.lock().ok().and_then(|g| g.clone())
+    }
+
+    /// True when `url` may drive the native IPC bridge: the Tauri-bundled shell
+    /// or the server the user actually connected to. Every other page — an
+    /// iframe, an ad, a redirect, a `file://` document — is refused.
+    pub fn is_trusted_ipc_url(&self, url: &Url) -> bool {
+        if is_shell_url(url) {
+            return true;
+        }
+        match (origin_string(url), self.trusted_origin()) {
+            (Some(origin), Some(trusted)) => origin == trusted,
+            _ => false,
+        }
+    }
+
+    /// Same check against a serialized `Origin` header value.
+    pub fn is_trusted_ipc_origin(&self, origin: &str) -> bool {
+        let origin = origin.trim();
+        // "null" is what a sandboxed iframe, a `data:` document or a redirected
+        // cross-origin request sends. It is never trusted.
+        if origin.is_empty() || origin.eq_ignore_ascii_case("null") {
+            return false;
+        }
+        if SHELL_ORIGINS.iter().any(|o| o.eq_ignore_ascii_case(origin)) {
+            return true;
+        }
+        match Url::parse(origin) {
+            Ok(url) => self.is_trusted_ipc_url(&url),
+            Err(_) => false,
+        }
     }
 
     pub fn data_dir(&self) -> &PathBuf {
@@ -749,7 +984,10 @@ impl AppSyncState {
 
     pub async fn save_server(&self, cfg: &ServerConfig) -> Result<()> {
         let json = serde_json::to_string_pretty(cfg)?;
-        fs::write(self.server_config_path(), json)?;
+        write_private(&self.server_config_path(), json.as_bytes())?;
+        if let Ok(mut guard) = self.trusted_origin.lock() {
+            *guard = origin_of_base_url(&cfg.base_url);
+        }
         *self.server.lock().await = cfg.clone();
         self.engine
             .set_credentials(cfg.base_url.clone(), cfg.access_token.clone())
@@ -839,6 +1077,74 @@ impl AppSyncState {
 
     pub fn record_url_history(&self, base_url: &str) -> Vec<String> {
         record_url_history(&self.data_dir, base_url)
+    }
+}
+
+/// Origins of the Tauri-bundled shell, as the WebView serializes them in an
+/// `Origin` header. Which one appears depends on the platform (custom scheme on
+/// Linux/macOS, `*.localhost` on Windows/Android).
+pub const SHELL_ORIGINS: &[&str] = &[
+    "tauri://localhost",
+    "asset://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://asset.localhost",
+    "https://asset.localhost",
+];
+
+/// Serialized tuple origin (`scheme://host[:port]`).
+///
+/// `Url::origin()` yields an opaque origin for non-special schemes such as
+/// `tauri:`, which would collapse every shell page to the same `null` value,
+/// so the tuple is built by hand.
+pub fn origin_string(url: &Url) -> Option<String> {
+    let host = url.host_str()?;
+    let scheme = url.scheme();
+    Some(match url.port() {
+        Some(port) => format!("{scheme}://{host}:{port}"),
+        None => format!("{scheme}://{host}"),
+    })
+}
+
+/// Origin of a stored `base_url`, or `None` when it is empty or unparsable.
+pub fn origin_of_base_url(base_url: &str) -> Option<String> {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Url::parse(trimmed).ok().as_ref().and_then(origin_string)
+}
+
+/// Write a file that only the current user can read.
+///
+/// `server.json` holds the access and refresh tokens and `client_prefs.json`
+/// holds the app-lock secret; on a shared machine the default 0644 would hand
+/// both to every other local account.
+pub fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        // `mode` only applies when the file is created; fix up an existing one
+        // that a previous version wrote with the default umask.
+        fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+        return Ok(());
+    }
+
+    #[cfg(not(unix))]
+    {
+        // Windows: the per-user AppData directory is already ACL'd to the user.
+        fs::write(path, bytes)?;
+        Ok(())
     }
 }
 
@@ -945,6 +1251,14 @@ pub fn navigate_to_server(app: &AppHandle, cfg: &ServerConfig) -> Result<(), Str
     if cfg.is_connected() {
         state.queue_inject(SessionInject::from(cfg));
     }
+    // Give this one origin the Settings ACL right before we hand it the
+    // WebView. Nothing is granted up front, so a page reached any other way
+    // (redirect, iframe, a link the user clicked) has no capability at all.
+    if let Some(origin) = origin_of_base_url(&cfg.base_url) {
+        if let Err(e) = crate::remote_ipc::grant_remote_capability(app, &origin) {
+            tracing::debug!(error = %e, origin, "remote capability already granted");
+        }
+    }
     let url = cfg.app_url().map_err(|e| e.to_string())?;
     window.navigate(url).map_err(|e| e.to_string())
 }
@@ -983,6 +1297,198 @@ pub fn navigate_to_sync_settings(app: &AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn prefs_with_pin(pin: &str) -> ClientPrefs {
+        let mut prefs = ClientPrefs::default();
+        prefs.set_pin(pin).expect("pin should be accepted");
+        prefs.app_lock_enabled = true;
+        prefs
+    }
+
+    fn dto_of(prefs: &ClientPrefs) -> ClientPrefsDto {
+        prefs.to_dto()
+    }
+
+    #[test]
+    fn pin_is_stored_salted_and_never_in_the_dto() {
+        let prefs = prefs_with_pin("1234");
+        let hash = prefs.app_lock_pin_hash.clone().unwrap();
+        assert!(!hash.contains("1234"), "hash must not embed the PIN");
+        assert!(prefs.app_lock_pin_salt.is_some(), "a salt must be stored");
+
+        let dto = dto_of(&prefs);
+        assert!(dto.app_lock_pin_set);
+        assert!(dto.app_lock_pin.is_none());
+        assert!(dto.current_app_lock_pin.is_none());
+
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(
+            !json.contains("1234"),
+            "the PIN must never reach the WebView: {json}"
+        );
+        assert!(!json.contains("app_lock_pin\":"), "no PIN field: {json}");
+    }
+
+    #[test]
+    fn the_same_pin_hashes_differently_under_a_fresh_salt() {
+        let a = prefs_with_pin("1234");
+        let b = prefs_with_pin("1234");
+        assert_ne!(a.app_lock_pin_salt, b.app_lock_pin_salt);
+        assert_ne!(a.app_lock_pin_hash, b.app_lock_pin_hash);
+        assert!(a.verify_pin("1234") && b.verify_pin("1234"));
+    }
+
+    #[test]
+    fn verify_pin_rejects_wrong_empty_and_oversized_candidates() {
+        let prefs = prefs_with_pin("1234");
+        assert!(prefs.verify_pin("1234"));
+        assert!(prefs.verify_pin(" 1234 "), "input is trimmed");
+        assert!(!prefs.verify_pin("12345"));
+        assert!(!prefs.verify_pin(""));
+        assert!(!prefs.verify_pin("   "));
+        assert!(!prefs.verify_pin(&"9".repeat(MAX_PIN_LEN + 1)));
+        assert!(!ClientPrefs::default().verify_pin("1234"), "no PIN set");
+    }
+
+    #[test]
+    fn set_pin_enforces_length_bounds() {
+        let mut prefs = ClientPrefs::default();
+        assert!(prefs.set_pin("123").is_err());
+        assert!(prefs.set_pin(&"1".repeat(MAX_PIN_LEN + 1)).is_err());
+        assert!(!prefs.has_pin(), "a rejected PIN must not be stored");
+        assert!(prefs.set_pin("1234").is_ok());
+        assert!(prefs.has_pin());
+    }
+
+    // Reaching `set_client_prefs` must not be enough to turn the lock off: a
+    // page that can call the bridge would otherwise unlock the app by writing
+    // `app_lock_enabled: false`.
+    #[test]
+    fn disabling_the_lock_requires_the_current_pin() {
+        let mut prefs = prefs_with_pin("1234");
+
+        let mut dto = dto_of(&prefs);
+        dto.app_lock_enabled = false;
+        assert_eq!(
+            prefs.clone().apply_dto(dto).unwrap_err(),
+            "Current PIN is incorrect"
+        );
+        assert!(prefs.app_lock_enabled && prefs.has_pin());
+
+        let mut dto = dto_of(&prefs);
+        dto.app_lock_enabled = false;
+        dto.current_app_lock_pin = Some("9999".into());
+        assert!(prefs.clone().apply_dto(dto).is_err());
+
+        let mut dto = dto_of(&prefs);
+        dto.app_lock_enabled = false;
+        dto.current_app_lock_pin = Some("1234".into());
+        prefs.apply_dto(dto).expect("correct PIN should disable");
+        assert!(!prefs.app_lock_enabled);
+        assert!(!prefs.has_pin(), "disabling clears the stored PIN");
+    }
+
+    #[test]
+    fn changing_the_pin_requires_the_current_pin() {
+        let mut prefs = prefs_with_pin("1234");
+
+        let mut dto = dto_of(&prefs);
+        dto.app_lock_pin = Some("5678".into());
+        assert!(prefs.clone().apply_dto(dto).is_err());
+        assert!(prefs.verify_pin("1234"), "the old PIN must survive");
+
+        let mut dto = dto_of(&prefs);
+        dto.app_lock_pin = Some("5678".into());
+        dto.current_app_lock_pin = Some("1234".into());
+        prefs.apply_dto(dto).expect("correct PIN should rotate");
+        assert!(prefs.verify_pin("5678"));
+        assert!(!prefs.verify_pin("1234"));
+    }
+
+    #[test]
+    fn unrelated_prefs_change_without_the_pin() {
+        let mut prefs = prefs_with_pin("1234");
+        let mut dto = dto_of(&prefs);
+        dto.wifi_only = false;
+        dto.enable_logs = false;
+        prefs.apply_dto(dto).expect("no PIN needed for other fields");
+        assert!(!prefs.wifi_only);
+        assert!(!prefs.enable_logs);
+        assert!(prefs.app_lock_enabled && prefs.verify_pin("1234"));
+    }
+
+    #[test]
+    fn the_lock_cannot_be_enabled_without_a_pin() {
+        let mut prefs = ClientPrefs::default();
+        let mut dto = dto_of(&prefs);
+        dto.app_lock_enabled = true;
+        assert!(prefs.apply_dto(dto).is_err());
+        assert!(!prefs.app_lock_enabled);
+    }
+
+    #[test]
+    fn cache_limit_is_clamped_to_the_supported_range() {
+        let mut prefs = ClientPrefs::default();
+        let mut dto = dto_of(&prefs);
+        dto.cache_limit_bytes = u64::MAX;
+        prefs.apply_dto(dto).unwrap();
+        assert_eq!(prefs.cache_limit_bytes, MAX_CACHE_LIMIT_BYTES);
+
+        let mut dto = dto_of(&prefs);
+        dto.cache_limit_bytes = 1;
+        prefs.apply_dto(dto).unwrap();
+        assert_eq!(prefs.cache_limit_bytes, MIN_CACHE_LIMIT_BYTES);
+    }
+
+    // Prefs written by older builds carry a plaintext `app_lock_pin`. It has to
+    // be rehashed on load and dropped from the file, not kept alongside.
+    #[test]
+    fn a_legacy_plaintext_pin_is_migrated_to_a_hash() {
+        let stored = r#"{"wifi_only":true,"app_lock_enabled":true,"app_lock_pin":"1234"}"#;
+        let mut prefs: ClientPrefs = serde_json::from_str(stored).unwrap();
+        assert!(prefs.migrate_legacy_pin());
+        assert!(prefs.has_pin());
+        assert!(prefs.verify_pin("1234"));
+
+        let json = serde_json::to_string(&prefs).unwrap();
+        assert!(
+            !json.contains("1234"),
+            "the plaintext PIN must not be rewritten to disk: {json}"
+        );
+        assert!(!prefs.migrate_legacy_pin(), "migration runs once");
+    }
+
+    #[test]
+    fn an_unusable_legacy_pin_turns_the_lock_off_instead_of_leaving_it_open() {
+        let stored = r#"{"wifi_only":true,"app_lock_enabled":true,"app_lock_pin":"  "}"#;
+        let mut prefs: ClientPrefs = serde_json::from_str(stored).unwrap();
+        assert!(prefs.migrate_legacy_pin());
+        assert!(!prefs.has_pin());
+        assert!(
+            !prefs.app_lock_enabled,
+            "a lock with no verifiable PIN must not stay on"
+        );
+    }
+
+    #[test]
+    fn trusted_ipc_origins_reject_null_and_empty() {
+        assert!(!SHELL_ORIGINS.contains(&""));
+        assert!(!SHELL_ORIGINS.contains(&"null"));
+        assert!(SHELL_ORIGINS.contains(&"tauri://localhost"));
+    }
+
+    #[test]
+    fn origin_of_base_url_drops_path_and_keeps_port() {
+        assert_eq!(
+            origin_of_base_url("http://192.168.1.5:8080/files?tab=1").as_deref(),
+            Some("http://192.168.1.5:8080")
+        );
+        assert_eq!(
+            origin_of_base_url("https://sarca.example.com/").as_deref(),
+            Some("https://sarca.example.com")
+        );
+        assert_eq!(origin_of_base_url("not a url"), None);
+    }
 
     #[test]
     fn session_inject_is_pinned_to_the_server_origin() {
