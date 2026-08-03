@@ -7,6 +7,8 @@ import apiRequest, {
 	API_BASE,
 } from './request'
 import { alertStore } from '../components/AlertStack'
+import { makeThumbBlob } from '../common/thumbMaker'
+import { putCachedThumb } from '../common/previewCache'
 
 /////////////////////////////////////////////////////////////
 ////  USERS
@@ -472,13 +474,30 @@ const uploadFile = async (storage_id, path, file, onProgress, options = {}) => {
 	}
 	form.append('file', file, basename)
 
-	return await apiMultipartRequest(
+	// Build the grid thumbnail here, from the picture already in memory, and ship
+	// it with the upload. The server stores it as-is: it never decodes the photo,
+	// and this client never downloads back a tile it just made.
+	const thumb = await makeThumbBlob(file)
+	if (thumb) form.append('thumb', thumb, 'thumb.jpg')
+
+	const result = await apiMultipartRequest(
 		`/storages/${storage_id}/files/upload`,
 		getAuthToken(),
 		form,
 		onProgress,
 		options,
 	)
+
+	if (thumb) {
+		const logicalPath = [String(path ?? '').replace(/\/+$/, ''), basename]
+			.filter(Boolean)
+			.join('/')
+		// Nothing to invalidate on a miss: an entry under a path the server
+		// renamed (conflict suffix) is simply never read.
+		putCachedThumb(storage_id, logicalPath, thumb).catch(() => {})
+	}
+
+	return result
 }
 
 /**

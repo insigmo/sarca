@@ -5,7 +5,7 @@ use super::storage_workers_scheduler::StorageWorkersScheduler;
 use crate::{
     common::{
         channels::{UploadFileData, UploadProgressEvent, emit_upload_progress},
-        preview_cache::PreviewCache,
+        media_cache::MediaCache,
         telegram_api::bot_api::{TelegramBotApi, UploadFilePartRequest},
         types::ChatId,
     },
@@ -13,6 +13,7 @@ use crate::{
     models::{
         chunk_replicas::ChunkReplica,
         file_chunks::FileChunk,
+        files::File,
         storage_channels::StorageChannel,
     },
     repositories::{
@@ -21,7 +22,7 @@ use crate::{
         storage_channels::StorageChannelsRepository,
         storages::StoragesRepository,
     },
-    services::thumbnails,
+    services::{thumbnails, thumbnails::ThumbAndPreview},
 };
 
 pub struct StorageManagerService<'d> {
@@ -37,11 +38,11 @@ pub struct StorageManagerService<'d> {
 }
 
 enum PreviewSource {
-    /// A video keyframe already extracted while building the thumb — use
-    /// it directly, no second ffmpeg run.
+    /// Built alongside the thumbnail off the same decode (image) or the same
+    /// extracted keyframe (video) — use it directly, no second pass.
     Ready(Vec<u8>),
-    /// An image with no precomputed bytes — generate a preview from the
-    /// original on disk.
+    /// An image whose thumbnail step produced nothing (failed, or the file was
+    /// uploaded before previews were derived there) — generate from disk.
     NeedsGeneration,
     /// Not an image and nothing precomputed (e.g. video keyframe
     /// extraction failed) — no preview for this file.
@@ -193,27 +194,42 @@ impl<'d> StorageManagerService<'d> {
         let result = self.replicas_repo.insert_batch(replicas).await;
 
         if result.is_ok() {
-            let video_preview = match self
-                .maybe_upload_thumb(data.file_id, storage.id, primary.chat_id, &data.file_path)
-                .await
-            {
-                Ok(preview) => preview,
-                Err(e) => {
-                    tracing::warn!("thumbnail upload failed for {}: {e}", data.file_id);
-                    None
+            // Both derived assets need the same row (logical path, size, chunk size);
+            // read it once and hand it down instead of querying per asset.
+            match self.files_repo.get_by_id(data.file_id).await {
+                Ok(file) => {
+                    let derived_preview = match self
+                        .maybe_upload_thumb(
+                            &file,
+                            storage.id,
+                            primary.chat_id,
+                            &data.file_path,
+                            data.client_thumb,
+                        )
+                        .await
+                    {
+                        Ok(preview) => preview,
+                        Err(e) => {
+                            tracing::warn!("thumbnail upload failed for {}: {e}", data.file_id);
+                            None
+                        },
+                    };
+                    if let Err(e) = self
+                        .maybe_upload_preview(
+                            &file,
+                            storage.id,
+                            primary.chat_id,
+                            &data.file_path,
+                            derived_preview,
+                        )
+                        .await
+                    {
+                        tracing::warn!("preview upload failed for {}: {e}", data.file_id);
+                    }
                 },
-            };
-            if let Err(e) = self
-                .maybe_upload_preview(
-                    data.file_id,
-                    storage.id,
-                    primary.chat_id,
-                    &data.file_path,
-                    video_preview,
-                )
-                .await
-            {
-                tracing::warn!("preview upload failed for {}: {e}", data.file_id);
+                Err(e) => {
+                    tracing::warn!("derived assets skipped for {}: {e}", data.file_id);
+                },
             }
             // Mark uploaded here so a client disconnect after Telegram finishes (oneshot
             // already closed) still leaves a visible file instead of a stale spool row.
@@ -226,27 +242,44 @@ impl<'d> StorageManagerService<'d> {
         result
     }
 
+    /// Store the grid thumbnail. Returns the screen-sized preview when one was
+    /// derived on the way (video keyframe, or the fallback decode below).
+    ///
+    /// Thumbnails belong to the client: it holds the picture already, so it
+    /// downscales and sends the tile with the upload. The server only decodes
+    /// when nothing arrived — a video or PDF, an API client, an old build.
     async fn maybe_upload_thumb(
         &self,
-        file_id: Uuid,
+        file: &File,
         storage_id: Uuid,
         chat_id: ChatId,
         file_path: &std::path::Path,
+        client_thumb: Option<Vec<u8>>,
     ) -> SarcaResult<Option<Vec<u8>>> {
-        let file = self.files_repo.get_by_id(file_id).await?;
+        let file_id = file.id;
 
-        let result = match thumbnails::generate(
-            file_path,
-            &file.path,
-            file.chunk_size_bytes.and_then(|n| u64::try_from(n).ok()).unwrap_or(u64::MAX),
-        )
-        .await
-        {
-            Ok(Some(result)) => result,
-            Ok(None) => return Ok(None),
-            Err(e) => {
-                tracing::warn!("thumbnail generation failed: {e}");
-                return Ok(None);
+        let result = match client_thumb {
+            Some(thumb) => {
+                ThumbAndPreview {
+                    thumb,
+                    preview: None,
+                }
+            },
+            None => {
+                match thumbnails::generate(
+                    file_path,
+                    &file.path,
+                    file.chunk_size_bytes.and_then(|n| u64::try_from(n).ok()).unwrap_or(u64::MAX),
+                )
+                .await
+                {
+                    Ok(Some(result)) => result,
+                    Ok(None) => return Ok(None),
+                    Err(e) => {
+                        tracing::warn!("thumbnail generation failed: {e}");
+                        return Ok(None);
+                    },
+                }
             },
         };
 
@@ -274,16 +307,16 @@ impl<'d> StorageManagerService<'d> {
     /// re-downloading every chunk of the original and re-encoding it.
     async fn maybe_upload_preview(
         &self,
-        file_id: Uuid,
+        file: &File,
         storage_id: Uuid,
         chat_id: ChatId,
         file_path: &std::path::Path,
-        precomputed_video_preview: Option<Vec<u8>>,
+        precomputed_preview: Option<Vec<u8>>,
     ) -> SarcaResult<()> {
-        let file = self.files_repo.get_by_id(file_id).await?;
+        let file_id = file.id;
 
         let jpeg = match resolve_preview_bytes(
-            precomputed_video_preview,
+            precomputed_preview,
             thumbnails::is_preview_image(&file.path),
         ) {
             PreviewSource::Ready(bytes) => bytes,
@@ -299,8 +332,8 @@ impl<'d> StorageManagerService<'d> {
             },
         };
 
-        let cache = PreviewCache::new(self.work_dir);
-        let cache_key = PreviewCache::cache_key(storage_id, &file.path);
+        let cache = MediaCache::previews(self.work_dir);
+        let cache_key = cache.key(storage_id, &file.path);
         if let Err(e) = cache.put(&cache_key, &jpeg).await {
             tracing::warn!("preview cache warm skipped for {}: {e}", file.path);
         }

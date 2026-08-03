@@ -23,7 +23,7 @@ import VisibilityIcon from '@suid/icons-material/Visibility'
 
 import API from '../../api'
 import { convertSize } from '../../common/size_converter'
-import { enqueueThumbFetch } from '../../common/thumbQueue'
+import { loadThumb } from '../../common/previewLoader'
 import FileTypeIcon from '../../components/FileTypeIcon'
 import FileViewer from '../../components/FileViewer'
 import { alertStore } from '../../components/AlertStack'
@@ -145,10 +145,12 @@ const PublicShare = () => {
 		for (const el of list) {
 			if (!el.is_file || !el.has_thumb) continue
 			const path = el.path
-			enqueueThumbFetch(
-				(signal) => API.publicShares.thumbPublicShare(t, path, signal),
-				{ signal: ac.signal },
-			)
+			loadThumb({
+				scope: `share:${t}`,
+				path,
+				fetchBlob: (signal) => API.publicShares.thumbPublicShare(t, path, signal),
+				signal: ac.signal,
+			})
 				.then((blob) => {
 					if (cancelled) return
 					const url = URL.createObjectURL(blob)

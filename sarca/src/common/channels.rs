@@ -26,6 +26,8 @@ pub struct UploadFileData {
     pub chunk_size: usize,
     /// Optional live progress toward Telegram (bytes within the whole file).
     pub progress: Option<mpsc::Sender<UploadProgressEvent>>,
+    /// Grid thumbnail (JPEG) built by the uploading client, if it sent one.
+    pub client_thumb: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

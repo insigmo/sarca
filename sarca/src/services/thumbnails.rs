@@ -26,12 +26,15 @@ pub struct ThumbAndPreview {
 }
 
 fn build_thumb_and_preview(raw: &[u8], include_preview: bool) -> Result<ThumbAndPreview, String> {
-    let thumb = resize_to_jpeg(raw, THUMB_MAX_EDGE, THUMB_JPEG_QUALITY)?;
-    let preview = if include_preview {
-        Some(resize_to_jpeg(raw, PREVIEW_MAX_EDGE, PREVIEW_JPEG_QUALITY)?)
-    } else {
-        None
-    };
+    let img = decode_guarded(raw)?;
+    // Downscale once to preview size and take the thumbnail from *that*: at
+    // 128px the result is indistinguishable from one built off the original,
+    // and it saves a second pass over the full-resolution pixels (plus, since
+    // both sizes now come from one decode, a second decode of the original).
+    let preview_img = resize_within(img, PREVIEW_MAX_EDGE);
+    let thumb = encode_jpeg(&resize_within_ref(&preview_img, THUMB_MAX_EDGE), THUMB_JPEG_QUALITY)?;
+    let preview =
+        if include_preview { Some(encode_jpeg(&preview_img, PREVIEW_JPEG_QUALITY)?) } else { None };
     Ok(ThumbAndPreview {
         thumb,
         preview,
@@ -71,7 +74,10 @@ pub async fn generate(
         },
     };
 
-    let include_preview = kind == ThumbKind::Video;
+    // Images and videos both get their screen-sized preview here, off the decode
+    // (or the ffmpeg keyframe) the thumbnail already paid for. PDFs have no
+    // preview document, so stop at the thumbnail.
+    let include_preview = matches!(kind, ThumbKind::Image | ThumbKind::Video);
     let result =
         tokio::task::spawn_blocking(move || build_thumb_and_preview(&raw, include_preview))
             .await
@@ -268,7 +274,7 @@ async fn generate_pdf(file_path: &Path) -> Result<Vec<u8>, String> {
 /// up memory during `image::load_from_memory`.
 const MAX_DECODE_PIXELS: u64 = 40_000_000; // ~40MP, well above any real photo/scan
 
-fn resize_to_jpeg(raw: &[u8], max_edge: u32, quality: u8) -> Result<Vec<u8>, String> {
+fn decode_guarded(raw: &[u8]) -> Result<image::DynamicImage, String> {
     if let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(raw)).with_guessed_format() {
         if let Ok((w, h)) = reader.into_dimensions() {
             let pixels = u64::from(w) * u64::from(h);
@@ -277,18 +283,39 @@ fn resize_to_jpeg(raw: &[u8], max_edge: u32, quality: u8) -> Result<Vec<u8>, Str
             }
         }
     }
-    let img = image::load_from_memory(raw).map_err(|e| format!("decode image: {e}"))?;
+    image::load_from_memory(raw).map_err(|e| format!("decode image: {e}"))
+}
+
+fn resize_within(img: image::DynamicImage, max_edge: u32) -> image::DynamicImage {
     let (w, h) = img.dimensions();
-    let resized = if w <= max_edge && h <= max_edge {
+    if w <= max_edge && h <= max_edge {
         img
     } else {
         img.resize(max_edge, max_edge, FilterType::Triangle)
-    };
+    }
+}
+
+/// Same as [`resize_within`] but keeps the source image, so one decode can feed
+/// several output sizes. Only copies when the source is already small enough.
+fn resize_within_ref(img: &image::DynamicImage, max_edge: u32) -> image::DynamicImage {
+    let (w, h) = img.dimensions();
+    if w <= max_edge && h <= max_edge {
+        img.clone()
+    } else {
+        img.resize(max_edge, max_edge, FilterType::Triangle)
+    }
+}
+
+fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut cursor = std::io::Cursor::new(&mut out);
     let encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
-    resized.write_with_encoder(encoder).map_err(|e| format!("encode jpeg: {e}"))?;
+    img.write_with_encoder(encoder).map_err(|e| format!("encode jpeg: {e}"))?;
     Ok(out)
+}
+
+fn resize_to_jpeg(raw: &[u8], max_edge: u32, quality: u8) -> Result<Vec<u8>, String> {
+    encode_jpeg(&resize_within(decode_guarded(raw)?, max_edge), quality)
 }
 
 async fn tempfile_dir() -> Result<PathBuf, String> {
@@ -345,6 +372,19 @@ mod tests {
         let decoded = image::load_from_memory(&jpeg).unwrap();
         assert!(decoded.width() <= THUMB_MAX_EDGE);
         assert!(decoded.height() <= THUMB_MAX_EDGE);
+    }
+
+    #[tokio::test]
+    async fn generate_returns_preview_for_images_without_a_second_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.png");
+        std::fs::write(&path, sample_png(3000, 2000)).unwrap();
+
+        let result = generate(&path, "photo.png", u64::MAX).await.unwrap().unwrap();
+
+        let preview = image::load_from_memory(&result.preview.unwrap()).unwrap();
+        assert!(preview.width() <= PREVIEW_MAX_EDGE && preview.height() <= PREVIEW_MAX_EDGE);
+        assert!(preview.width() > THUMB_MAX_EDGE);
     }
 
     #[test]
