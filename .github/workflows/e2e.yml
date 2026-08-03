@@ -176,16 +176,6 @@ jobs:
           name: ui-dist
           path: ui/dist
 
-      - uses: actions/download-artifact@v7
-        with:
-          name: server-bin
-          path: target/release
-
-      - uses: actions/download-artifact@v7
-        with:
-          name: sync-headless
-          path: target/debug/examples
-
       - name: Install GTK/WebKit and Xvfb
         run: |
           sudo apt-get update
@@ -199,6 +189,22 @@ jobs:
         with:
           workspaces: . -> target
           shared-key: e2e-gui
+
+      # These two land inside `target/`, so they must be downloaded *after*
+      # rust-cache restores it. On a cache hit the restore overwrites the
+      # directory and the prebuilt binaries vanish, which is why the next step
+      # intermittently failed with "chmod: cannot access 'target/release/sarca'"
+      # -- only on runs that hit the cache, so it looked flaky rather than
+      # ordered wrong.
+      - uses: actions/download-artifact@v7
+        with:
+          name: server-bin
+          path: target/release
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: sync-headless
+          path: target/debug/examples
 
       - uses: pnpm/action-setup@v6
         with:
