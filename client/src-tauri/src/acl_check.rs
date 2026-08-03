@@ -12,7 +12,7 @@
 //! wildcard-free, and the runtime grant must resolve real permission
 //! identifiers for exactly one origin.
 
-use crate::remote_ipc::REMOTE_SETTINGS_COMMANDS;
+use crate::remote_ipc::{REMOTE_SETTINGS_COMMANDS, SHELL_ONLY_COMMANDS};
 
 /// Permission identifiers that must appear in `capabilities/default.json`.
 pub const REQUIRED_ALLOW_PERMISSIONS: &[&str] = &[
@@ -49,12 +49,6 @@ pub const REQUIRED_ALLOW_PERMISSIONS: &[&str] = &[
     "allow-cache-get-preview",
     "allow-cache-put-preview",
 ];
-
-/// Commands the shell may call but the remote Settings UI may not.
-///
-/// `connect` rewrites the server URL and `get_url_history` leaks every server
-/// the user ever used, so neither belongs in a page-reachable grant.
-pub const SHELL_ONLY_COMMANDS: &[&str] = &["connect", "get_url_history"];
 
 fn allow_perm_for_command(cmd: &str) -> String {
     format!("allow-{}", cmd.replace('_', "-"))
