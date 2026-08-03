@@ -9,7 +9,8 @@ import { useNavigate, useParams } from '@solidjs/router'
 
 import API from '../api'
 import { convertSize } from '../common/size_converter'
-import { enqueueThumbFetch } from '../common/thumbQueue'
+import { loadThumb } from '../common/previewLoader'
+import { fileKind } from '../common/fileKind'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
 import FileTypeIcon from './FileTypeIcon'
@@ -26,6 +27,7 @@ const LONG_PRESS_MS = 520
  * @property {string} storageId
  * @property {() => {}} onDelete
  * @property {(file: import("../api").FSElement) => void} [onOpen]
+ * @property {(file: import("../api").FSElement) => void} [onPrefetch] Hover/press hint that this file is about to open
  * @property {boolean} [trashMode]
  * @property {boolean} [flatMode] Favorites / Recent: open files only, no folder browse
  * @property {'tiles' | 'list'} [layout]
@@ -189,6 +191,15 @@ const FSListItem = (props) => {
 		props.onOpen?.(props.fsElement)
 	}
 
+	/**
+	 * Hover / press-down is the earliest reliable signal that this file is about
+	 * to be opened, and it buys the preview fetch a head start over the click.
+	 */
+	const requestPrefetch = () => {
+		if (isParentNav() || props.trashMode) return
+		props.onPrefetch?.(props.fsElement)
+	}
+
 	const normalizedPath = () => {
 		const p = props.fsElement.path
 		if (props.fsElement.is_file) return p
@@ -203,11 +214,20 @@ const FSListItem = (props) => {
 
 		setThumbUrl(null)
 
-		if (el.is_file && el.has_thumb) {
-			enqueueThumbFetch(
-				(signal) => API.files.thumb(props.storageId, el.path, signal),
-				{ signal: ac.signal },
-			)
+		// A photo this client just uploaded already has its tile in the local
+		// store, even while `has_thumb` is still false because the thumbnail has
+		// not finished its trip to Telegram. Look there for images either way;
+		// only the network fetch waits for the server to admit it has one.
+		const localOnly = !el.has_thumb && fileKind(el.name, el.is_file) === 'image'
+
+		if (el.is_file && (el.has_thumb || localOnly)) {
+			loadThumb({
+				scope: props.storageId,
+				path: el.path,
+				fetchBlob: (signal) => API.files.thumb(props.storageId, el.path, signal),
+				signal: ac.signal,
+				cacheOnly: localOnly,
+			})
 				.then((blob) => {
 					if (revoked) return
 					objectUrl = URL.createObjectURL(blob)
@@ -469,6 +489,8 @@ const FSListItem = (props) => {
 						onClick={handleItemClick}
 						onDblClick={handleItemDblClick}
 						onContextMenu={handleContextMenu}
+						onPointerEnter={requestPrefetch}
+						onPointerDown={requestPrefetch}
 						onTouchStart={handleTouchStart}
 						onTouchEnd={handleTouchEnd}
 						onTouchMove={handleTouchMove}
@@ -560,6 +582,8 @@ const FSListItem = (props) => {
 					onClick={handleItemClick}
 					onDblClick={handleItemDblClick}
 					onContextMenu={handleContextMenu}
+					onPointerEnter={requestPrefetch}
+					onPointerDown={requestPrefetch}
 					onTouchStart={handleTouchStart}
 					onTouchEnd={handleTouchEnd}
 					onTouchMove={handleTouchMove}
