@@ -740,22 +740,21 @@ class ClientApp:
         """
         return self.eval_js(self._row_js(name, body)) == "yes"
 
-    def sidebar_click(self, label: str) -> None:
+    def sidebar_click(self, label: str, timeout_s: float = 25.0) -> None:
         """Click a sidebar entry by its aria-label, drawer or rail.
 
         Below 841px the desktop rail is `display: none` and the only copy of the
         sidebar is a drawer that starts closed, so the entry is in the DOM but
-        unclickable. Open the drawer first whenever the rail is not on screen.
+        unclickable. Rather than measure the window, try the entry and fall back
+        to the burger — that also covers a rail that is still mounting.
         """
-        visible = (
-            "(() => {"
-            " const el = document.querySelector('.files-sidebar--desktop');"
-            " return el && el.offsetParent !== null ? 'rail' : 'drawer';"
-            "})()"
-        )
-        if self.eval_js(visible) == "drawer":
-            self.click('.files-page__nav-toggle', required=False)
-        self.click(f'.files-sidebar__item[aria-label="{label}"]')
+        selector = f'.files-sidebar__item[aria-label="{label}"]'
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.click(selector, required=False, timeout_s=1.0):
+                return
+            self.click(".files-page__nav-toggle", required=False, timeout_s=1.0)
+        raise PilotError(f"the sidebar never offered {label!r}")
 
     def open_section(self, label: str) -> None:
         """Switch the file browser to All files / Favorites / Recent / Shared / Trash."""
