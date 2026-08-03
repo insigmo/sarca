@@ -227,6 +227,9 @@ jobs:
           bash scripts/patch-android-http.sh src-tauri/gen/android
           python3 -c "import json,pathlib; p=pathlib.Path('src-tauri/capabilities/default.json'); data=json.loads(p.read_text()); data['permissions']=[x for x in data.get('permissions',[]) if not str(x).startswith('process:')]; p.write_text(json.dumps(data,indent=2)+'\n')"
           mkdir -p src-tauri/gen/android
+          # Throwaway public keystore: this is a per-push build artifact that is
+          # never published as a release. `release.yml` requires the private
+          # ANDROID_KEYSTORE_* secrets instead.
           KS_PATH="${GITHUB_WORKSPACE}/client/mobile/sarca-sideload.p12"
           {
             echo "storePassword=sarca-sideload"
@@ -238,6 +241,10 @@ jobs:
 
       - name: Package APK
         if: success()
+        env:
+          # CI smoke artifact only, never a release download — see the warning in
+          # scripts/sign-android-apk.sh.
+          SARCA_ALLOW_PUBLIC_KEYSTORE: "1"
         run: |
           set -euo pipefail
           mkdir -p dist

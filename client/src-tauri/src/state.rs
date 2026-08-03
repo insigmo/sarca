@@ -1156,7 +1156,12 @@ pub fn is_shell_url(url: &Url) -> bool {
         "tauri" | "asset" => true,
         "http" | "https" => match url.host_str() {
             Some("tauri.localhost") | Some("asset.localhost") => true,
-            // Vite `devUrl` in tauri.conf.json (port 1420) only.
+            // Vite `devUrl` in tauri.conf.json (port 1420). Debug builds only:
+            // in a shipped binary this would hand full shell trust — and with it
+            // `connect`, `update_session` and `get_url_history` — to any local
+            // process that manages to bind port 1420 before the user browses to
+            // it. A release bundle never loads the dev server.
+            #[cfg(debug_assertions)]
             Some("localhost") | Some("127.0.0.1") => url.port() == Some(1420),
             _ => false,
         },
@@ -1514,7 +1519,16 @@ mod tests {
         assert!(is_shell_url(
             &Url::parse("https://tauri.localhost/").unwrap()
         ));
-        assert!(is_shell_url(&Url::parse("http://localhost:1420/").unwrap()));
+        // The Vite dev server is shell-trusted only in a debug build; a release
+        // bundle must not trust whatever is listening on port 1420.
+        assert_eq!(
+            is_shell_url(&Url::parse("http://localhost:1420/").unwrap()),
+            cfg!(debug_assertions)
+        );
+        assert_eq!(
+            is_shell_url(&Url::parse("http://127.0.0.1:1420/").unwrap()),
+            cfg!(debug_assertions)
+        );
         // Sarca server on localhost must NOT be treated as the client shell.
         assert!(!is_shell_url(
             &Url::parse("http://127.0.0.1:8080/storages").unwrap()

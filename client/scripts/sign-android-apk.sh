@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# Sign an Android APK with either ANDROID_KEYSTORE_* secrets or the committed sideload keystore.
+# Sign an Android APK with the ANDROID_KEYSTORE_* secrets.
 # Usage: sign-android-apk.sh <input.apk> <output.apk>
+#
+# The committed `mobile/sarca-sideload.p12` is a throwaway key: it lives in this
+# repository together with its password, so anyone can sign an APK with it.
+# Android identifies an app by its signer, so a forged APK signed with that key
+# installs over a real Sarca as an "update" and inherits its data directory,
+# granted permissions and MediaStore access. It is therefore usable only for
+# local and CI smoke builds, and only when the caller opts in explicitly with
+# SARCA_ALLOW_PUBLIC_KEYSTORE=1. Anything distributed to users must be signed
+# with a private key.
 set -euo pipefail
 
 IN="${1:?input apk}"
@@ -18,12 +27,29 @@ if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" ]]; then
   ALIAS="${ANDROID_KEY_ALIAS:-sarca}"
   STORE_PASS="${ANDROID_KEYSTORE_PASSWORD:?ANDROID_KEYSTORE_PASSWORD required with ANDROID_KEYSTORE_BASE64}"
   KEY_PASS="${ANDROID_KEY_PASSWORD:-$STORE_PASS}"
-else
+elif [[ "${SARCA_ALLOW_PUBLIC_KEYSTORE:-0}" == "1" ]]; then
   KS="$DEFAULT_KS"
   ALIAS="$DEFAULT_ALIAS"
   STORE_PASS="$DEFAULT_PASS"
   KEY_PASS="$DEFAULT_PASS"
-  echo "Using committed sideload keystore: $KS"
+  echo "WARNING: signing with the PUBLIC committed sideload keystore: $KS" >&2
+  echo "WARNING: the private key and password are in the repository. Never distribute this APK." >&2
+else
+  cat >&2 <<'EOF'
+ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD are not set.
+
+Refusing to sign with the committed sideload keystore: its private key and
+password are public, so the resulting APK can be forged by anyone and Android
+would accept the forgery as an update of the installed app.
+
+  * To ship: generate a private release key and export it to the environment.
+      keytool -genkeypair -v -keystore release.p12 -storetype PKCS12 \
+        -alias sarca -keyalg RSA -keysize 4096 -validity 10000
+      export ANDROID_KEYSTORE_BASE64="$(base64 -w0 release.p12)"
+      export ANDROID_KEYSTORE_PASSWORD=...
+  * For a local throwaway build only: SARCA_ALLOW_PUBLIC_KEYSTORE=1
+EOF
+  exit 1
 fi
 
 test -f "$IN"

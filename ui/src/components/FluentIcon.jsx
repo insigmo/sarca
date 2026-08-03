@@ -109,8 +109,13 @@ export const fluentIcons = {
 /**
  * Inline Fluent System Icon (SVG string).
  *
+ * `name` indexes the bundled icon table above and is the only way to reach the
+ * `innerHTML` sink. The component deliberately takes no raw-markup prop: an
+ * `src`-style escape hatch would render caller-supplied SVG unsanitized, and
+ * SVG carries script (`<script>`, `on*`, `<foreignObject>`). Anything dynamic
+ * must go through `sanitizeHtml` at the call site instead.
+ *
  * @param {{
- *   src?: string,
  *   name?: keyof typeof fluentIcons | string,
  *   size?: number,
  *   class?: string,
@@ -122,8 +127,9 @@ export const fluentIcons = {
  */
 const FluentIcon = (props) => {
 	const svg = () => {
-		if (props.src) return props.src
-		if (props.name && fluentIcons[props.name]) return fluentIcons[props.name]
+		if (props.name && Object.hasOwn(fluentIcons, props.name)) {
+			return fluentIcons[props.name]
+		}
 		return ''
 	}
 
