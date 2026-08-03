@@ -596,6 +596,7 @@ impl FilesRouter {
             || is_inline_previewable(&content_type);
         let disposition =
             content_disposition_value(if want_inline { "inline" } else { "attachment" }, filename);
+        let active = is_active_content(&content_type);
 
         let range =
             parse_bytes_range(headers.get(header::RANGE).and_then(|v| v.to_str().ok()), file_size);
@@ -621,6 +622,7 @@ impl FilesRouter {
             headers_mut.insert(header::CONTENT_DISPOSITION, disposition);
             headers_mut.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
             headers_mut.insert(header::CONTENT_LENGTH, "0".parse().unwrap());
+            apply_user_content_headers(headers_mut, active);
             return Ok(response);
         }
 
@@ -748,6 +750,7 @@ impl FilesRouter {
                 format!("bytes {start}-{end}/{file_size}").parse().unwrap(),
             );
         }
+        apply_user_content_headers(headers_mut, active);
 
         Ok(response)
     }
@@ -832,6 +835,13 @@ impl FilesRouter {
             for file in files {
                 let entry_name = file.path.strip_prefix(&prefix).unwrap_or(&file.path).to_owned();
                 if entry_name.is_empty() {
+                    continue;
+                }
+                // Never emit a zip-slip entry: a stored path containing `..`
+                // would escape the extraction directory on the client.
+                if entry_name.starts_with('/')
+                    || entry_name.split('/').any(|seg| seg == ".." || seg == ".")
+                {
                     continue;
                 }
 
@@ -1406,6 +1416,48 @@ fn content_disposition_value(disposition: &str, filename: &str) -> header::Heade
 }
 
 #[cfg(test)]
+mod active_content_tests {
+    use axum::http::{HeaderMap, header};
+
+    use super::{apply_user_content_headers, is_active_content};
+
+    #[test]
+    fn script_capable_types_are_treated_as_active() {
+        for ct in [
+            "text/html",
+            "text/html; charset=utf-8",
+            "IMAGE/SVG+XML",
+            "application/xhtml+xml",
+            "application/xml",
+        ] {
+            assert!(is_active_content(ct), "{ct} must be treated as active content");
+        }
+    }
+
+    #[test]
+    fn media_types_stay_inert() {
+        for ct in ["image/png", "video/mp4", "audio/mpeg", "application/pdf", "text/plain"] {
+            assert!(!is_active_content(ct), "{ct} must not be treated as active content");
+        }
+    }
+
+    #[test]
+    fn active_content_is_sandboxed_and_never_sniffed() {
+        let mut headers = HeaderMap::new();
+        apply_user_content_headers(&mut headers, true);
+        assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+        let csp = headers.get(header::CONTENT_SECURITY_POLICY).unwrap().to_str().unwrap();
+        assert!(csp.starts_with("sandbox"), "sandbox must be first: {csp}");
+        assert!(!csp.contains("allow-scripts"), "sandbox must not re-enable scripts: {csp}");
+
+        let mut headers = HeaderMap::new();
+        apply_user_content_headers(&mut headers, false);
+        assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+        assert!(headers.get(header::CONTENT_SECURITY_POLICY).is_none());
+    }
+}
+
+#[cfg(test)]
 mod content_disposition_tests {
     use super::content_disposition_value;
 
@@ -1425,6 +1477,47 @@ mod content_disposition_tests {
         let s = v.to_str().unwrap();
         assert!(s.contains("filename*=UTF-8''"));
         assert!(s.contains("%D1%87"));
+    }
+}
+
+/// Whether the mime type is rendered by the browser as an *active* document,
+/// i.e. one that can run script in the origin that served it.
+///
+/// User-uploaded files are served from the application's own origin, so an
+/// uploaded `.html` or `.svg` would otherwise execute with full same-origin
+/// privileges (reading the caller's tokens from `localStorage`).
+fn is_active_content(content_type: &str) -> bool {
+    let base = content_type.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "text/html"
+            | "text/xhtml"
+            | "text/xml"
+            | "text/xsl"
+            | "image/svg+xml"
+            | "image/svg"
+            | "application/xhtml+xml"
+            | "application/xml"
+            | "application/mathml+xml"
+    )
+}
+
+/// Headers applied to every response that streams user-uploaded bytes.
+///
+/// `nosniff` stops the browser from upgrading an opaque type into an active
+/// one. `Content-Security-Policy: sandbox` (no `allow-scripts`) puts active
+/// documents into an opaque origin with scripting disabled, which neutralises
+/// stored XSS even when the file is opened by direct navigation. It is applied
+/// only to active types so that the PDF viewer and media playback keep working.
+fn apply_user_content_headers(headers: &mut HeaderMap, active: bool) {
+    headers.insert("x-content-type-options", header::HeaderValue::from_static("nosniff"));
+    if active {
+        headers.insert(
+            header::CONTENT_SECURITY_POLICY,
+            header::HeaderValue::from_static(
+                "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+            ),
+        );
     }
 }
 

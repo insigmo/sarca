@@ -8,6 +8,7 @@ import ListItemIcon from '@suid/material/ListItemIcon'
 import ListItemText from '@suid/material/ListItemText'
 
 import createLocalStore from '../../libs'
+import API from '../api'
 import { clearSession } from '../common/auth'
 import { settingsStore } from '../common/settings'
 import { isNativeClient } from '../common/nativeClient'
@@ -231,6 +232,8 @@ const FilesSidebar = (props) => {
 	}
 
 	const logout = () => {
+		// Revoke server-side first; the local clear must not wait on the network.
+		API.auth.logout()
 		props.onMobileClose?.()
 		navigate(clearSession(setStore))
 	}

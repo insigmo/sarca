@@ -75,6 +75,8 @@ const SettingsModal = () => {
 	const showUsersTab = () => isSuperuser()
 
 	const logout = () => {
+		// Revoke server-side first; the local clear must not wait on the network.
+		API.auth.logout()
 		closeSettings()
 		navigate(clearSession(setStore))
 	}

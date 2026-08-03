@@ -29,7 +29,10 @@ pub async fn init_db(db: &SqlitePool) {
             id                 BLOB PRIMARY KEY NOT NULL,
             email              TEXT NOT NULL UNIQUE,
             password_hash      TEXT,
-            email_verified_at  TEXT
+            email_verified_at  TEXT,
+            -- Unix seconds. Tokens issued at or before this instant are refused,
+            -- which is what makes password reset and logout evict live sessions.
+            sessions_valid_after INTEGER NOT NULL DEFAULT 0
         );
         ",
         "
@@ -390,6 +393,7 @@ async fn add_missing_columns(db: &SqlitePool) {
     for (table, column, definition) in [
         ("files", "preview_telegram_file_id", "TEXT"),
         ("files", "preview_telegram_message_id", "INTEGER"),
+        ("users", "sessions_valid_after", "INTEGER NOT NULL DEFAULT 0"),
     ] {
         let has_column: bool = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM pragma_table_info($1) WHERE name = $2",

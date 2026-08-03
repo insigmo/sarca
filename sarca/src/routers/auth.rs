@@ -35,6 +35,7 @@ impl AuthRouter {
         let protected = Router::new()
             .route("/me", get(Self::me))
             .route("/verify/request", post(Self::verify_request))
+            .route("/logout", post(Self::logout))
             .route_layer(middleware::from_fn_with_state(state.clone(), logged_in_required));
 
         Router::new()
@@ -69,6 +70,15 @@ impl AuthRouter {
         Extension(user): Extension<AuthUser>,
     ) -> Result<Json<MeSchema>, (StatusCode, String)> {
         AuthService::new(&state.db).me(&user, &state.config).await.map(Json).map_err(Into::into)
+    }
+
+    /// Revoke every token issued for the caller so far.
+    async fn logout(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+    ) -> Result<StatusCode, (StatusCode, String)> {
+        AuthService::new(&state.db).logout(&user).await?;
+        Ok(StatusCode::NO_CONTENT)
     }
 
     async fn verify_request(
