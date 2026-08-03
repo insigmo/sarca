@@ -25,6 +25,8 @@ pub enum SarcaError {
     StorageWorkerTokenConflict,
     #[error("not authenticated")]
     NotAuthenticated,
+    #[error("too many attempts, try again later")]
+    TooManyAttempts,
     #[error("forbidden")]
     Forbidden,
     #[error("[Telegram API] {0}")]
@@ -83,6 +85,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::CannotManageAccessOfYourself
             | SarcaError::TrashPathConflict => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
+            SarcaError::TooManyAttempts => (StatusCode::TOO_MANY_REQUESTS, e.to_string()),
             SarcaError::Forbidden | SarcaError::CannotDeleteSuperuser => {
                 (StatusCode::FORBIDDEN, e.to_string())
             },
@@ -121,3 +124,22 @@ impl From<reqwest::Error> for SarcaError {
 }
 
 pub type SarcaResult<T> = Result<T, SarcaError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn throttled_attempts_answer_429_not_401() {
+        let (status, body): (StatusCode, String) = SarcaError::TooManyAttempts.into();
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        // The message must not say whether the credential was right.
+        assert!(!body.contains("password"), "{body}");
+    }
+
+    #[test]
+    fn a_bad_credential_still_answers_401() {
+        let (status, _): (StatusCode, String) = SarcaError::NotAuthenticated.into();
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+}

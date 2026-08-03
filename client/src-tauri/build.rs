@@ -1,7 +1,10 @@
 fn main() {
     // Remote-origin Settings (http/https) go through Tauri invoke when
-    // `__TAURI_INTERNALS__` is injected via capabilities `remote.urls`.
+    // `__TAURI_INTERNALS__` is injected via a capability's `remote.urls`.
     // Those calls require explicit ACL allow-* permissions for every command.
+    // No capability file grants remote access any more: the connected server
+    // origin gets one built at runtime (`remote_ipc::grant_remote_capability`),
+    // which resolves these same identifiers.
     const COMMANDS: &[&str] = &[
         "platform_label",
         "device_label",
@@ -27,6 +30,7 @@ fn main() {
         "sync_transfer_queue",
         "get_client_prefs",
         "set_client_prefs",
+        "verify_app_lock_pin",
         "export_logs",
         "is_on_wifi",
         "get_about",

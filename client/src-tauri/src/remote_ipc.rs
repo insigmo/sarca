@@ -5,6 +5,17 @@
 //! 1. Uses `__TAURI_INTERNALS__.invoke` when remote ACL allows,
 //! 2. `fetch`es the `sarca-ipc` custom protocol, or
 //! 3. falls back to a cancelled navigation to `https://sarca.ipc/...`.
+//!
+//! # Trust boundary
+//!
+//! Both fallbacks sit outside the Tauri capability ACL, so this module is the
+//! only thing standing between a web page and the native command surface
+//! (`add_binding`, `update_session`, `export_logs`, `disconnect`, …). Every
+//! entry point must therefore establish the caller's origin and refuse anything
+//! that is not the connected Sarca server or the bundled shell — an iframe, an
+//! ad, a page the user was redirected to, a `data:` document. The responses
+//! echo exactly that one origin: a wildcard `Access-Control-Allow-Origin` would
+//! hand the whole bridge to any site the WebView ever loads.
 
 use serde_json::{json, Value};
 use tauri::{
@@ -14,6 +25,11 @@ use tauri::{
 
 use crate::commands;
 use crate::state::AppSyncState;
+
+/// Largest IPC body we parse. `cache_put_preview` carries base64 image data, so
+/// the limit has to clear a preview; everything above it is refused before it
+/// reaches `serde_json`.
+const MAX_IPC_BODY_BYTES: usize = 12 * 1024 * 1024;
 
 /// Every command the remote Settings Sync / Security / General UI may call.
 /// Keep in sync with `build.rs` AppManifest commands and `capabilities/default.json`.
@@ -27,6 +43,7 @@ pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "update_session",
     "get_client_prefs",
     "set_client_prefs",
+    "verify_app_lock_pin",
     "export_logs",
     "list_storages",
     "list_bindings",
@@ -54,6 +71,38 @@ pub fn is_dispatched_command(cmd: &str) -> bool {
     REMOTE_SETTINGS_COMMANDS.contains(&cmd)
 }
 
+/// `allow-…` permission identifier for a dispatched command.
+pub(crate) fn permission_for(cmd: &str) -> String {
+    format!("allow-{}", cmd.replace('_', "-"))
+}
+
+/// URL pattern that matches exactly one origin, at any path.
+pub(crate) fn origin_url_pattern(origin: &str) -> String {
+    format!("{}/*", origin.trim_end_matches('/'))
+}
+
+/// Grant the connected Sarca server — and only it — the ACL for the Settings
+/// commands.
+///
+/// `capabilities/default.json` used to carry `remote.urls: ["http://*:*/*",
+/// "https://*:*/*"]`, which handed `__TAURI_INTERNALS__.invoke` to every http(s)
+/// page the WebView ever loaded. The grant is now built from the origin the user
+/// actually connected to, is limited to the Settings command set (no `connect`,
+/// no `get_url_history`), and is applied to the `main` window only.
+pub fn grant_remote_capability(app: &AppHandle, origin: &str) -> Result<(), String> {
+    if origin.is_empty() {
+        return Ok(());
+    }
+    let mut builder = tauri::ipc::CapabilityBuilder::new(format!("remote-server:{origin}"))
+        .local(false)
+        .remote(origin_url_pattern(origin))
+        .window("main");
+    for cmd in REMOTE_SETTINGS_COMMANDS {
+        builder = builder.permission(permission_for(cmd));
+    }
+    app.add_capability(builder).map_err(|e| e.to_string())
+}
+
 fn arg_str(args: &Value, snake: &str, camel: &str) -> Option<String> {
     args.get(snake).or_else(|| args.get(camel)).and_then(|v| {
         if v.is_null() {
@@ -70,19 +119,78 @@ fn arg_value<'a>(args: &'a Value, snake: &str, camel: &str) -> Option<&'a Value>
     args.get(snake).or_else(|| args.get(camel))
 }
 
-fn cors_response(status: StatusCode, body: Vec<u8>, content_type: &str) -> Response<Vec<u8>> {
+/// Build a response for `origin`, which the caller has already verified.
+///
+/// `Access-Control-Allow-Origin` names that single origin (never `*`) and
+/// `Vary: Origin` keeps a cached reply from being replayed to another one.
+fn ipc_response(
+    status: StatusCode,
+    body: Vec<u8>,
+    content_type: &str,
+    origin: &str,
+) -> Response<Vec<u8>> {
     Response::builder()
         .status(status)
         .header(CONTENT_TYPE, content_type)
-        .header("Access-Control-Allow-Origin", "*")
-        .header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        .header(
-            "Access-Control-Allow-Headers",
-            "Content-Type, Authorization, X-Requested-With",
-        )
-        .header("Access-Control-Max-Age", "86400")
+        .header("Access-Control-Allow-Origin", origin)
+        .header("Vary", "Origin")
+        .header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        .header("Access-Control-Allow-Headers", "Content-Type")
+        .header("Access-Control-Max-Age", "600")
+        .header("Cache-Control", "no-store")
         .body(body)
         .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
+/// Reply to a caller we refuse to serve. Carries no CORS headers at all, so the
+/// requesting page cannot even read the status.
+fn denied_response() -> Response<Vec<u8>> {
+    Response::builder()
+        .status(StatusCode::FORBIDDEN)
+        .header(CONTENT_TYPE, "application/json")
+        .header("Cache-Control", "no-store")
+        .body(br#"{"ok":false,"error":"origin not allowed"}"#.to_vec())
+        .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
+/// Resolve the origin a custom-protocol request came from, and return it only
+/// when it is allowed to drive native commands.
+///
+/// Two independent conditions must hold:
+/// * the `Origin` header names the connected server or the bundled shell, and
+/// * the webview that issued the request is itself on such a page, so a
+///   cross-origin iframe inside a trusted page cannot borrow the bridge.
+fn authorize_request(
+    app: &AppHandle,
+    request: &Request<Vec<u8>>,
+    webview_label: &str,
+) -> Option<String> {
+    let state = app.try_state::<AppSyncState>()?;
+
+    let origin = request
+        .headers()
+        .get("Origin")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|o| !o.is_empty())?;
+
+    if !state.is_trusted_ipc_origin(origin) {
+        tracing::warn!(origin, "native IPC refused: untrusted origin");
+        return None;
+    }
+
+    // `get_webview` is behind tauri's `unstable` feature; the app only ever
+    // creates webview windows, whose webview label equals the window label.
+    let page_ok = app
+        .get_webview_window(webview_label)
+        .and_then(|wv| wv.url().ok())
+        .is_some_and(|url| state.is_trusted_ipc_url(&url));
+    if !page_ok {
+        tracing::warn!(origin, webview_label, "native IPC refused: untrusted page");
+        return None;
+    }
+
+    Some(origin.to_owned())
 }
 
 /// Run a Settings / Sync command on behalf of the remote web UI.
@@ -123,10 +231,14 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let prefs_val = arg_value(&args, "prefs", "prefs")
                 .cloned()
                 .unwrap_or(args.clone());
-            let prefs: crate::state::ClientPrefs =
+            let prefs: crate::state::ClientPrefsDto =
                 serde_json::from_value(prefs_val).map_err(|e| e.to_string())?;
             let saved = commands::set_client_prefs(state.clone(), prefs)?;
             serde_json::to_value(saved).map_err(|e| e.to_string())
+        }
+        "verify_app_lock_pin" => {
+            let pin = arg_str(&args, "pin", "pin").unwrap_or_default();
+            Ok(json!(commands::verify_app_lock_pin(state.clone(), pin)?))
         }
         "export_logs" => {
             let dto = commands::export_logs(app.clone(), state.clone()).await?;
@@ -189,7 +301,8 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             let local_path = arg_str(&args, "local_path", "localPath")
                 .ok_or_else(|| "local_path required".to_string())?;
             let binding =
-                commands::update_binding_local_path(state.clone(), id, local_path).await?;
+                commands::update_binding_local_path(app.clone(), state.clone(), id, local_path)
+                    .await?;
             serde_json::to_value(binding).map_err(|e| e.to_string())
         }
         "update_binding_remote_root" => {
@@ -292,9 +405,28 @@ pub fn is_ipc_url(url: &tauri::Url) -> bool {
 }
 
 /// Parse IPC request from a cancelled navigation URL and run it.
+///
+/// Returns `true` for every IPC URL, allowed or not, so the caller always
+/// cancels the navigation — a refused request must not be allowed to load.
 pub fn handle_navigation(webview: &Webview, url: &tauri::Url) -> bool {
     if !is_ipc_url(url) {
         return false;
+    }
+
+    // `on_navigation` fires before the new document commits, so the webview is
+    // still on the page that issued the call: exactly the origin to authorise.
+    let trusted = webview
+        .app_handle()
+        .try_state::<AppSyncState>()
+        .is_some_and(|state| {
+            webview
+                .url()
+                .ok()
+                .is_some_and(|current| state.is_trusted_ipc_url(&current))
+        });
+    if !trusted {
+        tracing::warn!("native IPC refused: navigation from an untrusted page");
+        return true;
     }
 
     let payload = url
@@ -305,6 +437,10 @@ pub fn handle_navigation(webview: &Webview, url: &tauri::Url) -> bool {
     let Some(raw) = payload else {
         return true;
     };
+
+    if raw.len() > MAX_IPC_BODY_BYTES {
+        return true;
+    }
 
     let parsed: Value = match serde_json::from_str(&raw) {
         Ok(v) => v,
@@ -351,58 +487,67 @@ pub fn handle_protocol(
     request: Request<Vec<u8>>,
     responder: UriSchemeResponder,
 ) {
+    let app = ctx.app_handle().clone();
+    let Some(origin) = authorize_request(&app, &request, ctx.webview_label()) else {
+        responder.respond(denied_response());
+        return;
+    };
+
     if request.method() == tauri::http::Method::OPTIONS {
-        responder.respond(cors_response(
+        responder.respond(ipc_response(
             StatusCode::NO_CONTENT,
             Vec::new(),
             "text/plain",
+            &origin,
         ));
         return;
     }
 
-    let app = ctx.app_handle().clone();
+    // A GET carries its payload in the URL, where it lands in history and logs,
+    // and is reachable from a plain `<img>`/`<script>` tag that no CORS
+    // preflight guards. Commands are state-changing: require POST.
+    if request.method() != tauri::http::Method::POST {
+        responder.respond(ipc_response(
+            StatusCode::METHOD_NOT_ALLOWED,
+            br#"{"ok":false,"error":"POST required"}"#.to_vec(),
+            "application/json",
+            &origin,
+        ));
+        return;
+    }
+
+    if request.body().len() > MAX_IPC_BODY_BYTES {
+        responder.respond(ipc_response(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            br#"{"ok":false,"error":"IPC body too large"}"#.to_vec(),
+            "application/json",
+            &origin,
+        ));
+        return;
+    }
+
     tauri::async_runtime::spawn(async move {
         let body = request.body();
-        let parsed: Value = if body.is_empty() {
-            // Allow GET ?p=<json> as well.
-            let q = request.uri().query().unwrap_or("");
-            let mut p = None;
-            for pair in q.split('&') {
-                if let Some(rest) = pair.strip_prefix("p=") {
-                    p = Some(urlencoding_decode(rest).unwrap_or_else(|| rest.to_owned()));
-                    break;
-                }
-            }
-            match p.as_deref().map(serde_json::from_str) {
-                Some(Ok(v)) => v,
-                Some(Err(e)) => {
-                    responder.respond(cors_response(
-                        StatusCode::BAD_REQUEST,
-                        format!(r#"{{"ok":false,"error":{}}}"#, json!(e.to_string())).into_bytes(),
-                        "application/json",
-                    ));
-                    return;
-                }
-                None => {
-                    responder.respond(cors_response(
-                        StatusCode::BAD_REQUEST,
-                        br#"{"ok":false,"error":"empty IPC body"}"#.to_vec(),
-                        "application/json",
-                    ));
-                    return;
-                }
-            }
-        } else {
-            match serde_json::from_slice(body) {
-                Ok(v) => v,
-                Err(e) => {
-                    responder.respond(cors_response(
-                        StatusCode::BAD_REQUEST,
-                        format!(r#"{{"ok":false,"error":{}}}"#, json!(e.to_string())).into_bytes(),
-                        "application/json",
-                    ));
-                    return;
-                }
+        if body.is_empty() {
+            responder.respond(ipc_response(
+                StatusCode::BAD_REQUEST,
+                br#"{"ok":false,"error":"empty IPC body"}"#.to_vec(),
+                "application/json",
+                &origin,
+            ));
+            return;
+        }
+
+        let parsed: Value = match serde_json::from_slice(body) {
+            Ok(v) => v,
+            Err(e) => {
+                responder.respond(ipc_response(
+                    StatusCode::BAD_REQUEST,
+                    format!(r#"{{"ok":false,"error":{}}}"#, json!(e.to_string())).into_bytes(),
+                    "application/json",
+                    &origin,
+                ));
+                return;
             }
         };
 
@@ -426,29 +571,8 @@ pub fn handle_protocol(
                     .into_bytes(),
             ),
         };
-        responder.respond(cors_response(status, body, "application/json"));
+        responder.respond(ipc_response(status, body, "application/json", &origin));
     });
-}
-
-fn urlencoding_decode(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(s.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let h = (bytes[i + 1] as char).to_digit(16)?;
-            let l = (bytes[i + 2] as char).to_digit(16)?;
-            out.push((h * 16 + l) as u8);
-            i += 3;
-        } else if bytes[i] == b'+' {
-            out.push(b' ');
-            i += 1;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).ok()
 }
 
 #[cfg(test)]
