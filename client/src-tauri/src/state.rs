@@ -222,6 +222,11 @@ pub struct SessionInject {
     pub refresh_token: String,
     pub email: String,
     pub email_verified: bool,
+    /// Origin the tokens belong to (`http://host:port`). The script refuses to
+    /// run anywhere else: a page-load event can name the pending remote URL
+    /// while the connect shell is still the live document, and injecting there
+    /// would rewrite the shell's location and strand the app on it.
+    pub origin: String,
 }
 
 impl From<&ServerConfig> for SessionInject {
@@ -231,6 +236,10 @@ impl From<&ServerConfig> for SessionInject {
             refresh_token: cfg.refresh_token.clone(),
             email: cfg.email.clone(),
             email_verified: cfg.email_verified,
+            origin: cfg
+                .app_url()
+                .map(|u| u.origin().ascii_serialization())
+                .unwrap_or_default(),
         }
     }
 }
@@ -244,10 +253,13 @@ impl SessionInject {
             "email_verified": self.email_verified,
         }))
         .unwrap_or_else(|_| "{}".into());
+        let origin = serde_json::to_string(&self.origin).unwrap_or_else(|_| "\"\"".into());
         // JSON.stringify so values match createLocalStore (website login).
         format!(
             r#"(function(){{
   try {{
+    var want = {origin};
+    if (want && location.origin !== want) return;
     localStorage.setItem('access_token', JSON.stringify({access}));
     localStorage.setItem('refresh_token', JSON.stringify({refresh}));
     localStorage.setItem('user', JSON.stringify({user}));
@@ -793,6 +805,17 @@ impl AppSyncState {
         self.pending_inject.lock().ok().and_then(|mut g| g.take())
     }
 
+    /// Take the queued inject only when `url` is the origin it was queued for.
+    /// A mismatch leaves it queued, so the real remote load still gets it.
+    pub fn take_inject_for(&self, url: &Url) -> Option<SessionInject> {
+        let mut guard = self.pending_inject.lock().ok()?;
+        let origin = guard.as_ref().map(|i| i.origin.clone())?;
+        if !origin.is_empty() && origin != url.origin().ascii_serialization() {
+            return None;
+        }
+        guard.take()
+    }
+
     /// Remember the local connect-shell origin once. Never overwrite with a later
     /// URL — a Sarca server on localhost must not replace the Tauri asset origin.
     pub fn remember_shell_url(&self, url: Url) {
@@ -960,6 +983,22 @@ pub fn navigate_to_sync_settings(app: &AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_inject_is_pinned_to_the_server_origin() {
+        let cfg = ServerConfig {
+            base_url: "http://127.0.0.1:38827".into(),
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            email: "e@example.com".into(),
+            email_verified: true,
+            ..Default::default()
+        };
+        let inject = SessionInject::from(&cfg);
+        assert_eq!(inject.origin, "http://127.0.0.1:38827");
+        let script = inject.eval_script();
+        assert!(script.contains("location.origin !== want"));
+    }
 
     #[test]
     fn shell_url_accepts_tauri_origins_only() {

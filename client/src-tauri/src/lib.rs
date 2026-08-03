@@ -126,7 +126,7 @@ pub fn run() {
                 return;
             }
 
-            if let Some(inject) = state.take_inject() {
+            if let Some(inject) = state.take_inject_for(payload.url()) {
                 let _ = webview.eval(inject.eval_script());
             }
             // After the one-shot session inject (and on every later remote load),
