@@ -55,7 +55,7 @@ export PATH
 if ! command -v pnpm >/dev/null 2>&1; then
   if command -v corepack >/dev/null 2>&1; then
     corepack enable >/dev/null 2>&1 || true
-    corepack prepare pnpm@11.17.0 --activate >/dev/null 2>&1 || true
+    corepack prepare pnpm@11.20.0 --activate >/dev/null 2>&1 || true
   fi
 fi
 

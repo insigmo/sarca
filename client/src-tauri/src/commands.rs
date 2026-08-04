@@ -482,7 +482,7 @@ pub async fn connect(
         },
     };
     state.save_server(&cfg).await.map_err(|e| e.to_string())?;
-    navigate_to_server(&app, &cfg)?;
+    navigate_to_server(&app, &cfg).await?;
     state.record_url_history(&cfg.base_url);
 
     Ok(SessionDto {
@@ -510,7 +510,7 @@ pub async fn open_app(app: AppHandle, state: State<'_, AppSyncState>) -> Result<
     if !cfg.is_connected() {
         return Err("Not connected".into());
     }
-    navigate_to_server(&app, &cfg)
+    navigate_to_server(&app, &cfg).await
 }
 
 #[tauri::command]
