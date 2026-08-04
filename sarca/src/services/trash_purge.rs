@@ -8,7 +8,7 @@ use crate::repositories::{app_settings::AppSettingsRepository, files::FilesRepos
 pub struct TrashPurgeService;
 
 impl TrashPurgeService {
-    pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u8, interval: Duration) {
+    pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u16, interval: Duration) {
         tokio::spawn(async move {
             loop {
                 if let Err(e) = Self::run_once(&db, &base_url, rate_limit).await {
@@ -19,7 +19,7 @@ impl TrashPurgeService {
         });
     }
 
-    pub async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u8) -> Result<(), String> {
+    pub async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u16) -> Result<(), String> {
         let settings = AppSettingsRepository::new(db);
         let retention = settings.get_trash_retention_days().await.map_err(|e| e.to_string())?;
 

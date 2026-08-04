@@ -17,8 +17,9 @@ DEBUG_LOG=1
 # --- Telegram integration ---
 TELEGRAM_API_BASE_URL=https://api.telegram.org
 
-# Requests per minute per bot (scheduler enforces this via DB)
-TELEGRAM_RATE_LIMIT=18
+# Requests per minute per bot (scheduler enforces this via DB). This is a
+# self-imposed safety limit, not a number Telegram publishes for getFile.
+TELEGRAM_RATE_LIMIT=60
 
 # Chunk size (MB). Official Bot API supports up to 20 MB per document.
 # Files larger than this are split into multiple Telegram documents.
