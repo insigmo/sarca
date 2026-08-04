@@ -135,7 +135,8 @@ pub fn spawn_renewal_task(issuer: InstantAcmeIssuer, cert_store: CertStore, runt
                 last_issue = tokio::time::Instant::now();
                 tracing::info!("ACME certificate renewal starting");
                 match renew_once(&issuer, &cert_store, &runtime).await {
-                    Ok(()) => {
+                    Ok(not_after) => {
+                        tracing::info!("ACME certificate issued (not_after={not_after})");
                         tracing::info!("ACME certificate renewed successfully");
                         backoff = RETRY_MIN;
                         last_failed = false;
@@ -144,7 +145,7 @@ pub fn spawn_renewal_task(issuer: InstantAcmeIssuer, cert_store: CertStore, runt
                         backoff = next_backoff(backoff);
                         last_failed = true;
                         tracing::error!(
-                            "ACME renewal failed: {e}; retrying in {}s",
+                            "ACME issuance failed: {e}; retrying in {}s",
                             backoff.as_secs()
                         );
                     },
@@ -159,11 +160,11 @@ async fn renew_once(
     issuer: &InstantAcmeIssuer,
     cert_store: &CertStore,
     runtime: &TlsRuntime,
-) -> Result<(), acme::AcmeError> {
+) -> Result<DateTime<Utc>, acme::AcmeError> {
     let bundle = issuer.issue().await?;
     save_issued(cert_store, &bundle).await?;
     apply_renewed_material(runtime, &bundle)?;
-    Ok(())
+    Ok(bundle.not_after)
 }
 
 fn apply_renewed_material(
