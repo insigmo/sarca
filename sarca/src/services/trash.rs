@@ -2,7 +2,12 @@ use sqlx::SqlitePool;
 use uuid::Uuid;
 
 use crate::{
-    common::{access::check_access, jwt_manager::AuthUser, telegram_api::bot_api::TelegramBotApi},
+    common::{
+        access::check_access,
+        jwt_manager::AuthUser,
+        media_cache::MediaCache,
+        telegram_api::bot_api::TelegramBotApi,
+    },
     errors::{SarcaError, SarcaResult},
     models::{access::AccessType, files::FSElement},
     repositories::{
@@ -20,17 +25,30 @@ pub struct TrashService<'d> {
     db: &'d SqlitePool,
     base_url: &'d str,
     rate_limit: u8,
+    work_dir: &'d str,
 }
 
 impl<'d> TrashService<'d> {
-    pub fn new(db: &'d SqlitePool, base_url: &'d str, rate_limit: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, base_url: &'d str, rate_limit: u8, work_dir: &'d str) -> Self {
         Self {
             files_repo: FilesRepository::new(db),
             access_repo: AccessRepository::new(db),
             db,
             base_url,
             rate_limit,
+            work_dir,
         }
+    }
+
+    fn invalidate_media_cache(&self, storage_id: Uuid, path: &str) {
+        let previews = MediaCache::previews(self.work_dir);
+        let thumbs = MediaCache::thumbs(self.work_dir);
+        let preview_key = previews.key(storage_id, path);
+        let thumb_key = thumbs.key(storage_id, path);
+        tokio::spawn(async move {
+            previews.remove(&preview_key).await;
+            thumbs.remove(&thumb_key).await;
+        });
     }
 
     pub async fn list(
@@ -72,6 +90,7 @@ impl<'d> TrashService<'d> {
                     let live_ids =
                         self.files_repo.list_live_ids_at_path(storage_id, &canonical).await?;
                     self.purge_ids(&live_ids).await?;
+                    self.invalidate_media_cache(storage_id, &canonical);
                 },
                 Some("rename") => {
                     let new_path =
