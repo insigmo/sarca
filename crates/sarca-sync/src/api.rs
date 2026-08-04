@@ -3,12 +3,14 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use futures::StreamExt;
 use reqwest::{
     multipart::{Form, Part},
     Client, Response, Version,
 };
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -16,6 +18,12 @@ use crate::types::{ChangelogResponse, SnapshotResponse};
 
 /// Whether the sync client was built to prefer HTTP/3 (reqwest `http3` + `reqwest_unstable`).
 pub const HTTP3_PREFERRED: bool = cfg!(all(feature = "http3-client", reqwest_unstable));
+
+/// Largest single file we will pull down. The body used to be buffered whole in
+/// memory, so a server answering a small `snapshot` entry with a multi-gigabyte
+/// response could OOM the client. 16 GiB is far above any real media file and
+/// still bounds the damage.
+const MAX_DOWNLOAD_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 
 /// Budget for a whole control-plane call (login, snapshot, changelog, delete).
 /// These answer immediately or not at all, so a short deadline is right.
@@ -299,11 +307,61 @@ impl SarcaApi {
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        let bytes = resp.bytes().await?;
-        tokio::fs::write(dest, bytes)
-            .await
-            .with_context(|| format!("write {}", dest.display()))?;
-        Ok(())
+
+        // Reject an oversized body before reading it. `Content-Length` is only
+        // advisory (a hostile server may omit or understate it), so the stream
+        // below re-checks as bytes arrive.
+        if let Some(len) = resp.content_length() {
+            if len > MAX_DOWNLOAD_BYTES {
+                bail!(
+                    "refusing download of {len} bytes for {}: over the {MAX_DOWNLOAD_BYTES}-byte limit",
+                    dest.display()
+                );
+            }
+        }
+
+        // Write to a sibling temp file and rename into place. Writing straight
+        // to `dest` follows a symlink that happens to sit there, which lets a
+        // compromised server overwrite any file the user can write (`~/.bashrc`,
+        // `~/.ssh/authorized_keys`) simply by naming a path whose local
+        // counterpart is a link. `create_new` also means we never write through
+        // a link planted at the temp path itself.
+        let tmp = dest.with_extension(format!("sarca-part-{}", Uuid::new_v4().simple()));
+        let write = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp)
+                .await
+                .with_context(|| format!("create {}", tmp.display()))?;
+            let mut written: u64 = 0;
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = chunk?;
+                written = written.saturating_add(chunk.len() as u64);
+                if written > MAX_DOWNLOAD_BYTES {
+                    bail!(
+                        "download of {} exceeded the {MAX_DOWNLOAD_BYTES}-byte limit",
+                        dest.display()
+                    );
+                }
+                file.write_all(&chunk).await?;
+            }
+            file.flush().await?;
+            file.sync_all().await?;
+            drop(file);
+
+            // `rename` replaces a symlink at `dest` rather than following it.
+            tokio::fs::rename(&tmp, dest)
+                .await
+                .with_context(|| format!("write {}", dest.display()))
+        }
+        .await;
+
+        if write.is_err() {
+            let _ = tokio::fs::remove_file(&tmp).await;
+        }
+        write
     }
 
     pub async fn delete_remote(&self, storage_id: Uuid, remote_path: &str) -> Result<()> {
@@ -978,6 +1036,49 @@ mod tests {
         assert!(
             req.contains("/files/create_folder"),
             "wrong path in request:\n{req}"
+        );
+    }
+
+    /// A compromised server names a file whose local counterpart happens to be
+    /// a symlink pointing outside the sync root. Writing straight to that path
+    /// would overwrite the link target (`~/.bashrc`, `~/.ssh/authorized_keys`).
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn download_to_replaces_a_symlink_instead_of_writing_through_it() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nOWNED",
+                )
+                .await;
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("bashrc");
+        std::fs::write(&outside, b"ORIGINAL").unwrap();
+        let dest = dir.path().join("root").join("innocent.jpg");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&outside, &dest).unwrap();
+
+        let api = SarcaApi::new(format!("http://{addr}"), "t");
+        api.download_to(Uuid::nil(), "innocent.jpg", &dest)
+            .await
+            .expect("download must succeed");
+
+        assert_eq!(
+            std::fs::read(&outside).unwrap(),
+            b"ORIGINAL",
+            "the symlink target outside the root must be untouched"
+        );
+        assert_eq!(std::fs::read(&dest).unwrap(), b"OWNED");
+        assert!(
+            !std::fs::symlink_metadata(&dest).unwrap().is_symlink(),
+            "the link must have been replaced by a real file"
         );
     }
 

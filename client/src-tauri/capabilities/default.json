@@ -9,8 +9,6 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "notification:default",
-    "shell:allow-open",
     "allow-platform-label",
     "allow-device-label",
     "allow-get-session",
