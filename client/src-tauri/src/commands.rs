@@ -56,12 +56,19 @@ fn cache_root(state: &AppSyncState) -> PathBuf {
 }
 
 fn preview_cache_path(state: &AppSyncState, scope: &str, logical_path: &str) -> PathBuf {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    use std::hash::{Hash, Hasher};
-    scope.hash(&mut h);
-    logical_path.hash(&mut h);
-    "v1-1920-q80".hash(&mut h);
-    let digest = format!("{:016x}", h.finish());
+    // SHA-256 over length-prefixed fields, not `DefaultHasher`. The scope and the
+    // path both arrive from the WebView, and std's hasher is a 64-bit SipHash
+    // with fixed, public keys: a caller could search out a second (scope, path)
+    // that lands on another entry's file and serve a poisoned preview in its
+    // place. Length prefixes stop `("a", "bc")` and `("ab", "c")` from hashing
+    // to the same slot.
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    for field in [scope, logical_path, "v1-1920-q80"] {
+        h.update((field.len() as u64).to_le_bytes());
+        h.update(field.as_bytes());
+    }
+    let digest = hex::encode(&h.finalize()[..16]);
     cache_root(state)
         .join("preview")
         .join(sanitize_cache_scope(scope))

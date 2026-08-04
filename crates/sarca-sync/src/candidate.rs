@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use tracing::warn;
+use tracing::{debug, warn};
 use walkdir::WalkDir;
 
 use crate::index::mtime_ms_from_system;
@@ -72,8 +72,12 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
     }
     let mut out = Vec::new();
     let mut walk_errors = 0usize;
-    // Do not follow directory symlinks (can explode into huge trees). Still
-    // include symlink-*files* by resolving metadata without WalkDir::follow_links.
+    // Resolved once: every symlink target is compared against it below. `None`
+    // means the root itself could not be resolved, and then no link is followed.
+    let real_root = root.canonicalize().ok();
+    // Do not follow directory symlinks (can explode into huge trees). Symlink
+    // *files* are included only when they resolve back inside the root; see the
+    // check below.
     for entry in WalkDir::new(root) {
         let entry = match entry {
             Ok(e) => e,
@@ -86,8 +90,22 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
         let path = entry.path().to_path_buf();
         let ft = entry.file_type();
         let is_file = if ft.is_symlink() {
-            match std::fs::metadata(&path) {
-                Ok(m) => m.is_file(),
+            // A link is only followed while its target stays inside the root.
+            // `paths::validate_local_dir` confines a binding to the user's own
+            // folders, but it checks the root alone: an escaping link would
+            // carry `~/.ssh/id_rsa` to the server under an innocuous name.
+            match path.canonicalize() {
+                Ok(target) if real_root.as_ref().is_some_and(|r| target.starts_with(r)) => {
+                    target.is_file()
+                }
+                Ok(target) => {
+                    debug!(
+                        path = %path.display(),
+                        target = %target.display(),
+                        "skip symlink leaving the binding root"
+                    );
+                    false
+                }
                 Err(e) => {
                     warn!(path = %path.display(), error = %e, "symlink metadata error, skipping");
                     walk_errors += 1;
@@ -186,6 +204,28 @@ mod tests {
         let got = collect_fs_candidates(&missing, true).unwrap();
         assert!(got.is_empty());
         assert!(missing.is_dir());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn collect_fs_candidates_skips_symlinks_pointing_outside_the_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let secrets = tempfile::tempdir().unwrap();
+        let secret = secrets.path().join("id_rsa");
+        std::fs::write(&secret, b"PRIVATE KEY").unwrap();
+
+        std::fs::write(dir.path().join("a.jpg"), b"x").unwrap();
+        std::os::unix::fs::symlink(&secret, dir.path().join("b.jpg")).unwrap();
+        std::os::unix::fs::symlink(secrets.path(), dir.path().join("linked")).unwrap();
+
+        let got = collect_fs_candidates(dir.path(), true).unwrap();
+
+        assert_eq!(
+            got.len(),
+            1,
+            "only the in-root file may be a candidate: {got:?}"
+        );
+        assert_eq!(got[0].relative_path, "a.jpg");
     }
 
     #[test]
