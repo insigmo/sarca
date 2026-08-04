@@ -29,7 +29,9 @@ use sarca::{
         load_or_generate_material,
         new_runtime,
         save_issued,
+        shared_identity,
         spawn_acme_http_listener,
+        spawn_public_ip_watch,
         spawn_renewal_task,
     },
 };
@@ -88,12 +90,14 @@ async fn main() {
     // No TLS_HOSTNAME: fall back to the machine's public IP so the server still
     // comes up on HTTPS (TCP + HTTP/3) with an ACME-issuable identity. Only a
     // host with no usable address at all drops to plain HTTP.
+    let mut identity_auto_detected = false;
     if !plain_http && config.tls_hostname.is_none() {
         eprintln!("TLS_HOSTNAME unset — detecting public IP…");
         match detect_public_ip().await {
             Some(ip) => {
                 tracing::info!("TLS_HOSTNAME unset — using detected address {ip} as TLS identity");
                 config.tls_hostname = Some(ip.to_string());
+                identity_auto_detected = true;
             },
             None => {
                 tracing::warn!(
@@ -199,6 +203,9 @@ async fn main() {
     if tls_mode {
         let identity =
             config.tls_identity().unwrap_or_else(|e| die(format!("invalid TLS_HOSTNAME: {e}")));
+        // One slot shared by startup issuance, the renewal task and the public
+        // IP watcher, so a new address is picked up without a restart.
+        let identity_slot = identity.clone().map(shared_identity);
 
         let https_base = config.tls_hostname.as_ref().map_or_else(
             || format!("https://127.0.0.1:{}", config.https_addr.port()),
@@ -213,11 +220,11 @@ async fn main() {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         if acme_enabled(&config) {
-            if let Some(ref id) = identity {
+            if let Some(ref slot) = identity_slot {
                 let issuer = InstantAcmeIssuer::from_parts(
                     config.acme_directory.clone(),
                     config.acme_http_addr,
-                    id.clone(),
+                    slot.clone(),
                     challenges.clone(),
                     &cert_store,
                 );
@@ -254,18 +261,23 @@ async fn main() {
         );
 
         if acme_enabled(&config) {
-            if let Some(id) = identity {
+            if let Some(slot) = identity_slot {
                 spawn_renewal_task(
                     InstantAcmeIssuer::from_parts(
                         config.acme_directory.clone(),
                         config.acme_http_addr,
-                        id,
+                        slot.clone(),
                         runtime.challenges.clone(),
                         &cert_store,
                     ),
                     cert_store.clone(),
                     runtime.clone(),
                 );
+                // The identity is an address we guessed, not one an operator
+                // pinned, so keep watching it and re-issue when it moves.
+                if identity_auto_detected {
+                    spawn_public_ip_watch(slot, runtime.clone());
+                }
             }
         }
 

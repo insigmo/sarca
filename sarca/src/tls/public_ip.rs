@@ -7,6 +7,8 @@
 
 use std::{net::IpAddr, time::Duration};
 
+use super::{SharedIdentity, TlsIdentity, TlsRuntime};
+
 /// Plain-text "what is my IP" endpoints, tried in order.
 const LOOKUP_ENDPOINTS: [&str; 3] =
     ["https://api.ipify.org", "https://icanhazip.com", "https://ifconfig.me/ip"];
@@ -60,6 +62,37 @@ fn local_outbound_ip() -> Option<IpAddr> {
     };
 
     probe("0.0.0.0:0", "1.1.1.1:80").or_else(|| probe("[::]:0", "[2606:4700:4700::1111]:80"))
+}
+
+/// How often the watcher re-checks the public address.
+const WATCH_INTERVAL: Duration = Duration::from_mins(15);
+
+/// Track the public address and re-issue the certificate when it moves.
+///
+/// Only spawned when `TLS_HOSTNAME` is unset, so the certificate identity is
+/// the detected IP: when the machine changes address, the existing certificate
+/// no longer matches and both HTTP/3 and TCP TLS break until a new one is
+/// issued for the new address.
+pub fn spawn_public_ip_watch(identity: SharedIdentity, runtime: TlsRuntime) {
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(WATCH_INTERVAL).await;
+
+            let Some(ip) = detect_public_ip().await else {
+                tracing::debug!("public IP re-check failed; keeping the current TLS identity");
+                continue;
+            };
+
+            let current = identity.read().expect("identity lock").clone();
+            if matches!(current, TlsIdentity::Ip(cur) if cur == ip) {
+                continue;
+            }
+
+            tracing::warn!("public IP changed ({current:?} -> {ip}); re-issuing certificate");
+            *identity.write().expect("identity lock") = TlsIdentity::Ip(ip);
+            runtime.request_renewal("public IP changed");
+        }
+    });
 }
 
 /// Trim the response and accept it only if the whole body is one IP address.

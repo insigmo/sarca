@@ -1,6 +1,7 @@
 use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::{Arc, RwLock},
 };
 
 use chrono::{DateTime, Utc};
@@ -38,9 +39,20 @@ pub fn register_challenge(
 /// ACME certificate issuer (real http-01 client wired when `TLS_HOSTNAME` is set).
 pub trait AcmeIssuer: Send + Sync {
     fn directory_url(&self) -> &str;
-    fn identity(&self) -> &TlsIdentity;
+    fn identity(&self) -> TlsIdentity;
     fn http_addr(&self) -> SocketAddr;
     fn challenges(&self) -> &AcmeChallengeStore;
+}
+
+/// Certificate identity shared with whoever may change it at runtime.
+///
+/// With no `TLS_HOSTNAME` the identity is the detected public IP, and that can
+/// change under the running process (DHCP lease, NAT, failover). The watcher
+/// writes the new address here and the next issuance picks it up.
+pub type SharedIdentity = Arc<RwLock<TlsIdentity>>;
+
+pub fn shared_identity(identity: TlsIdentity) -> SharedIdentity {
+    Arc::new(RwLock::new(identity))
 }
 
 /// Configuration for in-process ACME certificate issuance.
@@ -48,7 +60,7 @@ pub trait AcmeIssuer: Send + Sync {
 pub struct AcmeConfig {
     pub directory: String,
     pub http_addr: SocketAddr,
-    pub identity: TlsIdentity,
+    pub identity: SharedIdentity,
     pub challenges: AcmeChallengeStore,
     pub account_path: PathBuf,
 }
@@ -57,7 +69,7 @@ impl AcmeConfig {
     pub fn new(
         directory: String,
         http_addr: SocketAddr,
-        identity: TlsIdentity,
+        identity: SharedIdentity,
         challenges: AcmeChallengeStore,
         account_path: PathBuf,
     ) -> Self {
@@ -135,7 +147,7 @@ impl InstantAcmeIssuer {
     pub fn from_parts(
         directory: String,
         http_addr: SocketAddr,
-        identity: TlsIdentity,
+        identity: SharedIdentity,
         challenges: AcmeChallengeStore,
         cert_store: &CertStore,
     ) -> Self {
@@ -148,11 +160,16 @@ impl InstantAcmeIssuer {
         ))
     }
 
+    /// Shared identity slot, so a public IP change can re-point issuance.
+    pub fn identity_slot(&self) -> SharedIdentity {
+        self.config.identity.clone()
+    }
+
     /// Request and finalize a certificate from the configured ACME directory.
     pub async fn issue(&self) -> Result<IssuedCertificate, AcmeError> {
         issue_certificate(
             &self.config.directory,
-            &self.config.identity,
+            &self.identity(),
             &self.config.challenges,
             &self.config.account_path,
         )
@@ -165,8 +182,8 @@ impl AcmeIssuer for InstantAcmeIssuer {
         &self.config.directory
     }
 
-    fn identity(&self) -> &TlsIdentity {
-        &self.config.identity
+    fn identity(&self) -> TlsIdentity {
+        self.config.identity.read().expect("identity lock").clone()
     }
 
     fn http_addr(&self) -> SocketAddr {
@@ -197,8 +214,8 @@ impl AcmeIssuer for StubAcmeIssuer {
         &self.config.directory
     }
 
-    fn identity(&self) -> &TlsIdentity {
-        &self.config.identity
+    fn identity(&self) -> TlsIdentity {
+        self.config.identity.read().expect("identity lock").clone()
     }
 
     fn http_addr(&self) -> SocketAddr {
@@ -322,7 +339,7 @@ mod tests {
     use super::*;
 
     fn test_config() -> AcmeConfig {
-        let identity = TlsIdentity::Dns("example.com".into());
+        let identity = shared_identity(TlsIdentity::Dns("example.com".into()));
         let challenges =
             std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
         AcmeConfig::new(

@@ -30,28 +30,52 @@ pub fn parse_not_after(cert_pem: &str) -> Result<DateTime<Utc>, acme::AcmeError>
     DateTime::from_timestamp(ts, 0).ok_or(acme::AcmeError::InvalidCert)
 }
 
-/// Background task: sleep until [`renew_at`], re-issue via ACME, hot-reload TCP TLS.
+/// Shortest gap between two on-demand re-issues.
+///
+/// Failing HTTP/3 handshakes and public IP flapping both poke the renewal task;
+/// this keeps that from turning into a Let's Encrypt rate-limit ban.
+const MIN_REISSUE_INTERVAL: Duration = Duration::from_mins(10);
+
+/// Background task: sleep until [`renew_at`] (or until something asks for an
+/// early renewal), re-issue via ACME, hot-reload TCP TLS and HTTP/3.
 pub fn spawn_renewal_task(issuer: InstantAcmeIssuer, cert_store: CertStore, runtime: TlsRuntime) {
+    let signal = runtime.renew_signal();
     tokio::spawn(
         async move {
+            let mut last_issue = tokio::time::Instant::now();
             loop {
                 let sleep_until = match cert_store.load_cert().await {
                     Ok(Some(pem)) => parse_not_after(&pem).ok().map(renew_at),
                     _ => None,
                 };
 
-                let Some(due_at) = sleep_until else {
-                    tokio::time::sleep(Duration::from_hours(1)).await;
-                    continue;
+                let delay = sleep_until.map_or(Duration::from_hours(1), |due_at| {
+                    let now = Utc::now();
+                    if due_at > now {
+                        tracing::info!("ACME renewal scheduled at {due_at}");
+                        (due_at - now).to_std().unwrap_or_else(|_| Duration::from_mins(1))
+                    } else {
+                        Duration::ZERO
+                    }
+                });
+
+                let on_demand = tokio::select! {
+                    () = tokio::time::sleep(delay) => false,
+                    () = signal.notified() => true,
                 };
 
-                let now = Utc::now();
-                if due_at > now {
-                    let delay = (due_at - now).to_std().unwrap_or_else(|_| Duration::from_mins(1));
-                    tracing::info!("ACME renewal scheduled at {due_at}");
-                    tokio::time::sleep(delay).await;
+                if on_demand {
+                    let since = last_issue.elapsed();
+                    if since < MIN_REISSUE_INTERVAL {
+                        tracing::info!(
+                            "early renewal requested but last issue was {}s ago; waiting",
+                            since.as_secs()
+                        );
+                        tokio::time::sleep(MIN_REISSUE_INTERVAL.saturating_sub(since)).await;
+                    }
                 }
 
+                last_issue = tokio::time::Instant::now();
                 tracing::info!("ACME certificate renewal starting");
                 match renew_once(&issuer, &cert_store, &runtime).await {
                     Ok(()) => tracing::info!("ACME certificate renewed successfully"),
@@ -82,7 +106,7 @@ fn apply_renewed_material(
 ) -> Result<(), acme::AcmeError> {
     let material = parse_pem_material(&issued.cert_pem, &issued.key_pem)
         .map_err(|_| acme::AcmeError::InvalidCert)?;
-    runtime.reload_tcp_material(&material);
+    runtime.reload_material(&material).map_err(|_| acme::AcmeError::InvalidCert)?;
     Ok(())
 }
 
