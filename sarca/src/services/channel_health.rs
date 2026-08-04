@@ -30,7 +30,7 @@ impl ChannelHealthService {
 
     /// Probe every active channel via `getChat`; mark dead ones and rotate away any
     /// storage's primary position that pointed at a channel that just died.
-    pub async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u8) {
+    pub async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u16) {
         let channels_repo = StorageChannelsRepository::new(db);
         let storages_repo = StoragesRepository::new(db);
 
@@ -121,7 +121,7 @@ impl ChannelHealthService {
     pub fn spawn_loop(
         db: SqlitePool,
         base_url: String,
-        rate_limit: u8,
+        rate_limit: u16,
         interval: std::time::Duration,
     ) {
         tokio::spawn(async move {

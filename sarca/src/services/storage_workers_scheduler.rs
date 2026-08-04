@@ -12,11 +12,11 @@ use crate::{
 /// Manages storage workers by limiting their usage
 pub struct StorageWorkersScheduler<'d> {
     repo: StorageWorkersRepository<'d>,
-    rate: u8,
+    rate: u16,
 }
 
 impl<'d> StorageWorkersScheduler<'d> {
-    pub fn new(db: &'d SqlitePool, rate: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, rate: u16) -> Self {
         let repo = StorageWorkersRepository::new(db);
         Self {
             repo,
