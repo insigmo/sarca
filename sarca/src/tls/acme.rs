@@ -34,17 +34,18 @@ const ACCOUNT_FILE: &str = "acme-account.json";
 /// The library default gives up after 30s. Let's Encrypt regularly needs
 /// longer than that (validation is queued and retried from several vantage
 /// points), and the timeout surfaced as "timed out waiting for an order
-/// update" while validation was still in flight.
+/// update" while validation was still in flight. Three minutes still hit it
+/// under load, so the budget matches LE's own validation retry window.
 const READY_POLICY: RetryPolicy = RetryPolicy::new()
     .initial_delay(Duration::from_secs(1))
     .backoff(1.4)
-    .timeout(Duration::from_mins(3));
+    .timeout(Duration::from_mins(10));
 
 /// Issuance after validation is quicker, but still not always under 30s.
 const CERTIFICATE_POLICY: RetryPolicy = RetryPolicy::new()
     .initial_delay(Duration::from_secs(1))
     .backoff(1.4)
-    .timeout(Duration::from_secs(90));
+    .timeout(Duration::from_mins(3));
 
 /// Register an http-01 challenge response for `token`.
 pub fn register_challenge(
