@@ -50,6 +50,11 @@ impl CertStore {
         tokio::fs::write(self.key_path(), pem).await
     }
 
+    /// Read a PEM file by path, `None` when it does not exist.
+    pub async fn load_pem_at(path: &Path) -> std::io::Result<Option<String>> {
+        Self::load_pem(path).await
+    }
+
     async fn load_pem(path: &Path) -> std::io::Result<Option<String>> {
         match tokio::fs::read_to_string(path).await {
             Ok(contents) => Ok(Some(contents)),

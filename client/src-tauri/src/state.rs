@@ -8,7 +8,9 @@ use std::{
 use anyhow::Result;
 #[cfg(not(target_os = "android"))]
 use sarca_sync::FsMediaSource;
-use sarca_sync::{Binding, BindingMode, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig};
+use sarca_sync::{
+    Binding, BindingMode, KeepBothPrompt, LocalProxy, SarcaApi, SyncEngine, SyncEngineConfig,
+};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, Url};
 use tokio::sync::{Mutex, RwLock};
@@ -681,10 +683,12 @@ impl Default for ClientPrefs {
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
-    bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut acc, b| {
-        let _ = write!(acc, "{b:02x}");
-        acc
-    })
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut acc, b| {
+            let _ = write!(acc, "{b:02x}");
+            acc
+        })
 }
 
 fn hash_pin(pin: &str, salt_hex: &str) -> String {
@@ -785,7 +789,11 @@ impl ClientPrefs {
     /// that is already set without presenting it: otherwise merely reaching
     /// `set_client_prefs` would be an app-lock bypass.
     pub fn apply_dto(&mut self, dto: ClientPrefsDto) -> Result<(), String> {
-        let new_pin = dto.app_lock_pin.as_deref().map(str::trim).filter(|p| !p.is_empty());
+        let new_pin = dto
+            .app_lock_pin
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty());
         let wants_pin_change = new_pin.is_some();
         let wants_disable = self.app_lock_enabled && !dto.app_lock_enabled;
 
@@ -828,6 +836,8 @@ pub struct AppSyncState {
     /// blocking on a lock it cannot await.
     trusted_origin: Arc<StdMutex<Option<String>>>,
     data_dir: PathBuf,
+    /// Loopback proxy serving the remote UI, alive only while it is in use.
+    proxy: Arc<StdMutex<Option<LocalProxy>>>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     /// Bumped to interrupt the background-loop sleep and run a tick soon
     /// (app resume / foreground).
@@ -869,9 +879,46 @@ impl AppSyncState {
             shell_url: Arc::new(StdMutex::new(None)),
             trusted_origin: Arc::new(StdMutex::new(trusted_origin)),
             data_dir,
+            proxy: Arc::new(StdMutex::new(None)),
             shutdown_tx,
             wake_tx,
         })
+    }
+
+    /// Serve `base_url` from a fresh loopback port and return its origin.
+    ///
+    /// The webview validates TLS through the OS trust store, which cannot know
+    /// about a server reached by a LAN address; the proxy leg does the pinned
+    /// TLS on its behalf. Any previous proxy is stopped first, so exactly one
+    /// port is ever bound.
+    pub fn start_proxy(&self, base_url: &str) -> Result<String, String> {
+        self.stop_proxy();
+        let proxy = tauri::async_runtime::block_on(LocalProxy::start(base_url))
+            .map_err(|e| e.to_string())?;
+        let origin = proxy.origin();
+        if let Ok(mut guard) = self.proxy.lock() {
+            *guard = Some(proxy);
+        }
+        Ok(origin)
+    }
+
+    /// Stop the loopback proxy and release its port.
+    pub fn stop_proxy(&self) {
+        let previous = self.proxy.lock().ok().and_then(|mut g| g.take());
+        if let Some(proxy) = previous {
+            proxy.stop();
+        }
+    }
+
+    /// Origin the loopback proxy is currently serving on, if any.
+    pub fn proxy_origin(&self) -> Option<String> {
+        self.proxy.lock().ok()?.as_ref().map(LocalProxy::origin)
+    }
+
+    pub fn set_trusted_origin(&self, origin: Option<String>) {
+        if let Ok(mut guard) = self.trusted_origin.lock() {
+            *guard = origin;
+        }
     }
 
     /// Origin of the connected server, or `None` while disconnected.
@@ -985,9 +1032,12 @@ impl AppSyncState {
     pub async fn save_server(&self, cfg: &ServerConfig) -> Result<()> {
         let json = serde_json::to_string_pretty(cfg)?;
         write_private(&self.server_config_path(), json.as_bytes())?;
-        if let Ok(mut guard) = self.trusted_origin.lock() {
-            *guard = origin_of_base_url(&cfg.base_url);
-        }
+        // While the UI is served over loopback that origin, not the server's,
+        // is the one the webview speaks from.
+        let origin = self
+            .proxy_origin()
+            .or_else(|| origin_of_base_url(&cfg.base_url));
+        self.set_trusted_origin(origin);
         *self.server.lock().await = cfg.clone();
         self.engine
             .set_credentials(cfg.base_url.clone(), cfg.access_token.clone())
@@ -1247,20 +1297,38 @@ pub fn navigate_to_server(app: &AppHandle, cfg: &ServerConfig) -> Result<(), Str
         .get_webview_window("main")
         .ok_or_else(|| "main window missing".to_string())?;
     let state = app.state::<AppSyncState>();
+
+    // The webview cannot use our pinned trust, so a server it cannot validate
+    // itself is served over loopback instead. A server it can reach directly
+    // is loaded directly, exactly as before.
+    let direct =
+        tauri::async_runtime::block_on(sarca_sync::proxy::reachable_without_proxy(&cfg.base_url));
+    let url = if direct {
+        state.stop_proxy();
+        cfg.app_url().map_err(|e| e.to_string())?
+    } else {
+        let origin = state.start_proxy(&cfg.base_url)?;
+        Url::parse(&format!("{origin}/")).map_err(|e| e.to_string())?
+    };
+
+    // The proxy origin replaces the server origin for everything that keys off
+    // it: the session inject guard, the IPC allow-list and the Settings ACL.
+    let origin = url.origin().ascii_serialization();
+    state.set_trusted_origin(Some(origin.clone()));
+
     // Only inject stored tokens when we have them. After URL-only Connect the
     // user signs in on the website; empty inject would wipe webview localStorage.
     if cfg.is_connected() {
-        state.queue_inject(SessionInject::from(cfg));
+        let mut inject = SessionInject::from(cfg);
+        inject.origin = origin.clone();
+        state.queue_inject(inject);
     }
     // Give this one origin the Settings ACL right before we hand it the
     // WebView. Nothing is granted up front, so a page reached any other way
     // (redirect, iframe, a link the user clicked) has no capability at all.
-    if let Some(origin) = origin_of_base_url(&cfg.base_url) {
-        if let Err(e) = crate::remote_ipc::grant_remote_capability(app, &origin) {
-            tracing::debug!(error = %e, origin, "remote capability already granted");
-        }
+    if let Err(e) = crate::remote_ipc::grant_remote_capability(app, &origin) {
+        tracing::debug!(error = %e, origin, "remote capability already granted");
     }
-    let url = cfg.app_url().map_err(|e| e.to_string())?;
     window.navigate(url).map_err(|e| e.to_string())
 }
 
@@ -1269,6 +1337,9 @@ pub fn navigate_to_shell(app: &AppHandle) -> Result<(), String> {
         .get_webview_window("main")
         .ok_or_else(|| "main window missing".to_string())?;
     let state = app.state::<AppSyncState>();
+    // Back on the bundled shell nothing loads from the server, so the loopback
+    // port has no reason to stay bound.
+    state.stop_proxy();
     let url = state
         .shell_url()
         .unwrap_or_else(|| Url::parse("tauri://localhost").expect("valid shell url"));
@@ -1282,8 +1353,15 @@ pub fn navigate_to_sync_settings(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AppSyncState>();
     let cfg = tauri::async_runtime::block_on(state.server.lock()).clone();
     if cfg.is_connected() {
-        state.queue_inject(SessionInject::from(&cfg));
-        let mut url = cfg.app_url().map_err(|e| e.to_string())?;
+        // Reuse the running proxy when there is one: the server URL itself may
+        // not be loadable by the webview at all.
+        let mut url = match state.proxy_origin() {
+            Some(origin) => Url::parse(&format!("{origin}/")).map_err(|e| e.to_string())?,
+            None => cfg.app_url().map_err(|e| e.to_string())?,
+        };
+        let mut inject = SessionInject::from(&cfg);
+        inject.origin = url.origin().ascii_serialization();
+        state.queue_inject(inject);
         // Open in-app Settings → Sync (not sync.html as primary UI).
         {
             let mut pairs = url.query_pairs_mut();
@@ -1412,7 +1490,9 @@ mod tests {
         let mut dto = dto_of(&prefs);
         dto.wifi_only = false;
         dto.enable_logs = false;
-        prefs.apply_dto(dto).expect("no PIN needed for other fields");
+        prefs
+            .apply_dto(dto)
+            .expect("no PIN needed for other fields");
         assert!(!prefs.wifi_only);
         assert!(!prefs.enable_logs);
         assert!(prefs.app_lock_enabled && prefs.verify_pin("1234"));

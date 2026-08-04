@@ -84,6 +84,8 @@ pub struct AcmeConfig {
     pub account_path: PathBuf,
     /// Extra PEM root for the ACME client (private CA); `None` uses the system store.
     pub root_ca: Option<PathBuf>,
+    /// Private key reused across issuances, so the pinned SPKI stays stable.
+    pub key_path: PathBuf,
 }
 
 impl AcmeConfig {
@@ -94,6 +96,7 @@ impl AcmeConfig {
         challenges: AcmeChallengeStore,
         account_path: PathBuf,
         root_ca: Option<PathBuf>,
+        key_path: PathBuf,
     ) -> Self {
         Self {
             directory,
@@ -102,6 +105,7 @@ impl AcmeConfig {
             challenges,
             account_path,
             root_ca,
+            key_path,
         }
     }
 }
@@ -124,6 +128,8 @@ pub enum AcmeError {
     Serde(#[from] serde_json::Error),
     #[error("no http-01 challenge offered for identifier")]
     NoHttp01Challenge,
+    #[error("failed to build the certificate signing request")]
+    CsrGen,
     #[error("invalid issued certificate")]
     InvalidCert,
     #[error("ACME directory URL is empty")]
@@ -184,6 +190,7 @@ impl InstantAcmeIssuer {
             challenges,
             account_credentials_path(cert_store.dir()),
             root_ca,
+            cert_store.key_path(),
         ))
     }
 
@@ -200,6 +207,7 @@ impl InstantAcmeIssuer {
             &self.config.challenges,
             &self.config.account_path,
             self.config.root_ca.as_deref(),
+            &self.config.key_path,
         )
         .await
     }
@@ -262,6 +270,7 @@ pub async fn issue_certificate(
     challenges: &AcmeChallengeStore,
     account_path: &Path,
     root_ca: Option<&Path>,
+    key_path: &Path,
 ) -> Result<IssuedCertificate, AcmeError> {
     if directory.trim().is_empty() {
         return Err(AcmeError::EmptyDirectory);
@@ -304,7 +313,14 @@ pub async fn issue_certificate(
         return Err(AcmeError::OrderNotReady(status));
     }
 
-    let key_pem = order.finalize().await?;
+    // `Order::finalize` generates a throwaway keypair, so the public key would
+    // change on every renewal (every ~6 days on the short-lived profile) and
+    // break any client that pinned it. Sign our own CSR with the persisted key
+    // instead.
+    let key_pair = load_or_create_key(key_path).await?;
+    let csr = build_csr(identity, &key_pair)?;
+    order.finalize_csr(csr.der()).await?;
+    let key_pem = key_pair.serialize_pem();
     let cert_pem = order.poll_certificate(&CERTIFICATE_POLICY).await?;
 
     challenges.write().expect("challenge lock").clear();
@@ -316,6 +332,49 @@ pub async fn issue_certificate(
         key_pem,
         not_after,
     })
+}
+
+/// Load the persisted private key, generating and saving one on first use.
+///
+/// A key that cannot be parsed is replaced rather than fatal: an unreadable
+/// `key.pem` would otherwise block issuance forever.
+async fn load_or_create_key(key_path: &Path) -> Result<rcgen::KeyPair, AcmeError> {
+    if let Some(pem) = CertStore::load_pem_at(key_path).await? {
+        match rcgen::KeyPair::from_pem(&pem) {
+            Ok(key) => return Ok(key),
+            Err(e) => {
+                tracing::warn!(
+                    "stored key at {} is unusable ({e}); generating a new one",
+                    key_path.display()
+                );
+            },
+        }
+    }
+
+    let key = rcgen::KeyPair::generate().map_err(|_| AcmeError::CsrGen)?;
+    if let Some(parent) = key_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    tokio::fs::write(key_path, key.serialize_pem()).await?;
+    Ok(key)
+}
+
+/// CSR for the ACME identity, signed by the persisted key.
+///
+/// The SAN list holds the ACME identifier and nothing else: a CA rejects a CSR
+/// naming identifiers the order did not authorize, so the extra `localhost` and
+/// `127.0.0.1` names of the self-signed fallback must not appear here.
+fn build_csr(
+    identity: &TlsIdentity,
+    key: &rcgen::KeyPair,
+) -> Result<rcgen::CertificateSigningRequest, AcmeError> {
+    let san = match identity {
+        TlsIdentity::Dns(name) => name.clone(),
+        TlsIdentity::Ip(ip) => ip.to_string(),
+    };
+    let mut params = rcgen::CertificateParams::new(vec![san]).map_err(|_| AcmeError::CsrGen)?;
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    params.serialize_request(key).map_err(|_| AcmeError::CsrGen)
 }
 
 /// Log why validation did not succeed.
@@ -423,6 +482,7 @@ mod tests {
             challenges,
             PathBuf::from("/tmp/acme-account.json"),
             None,
+            PathBuf::from("/tmp/acme-key.pem"),
         )
     }
 
@@ -438,6 +498,57 @@ mod tests {
             issuer.challenges().read().unwrap().get("tok").map(String::as_str),
             Some("auth")
         );
+    }
+
+    #[tokio::test]
+    async fn key_is_generated_once_and_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key.pem");
+
+        let first = load_or_create_key(&path).await.unwrap();
+        assert!(path.exists());
+        let second = load_or_create_key(&path).await.unwrap();
+
+        // The public key is what clients pin, so it is what must survive a
+        // renewal, not just the file.
+        assert_eq!(first.public_key_der(), second.public_key_der());
+    }
+
+    #[tokio::test]
+    async fn unusable_key_is_replaced_not_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("key.pem");
+        tokio::fs::write(&path, "not a key").await.unwrap();
+
+        let key = load_or_create_key(&path).await.unwrap();
+        let reloaded = load_or_create_key(&path).await.unwrap();
+        assert_eq!(key.public_key_der(), reloaded.public_key_der());
+    }
+
+    #[test]
+    fn csr_names_only_the_acme_identity() {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+        let csr = build_csr(&TlsIdentity::Ip(ip), &key).unwrap();
+
+        use x509_parser::prelude::FromDer;
+        let (_, parsed) =
+            x509_parser::certification_request::X509CertificationRequest::from_der(csr.der())
+                .unwrap();
+        let sans: Vec<_> = parsed
+            .requested_extensions()
+            .unwrap()
+            .filter_map(|ext| {
+                match ext {
+                    x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) => {
+                        Some(san.general_names.clone())
+                    },
+                    _ => None,
+                }
+            })
+            .flatten()
+            .collect();
+        assert_eq!(sans, vec![x509_parser::extensions::GeneralName::IPAddress(&[203, 0, 113, 10])]);
     }
 
     #[test]
