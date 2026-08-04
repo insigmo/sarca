@@ -703,7 +703,31 @@ impl<'t> TelegramBotApi<'t> {
     }
 
     pub async fn download(&self, telegram_file_id: &str, storage_id: Uuid) -> SarcaResult<Vec<u8>> {
-        let token = self.scheduler.get_token(storage_id).await?;
+        self.download_impl(telegram_file_id, storage_id, None).await
+    }
+
+    /// Like `download`, but gives up and returns `StorageBusy` if no token is
+    /// available before `deadline` — for interactive read paths that would
+    /// rather 503 than hold a request open for minutes.
+    pub async fn download_before(
+        &self,
+        telegram_file_id: &str,
+        storage_id: Uuid,
+        deadline: Instant,
+    ) -> SarcaResult<Vec<u8>> {
+        self.download_impl(telegram_file_id, storage_id, Some(deadline)).await
+    }
+
+    async fn download_impl(
+        &self,
+        telegram_file_id: &str,
+        storage_id: Uuid,
+        deadline: Option<Instant>,
+    ) -> SarcaResult<Vec<u8>> {
+        let token = match deadline {
+            Some(deadline) => self.scheduler.get_token_before(storage_id, deadline).await?,
+            None => self.scheduler.get_token(storage_id).await?,
+        };
         let url = self.build_url("", "getFile", &token);
         let masked_url = Self::mask_url(&url);
 

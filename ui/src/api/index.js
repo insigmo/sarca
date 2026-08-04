@@ -618,6 +618,8 @@ const getPreviewUrl = async (storage_id, path) => {
  * @returns {Promise<Blob>}
  */
 const thumb = async (storage_id, path, signal) => {
+	// silent: true — a busy storage returns 503 while thumbQueue retries with
+	// backoff; that is not a user-facing error, so it must not trigger a toast.
 	const response = await apiRequest(
 		`/storages/${storage_id}/files/thumb/${encodeFilePath(path)}`,
 		'get',
@@ -625,7 +627,7 @@ const thumb = async (storage_id, path, signal) => {
 		undefined,
 		true,
 		false,
-		false,
+		true,
 		signal,
 	)
 
