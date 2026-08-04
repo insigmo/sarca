@@ -2,6 +2,7 @@ use std::{
     net::SocketAddr,
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
+    time::Duration,
 };
 
 use chrono::{DateTime, Utc};
@@ -12,6 +13,7 @@ use instant_acme::{
     Identifier,
     NewAccount,
     NewOrder,
+    OrderStatus,
     RetryPolicy,
 };
 use thiserror::Error;
@@ -26,6 +28,23 @@ pub type AcmeChallengeStore = ChallengeStore;
 pub const SHORTLIVED_PROFILE: &str = "shortlived";
 
 const ACCOUNT_FILE: &str = "acme-account.json";
+
+/// How long to wait for the CA to validate the http-01 challenge.
+///
+/// The library default gives up after 30s. Let's Encrypt regularly needs
+/// longer than that (validation is queued and retried from several vantage
+/// points), and the timeout surfaced as "timed out waiting for an order
+/// update" while validation was still in flight.
+const READY_POLICY: RetryPolicy = RetryPolicy::new()
+    .initial_delay(Duration::from_secs(1))
+    .backoff(1.4)
+    .timeout(Duration::from_secs(180));
+
+/// Issuance after validation is quicker, but still not always under 30s.
+const CERTIFICATE_POLICY: RetryPolicy = RetryPolicy::new()
+    .initial_delay(Duration::from_secs(1))
+    .backoff(1.4)
+    .timeout(Duration::from_secs(90));
 
 /// Register an http-01 challenge response for `token`.
 pub fn register_challenge(
@@ -63,6 +82,8 @@ pub struct AcmeConfig {
     pub identity: SharedIdentity,
     pub challenges: AcmeChallengeStore,
     pub account_path: PathBuf,
+    /// Extra PEM root for the ACME client (private CA); `None` uses the system store.
+    pub root_ca: Option<PathBuf>,
 }
 
 impl AcmeConfig {
@@ -72,6 +93,7 @@ impl AcmeConfig {
         identity: SharedIdentity,
         challenges: AcmeChallengeStore,
         account_path: PathBuf,
+        root_ca: Option<PathBuf>,
     ) -> Self {
         Self {
             directory,
@@ -79,6 +101,7 @@ impl AcmeConfig {
             identity,
             challenges,
             account_path,
+            root_ca,
         }
     }
 }
@@ -105,6 +128,8 @@ pub enum AcmeError {
     InvalidCert,
     #[error("ACME directory URL is empty")]
     EmptyDirectory,
+    #[error("ACME order never became ready (status: {0:?})")]
+    OrderNotReady(OrderStatus),
 }
 
 /// Whether in-process ACME issuance is enabled (`SARCA_ACME=0` or empty directory disables it).
@@ -150,6 +175,7 @@ impl InstantAcmeIssuer {
         identity: SharedIdentity,
         challenges: AcmeChallengeStore,
         cert_store: &CertStore,
+        root_ca: Option<PathBuf>,
     ) -> Self {
         Self::new(AcmeConfig::new(
             directory,
@@ -157,6 +183,7 @@ impl InstantAcmeIssuer {
             identity,
             challenges,
             account_credentials_path(cert_store.dir()),
+            root_ca,
         ))
     }
 
@@ -172,6 +199,7 @@ impl InstantAcmeIssuer {
             &self.identity(),
             &self.config.challenges,
             &self.config.account_path,
+            self.config.root_ca.as_deref(),
         )
         .await
     }
@@ -233,12 +261,18 @@ pub async fn issue_certificate(
     identity: &TlsIdentity,
     challenges: &AcmeChallengeStore,
     account_path: &Path,
+    root_ca: Option<&Path>,
 ) -> Result<IssuedCertificate, AcmeError> {
     if directory.trim().is_empty() {
         return Err(AcmeError::EmptyDirectory);
     }
 
-    let builder = Account::builder()?;
+    // A private CA (step-ca, Pebble, the e2e mock) is not in the system trust
+    // store, so its root has to be handed to the ACME client explicitly.
+    let builder = match root_ca {
+        Some(path) => Account::builder_with_root(path)?,
+        None => Account::builder()?,
+    };
 
     let account = load_or_create_account(builder, directory, account_path).await?;
 
@@ -258,9 +292,20 @@ pub async fn issue_certificate(
         challenge.set_ready().await?;
     }
 
-    order.poll_ready(&RetryPolicy::default()).await?;
+    let status = match order.poll_ready(&READY_POLICY).await {
+        Ok(status) => status,
+        Err(e) => {
+            log_authorization_failures(&mut order).await;
+            return Err(e.into());
+        },
+    };
+    if status != OrderStatus::Ready {
+        log_authorization_failures(&mut order).await;
+        return Err(AcmeError::OrderNotReady(status));
+    }
+
     let key_pem = order.finalize().await?;
-    let cert_pem = order.poll_certificate(&RetryPolicy::default()).await?;
+    let cert_pem = order.poll_certificate(&CERTIFICATE_POLICY).await?;
 
     challenges.write().expect("challenge lock").clear();
 
@@ -271,6 +316,33 @@ pub async fn issue_certificate(
         key_pem,
         not_after,
     })
+}
+
+/// Log why validation did not succeed.
+///
+/// `poll_ready` only reports that the order never became ready; the actionable
+/// detail (unreachable http-01, wrong address, firewall) lives in the
+/// per-authorization challenge error.
+async fn log_authorization_failures(order: &mut instant_acme::Order) {
+    let mut authorizations = order.authorizations();
+    while let Some(result) = authorizations.next().await {
+        let mut authz = match result {
+            Ok(authz) => authz,
+            Err(e) => {
+                tracing::error!("ACME authorization could not be read: {e}");
+                continue;
+            },
+        };
+        let url = authz.url().to_owned();
+        match authz.refresh().await {
+            Ok(state) => tracing::error!(
+                "ACME authorization {url}: status={:?}, challenges={:?}",
+                state.status,
+                state.challenges
+            ),
+            Err(e) => tracing::error!("ACME authorization {url} could not be refreshed: {e}"),
+        }
+    }
 }
 
 async fn new_order_with_profile(
@@ -348,6 +420,7 @@ mod tests {
             identity,
             challenges,
             PathBuf::from("/tmp/acme-account.json"),
+            None,
         )
     }
 
