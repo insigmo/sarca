@@ -645,6 +645,7 @@ impl FilesRouter {
         let db = state.db.clone();
         let cache = ChunkCache::new(&state.config.work_dir);
         let is_video = crate::models::files::is_video(path, Some(&content_type));
+        let media_semaphore = state.media_semaphore.clone();
 
         let channels =
             ordered_active_channels(&db, storage_id).await.map_err(<(StatusCode, String)>::from)?;
@@ -670,6 +671,7 @@ impl FilesRouter {
                         rate,
                         storage_id,
                         file_id,
+                        media_semaphore.clone(),
                     );
                 }
             }
@@ -699,15 +701,19 @@ impl FilesRouter {
                                 rate,
                                 storage_id,
                                 file_id,
+                                media_semaphore.clone(),
                             );
                         }
                     }
                 }
 
                 let chunk_candidates = candidates.get(&chunk.position).cloned().unwrap_or_default();
+                let permit =
+                    media_semaphore.acquire().await.expect("media semaphore never closed");
                 let cached = ensure_chunk_cached(&cache, &base_url, &db, rate, storage_id, &chunk_candidates)
                     .await
                     .map_err(|e| io::Error::other(e.to_string()))?;
+                drop(permit);
 
                 let mut file = tokio::fs::File::open(&cached)
                     .await
@@ -867,6 +873,11 @@ impl FilesRouter {
                 for chunk in chunks {
                     let chunk_candidates =
                         candidates.get(&chunk.position).cloned().unwrap_or_default();
+                    let _permit = state
+                        .media_semaphore
+                        .acquire()
+                        .await
+                        .expect("media semaphore never closed");
                     let mut stream = download_chunk_stream_with_failover(
                         &base_url,
                         &db,
@@ -984,10 +995,12 @@ impl FilesRouter {
         }
 
         let scheduler = StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
+        let permit = state.media_semaphore.acquire().await.expect("media semaphore never closed");
         let bytes = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
             .download(thumb_id, storage_id)
             .await
             .map_err(<(StatusCode, String)>::from)?;
+        drop(permit);
 
         if is_jpeg(&bytes) {
             if let Err(e) = thumb_cache.put(&cache_key, &bytes).await {
@@ -1054,10 +1067,13 @@ impl FilesRouter {
         if let Some(preview_id) = file.preview_telegram_file_id.as_deref() {
             let scheduler =
                 StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
-            match TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
+            let permit =
+                state.media_semaphore.acquire().await.expect("media semaphore never closed");
+            let result = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
                 .download(preview_id, storage_id)
-                .await
-            {
+                .await;
+            drop(permit);
+            match result {
                 Ok(bytes) if is_jpeg(&bytes) => {
                     if let Err(e) = preview_cache.put(&cache_key, &bytes).await {
                         tracing::warn!("preview cache write skipped: {e}");
@@ -1318,6 +1334,7 @@ async fn assemble_file_bytes(
         .map_err(<(StatusCode, String)>::from)?;
 
     let mut out = Vec::with_capacity(file_size as usize);
+    let _permit = state.media_semaphore.acquire().await.expect("media semaphore never closed");
 
     for (idx, chunk) in chunks.into_iter().enumerate() {
         let chunk_candidates = candidates.get(&chunk.position).cloned().unwrap_or_default();
@@ -1400,8 +1417,10 @@ fn prefetch_telegram_chunk(
     rate: u8,
     storage_id: Uuid,
     telegram_file_id: String,
+    media_semaphore: Arc<tokio::sync::Semaphore>,
 ) {
     tokio::spawn(async move {
+        let Ok(_permit) = media_semaphore.acquire().await else { return };
         let scheduler = StorageWorkersScheduler::new(&db, rate);
         let api = TelegramBotApi::new(&base_url, scheduler);
         if let Err(e) = cache.ensure(&telegram_file_id, storage_id, &api).await {
