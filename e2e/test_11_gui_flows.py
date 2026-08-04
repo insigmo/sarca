@@ -101,7 +101,11 @@ def set_sort(app: ClientApp, field: str, direction: str) -> None:
 
 
 def test_sign_in_survives_a_relaunch_and_log_out_clears_it(
-    signed_in: ClientApp, base_url: str, storage: str
+    signed_in: ClientApp,
+    base_url: str,
+    storage: str,
+    sarca: SarcaClient,
+    credentials: tuple[str, str],
 ) -> None:
     """The session is the thing a user never wants to redo.
 
@@ -125,6 +129,11 @@ def test_sign_in_survives_a_relaunch_and_log_out_clears_it(
     signed_in.sidebar_click("Log out")
     signed_in.wait_for_url("/login")
     assert not signed_in.local_storage("access_token"), "log out left the token behind"
+
+    # Log out is "log out everywhere": the server bumps the user's
+    # tokens_valid_from, which also kills the token the harness holds for the
+    # same superuser. Mint a fresh one so the rest of the session still works.
+    sarca.login(*credentials)
 
 
 # ---------------------------------------------------------------- 2. storages
