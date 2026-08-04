@@ -89,7 +89,6 @@ pwhash = "1.0.0"
 # (RUSTSEC-2023-0071, Marvin) out of the build entirely. Only HS256 is used.
 jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
 sha2 = "0.10"
-lettre = { version = "0.11", default-features = false, features = ["builder", "smtp-transport", "tokio1-rustls-tls"] }
 
 # async
 tokio = { version = "1.33.0", features = ["full"] }

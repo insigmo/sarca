@@ -10,9 +10,6 @@ import AlertStack from './components/AlertStack'
 import UploadManager from './components/UploadManager'
 import Files from './pages/Files'
 import PublicShare from './pages/PublicShare'
-import ForgotPassword from './pages/ForgotPassword'
-import ResetPassword from './pages/ResetPassword'
-import Verify from './pages/Verify'
 import NotFound from './pages/404'
 import { initTheme, useThemeMode } from './common/theme'
 import { bindOpenSettingsDeepLink } from './common/nativeClient'
@@ -191,9 +188,6 @@ const App = () => {
 					<AppLockGate>
 						<Routes>
 							<Route path="/login" component={Login} />
-							<Route path="/forgot-password" component={ForgotPassword} />
-							<Route path="/reset-password" component={ResetPassword} />
-							<Route path="/verify" component={Verify} />
 							<Route path="/s/:token" component={PublicShare} />
 
 							<Route path="/" component={BasicLayout}>

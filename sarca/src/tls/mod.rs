@@ -1,4 +1,5 @@
 mod acme;
+mod public_ip;
 mod renew;
 mod serve;
 mod store;
@@ -19,6 +20,7 @@ pub use acme::{
     register_challenge,
     save_issued,
 };
+pub use public_ip::detect_public_ip;
 pub use renew::{parse_not_after, renew_at, spawn_renewal_task};
 pub use serve::{
     ChallengeStore,

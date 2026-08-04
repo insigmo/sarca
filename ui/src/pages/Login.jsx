@@ -5,7 +5,7 @@ import Button from '@suid/material/Button'
 import Paper from '@suid/material/Paper'
 import Stack from '@suid/material/Stack'
 import createLocalStore from '../../libs'
-import { A, useNavigate } from '@solidjs/router'
+import { useNavigate } from '@solidjs/router'
 
 import API from '../api'
 import { safeRedirectPath } from '../common/auth'
@@ -95,10 +95,6 @@ const Login = () => {
 							autoComplete="current-password"
 							required
 						/>
-
-						<A class="default-link auth-forgot-link" href="/forgot-password">
-							Forgot password?
-						</A>
 
 						<Stack spacing={1.5} sx={{ mt: 0.5 }}>
 							<Button type="submit" variant="contained" color="secondary" size="large">

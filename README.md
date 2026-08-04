@@ -50,7 +50,7 @@ Single-container deploy (SQLite + in-process TLS/ACME):
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash -s -- --docker
 ```
 
-Open `https://your-domain` when `TLS_HOSTNAME` is set, otherwise `http://127.0.0.1:$PORT` (default `8000`). Logs: `docker logs -f sarca`.
+Open `https://your-domain` when `TLS_HOSTNAME` is set. Unset, the server detects its public IP at startup and serves HTTPS on that identity; only a host with no reachable address falls back to `http://127.0.0.1:$PORT` (default `8000`). Logs: `docker logs -f sarca`.
 
 <details>
 <summary>Build from source</summary>
@@ -112,7 +112,7 @@ Full list: [`sarca.conf.example`](sarca.conf.example).
 | `SUPERUSER_EMAIL` / `SUPERUSER_PASS` | Bootstrap admin |
 | `SECRET_KEY` | JWT + encryption (installer generates this) |
 | `SQLITE_PATH` | SQLite metadata database (default `{WORK_DIR}/sarca.sqlite`) |
-| `TLS_HOSTNAME` | Public domain or IP for ACME certificate |
+| `TLS_HOSTNAME` | Public domain or IP for ACME certificate (default: detected public IP) |
 | `HTTPS_ADDR` / `ACME_HTTP_ADDR` | HTTPS (443) and ACME (80) listen addresses |
 | `CERTS_DIR` | PEM store for issued certificates |
 | `TELEGRAM_*` | Bot API URL, rate limit, chunk size (≤20 MB) |
