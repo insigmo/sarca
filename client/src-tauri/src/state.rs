@@ -1039,10 +1039,6 @@ impl AppSyncState {
         }
     }
 
-    pub fn take_inject(&self) -> Option<SessionInject> {
-        self.pending_inject.lock().ok().and_then(|mut g| g.take())
-    }
-
     /// Take the queued inject only when `url` is the origin it was queued for.
     /// A mismatch leaves it queued, so the real remote load still gets it.
     pub fn take_inject_for(&self, url: &Url) -> Option<SessionInject> {
