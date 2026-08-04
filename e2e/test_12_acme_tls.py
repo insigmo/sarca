@@ -73,6 +73,6 @@ def test_https_serves_the_acme_certificate(acme_server):
 
 def test_http3_uses_the_acme_certificate(acme_server):
     """HTTP/3 shares the resolver, so QUIC must serve the same fresh certificate."""
-    server, _ca = acme_server
-    response = h3_request("127.0.0.1", server.https_port, "/health")
+    server, ca = acme_server
+    response = h3_request("127.0.0.1", server.https_port, "/health", cafile=str(ca.ca_path))
     assert response.status == 200, response
