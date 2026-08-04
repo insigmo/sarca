@@ -150,7 +150,6 @@ async fn main() {
     eprintln!("ensuring superuser…");
     create_superuser(&db, &config).await;
     let config_copy = config.clone();
-    let workers = config.workers;
 
     let manager_db = db.clone();
     tokio::spawn(async move {
@@ -188,7 +187,7 @@ async fn main() {
     );
 
     let app_state = AppState::new(db, config.clone(), tx);
-    let server = Server::build_server(workers.into(), Arc::new(app_state));
+    let server = Server::build_server(Arc::new(app_state));
 
     let cert_store = CertStore::new(&config.certs_dir);
     cert_store

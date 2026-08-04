@@ -361,6 +361,7 @@ write_or_merge_conf() {
   set -- \
     "PORT=8000" \
     "WORKERS=4" \
+    "MEDIA_CONCURRENCY=16" \
     "CHANNEL_CAPACITY=32" \
     "SUPERUSER_EMAIL=admin@example.com" \
     "SUPERUSER_PASS=change-me" \
