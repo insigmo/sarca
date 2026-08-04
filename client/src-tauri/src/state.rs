@@ -891,10 +891,12 @@ impl AppSyncState {
     /// about a server reached by a LAN address; the proxy leg does the pinned
     /// TLS on its behalf. Any previous proxy is stopped first, so exactly one
     /// port is ever bound.
-    pub fn start_proxy(&self, base_url: &str) -> Result<String, String> {
+    /// Callers are always on the async runtime, so this awaits rather than
+    /// blocking: `block_on` from a runtime worker panics with "Cannot start a
+    /// runtime from within a runtime" and left Connect dead in the water.
+    pub async fn start_proxy(&self, base_url: &str) -> Result<String, String> {
         self.stop_proxy();
-        let proxy = tauri::async_runtime::block_on(LocalProxy::start(base_url))
-            .map_err(|e| e.to_string())?;
+        let proxy = LocalProxy::start(base_url).await.map_err(|e| e.to_string())?;
         let origin = proxy.origin();
         if let Ok(mut guard) = self.proxy.lock() {
             *guard = Some(proxy);
@@ -1292,7 +1294,7 @@ pub fn new_binding(
     })
 }
 
-pub fn navigate_to_server(app: &AppHandle, cfg: &ServerConfig) -> Result<(), String> {
+pub async fn navigate_to_server(app: &AppHandle, cfg: &ServerConfig) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window missing".to_string())?;
@@ -1301,13 +1303,12 @@ pub fn navigate_to_server(app: &AppHandle, cfg: &ServerConfig) -> Result<(), Str
     // The webview cannot use our pinned trust, so a server it cannot validate
     // itself is served over loopback instead. A server it can reach directly
     // is loaded directly, exactly as before.
-    let direct =
-        tauri::async_runtime::block_on(sarca_sync::proxy::reachable_without_proxy(&cfg.base_url));
+    let direct = sarca_sync::proxy::reachable_without_proxy(&cfg.base_url).await;
     let url = if direct {
         state.stop_proxy();
         cfg.app_url().map_err(|e| e.to_string())?
     } else {
-        let origin = state.start_proxy(&cfg.base_url)?;
+        let origin = state.start_proxy(&cfg.base_url).await?;
         Url::parse(&format!("{origin}/")).map_err(|e| e.to_string())?
     };
 
