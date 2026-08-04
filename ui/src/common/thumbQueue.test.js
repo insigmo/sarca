@@ -76,4 +76,51 @@ describe('thumbQueue', () => {
 		const results = await Promise.allSettled(tasks)
 		expect(results.every((r) => r.status === 'rejected')).toBe(true)
 	})
+
+	it('retries a 503 with backoff instead of failing the tile', async () => {
+		vi.useFakeTimers()
+		try {
+			let calls = 0
+			const promise = enqueueThumbFetch(() => {
+				calls += 1
+				if (calls < 3) {
+					const err = new Error('storage is busy, retry shortly')
+					err.status = 503
+					return Promise.reject(err)
+				}
+				return Promise.resolve('ok')
+			})
+
+			await vi.advanceTimersByTimeAsync(1000)
+			await vi.advanceTimersByTimeAsync(2000)
+
+			await expect(promise).resolves.toBe('ok')
+			expect(calls).toBe(3)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
+
+	it('gives up after exhausting 503 retries', async () => {
+		vi.useFakeTimers()
+		try {
+			let calls = 0
+			const err = new Error('storage is busy, retry shortly')
+			err.status = 503
+			const promise = enqueueThumbFetch(() => {
+				calls += 1
+				return Promise.reject(err)
+			})
+			promise.catch(() => {})
+
+			await vi.advanceTimersByTimeAsync(1000)
+			await vi.advanceTimersByTimeAsync(2000)
+			await vi.advanceTimersByTimeAsync(4000)
+
+			await expect(promise).rejects.toBe(err)
+			expect(calls).toBe(4)
+		} finally {
+			vi.useRealTimers()
+		}
+	})
 })
