@@ -24,12 +24,12 @@ pub struct TrashService<'d> {
     access_repo: AccessRepository<'d>,
     db: &'d SqlitePool,
     base_url: &'d str,
-    rate_limit: u8,
+    rate_limit: u16,
     work_dir: &'d str,
 }
 
 impl<'d> TrashService<'d> {
-    pub fn new(db: &'d SqlitePool, base_url: &'d str, rate_limit: u8, work_dir: &'d str) -> Self {
+    pub fn new(db: &'d SqlitePool, base_url: &'d str, rate_limit: u16, work_dir: &'d str) -> Self {
         Self {
             files_repo: FilesRepository::new(db),
             access_repo: AccessRepository::new(db),
@@ -176,7 +176,7 @@ async fn live_conflict_at(
 pub async fn purge_file_ids(
     db: &SqlitePool,
     base_url: &str,
-    rate_limit: u8,
+    rate_limit: u16,
     ids: &[Uuid],
 ) -> SarcaResult<()> {
     if ids.is_empty() {
@@ -225,7 +225,7 @@ pub async fn purge_file_ids(
 async fn gc_telegram_messages(
     db: &SqlitePool,
     base_url: &str,
-    rate_limit: u8,
+    rate_limit: u16,
     messages: Vec<(i64, i64, Uuid)>,
 ) -> SarcaResult<()> {
     let replicas_repo = ChunkReplicasRepository::new(db);

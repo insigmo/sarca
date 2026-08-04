@@ -236,7 +236,7 @@ impl<'d> StorageWorkersRepository<'d> {
     pub async fn get_token(
         &self,
         storage_id: Uuid,
-        limit: u8,
+        limit: u16,
     ) -> SarcaResult<Option<StorageWorkerTokenOnly>> {
         let mut transaction = self.db.begin().await.map_err(|e| map_not_found(&e, ""))?;
 
@@ -266,7 +266,7 @@ impl<'d> StorageWorkersRepository<'d> {
             "
         ))
         .bind(storage_id)
-        .bind(i16::from(limit))
+        .bind(i32::from(limit))
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|e| map_not_found(&e, "some entity"))?;
