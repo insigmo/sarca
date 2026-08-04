@@ -32,7 +32,7 @@ pub struct StorageManagerService<'d> {
     replicas_repo: ChunkReplicasRepository<'d>,
     telegram_baseurl: &'d str,
     db: &'d SqlitePool,
-    rate_limit: u8,
+    rate_limit: u16,
     /// `WORK_DIR`, so freshly built previews can warm the on-disk preview cache.
     work_dir: &'d str,
 }
@@ -61,7 +61,7 @@ impl<'d> StorageManagerService<'d> {
     pub fn new(
         db: &'d SqlitePool,
         telegram_baseurl: &'d str,
-        rate_limit: u8,
+        rate_limit: u16,
         work_dir: &'d str,
     ) -> Self {
         let files_repo = FilesRepository::new(db);

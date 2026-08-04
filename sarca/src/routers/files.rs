@@ -1266,7 +1266,7 @@ async fn ensure_chunk_cached(
     cache: &ChunkCache,
     base_url: &str,
     db: &sqlx::SqlitePool,
-    rate: u8,
+    rate: u16,
     storage_id: Uuid,
     candidates: &[(String, Uuid)],
 ) -> SarcaResult<std::path::PathBuf> {
@@ -1293,7 +1293,7 @@ async fn ensure_chunk_cached(
 async fn download_chunk_stream_with_failover(
     base_url: &str,
     db: &sqlx::SqlitePool,
-    rate: u8,
+    rate: u16,
     storage_id: Uuid,
     candidates: &[(String, Uuid)],
 ) -> SarcaResult<Pin<Box<dyn Stream<Item = Result<tokio_util::bytes::Bytes, SarcaError>> + Send>>> {
@@ -1440,7 +1440,7 @@ fn prefetch_telegram_chunk(
     cache: ChunkCache,
     base_url: String,
     db: sqlx::SqlitePool,
-    rate: u8,
+    rate: u16,
     storage_id: Uuid,
     telegram_file_id: String,
     media_semaphore: Arc<tokio::sync::Semaphore>,

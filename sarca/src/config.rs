@@ -33,7 +33,7 @@ pub struct Config {
     pub secret_key: String,
 
     pub telegram_api_base_url: String,
-    pub telegram_rate_limit: u8,
+    pub telegram_rate_limit: u16,
 
     /// How many files the storage manager relays to Telegram at once. Chunks of a
     /// single file always stay sequential, and the per-token send gate still paces
@@ -107,7 +107,7 @@ impl Config {
             "TELEGRAM_API_BASE_URL",
             "https://api.telegram.org".to_owned(),
         )?;
-        let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 18)?;
+        let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 60u16)?;
         // 4 is the useful ceiling: beyond that the per-token send gate, not the
         // manager, is what everyone queues behind. 0 would wedge the manager.
         let upload_concurrency =
