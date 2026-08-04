@@ -38,7 +38,7 @@ const ACCOUNT_FILE: &str = "acme-account.json";
 const READY_POLICY: RetryPolicy = RetryPolicy::new()
     .initial_delay(Duration::from_secs(1))
     .backoff(1.4)
-    .timeout(Duration::from_secs(180));
+    .timeout(Duration::from_mins(3));
 
 /// Issuance after validation is quicker, but still not always under 30s.
 const CERTIFICATE_POLICY: RetryPolicy = RetryPolicy::new()
@@ -335,11 +335,13 @@ async fn log_authorization_failures(order: &mut instant_acme::Order) {
         };
         let url = authz.url().to_owned();
         match authz.refresh().await {
-            Ok(state) => tracing::error!(
-                "ACME authorization {url}: status={:?}, challenges={:?}",
-                state.status,
-                state.challenges
-            ),
+            Ok(state) => {
+                tracing::error!(
+                    "ACME authorization {url}: status={:?}, challenges={:?}",
+                    state.status,
+                    state.challenges
+                );
+            },
             Err(e) => tracing::error!("ACME authorization {url} could not be refreshed: {e}"),
         }
     }
