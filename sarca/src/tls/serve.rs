@@ -1,7 +1,11 @@
 use std::{
     io::Cursor,
     net::SocketAddr,
-    sync::{Arc, RwLock},
+    sync::{
+        Arc,
+        RwLock,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 use axum::{
@@ -16,7 +20,10 @@ use hyper_util::service::TowerToHyperService;
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer},
+    server::{ClientHello, ResolvesServerCert},
+    sign::CertifiedKey,
 };
+use tokio::sync::Notify;
 use tokio_rustls::TlsAcceptor;
 
 use super::{CertStore, TlsError, TlsIdentity};
@@ -30,6 +37,44 @@ pub struct TlsMaterial {
     pub key: PrivateKeyDer<'static>,
 }
 
+/// Certificate holder shared by the TCP and QUIC rustls configs.
+///
+/// Both listeners resolve their certificate through this one object, so a
+/// renewed certificate reaches HTTP/3 without a process restart: QUIC's
+/// `ServerConfig` is built once, but it asks the resolver on every handshake.
+#[derive(Debug)]
+pub struct CertResolver {
+    current: RwLock<Arc<CertifiedKey>>,
+}
+
+impl CertResolver {
+    pub fn new(material: &TlsMaterial) -> Result<Arc<Self>, TlsError> {
+        Ok(Arc::new(Self {
+            current: RwLock::new(certified_key(material)?),
+        }))
+    }
+
+    /// Swap in freshly issued material. Live connections keep their old
+    /// certificate; every new handshake gets the new one.
+    pub fn set(&self, material: &TlsMaterial) -> Result<(), TlsError> {
+        let key = certified_key(material)?;
+        *self.current.write().expect("cert resolver lock") = key;
+        Ok(())
+    }
+}
+
+impl ResolvesServerCert for CertResolver {
+    fn resolve(&self, _hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        Some(self.current.read().expect("cert resolver lock").clone())
+    }
+}
+
+fn certified_key(material: &TlsMaterial) -> Result<Arc<CertifiedKey>, TlsError> {
+    let signing = rustls::crypto::ring::sign::any_supported_type(&material.key)
+        .map_err(|_| TlsError::InvalidPem)?;
+    Ok(Arc::new(CertifiedKey::new(material.cert_chain.clone(), signing)))
+}
+
 /// Runtime TLS settings shared by TCP HTTPS and QUIC listeners.
 #[derive(Clone)]
 pub struct TlsRuntime {
@@ -37,12 +82,22 @@ pub struct TlsRuntime {
     pub acme_addr: SocketAddr,
     pub challenges: ChallengeStore,
     pub https_redirect_base: String,
+    resolver: Arc<CertResolver>,
     server_config: Arc<RwLock<Arc<ServerConfig>>>,
     quinn_config: quinn::ServerConfig,
+    renew_signal: Arc<Notify>,
+    h3_failures: Arc<AtomicU32>,
 }
 
 const QUIC_ALPN: &[&[u8]] = &[b"h3"];
 const TCP_ALPN: &[&[u8]] = &[b"h2", b"http/1.1"];
+
+/// Consecutive HTTP/3 handshake failures that trigger a certificate refresh.
+///
+/// A broken or expired certificate makes every QUIC handshake fail while TCP
+/// TLS may still limp along on a cached session, so repeated H3 failures are
+/// the earliest signal that the cert needs re-issuing.
+const H3_FAILURE_THRESHOLD: u32 = 3;
 
 /// Load PEM from [`CertStore`] or generate a self-signed cert for first boot.
 pub async fn load_or_generate_material(
@@ -114,14 +169,13 @@ pub fn parse_pem_material(cert_pem: &str, key_pem: &str) -> Result<TlsMaterial, 
     })
 }
 
-pub fn build_rustls_config(material: &TlsMaterial, alpn: &[&[u8]]) -> Arc<ServerConfig> {
+pub fn build_rustls_config(resolver: Arc<CertResolver>, alpn: &[&[u8]]) -> Arc<ServerConfig> {
     let mut config =
         ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
             .expect("protocols")
             .with_no_client_auth()
-            .with_single_cert(material.cert_chain.clone(), material.key.clone_key())
-            .expect("valid tls material");
+            .with_cert_resolver(resolver);
     config.alpn_protocols = alpn.iter().map(|p| (*p).to_vec()).collect();
     config.max_early_data_size = u32::MAX;
     Arc::new(config)
@@ -144,25 +198,54 @@ pub fn new_runtime(
     https_redirect_base: String,
     challenges: ChallengeStore,
 ) -> TlsRuntime {
-    let tcp = build_rustls_config(material, TCP_ALPN);
-    let quic = build_rustls_config(material, QUIC_ALPN);
+    let resolver = CertResolver::new(material).expect("valid tls material");
+    let tcp = build_rustls_config(resolver.clone(), TCP_ALPN);
+    let quic = build_rustls_config(resolver.clone(), QUIC_ALPN);
     TlsRuntime {
         https_addr,
         acme_addr,
         challenges,
         https_redirect_base,
+        resolver,
         server_config: Arc::new(RwLock::new(tcp)),
         quinn_config: build_quinn_config(quic),
+        renew_signal: Arc::new(Notify::new()),
+        h3_failures: Arc::new(AtomicU32::new(0)),
     }
 }
 
 impl TlsRuntime {
-    /// Hot-reload the TCP TLS certificate chain. QUIC/HTTP/3 requires a process restart.
-    pub fn reload_tcp_material(&self, material: &TlsMaterial) {
-        let tcp = build_rustls_config(material, TCP_ALPN);
-        *self.server_config.write().expect("tls lock") = tcp;
-        tracing::info!("TCP TLS certificate hot-reloaded");
-        tracing::warn!("HTTP/3 (QUIC) requires process restart to pick up renewed certificate");
+    /// Hot-reload the certificate for both TCP TLS and HTTP/3.
+    pub fn reload_material(&self, material: &TlsMaterial) -> Result<(), TlsError> {
+        self.resolver.set(material)?;
+        self.h3_failures.store(0, Ordering::Relaxed);
+        tracing::info!("TLS certificate hot-reloaded (TCP + HTTP/3)");
+        Ok(())
+    }
+
+    /// Ask the renewal task to re-issue as soon as it can.
+    pub fn request_renewal(&self, reason: &str) {
+        tracing::warn!("requesting certificate renewal: {reason}");
+        self.renew_signal.notify_one();
+    }
+
+    /// Waker the renewal task parks on between scheduled renewals.
+    pub fn renew_signal(&self) -> Arc<Notify> {
+        self.renew_signal.clone()
+    }
+
+    /// A QUIC handshake failed. Enough of them in a row means the certificate
+    /// is the likely cause, so kick off a renewal to get HTTP/3 back.
+    fn note_h3_failure(&self) {
+        let failures = self.h3_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        if failures >= H3_FAILURE_THRESHOLD {
+            self.h3_failures.store(0, Ordering::Relaxed);
+            self.request_renewal("HTTP/3 handshakes failing repeatedly");
+        }
+    }
+
+    fn note_h3_success(&self) {
+        self.h3_failures.store(0, Ordering::Relaxed);
     }
 }
 
@@ -236,7 +319,7 @@ pub async fn serve_dual_tls(
     let https_addr = runtime.https_addr;
     let acme_addr = runtime.acme_addr;
     let tcp_cfg = runtime.server_config.clone();
-    let quinn_cfg = runtime.quinn_config.clone();
+    let h3_runtime = runtime.clone();
 
     eprintln!();
     eprintln!("========================================");
@@ -255,7 +338,7 @@ pub async fn serve_dual_tls(
     });
 
     let h3_task = tokio::spawn(async move {
-        if let Err(e) = serve_h3(https_addr, h3_router, quinn_cfg).await {
+        if let Err(e) = serve_h3(https_addr, h3_router, h3_runtime).await {
             tracing::error!("HTTP/3 listener failed: {e}");
         }
     });
@@ -307,16 +390,21 @@ async fn serve_tcp_tls(
 async fn serve_h3(
     addr: SocketAddr,
     router: Router,
-    server_config: quinn::ServerConfig,
+    runtime: TlsRuntime,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let endpoint = quinn::Endpoint::server(server_config, addr)?;
+    let endpoint = quinn::Endpoint::server(runtime.quinn_config.clone(), addr)?;
     tracing::info!("HTTP/3 listening on {addr} (UDP)");
 
     while let Some(incoming) = endpoint.accept().await {
         let app = router.clone();
+        let runtime = runtime.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_h3_connection(incoming, app).await {
-                tracing::debug!("HTTP/3 connection error: {e}");
+            match handle_h3_connection(incoming, app, &runtime).await {
+                Ok(()) => runtime.note_h3_success(),
+                Err(e) => {
+                    tracing::debug!("HTTP/3 connection error: {e}");
+                    runtime.note_h3_failure();
+                },
             }
         });
     }
@@ -326,8 +414,12 @@ async fn serve_h3(
 async fn handle_h3_connection(
     incoming: quinn::Incoming,
     app: Router,
+    runtime: &TlsRuntime,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let conn = incoming.await?;
+    // Handshake completed, so the certificate is fine no matter what the
+    // request stream does afterwards.
+    runtime.note_h3_success();
     let mut h3_conn = h3::server::builder().build(h3_quinn::Connection::new(conn)).await?;
     loop {
         match h3_conn.accept().await {
@@ -371,5 +463,24 @@ mod tests {
         let (cert_pem, key_pem, _) = generate_self_signed_pem(&id).unwrap();
         let parsed = parse_pem_material(&cert_pem, &key_pem).unwrap();
         assert!(!parsed.cert_chain.is_empty());
+    }
+
+    #[test]
+    fn resolver_swap_is_visible_to_both_listeners() {
+        let first = generate_self_signed(&TlsIdentity::Dns("first.local".into())).unwrap();
+        let second = generate_self_signed(&TlsIdentity::Dns("second.local".into())).unwrap();
+
+        let resolver = CertResolver::new(&first).unwrap();
+        // The QUIC config is built once and never rebuilt, so the shared
+        // resolver is the only path a renewed cert has into HTTP/3.
+        let _tcp = build_rustls_config(resolver.clone(), TCP_ALPN);
+        let _quic = build_quinn_config(build_rustls_config(resolver.clone(), QUIC_ALPN));
+
+        let before = resolver.current.read().unwrap().cert[0].clone();
+        resolver.set(&second).unwrap();
+        let after = resolver.current.read().unwrap().cert[0].clone();
+
+        assert_eq!(before, first.cert_chain[0]);
+        assert_eq!(after, second.cert_chain[0]);
     }
 }
