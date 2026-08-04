@@ -53,7 +53,11 @@ def _peer_certificate(host: str, port: int, ca_path: str) -> x509.Certificate:
 
 def test_acme_issues_a_certificate_at_startup(acme_server):
     server, ca = acme_server
-    line = server.wait_for_log("ACME certificate issued", timeout=60.0)
+    # The mock CA holds the order pending for VALIDATION_DELAY (35s), and the
+    # client's backoff lands the next poll around 50s in. 60s left ~9s of slack,
+    # which a loaded runner eats; 120s keeps the regression meaningful without
+    # being a coin flip.
+    line = server.wait_for_log("ACME certificate issued", timeout=120.0)
     assert "not_after=" in line
     server.assert_no_log("ACME issuance failed")
     assert ca.issued == 1

@@ -145,6 +145,28 @@ async fn forward(
     })
 }
 
+/// Whether `host` is a literal loopback authority for our port.
+///
+/// The proxy listens on loopback, but loopback is not a boundary a browser
+/// respects: a page on `evil.example` whose DNS name resolves to 127.0.0.1
+/// (DNS rebinding) becomes *same-origin* with us, and from there it reads
+/// every proxied response and drives the whole Sarca API. The port is
+/// ephemeral, which only means the attacker has to scan for it.
+///
+/// A literal-IP `Host` cannot be produced by rebinding, because the browser
+/// sends the hostname it was given, not the address it resolved to. So require
+/// one. Requests with no `Host` at all are HTTP/1.1 protocol errors anyway.
+fn is_loopback_host(host: &str, port: u16) -> bool {
+    let Some((name, host_port)) = host.rsplit_once(':') else {
+        // No port means port 80; we never listen there.
+        return false;
+    };
+    if host_port.parse::<u16>() != Ok(port) {
+        return false;
+    }
+    matches!(name, "127.0.0.1" | "localhost" | "[::1]")
+}
+
 async fn proxy_request(
     client: &Client,
     upstream: &str,
@@ -152,6 +174,21 @@ async fn proxy_request(
     port: u16,
 ) -> Result<Response<ProxyBody>> {
     let (parts, body) = req.into_parts();
+
+    let host_ok = parts
+        .headers
+        .get(HOST)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|h| is_loopback_host(h, port));
+    if !host_ok {
+        tracing::warn!("webview proxy rejected a request with a non-loopback Host header");
+        let mut resp = Response::new(body_from_bytes(Bytes::from_static(
+            b"Sarca client proxy accepts loopback requests only.",
+        )));
+        *resp.status_mut() = StatusCode::FORBIDDEN;
+        return Ok(resp);
+    }
+
     let path = parts.uri.path_and_query().map_or("/", |p| p.as_str());
     let url = format!("{upstream}{path}");
 
@@ -234,6 +271,35 @@ mod tests {
     use std::net::TcpListener as StdListener;
 
     use super::*;
+
+    #[test]
+    fn only_literal_loopback_authorities_are_accepted() {
+        assert!(is_loopback_host("127.0.0.1:8080", 8080));
+        assert!(is_loopback_host("localhost:8080", 8080));
+        assert!(is_loopback_host("[::1]:8080", 8080));
+        // A rebound name: resolves to 127.0.0.1, but the browser sends this.
+        assert!(!is_loopback_host("evil.example:8080", 8080));
+        assert!(!is_loopback_host("evil.example", 8080));
+        // Right name, wrong port: another local service, not us.
+        assert!(!is_loopback_host("127.0.0.1:9090", 8080));
+        assert!(!is_loopback_host("127.0.0.1", 8080));
+        assert!(!is_loopback_host("", 8080));
+    }
+
+    #[tokio::test]
+    async fn a_rebound_host_header_is_refused_before_reaching_upstream() {
+        let (upstream_url, _up) = upstream().await;
+        let proxy = LocalProxy::start(&upstream_url).await.unwrap();
+
+        let response = Client::new()
+            .get(format!("{}/api/files", proxy.origin()))
+            .header(HOST, "evil.example")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
 
     /// Upstream echo server: reports method, path and body, plus a redirect route.
     async fn upstream() -> (String, tokio::task::JoinHandle<()>) {
