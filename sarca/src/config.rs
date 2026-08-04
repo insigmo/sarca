@@ -18,6 +18,9 @@ pub struct Config {
     /// means the server detects its public IP at startup and fills this in.
     pub tls_hostname: Option<String>,
     pub acme_directory: String,
+    /// PEM root the ACME client trusts on top of the system store. Needed for
+    /// a private CA (step-ca, Pebble) and by the ACME e2e test.
+    pub acme_root_ca: Option<String>,
     /// Directory for ACME account + issued PEM material.
     pub certs_dir: String,
     pub workers: u16,
@@ -85,6 +88,7 @@ impl Config {
             "ACME_DIRECTORY",
             "https://acme-v02.api.letsencrypt.org/directory".to_owned(),
         )?;
+        let acme_root_ca = Self::get_optional_env_var("ACME_ROOT_CA");
         let certs_dir = Self::get_optional_env_var("CERTS_DIR")
             .unwrap_or_else(|| Self::default_certs_dir(&work_dir));
         let workers = Self::get_env_var("WORKERS")?;
@@ -118,6 +122,7 @@ impl Config {
             acme_http_addr,
             tls_hostname,
             acme_directory,
+            acme_root_ca,
             certs_dir,
             workers,
             channel_capacity,
@@ -208,6 +213,7 @@ mod tests {
             "ACME_HTTP_ADDR",
             "TLS_HOSTNAME",
             "ACME_DIRECTORY",
+            "ACME_ROOT_CA",
             "CERTS_DIR",
             "SARCA_PLAIN_HTTP",
             "SARCA_ACME",
