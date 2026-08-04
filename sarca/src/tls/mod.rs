@@ -14,15 +14,18 @@ pub use acme::{
     InstantAcmeIssuer,
     IssuedCertificate,
     SHORTLIVED_PROFILE,
+    SharedIdentity,
     StubAcmeIssuer,
     acme_enabled,
     identity_to_identifier,
     register_challenge,
     save_issued,
+    shared_identity,
 };
-pub use public_ip::detect_public_ip;
+pub use public_ip::{detect_public_ip, spawn_public_ip_watch};
 pub use renew::{parse_not_after, renew_at, spawn_renewal_task};
 pub use serve::{
+    CertResolver,
     ChallengeStore,
     TlsMaterial,
     TlsRuntime,
