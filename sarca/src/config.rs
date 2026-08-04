@@ -41,6 +41,11 @@ pub struct Config {
     /// Halved automatically while a flood wait is in effect.
     pub upload_concurrency: u8,
 
+    /// How many thumb/preview/download requests may block on Telegram at once.
+    /// Bounds media-request concurrency independently of `workers`, which is a
+    /// DB-pool/thread-count knob and must not double as a request-admission gate.
+    pub media_concurrency: u16,
+
     /// Where to spool uploads and other temporary data.
     pub work_dir: String,
 
@@ -107,6 +112,8 @@ impl Config {
         // manager, is what everyone queues behind. 0 would wedge the manager.
         let upload_concurrency =
             Self::get_env_var_with_default("UPLOAD_CONCURRENCY", 4u8)?.clamp(1, 16);
+        let media_concurrency =
+            Self::get_env_var_with_default("MEDIA_CONCURRENCY", 16u16)?.clamp(1, 128);
         let telegram_chunk_size_mb =
             Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", 20u32)?;
         let telegram_video_chunk_size_mb =
@@ -134,6 +141,7 @@ impl Config {
             telegram_api_base_url,
             telegram_rate_limit,
             upload_concurrency,
+            media_concurrency,
             work_dir,
             telegram_chunk_size_mb,
             telegram_video_chunk_size_mb,
