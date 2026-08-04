@@ -940,3 +940,59 @@ optional-фичу `sqlx-mysql` и в бинарник не идёт, что по
    тесты проходят, но подмена SVG-строк на имена — визуальное изменение;
    стоит открыть список файлов и убедиться, что все пять иконок на месте в
    обоих состояниях (обычном и активном).
+
+---
+
+# Раунд 3 (2026-08-04, HEAD `2584668`)
+
+Проверка после коммитов `3268d5e`..`2584668`, которые прошли уже после раундов 1-2.
+
+## R3.1 Таблица находок
+
+| Найдено | Риск | Файл | Исправление |
+| --- | --- | --- | --- |
+| Loopback-прокси вебвью принимает любой `Host`: DNS rebinding делает страницу атакующего same-origin с `127.0.0.1:<port>` и даёт ей читать ответы и дёргать весь Sarca API | High | `crates/sarca-sync/src/proxy.rs` | Проверка `Host` на литеральный loopback-authority с нашим портом, иначе 403 (`is_loopback_host`) |
+| `tauri-plugin-pilot` закреплён по `tag`, а тег мутабельный: force-push подменяет код под тем же именем | Medium | `client/src-tauri/Cargo.toml` | Пин по `rev = "a6c5baa…"` |
+| Лог `ACME certificate issued (not_after=…)` удалён вместе с inline-выдачей при старте; e2e-тест на него ещё ждал — красный CI | Medium (CI/наблюдаемость) | `sarca/src/tls/renew.rs` | Логировать в ветке успеха задачи продления; `renew_once` возвращает `not_after` |
+| Ветка ошибки логировала `ACME renewal failed`, а `assert_no_log("ACME issuance failed")` стал бессмысленным | Low | `sarca/src/tls/renew.rs` | Переименовано в `ACME issuance failed` |
+| Запас теста 60s против фактических ~50s выдачи (VALIDATION_DELAY 35s + бэкофф) — флаки на нагруженном раннере | Low | `e2e/test_12_acme_tls.py` | Таймаут 120s |
+
+## R3.2 Проверено и признано закрытым (без изменений)
+
+- **CSP**: `tauri.conf.json` задаёт директивную карту без `unsafe-inline`/`unsafe-eval`;
+  `object-src`/`base-uri`/`form-action`/`frame-ancestors` = `'none'`.
+  `'unsafe-eval'` появляется только в `lib.rs::pilot_context` под
+  `cfg(all(desktop, debug_assertions, feature = "pilot"))` — в релиз не попадает.
+- **Capabilities**: единственный `default.json`, `local: true`, окно `main`,
+  без wildcard; каждая команда перечислена поимённо. Удалённый origin получает
+  права только через `remote_ipc::grant_remote_capability`.
+- **innerHTML-сингки**: `FileViewer` (markdown, docx) проходят через
+  `sanitizeHtml` (DOMPurify, FORBID_TAGS/ATTR); `client/src/sync.js` экранирует
+  через `escapeHtml`; `FluentIcon` не принимает raw-markup проп.
+  `eval` / `new Function` / `document.write` / `dangerouslySetInnerHTML` — нет.
+- **unsafe в Rust**: блоков `unsafe` нет ни в `sarca`, ни в `client/src-tauri`,
+  ни в `sarca-sync`.
+- **Секреты**: в дереве только тестовые значения (`e2e-password-123`,
+  `test-secret-value`, `webview-live-token`).
+- **Зависимости**: `cargo audit` — 1 уязвимость, RUSTSEC-2023-0071 (`rsa` 0.9.10,
+  Marvin), патча нет; приходит только через неактивную фичу `sqlx-mysql`,
+  `cargo tree -i rsa -e normal` печатает "nothing to print", в бинарь не входит.
+  Игнор задокументирован в `.github/workflows/audit.yml`. Остальные 19 —
+  `unmaintained`/`unsound` (GTK3-биндинги, `event-listener`, `glib`).
+- **Updater**: плагин обновлений не подключён вообще, поэтому проверку подписи
+  отключить негде. Если его когда-нибудь включат — `pubkey` обязателен.
+- **Подпись сборок**: Android релизный APK отказывается публиковаться с
+  закоммиченным keystore и проверяется `apksigner`; iOS подписывается при
+  наличии `APPLE_*` секретов.
+
+## R3.3 Что осталось проверить вручную
+
+1. **macOS**: `bundle.macOS.signingIdentity` = `"-"` (ad-hoc). Для распространения
+   нужен Developer ID + нотаризация; ad-hoc бинарь Gatekeeper не пропустит.
+2. **Windows**: подпись Authenticode в `release.yml` не настроена.
+3. **Isolation Pattern**: не включён. Оправданно, пока весь фронтенд свой, но
+   удалённая страница Sarca-сервера рендерится в том же вебвью — если модель
+   угроз допускает скомпрометированный сервер, изоляцию стоит включить.
+4. Пентест сетевого API сервера (authz по объектам, IDOR, rate limits) — вне
+   статического анализа.
+5. Ротация `ANDROID_KEYSTORE_*` / `APPLE_*` секретов в GitHub.
