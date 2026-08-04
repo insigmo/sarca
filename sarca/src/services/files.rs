@@ -44,7 +44,7 @@ pub struct FilesService<'d> {
     access_repo: AccessRepository<'d>,
     db: &'d SqlitePool,
     base_url: &'d str,
-    rate_limit: u8,
+    rate_limit: u16,
     work_dir: &'d str,
     tx: ClientSender,
 }
@@ -54,7 +54,7 @@ impl<'d> FilesService<'d> {
         db: &'d SqlitePool,
         tx: ClientSender,
         base_url: &'d str,
-        rate_limit: u8,
+        rate_limit: u16,
         work_dir: &'d str,
     ) -> Self {
         let repo = FilesRepository::new(db);
