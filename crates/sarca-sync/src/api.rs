@@ -489,22 +489,48 @@ pub struct HttpClients {
     pub tcp: Client,
 }
 
-fn build_tcp_client(timeout: Duration) -> Result<Client> {
-    Client::builder()
+/// Common builder settings, including TOFU pinning when a pin store is installed.
+///
+/// reqwest routes a preconfigured rustls config to both the TCP connector and
+/// the HTTP/3 connector, so the same verifier covers QUIC.
+fn client_builder(timeout: Duration) -> reqwest::ClientBuilder {
+    let builder = Client::builder()
         .timeout(timeout)
         .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(READ_IDLE_TIMEOUT)
+        .read_timeout(READ_IDLE_TIMEOUT);
+    match crate::pinning::pinned_tls_config() {
+        Some(config) => builder.use_preconfigured_tls(config),
+        None => builder,
+    }
+}
+
+fn build_tcp_client(timeout: Duration) -> Result<Client> {
+    client_builder(timeout)
         .build()
         .context("failed to create TCP HTTP client")
+}
+
+/// Pinned client for the loopback webview proxy.
+///
+/// No overall timeout (a request may be a multi-gigabyte transfer) and no
+/// redirect following, so the proxy can rewrite `Location` itself.
+pub(crate) fn proxy_http_client() -> Result<Client> {
+    let builder = Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none());
+    let builder = match crate::pinning::pinned_tls_config() {
+        Some(config) => builder.use_preconfigured_tls(config),
+        None => builder,
+    };
+    builder
+        .build()
+        .context("failed to create webview proxy HTTP client")
 }
 
 fn build_h3_prior_client(timeout: Duration) -> Result<Client> {
     #[cfg(feature = "http3-client")]
     {
-        Client::builder()
-            .timeout(timeout)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .read_timeout(READ_IDLE_TIMEOUT)
+        client_builder(timeout)
             .http3_prior_knowledge()
             .build()
             .context("failed to create HTTP/3 client")

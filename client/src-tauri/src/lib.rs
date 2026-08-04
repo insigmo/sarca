@@ -7,6 +7,7 @@ mod commands;
 mod folder_picker;
 mod mediastore;
 mod paths;
+mod pin_store;
 mod remote_ipc;
 mod startup;
 mod state;
@@ -288,6 +289,14 @@ pub fn run() {
             }
 
             let state = app.state::<AppSyncState>();
+            // Before anything issues a request: a Sarca certificate names only
+            // the server's public address, so reaching it over a LAN address or
+            // loopback is only possible against a remembered server key.
+            if !sarca_sync::set_pin_store(std::sync::Arc::new(pin_store::FilePinStore::new(
+                state.data_dir(),
+            ))) {
+                tracing::warn!("pinned key store was already installed");
+            }
             {
                 let prefs = commands::load_prefs(&state);
                 client_log::set_enabled(prefs.enable_logs, state.data_dir());

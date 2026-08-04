@@ -4488,7 +4488,7 @@ dependencies = [
 
 [[package]]
 name = "sarca"
-version = "0.0.120"
+version = "0.0.122"
 dependencies = [
  "async-stream",
  "axum",
@@ -4533,12 +4533,13 @@ dependencies = [
 
 [[package]]
 name = "sarca-client"
-version = "0.0.120"
+version = "0.0.122"
 dependencies = [
  "android_logger",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "hex",
  "hostname",
  "log",
  "network-interface",
@@ -4556,6 +4557,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-single-instance",
  "tauri-utils",
+ "tempfile",
  "tokio",
  "tracing",
  "url",
@@ -4568,13 +4570,19 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bytes",
  "chrono",
  "futures",
  "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "log",
  "notify",
+ "rcgen 0.13.2",
  "reqwest 0.12.28",
  "rusqlite",
+ "rustls",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -4585,6 +4593,8 @@ dependencies = [
  "tracing",
  "uuid",
  "walkdir",
+ "webpki-roots 1.0.9",
+ "x509-parser 0.17.0",
 ]
 
 [[package]]
