@@ -204,13 +204,6 @@ mod tests {
             work_dir: String::new(),
             telegram_chunk_size_mb: 20,
             telegram_video_chunk_size_mb: 20,
-            public_base_url: "http://127.0.0.1:8001".into(),
-            smtp_host: None,
-            smtp_port: 587,
-            smtp_username: None,
-            smtp_password: None,
-            smtp_from: String::new(),
-            smtp_tls: "starttls".into(),
             debug_log: false,
         }
     }

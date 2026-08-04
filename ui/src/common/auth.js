@@ -1,5 +1,5 @@
 /** Routes that render without a session. Never a post-login destination. */
-const AUTH_PATHS = ['/login', '/forgot-password', '/reset-password', '/verify']
+const AUTH_PATHS = ['/login']
 
 /**
  * @param {string} path

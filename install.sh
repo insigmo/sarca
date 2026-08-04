@@ -334,7 +334,7 @@ configure_tls() {
     if [ -n "${detected}" ]; then
       hostname="${detected}"
     else
-      echo "No TLS_HOSTNAME set — Sarca will serve plain HTTP on PORT until configured."
+      echo "No TLS_HOSTNAME set — Sarca will detect its public IP at startup."
       return 0
     fi
   fi

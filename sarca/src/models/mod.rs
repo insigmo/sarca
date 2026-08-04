@@ -1,6 +1,5 @@
 pub mod access;
 pub mod chunk_replicas;
-pub mod email_tokens;
 pub mod file_chunks;
 pub mod file_sync_events;
 pub mod files;
