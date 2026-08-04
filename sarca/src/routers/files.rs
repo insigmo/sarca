@@ -78,6 +78,7 @@ impl FilesRouter {
             state.tx.clone(),
             &state.config.telegram_api_base_url,
             state.config.telegram_rate_limit,
+            &state.config.work_dir,
         )
     }
 
@@ -315,11 +316,12 @@ impl FilesRouter {
         let client_tx = state.tx.clone();
         let base_url = state.config.telegram_api_base_url.clone();
         let rate_limit = state.config.telegram_rate_limit;
+        let work_dir = state.config.work_dir.clone();
         let user = user.clone();
         let tmp_for_task = tmp_path.clone();
 
         let upload_task = tokio::spawn(async move {
-            let result = FilesService::new(&db, client_tx, &base_url, rate_limit)
+            let result = FilesService::new(&db, client_tx, &base_url, rate_limit, &work_dir)
                 .upload_anyway_from_path_with_progress(
                     in_file,
                     tmp_for_task.clone(),
@@ -967,15 +969,31 @@ impl FilesRouter {
             return Err((StatusCode::NOT_FOUND, "Thumbnail not found".to_owned()));
         };
 
-        // No server-side thumb cache on purpose: the client that uploaded the
-        // photo built this tile and keeps it in its own store, so a request here
-        // only happens on a device that has never seen the file. The response is
-        // `max-age`d, so even that device asks once.
+        let thumb_cache = MediaCache::thumbs(&state.config.work_dir);
+        let cache_key = thumb_cache.key(storage_id, path);
+
+        if let Some(bytes) = cached_jpeg(&thumb_cache, &cache_key).await {
+            return Ok(inline_jpeg_response(bytes, "thumb.jpg"));
+        }
+
+        // A grid renders the same tile from several components and the
+        // neighbours race; see the comment at `preview_for_path` above.
+        let _flight = SingleFlight::global().acquire(&format!("thumb:{cache_key}")).await;
+        if let Some(bytes) = cached_jpeg(&thumb_cache, &cache_key).await {
+            return Ok(inline_jpeg_response(bytes, "thumb.jpg"));
+        }
+
         let scheduler = StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
         let bytes = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
             .download(thumb_id, storage_id)
             .await
             .map_err(<(StatusCode, String)>::from)?;
+
+        if is_jpeg(&bytes) {
+            if let Err(e) = thumb_cache.put(&cache_key, &bytes).await {
+                tracing::warn!("thumb cache write skipped: {e}");
+            }
+        }
 
         Ok(inline_jpeg_response(bytes, "thumb.jpg"))
     }
@@ -1087,6 +1105,7 @@ impl FilesRouter {
             state.tx.clone(),
             &state.config.telegram_api_base_url,
             state.config.telegram_rate_limit,
+            &state.config.work_dir,
         )
         .search(storage_id, path, search_path, &user)
         .await
