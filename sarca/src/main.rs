@@ -227,6 +227,7 @@ async fn main() {
                     slot.clone(),
                     challenges.clone(),
                     &cert_store,
+                    config.acme_root_ca.as_ref().map(std::path::PathBuf::from),
                 );
                 match issuer.issue().await {
                     Ok(bundle) => {
@@ -269,6 +270,7 @@ async fn main() {
                         slot.clone(),
                         runtime.challenges.clone(),
                         &cert_store,
+                        config.acme_root_ca.as_ref().map(std::path::PathBuf::from),
                     ),
                     cert_store.clone(),
                     runtime.clone(),
