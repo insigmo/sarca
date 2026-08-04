@@ -25,6 +25,13 @@ futures = "0.3"
 hex = "0.4"
 log = "0.4"
 notify = { version = "6", optional = true, default-features = true }
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+x509-parser = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream", "http2"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -38,5 +45,6 @@ uuid = { version = "1", features = ["serde", "v4"] }
 walkdir = "2"
 
 [dev-dependencies]
+rcgen = "0.13"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
