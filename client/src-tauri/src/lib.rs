@@ -329,40 +329,55 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::platform_label,
-            commands::device_label,
-            commands::get_session,
-            commands::get_url_history,
-            commands::update_session,
-            commands::connect,
-            commands::disconnect,
-            commands::open_app,
-            commands::open_sync_settings,
-            commands::pick_local_folder,
-            commands::default_gallery_path,
-            commands::list_storages,
-            commands::ensure_remote_folder,
-            commands::list_bindings,
-            commands::add_binding,
-            commands::remove_binding,
-            commands::set_binding_enabled,
-            commands::update_binding_local_path,
-            commands::update_binding_remote_root,
-            commands::sync_now,
-            commands::sync_statuses,
-            commands::sync_transfer_queue,
-            commands::get_client_prefs,
-            commands::set_client_prefs,
-            commands::verify_app_lock_pin,
-            commands::export_logs,
-            commands::is_on_wifi,
-            commands::get_about,
-            commands::get_cache_size,
-            commands::clear_local_cache,
-            commands::cache_get_preview,
-            commands::cache_put_preview,
-        ])
+        .invoke_handler({
+            let handler: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> =
+                Box::new(tauri::generate_handler![
+                    commands::platform_label,
+                    commands::device_label,
+                    commands::get_session,
+                    commands::get_url_history,
+                    commands::update_session,
+                    commands::connect,
+                    commands::disconnect,
+                    commands::open_app,
+                    commands::open_sync_settings,
+                    commands::pick_local_folder,
+                    commands::default_gallery_path,
+                    commands::list_storages,
+                    commands::ensure_remote_folder,
+                    commands::list_bindings,
+                    commands::add_binding,
+                    commands::remove_binding,
+                    commands::set_binding_enabled,
+                    commands::update_binding_local_path,
+                    commands::update_binding_remote_root,
+                    commands::sync_now,
+                    commands::sync_statuses,
+                    commands::sync_transfer_queue,
+                    commands::get_client_prefs,
+                    commands::set_client_prefs,
+                    commands::verify_app_lock_pin,
+                    commands::export_logs,
+                    commands::is_on_wifi,
+                    commands::get_about,
+                    commands::get_cache_size,
+                    commands::clear_local_cache,
+                    commands::cache_get_preview,
+                    commands::cache_put_preview,
+                ]);
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+                // The ACL alone cannot answer "is this origin connected *now*",
+                // so re-check the calling webview's current URL per invoke.
+                let webview = invoke.message.webview_ref();
+                let app = webview.app_handle().clone();
+                let url = webview.url().ok();
+                if !remote_ipc::authorize_invoke(&app, invoke.message.command(), url.as_ref()) {
+                    invoke.resolver.reject("unauthorized origin");
+                    return true;
+                }
+                handler(invoke)
+            }
+        })
         .build(pilot_context(tauri::generate_context!()))
         .expect("error while building Sarca client")
         .run(|app_handle, event| {
