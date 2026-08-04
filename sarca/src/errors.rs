@@ -59,10 +59,6 @@ pub enum SarcaError {
     InvalidTrashRetention,
     #[error("Share expiry must be in the future")]
     InvalidShareExpiry,
-    #[error("mail not configured")]
-    MailNotConfigured,
-    #[error("invalid or expired token")]
-    InvalidToken,
     #[error("unknown error")]
     Unknown,
     #[error("{0} header is required")]
@@ -100,9 +96,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::WorkerRequiresStorage
             | SarcaError::InvalidTrashRetention
             | SarcaError::InvalidShareExpiry
-            | SarcaError::InvalidToken
             | SarcaError::TelegramAPIError(_) => (StatusCode::BAD_REQUEST, e.to_string()),
-            SarcaError::MailNotConfigured => (StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
             _ => {
                 tracing::error!("{e}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Something went wrong".to_owned())

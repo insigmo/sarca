@@ -28,7 +28,8 @@ WORK_DIR=/work
 SQLITE_PATH=/work/sarca.sqlite
 
 # --- TLS / ACME (Let's Encrypt short-lived) ---
-# Public domain or IP for certificate identity. Unset = plain HTTP on PORT only.
+# Public domain or IP for certificate identity.
+# Unset = the server detects its public IP at startup and uses that.
 TLS_HOSTNAME=
 
 # HTTPS listen address (HTTP/3 UDP + TLS TCP). Production: 0.0.0.0:443
@@ -50,14 +51,3 @@ ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory
 # Never set this on a real deployment — it removes an XSS barrier.
 # SARCA_ALLOW_EVAL=1
 
-# --- Auth: email verify / password reset ---
-# Public base URL used in email links
-PUBLIC_BASE_URL=http://127.0.0.1:8000
-
-# Leave SMTP_HOST empty to disable outbound mail (verify/reset return "mail not configured")
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_USERNAME=
-SMTP_PASSWORD=
-SMTP_FROM=Sarca <noreply@example.com>
-SMTP_TLS=starttls   # starttls | none | tls

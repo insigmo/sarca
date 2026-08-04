@@ -2,7 +2,7 @@
 
 Covers the app setting exposed over the API (trash retention) and the deployment
 settings from sarca.conf that change the Telegram data path: chunk size, rate limit,
-multi-channel replication and SMTP.
+multi-channel replication.
 """
 
 from __future__ import annotations
@@ -182,16 +182,3 @@ def test_rate_limit_setting_throttles_telegram_calls(e2e_tmp, telegram, mock) ->
         server.wait_for_log("waiting for getting a token", offset=offset, timeout=30)
         client.close()
         server.stop()
-
-
-# ---------------------------------------------------------------------- SMTP
-
-
-def test_mail_endpoints_report_smtp_is_not_configured(sarca: SarcaClient) -> None:
-    """SMTP_HOST is empty in this deployment, so mail flows must say so, not 500."""
-    r = sarca.post("/api/auth/password/forgot", json={"email": "someone@sarca.test"})
-    # 204 = deliberately silent (never reveals whether the account exists);
-    # 503 = explicit "mail not configured". Either is fine, a 500 is not.
-    assert r.status_code in (200, 202, 204, 503), r.text
-    if r.status_code == 503:
-        assert "mail" in r.text.lower()
