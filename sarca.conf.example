@@ -51,3 +51,6 @@ ACME_DIRECTORY=https://acme-v02.api.letsencrypt.org/directory
 # Never set this on a real deployment — it removes an XSS barrier.
 # SARCA_ALLOW_EVAL=1
 
+
+# Extra PEM root the ACME client trusts (private CA: step-ca, Pebble). Empty = system store.
+#ACME_ROOT_CA=/etc/sarca/acme-ca.pem

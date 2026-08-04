@@ -101,10 +101,15 @@ async def _run(
     headers: dict[str, str] | None,
     body: bytes | None,
     timeout: float,
+    cafile: str | None,
 ) -> H3Response:
     config = QuicConfiguration(is_client=True, alpn_protocols=H3_ALPN)
-    # Self-signed certificate in dev/e2e: cert identity is not what these tests check.
-    config.verify_mode = ssl.CERT_NONE
+    if cafile:
+        # ACME scenario: the served certificate must chain to the issuing CA.
+        config.load_verify_locations(cafile=cafile)
+    else:
+        # Self-signed certificate in dev/e2e: cert identity is not what these tests check.
+        config.verify_mode = ssl.CERT_NONE
 
     async with connect(
         host, port, configuration=config, create_protocol=_H3Client, wait_connected=True
@@ -123,6 +128,11 @@ def h3_request(
     headers: dict[str, str] | None = None,
     body: bytes | None = None,
     timeout: float = 15.0,
+    cafile: str | None = None,
 ) -> H3Response:
-    """Perform one HTTP/3 request over QUIC and return the full response."""
-    return asyncio.run(_run(host, port, method, path, headers, body, timeout))
+    """Perform one HTTP/3 request over QUIC and return the full response.
+
+    `cafile` turns on certificate verification against that PEM root; without it
+    the peer certificate is accepted unchecked (the self-signed dev default).
+    """
+    return asyncio.run(_run(host, port, method, path, headers, body, timeout, cafile))

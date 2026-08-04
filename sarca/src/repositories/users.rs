@@ -190,6 +190,7 @@ mod tests {
             acme_http_addr: "127.0.0.1:8080".parse().expect("valid addr"),
             tls_hostname: None,
             acme_directory: String::new(),
+            acme_root_ca: None,
             certs_dir: String::new(),
             workers: 1,
             channel_capacity: 8,
