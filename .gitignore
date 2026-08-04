@@ -50,3 +50,5 @@ target-android/
 .claude/
 .mcp.json
 CLAUDE.md
+.ua/
+docs/
