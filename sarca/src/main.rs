@@ -207,9 +207,12 @@ async fn main() {
         // IP watcher, so a new address is picked up without a restart.
         let identity_slot = identity.clone().map(shared_identity);
 
-        let https_base = config.tls_hostname.as_ref().map_or_else(
+        // Both the port-80 redirect and the startup banner point here, so it has
+        // to be an address the certificate actually covers: an ACME certificate
+        // carries only the TLS identity, never 127.0.0.1.
+        let https_base = identity.as_ref().map_or_else(
             || format!("https://127.0.0.1:{}", config.https_addr.port()),
-            |h| format!("https://{h}"),
+            |id| sarca::tls::identity_base_url(id, config.https_addr.port()),
         );
 
         let challenges = ChallengeStore::default();

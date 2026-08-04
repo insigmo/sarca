@@ -66,6 +66,19 @@ pub enum TlsError {
     Io(String),
 }
 
+/// Base URL clients should use for this identity.
+///
+/// IPv6 needs brackets, and the port is omitted when it is the HTTPS default so
+/// the printed URL matches what a browser shows.
+pub fn identity_base_url(identity: &TlsIdentity, port: u16) -> String {
+    let host = match identity {
+        TlsIdentity::Dns(name) => name.clone(),
+        TlsIdentity::Ip(IpAddr::V4(ip)) => ip.to_string(),
+        TlsIdentity::Ip(IpAddr::V6(ip)) => format!("[{ip}]"),
+    };
+    if port == 443 { format!("https://{host}") } else { format!("https://{host}:{port}") }
+}
+
 /// Parse `TLS_HOSTNAME` — dotted IP → [`TlsIdentity::Ip`], otherwise DNS.
 pub fn parse_tls_identity(hostname: &str) -> Result<TlsIdentity, TlsError> {
     let trimmed = hostname.trim();
@@ -106,6 +119,20 @@ mod tests {
             id,
             TlsIdentity::Ip(IpAddr::V6(Ipv6Addr::new(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1)))
         );
+    }
+
+    #[test]
+    fn base_url_omits_default_port_and_brackets_ipv6() {
+        let dns = TlsIdentity::Dns("sarca.example".into());
+        assert_eq!(identity_base_url(&dns, 443), "https://sarca.example");
+        assert_eq!(identity_base_url(&dns, 8443), "https://sarca.example:8443");
+
+        let v4 = TlsIdentity::Ip(IpAddr::V4(Ipv4Addr::new(176, 85, 145, 128)));
+        assert_eq!(identity_base_url(&v4, 443), "https://176.85.145.128");
+
+        let v6 = TlsIdentity::Ip(IpAddr::V6(Ipv6Addr::new(0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1)));
+        assert_eq!(identity_base_url(&v6, 443), "https://[2001:db8::1]");
+        assert_eq!(identity_base_url(&v6, 8443), "https://[2001:db8::1]:8443");
     }
 
     #[test]

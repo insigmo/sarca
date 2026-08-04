@@ -324,8 +324,8 @@ pub async fn serve_dual_tls(
     eprintln!();
     eprintln!("========================================");
     eprintln!("  Sarca is running (TLS)");
-    eprintln!("  HTTPS:   https://127.0.0.1:{}", https_addr.port());
-    eprintln!("  HTTP/3:  https://127.0.0.1:{} (UDP)", https_addr.port());
+    eprintln!("  HTTPS:   {}", runtime.https_redirect_base);
+    eprintln!("  HTTP/3:  {} (UDP)", runtime.https_redirect_base);
     eprintln!("  ACME:    http://127.0.0.1:{}", acme_addr.port());
     eprintln!("  UI dir:  {}", ui_dir.display());
     eprintln!("========================================");
