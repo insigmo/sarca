@@ -95,9 +95,18 @@ pub fn spawn_renewal_task(issuer: InstantAcmeIssuer, cert_store: CertStore, runt
             let mut last_issue = tokio::time::Instant::now();
             let mut backoff = RETRY_MIN;
             let mut last_failed = false;
+            // Startup no longer issues inline, so the first pass has to be the
+            // one that gets a real certificate: go now, not after RETRY_MIN.
+            let mut first = true;
             loop {
                 let stored = cert_store.load_cert().await.ok().flatten();
                 let mut delay = schedule_delay(stored.as_deref(), backoff, Utc::now());
+                if first {
+                    first = false;
+                    if delay == backoff {
+                        delay = Duration::ZERO;
+                    }
+                }
                 // A failed attempt against a still-valid but due certificate
                 // would otherwise schedule zero delay and spin.
                 if last_failed {

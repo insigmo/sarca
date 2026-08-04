@@ -332,7 +332,7 @@ pub fn run() {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(250)).await;
-                    let _ = navigate_to_server(&handle, &cfg);
+                    let _ = navigate_to_server(&handle, &cfg).await;
                 });
             }
 

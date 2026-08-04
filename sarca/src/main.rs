@@ -28,7 +28,6 @@ use sarca::{
         install_crypto_provider,
         load_or_generate_material,
         new_runtime,
-        save_issued,
         shared_identity,
         spawn_acme_http_listener,
         spawn_public_ip_watch,
@@ -223,29 +222,12 @@ async fn main() {
         tokio::time::sleep(Duration::from_millis(100)).await;
 
         if acme_enabled(&config) {
-            if let Some(ref slot) = identity_slot {
-                let issuer = InstantAcmeIssuer::from_parts(
-                    config.acme_directory.clone(),
-                    config.acme_http_addr,
-                    slot.clone(),
-                    challenges.clone(),
-                    &cert_store,
-                    config.acme_root_ca.as_ref().map(std::path::PathBuf::from),
-                );
-                match issuer.issue().await {
-                    Ok(bundle) => {
-                        save_issued(&cert_store, &bundle).await.unwrap_or_else(|e| {
-                            die(format!("failed to save ACME certificate: {e}"))
-                        });
-                        tracing::info!("ACME certificate issued (not_after={})", bundle.not_after);
-                    },
-                    Err(e) => {
-                        tracing::warn!(
-                            "ACME issuance failed ({e}); falling back to stored or self-signed certificate"
-                        );
-                    },
-                }
-            }
+            // Issuance is not on the boot path: http-01 validation can take
+            // minutes, and blocking here meant a slow CA delayed serving and
+            // logged a scary fallback warning. The renewal task below runs the
+            // first attempt immediately and hot-reloads the certificate when it
+            // lands; until then we serve the stored or self-signed material.
+            tracing::info!("ACME enabled; first issuance runs in the background");
         } else {
             tracing::info!(
                 "ACME disabled (SARCA_ACME=0 or empty ACME_DIRECTORY); using stored/self-signed TLS"
