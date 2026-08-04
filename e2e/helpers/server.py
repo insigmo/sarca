@@ -136,8 +136,6 @@ class SarcaServer:
                 "WORK_DIR": str(self.work_dir),
                 "SQLITE_PATH": str(self.work_dir / "sarca.sqlite"),
                 "CERTS_DIR": str(self.work_dir / "certs"),
-                "PUBLIC_BASE_URL": f"http://127.0.0.1:{self.port}",
-                "SMTP_HOST": "",
                 "RUST_LOG": os.environ.get("SARCA_E2E_RUST_LOG", "sarca=debug,info"),
                 "RUST_BACKTRACE": "1",
             }

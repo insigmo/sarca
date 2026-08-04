@@ -3,7 +3,6 @@ pub mod channels;
 pub mod chunk_cache;
 pub mod db;
 pub mod jwt_manager;
-pub mod mailer;
 pub mod media_cache;
 pub mod password_manager;
 pub mod routing;

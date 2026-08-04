@@ -34,19 +34,3 @@ pub struct MeSchema {
     pub email_verified: bool,
     pub is_superuser: bool,
 }
-
-#[derive(Deserialize)]
-pub struct TokenBodySchema {
-    pub token: String,
-}
-
-#[derive(Deserialize)]
-pub struct ForgotPasswordSchema {
-    pub email: String,
-}
-
-#[derive(Deserialize)]
-pub struct ResetPasswordSchema {
-    pub token: String,
-    pub new_password: String,
-}
