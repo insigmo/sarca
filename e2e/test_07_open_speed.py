@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 
+import httpx
 import pytest
 
 from helpers import media
@@ -139,3 +141,36 @@ def test_preview_does_not_scale_with_original_size(
 
     assert timings["huge.jpg"] < OPEN_BUDGET_SECONDS, timings
     assert timings["huge.jpg"] < timings["small.jpg"] + 0.5, timings
+
+
+def test_unrelated_api_call_stays_fast_while_thumbs_are_slow(
+    sarca: SarcaClient,
+    storage: str,
+    slow_telegram,
+    client: httpx.Client,
+    auth_headers: dict[str, str],
+) -> None:
+    """The media semaphore must not throttle requests that never touch Telegram.
+
+    Before the concurrency limit was scoped to Telegram-blocking work, a single
+    global `ConcurrencyLimitLayer` on `/api` meant a handful of slow thumb loads
+    could starve every other endpoint, including plain DB reads like auth/me.
+    """
+    slow_telegram.set_latency(getFile=2.0, download=2.0)
+    for i in range(8):
+        data = media.big_photo(1200, 900)
+        assert sarca.upload(storage, f"busy{i}.jpg", data, content_type="image/jpeg").ok
+        sarca.wait_for_file(storage, f"busy{i}.jpg")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(sarca.thumb, storage, f"busy{i}.jpg") for i in range(8)]
+        try:
+            time.sleep(0.3)  # let the 8 requests actually reach the semaphore/Telegram
+            started = time.perf_counter()
+            r = client.get("/api/auth/me", headers=auth_headers)
+            elapsed = time.perf_counter() - started
+            assert r.status_code == 200, r.text
+            assert elapsed < 0.5, f"auth/me took {elapsed:.2f}s while thumbs were in flight"
+        finally:
+            for f in futures:
+                assert f.result().status_code == 200

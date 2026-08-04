@@ -198,6 +198,7 @@ function Write-OrMergeEnv {
         PORT = "8000"
         WORKERS = "4"
         CHANNEL_CAPACITY = "32"
+        MEDIA_CONCURRENCY = "16"
         SUPERUSER_EMAIL = "admin@example.com"
         SUPERUSER_PASS = "change-me"
         ACCESS_TOKEN_EXPIRE_IN_SECS = "1800"

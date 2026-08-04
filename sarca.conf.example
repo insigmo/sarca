@@ -1,6 +1,10 @@
 PORT=8000
 WORKERS=4
 CHANNEL_CAPACITY=32
+
+# How many thumb/preview/download requests may block on Telegram at once.
+# Independent of WORKERS, which only sizes the DB pool.
+MEDIA_CONCURRENCY=16
 SUPERUSER_EMAIL=sarca@sarca.sarca
 SUPERUSER_PASS=sarca
 ACCESS_TOKEN_EXPIRE_IN_SECS=1800
