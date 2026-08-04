@@ -1,4 +1,11 @@
-use std::{collections::HashMap, io, path::Path, pin::Pin, sync::Arc};
+use std::{
+    collections::HashMap,
+    io,
+    path::Path,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_stream::try_stream;
 use axum::{
@@ -59,6 +66,9 @@ pub struct FilesRouter;
 impl FilesRouter {
     /// Max total uncompressed size of files packed into a folder ZIP.
     const MAX_FOLDER_ZIP_BYTES: i64 = 10 * 1024 * 1024 * 1024;
+    /// Thumb/preview reads give up on a saturated storage worker and return 503
+    /// rather than hold the request open; uploads keep waiting indefinitely.
+    const MEDIA_READ_TOKEN_BUDGET: Duration = Duration::from_secs(10);
 
     pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
@@ -996,11 +1006,16 @@ impl FilesRouter {
 
         let scheduler = StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
         let permit = state.media_semaphore.acquire().await.expect("media semaphore never closed");
-        let bytes = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
-            .download(thumb_id, storage_id)
-            .await
-            .map_err(<(StatusCode, String)>::from)?;
+        let deadline = Instant::now() + Self::MEDIA_READ_TOKEN_BUDGET;
+        let result = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
+            .download_before(thumb_id, storage_id, deadline)
+            .await;
         drop(permit);
+        let bytes = match result {
+            Ok(bytes) => bytes,
+            Err(SarcaError::StorageBusy) => return Ok(storage_busy_response()),
+            Err(e) => return Err(<(StatusCode, String)>::from(e)),
+        };
 
         if is_jpeg(&bytes) {
             if let Err(e) = thumb_cache.put(&cache_key, &bytes).await {
@@ -1069,8 +1084,9 @@ impl FilesRouter {
                 StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
             let permit =
                 state.media_semaphore.acquire().await.expect("media semaphore never closed");
+            let deadline = Instant::now() + Self::MEDIA_READ_TOKEN_BUDGET;
             let result = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
-                .download(preview_id, storage_id)
+                .download_before(preview_id, storage_id, deadline)
                 .await;
             drop(permit);
             match result {
@@ -1081,6 +1097,7 @@ impl FilesRouter {
                     return Ok(preview_jpeg_response(bytes));
                 },
                 Ok(_) => tracing::warn!("stored preview for {path} is not a JPEG; re-encoding"),
+                Err(SarcaError::StorageBusy) => return Ok(storage_busy_response()),
                 // Fall through to the slow path: the file predates stored previews, or
                 // its preview document is gone from Telegram.
                 Err(e) => tracing::warn!("stored preview download failed for {path}: {e}"),
@@ -1394,6 +1411,15 @@ async fn cached_jpeg(cache: &MediaCache, key: &str) -> Option<Vec<u8>> {
 
 fn preview_jpeg_response(bytes: Vec<u8>) -> Response {
     inline_jpeg_response(bytes, "preview.jpg")
+}
+
+/// 503 with `Retry-After` so `thumbQueue.js` backs off instead of hammering a
+/// storage that is already at its Telegram rate limit.
+fn storage_busy_response() -> Response {
+    let mut response =
+        (StatusCode::SERVICE_UNAVAILABLE, SarcaError::StorageBusy.to_string()).into_response();
+    response.headers_mut().insert(header::RETRY_AFTER, "5".parse().unwrap());
+    response
 }
 
 /// `Vec<u8>` responds as `application/octet-stream`, so the JPEG headers must
