@@ -5,6 +5,8 @@ mod candidate;
 mod hash;
 mod index;
 mod media_source;
+pub mod pinning;
+pub mod proxy;
 mod scheduler;
 mod transfer;
 mod types;
@@ -23,6 +25,8 @@ pub use engine::{
 pub use hash::sha256_file;
 pub use index::{now_ms, LocalIndex, UploadFailure};
 pub use media_source::{FsMediaSource, LocalMediaSource};
+pub use pinning::{set_pin_store, PinStore};
+pub use proxy::LocalProxy;
 pub use scheduler::BindingScheduler;
 pub use transfer::{TransferDirection, TransferItem, TransferQueueSnapshot, TransferStatus};
 pub use types::{
