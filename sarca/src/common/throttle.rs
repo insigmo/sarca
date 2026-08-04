@@ -148,13 +148,6 @@ pub mod keys {
         format!("login:{}", email.trim().to_lowercase())
     }
 
-    /// Password-reset mail: throttled to stop an anonymous caller from using
-    /// the endpoint to flood someone's inbox (and to keep invalidating their
-    /// pending token).
-    pub fn forgot_password(email: &str) -> String {
-        format!("forgot:{}", email.trim().to_lowercase())
-    }
-
     /// Share unlock is keyed by the link token, which is what an attacker is
     /// guessing passwords for.
     pub fn share_unlock(token: &str) -> String {
@@ -244,7 +237,6 @@ mod tests {
 
     #[test]
     fn namespaces_keep_surfaces_apart() {
-        assert_ne!(keys::login("t"), keys::forgot_password("t"));
         assert_ne!(keys::login("t"), keys::share_unlock("t"));
         // Case and padding must not buy a fresh budget.
         assert_eq!(keys::login(" A@B.C "), keys::login("a@b.c"));

@@ -1,7 +1,6 @@
 pub mod access;
 pub mod app_settings;
 pub mod chunk_replicas;
-pub mod email_tokens;
 pub mod favorites;
 pub mod files;
 pub mod recent_files;

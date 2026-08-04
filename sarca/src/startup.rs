@@ -198,19 +198,7 @@ pub async fn init_db(db: &SqlitePool) {
           ON share_links (created_by);
         ",
         "
-        CREATE TABLE IF NOT EXISTS email_tokens (
-            id         BLOB PRIMARY KEY NOT NULL,
-            user_id    BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-            purpose    TEXT NOT NULL,
-            token_hash TEXT NOT NULL UNIQUE,
-            expires_at TEXT NOT NULL,
-            used_at    TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        ",
-        "
-        CREATE INDEX IF NOT EXISTS email_tokens_user_purpose_idx
-          ON email_tokens (user_id, purpose);
+        DROP TABLE IF EXISTS email_tokens;
         ",
         "
         CREATE TABLE IF NOT EXISTS file_sync_events (

@@ -14,7 +14,8 @@ pub struct Config {
     pub https_addr: SocketAddr,
     /// ACME http-01 + redirect listener; dev default high port.
     pub acme_http_addr: SocketAddr,
-    /// Certificate identity hostname (domain or IP); unset until install/ACME.
+    /// Certificate identity hostname (domain or IP). Unset in the environment
+    /// means the server detects its public IP at startup and fills this in.
     pub tls_hostname: Option<String>,
     pub acme_directory: String,
     /// Directory for ACME account + issued PEM material.
@@ -46,26 +47,11 @@ pub struct Config {
     /// Chunk size for video uploads (≤20 MB; smaller chunks → progressive Range playback sooner).
     pub telegram_video_chunk_size_mb: u32,
 
-    /// Public base URL for email links (verify / reset).
-    pub public_base_url: String,
-
-    pub smtp_host: Option<String>,
-    pub smtp_port: u16,
-    pub smtp_username: Option<String>,
-    pub smtp_password: Option<String>,
-    pub smtp_from: String,
-    /// `starttls` | `none` | `tls`
-    pub smtp_tls: String,
-
     /// Verbose (debug-level) tracing for requests and background jobs. `RUST_LOG` still wins.
     pub debug_log: bool,
 }
 
 impl Config {
-    pub fn smtp_configured(&self) -> bool {
-        self.smtp_host.is_some()
-    }
-
     /// Default `SQLite` file location: `sarca.sqlite` inside `WORK_DIR`.
     pub fn default_sqlite_path(work_dir: &str) -> String {
         format!("{}/sarca.sqlite", work_dir.trim_end_matches('/'))
@@ -122,15 +108,6 @@ impl Config {
         let telegram_video_chunk_size_mb =
             Self::get_env_var_with_default("TELEGRAM_VIDEO_CHUNK_SIZE_MB", 20u32)?;
 
-        let public_base_url =
-            Self::get_env_var_with_default("PUBLIC_BASE_URL", format!("http://127.0.0.1:{port}"))?;
-        let smtp_host = Self::get_optional_env_var("SMTP_HOST");
-        let smtp_port = Self::get_env_var_with_default("SMTP_PORT", 587u16)?;
-        let smtp_username = Self::get_optional_env_var("SMTP_USERNAME");
-        let smtp_password = Self::get_optional_env_var("SMTP_PASSWORD");
-        let smtp_from =
-            Self::get_env_var_with_default("SMTP_FROM", "Sarca <noreply@example.com>".to_owned())?;
-        let smtp_tls = Self::get_env_var_with_default("SMTP_TLS", "starttls".to_owned())?;
         let debug_log = Self::get_optional_env_var("DEBUG_LOG")
             .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
@@ -155,13 +132,6 @@ impl Config {
             work_dir,
             telegram_chunk_size_mb,
             telegram_video_chunk_size_mb,
-            public_base_url,
-            smtp_host,
-            smtp_port,
-            smtp_username,
-            smtp_password,
-            smtp_from,
-            smtp_tls,
             debug_log,
         })
     }

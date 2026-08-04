@@ -124,38 +124,6 @@ const meSilent = async () => {
 	}
 }
 
-/**
- * Consume email verification token.
- * @param {string} token
- * @returns {Promise<void>}
- */
-const verifyEmail = async (token) => {
-	return await apiRequest('/auth/verify', 'post', undefined, { token })
-}
-
-/**
- * Always 204 when backend is present (no email enumeration).
- * @param {string} email
- * @returns {Promise<void>}
- */
-const forgotPassword = async (email) => {
-	return await apiRequest('/auth/password/forgot', 'post', undefined, {
-		email,
-	})
-}
-
-/**
- * @param {string} token
- * @param {string} new_password
- * @returns {Promise<void>}
- */
-const resetPassword = async (token, new_password) => {
-	return await apiRequest('/auth/password/reset', 'post', undefined, {
-		token,
-		new_password,
-	})
-}
-
 /////////////////////////////////////////////////////////////
 ////  STORAGES
 /////////////////////////////////////////////////////////////
@@ -1358,9 +1326,6 @@ const API = {
 		refresh,
 		me,
 		meSilent,
-		verifyEmail,
-		forgotPassword,
-		resetPassword,
 	},
 	storages: {
 		listStorages,

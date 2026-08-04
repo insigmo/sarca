@@ -351,24 +351,6 @@ a.default-link:hover {
 	text-align: center;
 }
 
-.auth-forgot-link {
-	align-self: flex-end;
-	font-size: 0.875rem;
-	margin-top: -4px;
-}
-
-.auth-message {
-	margin: 0;
-	color: var(--sarca-ink-soft);
-	font-size: 0.95rem;
-	line-height: 1.45;
-	text-align: center;
-}
-
-.auth-message--error {
-	color: var(--sarca-danger, #c62828);
-}
-
 /* —— Page chrome —— */
 .page-header {
 	display: flex;

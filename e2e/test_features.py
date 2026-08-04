@@ -34,25 +34,15 @@ def test_login_includes_email_verified(tokens: dict[str, str]) -> None:
     assert tokens["email_verified"] is True
 
 
-def test_password_forgot_always_204(client: httpx.Client) -> None:
-    r = client.post(
-        "/api/auth/password/forgot",
-        json={"email": "nobody-does-not-exist@example.com"},
-    )
-    assert r.status_code == 204, r.text
-
-
-def test_password_reset_rejects_bad_token(client: httpx.Client) -> None:
-    r = client.post(
-        "/api/auth/password/reset",
-        json={"token": "not-a-real-token", "new_password": "abcdefgh"},
-    )
-    assert r.status_code in (400, 401, 404), r.text
-
-
-def test_verify_rejects_bad_token(client: httpx.Client) -> None:
-    r = client.post("/api/auth/verify", json={"token": "not-a-real-token"})
-    assert r.status_code in (400, 401, 404), r.text
+def test_mail_endpoints_are_gone(client: httpx.Client) -> None:
+    """Mail-driven auth was removed; the routes must not exist any more."""
+    for path, body in (
+        ("/api/auth/password/forgot", {"email": "nobody@example.com"}),
+        ("/api/auth/password/reset", {"token": "x", "new_password": "abcdefgh"}),
+        ("/api/auth/verify", {"token": "x"}),
+    ):
+        r = client.post(path, json=body)
+        assert r.status_code == 404, f"{path}: {r.status_code} {r.text}"
 
 
 def test_public_register_rejected(client: httpx.Client) -> None:

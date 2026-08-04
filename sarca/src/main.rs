@@ -24,6 +24,7 @@ use sarca::{
         ChallengeStore,
         InstantAcmeIssuer,
         acme_enabled,
+        detect_public_ip,
         install_crypto_provider,
         load_or_generate_material,
         new_runtime,
@@ -45,7 +46,7 @@ async fn main() {
     install_crypto_provider();
     conf::load_sarca_conf();
 
-    let config = Config::new().unwrap_or_else(|e| die(format!("failed to load config: {e}")));
+    let mut config = Config::new().unwrap_or_else(|e| die(format!("failed to load config: {e}")));
 
     tokio::fs::create_dir_all(&config.work_dir)
         .await
@@ -79,6 +80,29 @@ async fn main() {
     if config.debug_log {
         tracing::info!("DEBUG_LOG=1 — verbose request/action logging enabled");
     }
+
+    let plain_http = env::var("SARCA_PLAIN_HTTP")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+
+    // No TLS_HOSTNAME: fall back to the machine's public IP so the server still
+    // comes up on HTTPS (TCP + HTTP/3) with an ACME-issuable identity. Only a
+    // host with no usable address at all drops to plain HTTP.
+    if !plain_http && config.tls_hostname.is_none() {
+        eprintln!("TLS_HOSTNAME unset — detecting public IP…");
+        match detect_public_ip().await {
+            Some(ip) => {
+                tracing::info!("TLS_HOSTNAME unset — using detected address {ip} as TLS identity");
+                config.tls_hostname = Some(ip.to_string());
+            },
+            None => {
+                tracing::warn!(
+                    "TLS_HOSTNAME unset and no public IP could be detected — plain HTTP on PORT"
+                );
+            },
+        }
+    }
+    let config = config;
 
     let db_timeout = Duration::from_secs(10);
     let (tx, rx) = mpsc::channel::<ClientMessage>(config.channel_capacity.into());
@@ -163,9 +187,6 @@ async fn main() {
     let app_state = AppState::new(db, config.clone(), tx);
     let server = Server::build_server(workers.into(), Arc::new(app_state));
 
-    let plain_http = env::var("SARCA_PLAIN_HTTP")
-        .ok()
-        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     let cert_store = CertStore::new(&config.certs_dir);
     cert_store
         .ensure_dir()
@@ -258,7 +279,7 @@ async fn main() {
         if plain_http {
             tracing::info!("SARCA_PLAIN_HTTP=1 — plain HTTP on PORT (dev/e2e escape hatch)");
         } else {
-            tracing::info!("no TLS_HOSTNAME or certs — plain HTTP on PORT");
+            tracing::info!("no TLS identity or certs — plain HTTP on PORT");
         }
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
         server.run(&addr).await;
