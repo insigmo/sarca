@@ -14,6 +14,9 @@ const SIZE = 48
  * @property {boolean} [storage] Fluent cloud glyph for storage cards
  * @property {string} [thumbUrl] when set, shows thumbnail instead of glyph
  * @property {number} [size]
+ * @property {() => void} [onThumbError] Called when `thumbUrl` fails to decode
+ *   (e.g. a revoked blob: URL) so the caller clears it and this falls back to
+ *   the material glyph instead of staying on the broken-image "?" forever.
  */
 
 /**
@@ -71,6 +74,7 @@ const FileTypeIcon = (props) => {
 					height: size(),
 					objectFit: 'cover',
 				}}
+				onError={() => props.onThumbError?.()}
 			/>
 		</Show>
 	)

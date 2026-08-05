@@ -3,13 +3,14 @@ import ListItemIcon from '@suid/material/ListItemIcon'
 import ListItemText from '@suid/material/ListItemText'
 import MenuItem from '@suid/material/MenuItem'
 import MenuMUI from '@suid/material/Menu'
-import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import { Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import { useNavigate, useParams } from '@solidjs/router'
 
 import API from '../api'
 import { convertSize } from '../common/size_converter'
 import { loadThumb } from '../common/previewLoader'
+import { acquireObjectUrl, releaseObjectUrl } from '../common/objectUrlPool'
 import { fileKind } from '../common/fileKind'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
@@ -206,10 +207,26 @@ const FSListItem = (props) => {
 		return p.endsWith('/') ? p : `${p}/`
 	}
 
+	// Memoized per-field reads so the effect below only reruns when one of
+	// these actually changes value, not on every new `fsElement` object
+	// identity a list refresh or virtualized remount hands it (that identity
+	// churn used to retrigger the effect, which revoked the object URL a
+	// still-mounted `<img>` was showing — the WebKit "?" glyph).
+	const thumbPath = createMemo(() => props.fsElement.path)
+	const thumbHasThumb = createMemo(() => props.fsElement.has_thumb)
+	const thumbName = createMemo(() => props.fsElement.name)
+	const thumbIsFile = createMemo(() => props.fsElement.is_file)
+
 	createEffect(() => {
-		const el = props.fsElement
+		const path = thumbPath()
+		const hasThumb = thumbHasThumb()
+		const name = thumbName()
+		const isFile = thumbIsFile()
+		const storageId = props.storageId
+		const key = `${storageId}:${path}`
+
 		let revoked = false
-		let objectUrl = null
+		let acquired = false
 		const ac = new AbortController()
 
 		setThumbUrl(null)
@@ -218,20 +235,22 @@ const FSListItem = (props) => {
 		// store, even while `has_thumb` is still false because the thumbnail has
 		// not finished its trip to Telegram. Look there for images either way;
 		// only the network fetch waits for the server to admit it has one.
-		const localOnly = !el.has_thumb && fileKind(el.name, el.is_file) === 'image'
+		const localOnly = !hasThumb && fileKind(name, isFile) === 'image'
 
-		if (el.is_file && (el.has_thumb || localOnly)) {
+		if (isFile && (hasThumb || localOnly)) {
 			loadThumb({
-				scope: props.storageId,
-				path: el.path,
-				fetchBlob: (signal) => API.files.thumb(props.storageId, el.path, signal),
+				scope: storageId,
+				path,
+				fetchBlob: (signal) => API.files.thumb(storageId, path, signal),
 				signal: ac.signal,
 				cacheOnly: localOnly,
 			})
 				.then((blob) => {
 					if (revoked) return
-					objectUrl = URL.createObjectURL(blob)
-					setThumbUrl(objectUrl)
+					// Pooled: a remount right after this (virtualized scroll, list
+					// refresh) reuses this same URL instead of racing a revoke.
+					acquired = true
+					setThumbUrl(acquireObjectUrl(key, blob))
 				})
 				.catch((err) => {
 					if (revoked || err?.name === 'AbortError') return
@@ -242,7 +261,7 @@ const FSListItem = (props) => {
 		onCleanup(() => {
 			revoked = true
 			ac.abort()
-			if (objectUrl) URL.revokeObjectURL(objectUrl)
+			if (acquired) releaseObjectUrl(key)
 		})
 	})
 
@@ -547,6 +566,7 @@ const FSListItem = (props) => {
 								name={props.fsElement.name}
 								isFile={props.fsElement.is_file}
 								thumbUrl={thumbUrl()}
+								onThumbError={() => setThumbUrl(null)}
 								size={64}
 							/>
 						</div>
@@ -594,6 +614,7 @@ const FSListItem = (props) => {
 						name={props.fsElement.name}
 						isFile={props.fsElement.is_file}
 						thumbUrl={thumbUrl()}
+						onThumbError={() => setThumbUrl(null)}
 						size={40}
 					/>
 					<div class="fs-list-item__body">

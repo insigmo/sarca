@@ -5,6 +5,18 @@ CHANNEL_CAPACITY=32
 # How many thumb/preview/download requests may block on Telegram at once.
 # Independent of WORKERS, which only sizes the DB pool.
 MEDIA_CONCURRENCY=16
+
+# Startup daemon that walks each storage's tree and warms the thumb/preview
+# caches ahead of time, so the first grid render and viewer open after a
+# restart are already fast. Set to 0/false to disable.
+PREFETCH_ENABLED=true
+# How many folder levels deep it walks per storage.
+PREFETCH_DEPTH=3
+# How many files it warms at once (independent of MEDIA_CONCURRENCY).
+PREFETCH_CONCURRENCY=3
+# Hard cap on files warmed per run.
+PREFETCH_MAX_ITEMS=2000
+
 SUPERUSER_EMAIL=sarca@sarca.sarca
 SUPERUSER_PASS=sarca
 ACCESS_TOKEN_EXPIRE_IN_SECS=1800
