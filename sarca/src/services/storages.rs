@@ -166,6 +166,11 @@ impl<'d> StoragesService<'d> {
             }
         }
 
+        // A storage added after boot used to stay cold until the next restart,
+        // because the warmer only ran once. Ask for a sweep now so its photos
+        // and videos are warm before anyone browses them.
+        crate::services::media_warmer::request_sweep();
+
         Ok(storage)
     }
 
@@ -501,17 +506,73 @@ impl<'d> StoragesService<'d> {
         self.replicas_repo.replication_stats(storage_id).await
     }
 
+    /// Guard the "admins cannot manage admins" rule.
+    ///
+    /// A storage admin holds `AccessType::A`, which is what `check_access`
+    /// below asks for — so without this every admin could demote or evict the
+    /// superuser and every other admin on the storage, including the one who
+    /// granted them the role. Only the configured superuser may hand out or
+    /// take away `A`, or touch the superuser's own row; admins keep full
+    /// control over ordinary readers and writers.
+    ///
+    /// `is_target` picks the affected member out of the access list, which is
+    /// the one place carrying both the email and the current level.
+    async fn guard_admin_target(
+        &self,
+        storage_id: Uuid,
+        actor: &AuthUser,
+        superuser_email: &str,
+        grants_admin: bool,
+        is_target: impl Fn(&UserWithAccess) -> bool,
+    ) -> SarcaResult<()> {
+        if actor.email.eq_ignore_ascii_case(superuser_email) {
+            return Ok(());
+        }
+        if grants_admin {
+            return Err(SarcaError::OnlySuperuserManagesAdmins);
+        }
+
+        let members = self.access_repo.list_users_with_access(storage_id).await?;
+        let protected = members.iter().filter(|m| is_target(m)).any(|m| {
+            m.access_type == AccessType::A || m.email.eq_ignore_ascii_case(superuser_email)
+        });
+        if protected {
+            return Err(SarcaError::OnlySuperuserManagesAdmins);
+        }
+
+        Ok(())
+    }
+
     pub async fn grant_access(
         &self,
         id: Uuid,
         in_schema: GrantAccess,
         user: &AuthUser,
+        superuser_email: &str,
     ) -> SarcaResult<()> {
         check_access(&self.access_repo, user.id, id, &AccessType::A).await?;
 
         if in_schema.user_email == user.email {
             return Err(SarcaError::CannotManageAccessOfYourself);
         }
+
+        // The superuser may have no access row on this storage at all, so the
+        // email is checked directly as well as through the member list.
+        if !user.email.eq_ignore_ascii_case(superuser_email)
+            && in_schema.user_email.eq_ignore_ascii_case(superuser_email)
+        {
+            return Err(SarcaError::OnlySuperuserManagesAdmins);
+        }
+
+        let target_email = in_schema.user_email.clone();
+        self.guard_admin_target(
+            id,
+            user,
+            superuser_email,
+            in_schema.access_type == AccessType::A,
+            |m| m.email.eq_ignore_ascii_case(&target_email),
+        )
+        .await?;
 
         self.access_repo.create_or_update(id, in_schema).await
     }
@@ -531,12 +592,16 @@ impl<'d> StoragesService<'d> {
         id: Uuid,
         in_schema: RestrictAccess,
         user: &AuthUser,
+        superuser_email: &str,
     ) -> SarcaResult<()> {
         check_access(&self.access_repo, user.id, id, &AccessType::A).await?;
 
         if in_schema.user_id == user.id {
             return Err(SarcaError::CannotManageAccessOfYourself);
         }
+
+        let target_id = in_schema.user_id;
+        self.guard_admin_target(id, user, superuser_email, false, |m| m.id == target_id).await?;
 
         self.access_repo.delete_access(in_schema.user_id, id).await
     }

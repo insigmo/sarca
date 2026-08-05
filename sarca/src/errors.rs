@@ -43,6 +43,8 @@ pub enum SarcaError {
     CannotManageAccessOfYourself,
     #[error("The superuser account cannot be deleted")]
     CannotDeleteSuperuser,
+    #[error("Only the superuser can manage administrator access")]
+    OnlySuperuserManagesAdmins,
     #[error("Storage does not have workers")]
     StorageDoesNotHaveWorkers,
     #[error("storage_id is required")]
@@ -84,9 +86,9 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::TrashPathConflict => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
             SarcaError::TooManyAttempts => (StatusCode::TOO_MANY_REQUESTS, e.to_string()),
-            SarcaError::Forbidden | SarcaError::CannotDeleteSuperuser => {
-                (StatusCode::FORBIDDEN, e.to_string())
-            },
+            SarcaError::Forbidden
+            | SarcaError::CannotDeleteSuperuser
+            | SarcaError::OnlySuperuserManagesAdmins => (StatusCode::FORBIDDEN, e.to_string()),
             SarcaError::DoesNotExist(_) => (StatusCode::NOT_FOUND, e.to_string()),
             SarcaError::FolderTooLargeForZip => (StatusCode::PAYLOAD_TOO_LARGE, e.to_string()),
             // Distinct from TelegramAPIError/NoStorageWorkers below: this is a transient
