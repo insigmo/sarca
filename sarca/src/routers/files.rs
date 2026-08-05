@@ -1313,6 +1313,47 @@ async fn ensure_chunk_cached(
     Err(last_err)
 }
 
+/// Pull a file's *first* chunk into the on-disk chunk cache.
+///
+/// Used by the startup/background warmer for videos: the player's opening Range
+/// request only ever needs chunk 0, so warming just that one makes "tap the
+/// video, it starts" hold without paying for the whole file up front — the rest
+/// is prefetched chunk-by-chunk by the streaming path once playback starts.
+pub(crate) async fn warm_first_chunk(
+    state: &Arc<AppState>,
+    storage_id: Uuid,
+    path: &str,
+) -> SarcaResult<()> {
+    let file = FilesRepository::new(&state.db).get_file_by_path(path, storage_id).await?;
+
+    let channels = ordered_active_channels(&state.db, storage_id).await?;
+    if channels.is_empty() {
+        return Err(SarcaError::NoActiveChannel);
+    }
+
+    let candidates = resolve_chunk_candidates(&state.db, file.id, &channels).await?;
+    let Some(first_position) = candidates.keys().min().copied() else {
+        return Ok(());
+    };
+    let Some(first) = candidates.get(&first_position) else {
+        return Ok(());
+    };
+
+    // Background work shares the smaller thumb semaphore, never the media one
+    // an interactive read waits on.
+    let _permit = state.thumb_semaphore.acquire().await.expect("thumb semaphore never closed");
+    ensure_chunk_cached(
+        &ChunkCache::new(&state.config.work_dir),
+        &state.config.telegram_api_base_url,
+        &state.db,
+        state.config.telegram_rate_limit,
+        storage_id,
+        first,
+    )
+    .await
+    .map(|_| ())
+}
+
 /// Same as [`ensure_chunk_cached`] but streams straight from Telegram (used for ZIP
 /// folder downloads, which don't benefit from the on-disk chunk cache).
 async fn download_chunk_stream_with_failover(

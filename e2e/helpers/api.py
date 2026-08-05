@@ -232,6 +232,13 @@ class SarcaClient:
             json={"user_email": email, "access_type": access_type},
         )
 
+    def restrict_access(self, storage_id: str, user_id: str) -> httpx.Response:
+        return self.request(
+            "DELETE",
+            f"/api/storages/{storage_id}/access",
+            json={"user_id": user_id},
+        )
+
     # --------------------------------------------------------------- settings
     def get_trash_settings(self) -> dict[str, Any]:
         r = self.get("/api/settings/trash")

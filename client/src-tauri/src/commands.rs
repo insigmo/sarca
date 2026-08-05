@@ -1032,6 +1032,10 @@ pub fn set_client_prefs(
     let mut stored = load_prefs(&state);
     stored.apply_dto(prefs)?;
     save_prefs(&state, &stored)?;
+    // The writer reads a process-global flag, set from the stored prefs at
+    // startup. Without this the toggle only took effect on the next launch:
+    // turning logging on wrote nothing, turning it off kept writing.
+    client_log::set_enabled(stored.enable_logs, state.data_dir());
     client_log::write_line(state.data_dir(), "set_client_prefs saved");
     Ok(stored.to_dto())
 }

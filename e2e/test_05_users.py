@@ -78,6 +78,48 @@ def test_granted_user_sees_the_shared_storage(
     assert temp_user["email"] in holders
 
 
+def test_admin_cannot_touch_the_superuser_or_another_admin(
+    sarca: SarcaClient, storage: str, temp_user: dict[str, str], base_url: str
+) -> None:
+    """A storage admin manages readers and writers, never other admins.
+
+    `A` is the level the access endpoints themselves check for, so without an
+    extra rule every admin could demote or evict the superuser and each other.
+    """
+    superuser = next(u for u in sarca.list_users() if u["is_superuser"])
+    assert sarca.grant_access(storage, temp_user["email"], "A").status_code in (200, 201, 204)
+
+    victim_email = f"victim-{uuid.uuid4().hex[:6]}@sarca.test"
+    assert sarca.create_user(victim_email, "victim-pass-123").status_code == 201
+    victim_id = next(u["id"] for u in sarca.list_users() if u["email"] == victim_email)
+    assert sarca.grant_access(storage, victim_email, "W").status_code in (200, 201, 204)
+
+    admin = SarcaClient(base_url)
+    try:
+        admin.login(temp_user["email"], temp_user["password"])
+
+        # The superuser: neither demoted nor evicted.
+        assert admin.grant_access(storage, superuser["email"], "R").status_code == 403
+        assert admin.restrict_access(storage, superuser["id"]).status_code == 403
+
+        # Handing out admin is the superuser's call too.
+        assert admin.grant_access(storage, victim_email, "A").status_code == 403
+
+        # Ordinary members stay fully manageable.
+        assert admin.grant_access(storage, victim_email, "R").status_code in (200, 201, 204)
+        assert admin.restrict_access(storage, victim_id).status_code in (200, 204)
+    finally:
+        admin.close()
+        sarca.delete_user(victim_id)
+
+    # The superuser is still an admin on the storage they own.
+    holders = {u["email"]: u["access_type"] for u in sarca.get(f"/api/storages/{storage}/access").json()}
+    assert holders[superuser["email"]].lower() == "a"
+
+    # And the superuser can still demote the admin it promoted.
+    assert sarca.grant_access(storage, temp_user["email"], "R").status_code in (200, 201, 204)
+
+
 def test_deleting_a_user_revokes_access_and_logins(
     sarca: SarcaClient, storage: str, base_url: str
 ) -> None:

@@ -37,6 +37,15 @@ const Access = (props) => {
 
 	onMount(props.onMount)
 
+	/**
+	 * Admin rows are the superuser's to manage: the server refuses anything else
+	 * (403), so the buttons are disabled rather than left to fail on click. The
+	 * caller's own row stays disabled as before.
+	 */
+	const canManage = (user) =>
+		store.user?.email !== user.email &&
+		(!!store.user?.is_superuser || String(user.access_type).toUpperCase() !== 'A')
+
 	const onEditButtonClicked = (user) => {
 		setSelectedUserEmail(user.email)
 		setSelectedAccessType(user.access_type)
@@ -90,7 +99,7 @@ const Access = (props) => {
 								<div class="access-row__actions">
 									<IconButton
 										size="small"
-										disabled={store.user?.email === user.email}
+										disabled={!canManage(user)}
 										aria-label={`Edit access for ${user.email}`}
 										onClick={() => onEditButtonClicked(user)}
 									>
@@ -98,7 +107,7 @@ const Access = (props) => {
 									</IconButton>
 									<IconButton
 										size="small"
-										disabled={store.user?.email === user.email}
+										disabled={!canManage(user)}
 										aria-label={`Remove access for ${user.email}`}
 										onClick={() => onDeleteButtonClicked(user.email)}
 									>
