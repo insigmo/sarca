@@ -40,6 +40,12 @@ const GrantAccess = (props) => {
 	const getAction = () => (props.email?.length ? 'Change' : 'Grant')
 	const storageId = () => props.storageId || params.id
 	const [accessType, setAccessType] = createSignal(/** @type {'R' | 'W' | 'A'} */ ('R'))
+	// Handing out Admin is the superuser's call — the server answers 403 to
+	// anyone else, so the option is not offered rather than offered and refused.
+	const accessOptions = () =>
+		store.user?.is_superuser
+			? ACCESS_OPTIONS
+			: ACCESS_OPTIONS.filter((o) => o.value !== 'A')
 	/** @type {[import("solid-js").Accessor<Array<{id: string, email: string}>>, any]} */
 	const [directory, setDirectory] = createSignal([])
 	const suggestions = () => {
@@ -142,7 +148,7 @@ const GrantAccess = (props) => {
 								role="radiogroup"
 								aria-label="Access"
 							>
-								{ACCESS_OPTIONS.map((opt) => (
+								{accessOptions().map((opt) => (
 									<button
 										type="button"
 										role="radio"

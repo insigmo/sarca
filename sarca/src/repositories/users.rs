@@ -254,6 +254,7 @@ mod tests {
             prefetch_depth: 3,
             prefetch_concurrency: 3,
             prefetch_max_items: 2000,
+            prefetch_interval_secs: 600,
         }
     }
 
