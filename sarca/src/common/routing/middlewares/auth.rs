@@ -42,6 +42,13 @@ pub async fn logged_in_required(
         return Err(<(StatusCode, String)>::from(SarcaError::NotAuthenticated));
     }
 
+    // `set_disabled` already bumps `sessions_valid_after`, but that is a
+    // second write to the same row: checking the flag here closes the gap
+    // between the two and makes "is this account usable" single-sourced.
+    if user.is_disabled() {
+        return Err(<(StatusCode, String)>::from(SarcaError::NotAuthenticated));
+    }
+
     req.extensions_mut().insert(AuthUser::new(user.id, user.email));
     Ok(next.run(req).await)
 }

@@ -32,7 +32,9 @@ pub async fn init_db(db: &SqlitePool) {
             email_verified_at  TEXT,
             -- Unix seconds. Tokens issued at or before this instant are refused,
             -- which is what makes password reset and logout evict live sessions.
-            sessions_valid_after INTEGER NOT NULL DEFAULT 0
+            sessions_valid_after INTEGER NOT NULL DEFAULT 0,
+            -- Set means the account is disabled: login refused, sessions revoked.
+            disabled_at        DATETIME
         );
         ",
         "
@@ -382,6 +384,7 @@ async fn add_missing_columns(db: &SqlitePool) {
         ("files", "preview_telegram_file_id", "TEXT"),
         ("files", "preview_telegram_message_id", "INTEGER"),
         ("users", "sessions_valid_after", "INTEGER NOT NULL DEFAULT 0"),
+        ("users", "disabled_at", "DATETIME"),
     ] {
         let has_column: bool = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM pragma_table_info($1) WHERE name = $2",

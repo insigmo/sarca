@@ -52,6 +52,7 @@ impl<'d> UsersRepository<'d> {
             password_hash: in_obj.password_hash,
             email_verified_at: in_obj.email_verified_at,
             sessions_valid_after: 0,
+            disabled_at: None,
         })
     }
 
@@ -137,6 +138,46 @@ impl<'d> UsersRepository<'d> {
         Ok(())
     }
 
+    /// Disable or re-enable an account. Disabling also bumps
+    /// `sessions_valid_after`, so any session already issued dies immediately
+    /// rather than surviving until the token's natural expiry.
+    pub async fn set_disabled(&self, user_id: Uuid, disabled: bool) -> SarcaResult<()> {
+        let res = if disabled {
+            sqlx::query(
+                "UPDATE users SET disabled_at = $2, sessions_valid_after = $3 WHERE id = $1",
+            )
+            .bind(user_id)
+            .bind(Utc::now())
+            .bind(Utc::now().timestamp())
+            .execute(self.db)
+            .await
+        } else {
+            sqlx::query("UPDATE users SET disabled_at = NULL WHERE id = $1")
+                .bind(user_id)
+                .execute(self.db)
+                .await
+        }
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+        if res.rows_affected() == 0 {
+            return Err(SarcaError::DoesNotExist("user".into()));
+        }
+        Ok(())
+    }
+
+    /// Enabled users only, for the grant-access autocomplete directory.
+    pub async fn list_directory(&self) -> SarcaResult<Vec<(Uuid, String)>> {
+        sqlx::query_as("SELECT id, email FROM users WHERE disabled_at IS NULL ORDER BY email ASC")
+            .fetch_all(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })
+    }
+
     /// Invalidate every token issued so far for this user (logout everywhere).
     pub async fn revoke_sessions(&self, user_id: Uuid) -> SarcaResult<()> {
         sqlx::query("UPDATE users SET sessions_valid_after = $2 WHERE id = $1")
@@ -177,8 +218,10 @@ mod tests {
 
     use super::*;
     use crate::{
-        common::db::pool::get_pool,
+        common::{db::pool::get_pool, jwt_manager::AuthUser, password_manager::PasswordManager},
         config::Config,
+        schemas::{auth::LoginSchema, users::SetDisabled},
+        services::{auth::AuthService, users::UsersService},
         startup::{create_superuser, init_db},
     };
 
@@ -236,5 +279,146 @@ mod tests {
         let config = test_config("admin@example.com", "super-secret");
         create_superuser(&pool, &config).await;
         create_superuser(&pool, &config).await;
+    }
+
+    #[tokio::test]
+    async fn disabled_account_cannot_log_in_or_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+        let config = test_config("admin@example.com", "super-secret");
+
+        let email = "someone@example.com";
+        let password_hash = PasswordManager::generate("s3cret").unwrap();
+        let user = UsersRepository::new(&pool)
+            .create(InDBUser::new_password(email.into(), password_hash))
+            .await
+            .unwrap();
+
+        let tokens = AuthService::new(&pool)
+            .login(
+                LoginSchema {
+                    email: email.into(),
+                    password: "s3cret".into(),
+                },
+                &config,
+            )
+            .await
+            .unwrap();
+
+        UsersRepository::new(&pool).set_disabled(user.id, true).await.unwrap();
+
+        let login_err = AuthService::new(&pool)
+            .login(
+                LoginSchema {
+                    email: email.into(),
+                    password: "s3cret".into(),
+                },
+                &config,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(login_err, SarcaError::NotAuthenticated), "got {login_err:?}");
+
+        let refresh_err =
+            AuthService::new(&pool).refresh(&tokens.refresh_token, &config).await.unwrap_err();
+        assert!(matches!(refresh_err, SarcaError::NotAuthenticated), "got {refresh_err:?}");
+    }
+
+    #[tokio::test]
+    async fn set_disabled_toggles_disabled_at_and_bumps_sessions_valid_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+
+        let user = UsersRepository::new(&pool)
+            .create(InDBUser::new_password("someone@example.com".into(), "hash".into()))
+            .await
+            .unwrap();
+        assert_eq!(user.sessions_valid_after, 0);
+
+        UsersRepository::new(&pool).set_disabled(user.id, true).await.unwrap();
+        let disabled = UsersRepository::new(&pool).get_by_id(user.id).await.unwrap();
+        assert!(disabled.is_disabled());
+        assert!(disabled.sessions_valid_after > 0);
+
+        UsersRepository::new(&pool).set_disabled(user.id, false).await.unwrap();
+        let enabled = UsersRepository::new(&pool).get_by_id(user.id).await.unwrap();
+        assert!(!enabled.is_disabled());
+    }
+
+    #[tokio::test]
+    async fn superuser_cannot_disable_itself_or_the_configured_superuser_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+        let config = test_config("admin@example.com", "super-secret");
+        create_superuser(&pool, &config).await;
+
+        let superuser =
+            UsersRepository::new(&pool).get_by_email(&config.superuser_email).await.unwrap();
+        let actor = AuthUser::new(superuser.id, superuser.email.clone());
+
+        let err = UsersService::new(&pool)
+            .set_disabled_by_superuser(
+                &actor,
+                superuser.id,
+                SetDisabled {
+                    disabled: true,
+                },
+                &config,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, SarcaError::Forbidden), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn list_directory_is_forbidden_for_a_user_with_no_admin_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+        let config = test_config("admin@example.com", "super-secret");
+
+        let user = UsersRepository::new(&pool)
+            .create(InDBUser::new_password("someone@example.com".into(), "hash".into()))
+            .await
+            .unwrap();
+        let actor = AuthUser::new(user.id, user.email.clone());
+
+        let err = UsersService::new(&pool).list_directory(&actor, &config).await.unwrap_err();
+        assert!(matches!(err, SarcaError::Forbidden), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn list_directory_excludes_disabled_users() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+        let config = test_config("admin@example.com", "super-secret");
+        create_superuser(&pool, &config).await;
+
+        let active = UsersRepository::new(&pool)
+            .create(InDBUser::new_password("active@example.com".into(), "hash".into()))
+            .await
+            .unwrap();
+        let disabled = UsersRepository::new(&pool)
+            .create(InDBUser::new_password("disabled@example.com".into(), "hash".into()))
+            .await
+            .unwrap();
+        UsersRepository::new(&pool).set_disabled(disabled.id, true).await.unwrap();
+
+        let superuser =
+            UsersRepository::new(&pool).get_by_email(&config.superuser_email).await.unwrap();
+        let actor = AuthUser::new(superuser.id, superuser.email.clone());
+
+        let entries = UsersService::new(&pool).list_directory(&actor, &config).await.unwrap();
+        assert!(entries.iter().any(|e| e.id == active.id));
+        assert!(!entries.iter().any(|e| e.id == disabled.id));
     }
 }

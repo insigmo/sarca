@@ -32,6 +32,12 @@ vi.mock('../api', () => ({
 	default: {
 		storages: { listStorages: vi.fn().mockResolvedValue({ storages: [] }) },
 		auth: { meSilent: vi.fn().mockResolvedValue(null) },
+		// General now also fetches trash settings (folded in from the old
+		// 'trash' tab); it's superuser-only server-side, but the effect fires
+		// regardless of isSuperuser() and just no-ops via .catch on failure.
+		settings: {
+			getTrashSettings: vi.fn().mockResolvedValue({ retention_days: 30 }),
+		},
 	},
 }))
 
@@ -61,12 +67,18 @@ function mockNativeInvoke(prefs = {}) {
 describe('SettingsModal app lock state machine', () => {
 	beforeEach(() => {
 		mockNativeInvoke()
-		settingsStore.openSettings('security')
+		settingsStore.openSettings('general')
 	})
 
 	it('does not call native set_client_prefs when cancelling app lock mid-PIN-entry', async () => {
-		const { getByRole } = render(() => <SettingsModal />)
-		const sw = await waitFor(() => getByRole('switch'))
+		// The General tab now also renders the "Enable logs" switch, so
+		// getByRole('switch') alone is ambiguous — pick the app-lock one by id.
+		const { container } = render(() => <SettingsModal />)
+		const sw = await waitFor(() => {
+			const el = container.querySelector('#settings-app-lock-switch')
+			if (!el) throw new Error('app lock switch not rendered yet')
+			return el
+		})
 		await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'false'))
 
 		// Turn on: only local "entering PIN" state, nothing persisted yet.
@@ -88,8 +100,14 @@ describe('SettingsModal app lock state machine', () => {
 
 	it('reflects a previously persisted lock as checked on load', async () => {
 		mockNativeInvoke({ app_lock_enabled: true, app_lock_pin_set: true })
-		const { getByRole } = render(() => <SettingsModal />)
-		const sw = await waitFor(() => getByRole('switch'))
+		// The General tab now also renders the "Enable logs" switch, so
+		// getByRole('switch') alone is ambiguous — pick the app-lock one by id.
+		const { container } = render(() => <SettingsModal />)
+		const sw = await waitFor(() => {
+			const el = container.querySelector('#settings-app-lock-switch')
+			if (!el) throw new Error('app lock switch not rendered yet')
+			return el
+		})
 		await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'))
 	})
 
@@ -98,10 +116,14 @@ describe('SettingsModal app lock state machine', () => {
 	// to Rust, which verifies it against a salted hash and refuses on mismatch.
 	it('sends the current PIN to Rust when disabling a persisted lock', async () => {
 		mockNativeInvoke({ app_lock_enabled: true, app_lock_pin_set: true })
-		const { getByRole, getByLabelText, findByText } = render(() => (
+		const { container, getByLabelText, findByText } = render(() => (
 			<SettingsModal />
 		))
-		const sw = await waitFor(() => getByRole('switch'))
+		const sw = await waitFor(() => {
+			const el = container.querySelector('#settings-app-lock-switch')
+			if (!el) throw new Error('app lock switch not rendered yet')
+			return el
+		})
 		await waitFor(() => expect(sw).toHaveAttribute('aria-checked', 'true'))
 
 		// No current PIN typed: refused locally, nothing persisted.

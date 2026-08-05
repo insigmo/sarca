@@ -35,6 +35,12 @@ impl<'d> AuthService<'d> {
             .await
             .map_err(|_| SarcaError::NotAuthenticated)?;
 
+        // A disabled account must look like a bad credential, not a distinct
+        // error, or the login form leaks which addresses exist and are banned.
+        if user.is_disabled() {
+            return Err(SarcaError::NotAuthenticated);
+        }
+
         let Some(ref hash) = user.password_hash else {
             return Err(SarcaError::NotAuthenticated);
         };
@@ -51,7 +57,10 @@ impl<'d> AuthService<'d> {
         // recreated under the same address would otherwise accept the old
         // account's refresh token.
         let user = self.repo.get_by_id(auth.id).await.map_err(|_| SarcaError::NotAuthenticated)?;
-        if !user.email.eq_ignore_ascii_case(&auth.email) || !user.session_is_live(auth.issued_at) {
+        if !user.email.eq_ignore_ascii_case(&auth.email)
+            || !user.session_is_live(auth.issued_at)
+            || user.is_disabled()
+        {
             return Err(SarcaError::NotAuthenticated);
         }
         // Re-issue from the DB row, never from the old claims.

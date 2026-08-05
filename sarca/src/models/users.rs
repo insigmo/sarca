@@ -25,6 +25,9 @@ pub struct User {
     /// Unix seconds; tokens whose `iat` is not newer are refused.
     #[sqlx(default)]
     pub sessions_valid_after: i64,
+    /// Set means the account is disabled: login refused, sessions revoked.
+    #[sqlx(default)]
+    pub disabled_at: Option<DateTime<Utc>>,
 }
 
 impl User {
@@ -35,5 +38,9 @@ impl User {
     /// Whether a token issued at `token_iat` (unix seconds) is still accepted.
     pub fn session_is_live(&self, token_iat: i64) -> bool {
         token_iat >= self.sessions_valid_after
+    }
+
+    pub fn is_disabled(&self) -> bool {
+        self.disabled_at.is_some()
     }
 }
