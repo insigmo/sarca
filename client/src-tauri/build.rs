@@ -1,4 +1,13 @@
 fn main() {
+    // Tauri Android overrides RUSTFLAGS at build time, so target-specific
+    // rustflags in .cargo/config.toml get silently dropped. cargo:rustc-link-arg
+    // goes straight to the linker invocation and survives that override.
+    // Align PT_LOAD segments to 16KB so the .so runs on 16KB-page devices
+    // (e.g. Pixel 9 in 16KB mode) while staying compatible with 4KB-page ones.
+    if std::env::var("TARGET").map(|t| t.contains("android")).unwrap_or(false) {
+        println!("cargo:rustc-link-arg=-Wl,-z,max-page-size=16384");
+    }
+
     // Remote-origin Settings (http/https) go through Tauri invoke when
     // `__TAURI_INTERNALS__` is injected via a capability's `remote.urls`.
     // Those calls require explicit ACL allow-* permissions for every command.
