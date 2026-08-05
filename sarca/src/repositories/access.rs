@@ -201,6 +201,29 @@ impl<'d> AccessRepository<'d> {
         Ok(has_access.0)
     }
 
+    /// Whether the user holds `AccessType::A` on at least one storage — the
+    /// bar for the directory endpoint, so non-superusers running the grant
+    /// dialog get autocomplete too, without exposing the full user list to
+    /// everyone.
+    #[inline]
+    pub async fn has_any_admin_access(&self, user_id: Uuid) -> SarcaResult<bool> {
+        let has_access: (bool,) = sqlx::query_as(
+            format!(
+                "SELECT EXISTS(SELECT 1 FROM {TABLE} WHERE user_id = $1 AND access_type = 'a')"
+            )
+            .as_str(),
+        )
+        .bind(user_id)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+
+        Ok(has_access.0)
+    }
+
     pub async fn delete_access(&self, user_id: Uuid, storage_id: Uuid) -> SarcaResult<()> {
         sqlx::query(
             format!(

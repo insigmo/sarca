@@ -363,6 +363,7 @@ pub fn run() {
                     commands::sync_now,
                     commands::sync_statuses,
                     commands::sync_transfer_queue,
+                    commands::set_app_foreground,
                     commands::get_client_prefs,
                     commands::set_client_prefs,
                     commands::verify_app_lock_pin,
@@ -406,6 +407,11 @@ pub fn run() {
             #[cfg(any(target_os = "android", target_os = "ios"))]
             if let tauri::RunEvent::Resumed = event {
                 let state = app_handle.state::<AppSyncState>();
+                // The webview's own `visibilitychange` ping usually beats this,
+                // but `Resumed` fires from the OS side and does not wait on the
+                // webview's JS event loop, so set it here too rather than rely
+                // on the ping alone.
+                state.set_foreground(true);
                 // Only wake when a session exists — otherwise MediaStore discovery
                 // on resume races the connect shell paint for no benefit.
                 let connected = state::load_server_config(state.data_dir()).is_connected();
