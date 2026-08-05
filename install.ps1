@@ -198,13 +198,14 @@ function Write-OrMergeEnv {
         PORT = "8000"
         WORKERS = "4"
         CHANNEL_CAPACITY = "32"
+        MEDIA_CONCURRENCY = "16"
         SUPERUSER_EMAIL = "admin@example.com"
         SUPERUSER_PASS = "change-me"
         ACCESS_TOKEN_EXPIRE_IN_SECS = "1800"
         REFRESH_TOKEN_EXPIRE_IN_DAYS = "14"
         SECRET_KEY = $secret
         TELEGRAM_API_BASE_URL = "https://api.telegram.org"
-        TELEGRAM_RATE_LIMIT = "18"
+        TELEGRAM_RATE_LIMIT = "60"
         TELEGRAM_CHUNK_SIZE_MB = "20"
         TELEGRAM_VIDEO_CHUNK_SIZE_MB = "20"
         WORK_DIR = $workUnix

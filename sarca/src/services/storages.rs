@@ -60,11 +60,11 @@ pub struct StoragesService<'d> {
     replicas_repo: ChunkReplicasRepository<'d>,
     db: &'d SqlitePool,
     telegram_baseurl: &'d str,
-    rate_limit: u8,
+    rate_limit: u16,
 }
 
 impl<'d> StoragesService<'d> {
-    pub fn new(db: &'d SqlitePool, telegram_baseurl: &'d str, rate_limit: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, telegram_baseurl: &'d str, rate_limit: u16) -> Self {
         Self {
             repo: StoragesRepository::new(db),
             access_repo: AccessRepository::new(db),
