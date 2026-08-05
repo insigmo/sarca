@@ -29,6 +29,31 @@ function renderUrlHistory(urls) {
   wrap.hidden = false;
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The ACL that gates `connect` is resolved against the URL the WebView reports
+ * for this document. Right after a failed or cancelled navigation to a server
+ * that URL can still be the remote one while the shell is what is actually on
+ * screen, and the call comes back "Command connect not allowed by ACL" even
+ * though pressing Connect again works. Retry quietly instead of showing an
+ * error the user can do nothing about; anything else surfaces immediately.
+ */
+async function connectWithRetry(serverUrl) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await invoke("connect", { serverUrl });
+    } catch (e) {
+      const message = String(e);
+      const transient =
+        message.includes("not allowed by ACL") ||
+        message.includes("unauthorized origin");
+      if (!transient || attempt >= 4) throw e;
+      await sleep(150 * (attempt + 1));
+    }
+  }
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   try {
     $("platform").textContent = await invoke("platform_label");
@@ -59,9 +84,7 @@ window.addEventListener("DOMContentLoaded", async () => {
     button.disabled = true;
     button.textContent = "Connecting…";
     try {
-      await invoke("connect", {
-        serverUrl: $("serverUrl").value.trim(),
-      });
+      await connectWithRetry($("serverUrl").value.trim());
       // Rust navigates the webview to the server UI; sign-in is on the website.
     } catch (e) {
       setError(String(e).replace(/^Error:\s*/i, ""));

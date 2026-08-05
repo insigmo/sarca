@@ -277,6 +277,50 @@ impl SyncEngine {
         queue.begin(binding_id, direction, relative_path, size)
     }
 
+    /// Repoint a binding whose storage was deleted on the server.
+    ///
+    /// The account keeps its bindings when a storage is deleted and recreated,
+    /// but the new storage has a new id, so every upload afterwards fails
+    /// against an id that no longer exists — auto-upload looks alive and moves
+    /// nothing. With exactly one storage left there is no ambiguity about where
+    /// the files were meant to go, so the binding is repointed and sync resumes
+    /// on the next tick. With several, the choice is the user's: the returned
+    /// message says so instead of guessing.
+    ///
+    /// Returns a message to publish as `last_error`, or `None` to keep the
+    /// original error (the storage is fine and the failure was something else).
+    async fn heal_stale_storage(&self, binding: &Binding) -> Option<String> {
+        let storages = self.api().await.list_storages().await.ok()?;
+        if storages.iter().any(|s| s.id == binding.storage_id) {
+            return None;
+        }
+
+        match storages.as_slice() {
+            [only] => {
+                let mut healed = binding.clone();
+                healed.storage_id = only.id;
+                match self.index.upsert_binding(&healed) {
+                    Ok(()) => {
+                        warn!(
+                            binding = %binding.id,
+                            old_storage = %binding.storage_id,
+                            new_storage = %only.id,
+                            "bound storage was deleted; repointed to the only storage left"
+                        );
+                        Some(format!("Reconnected to storage \"{}\"", only.name))
+                    }
+                    Err(e) => Some(format!(
+                        "Storage no longer exists, and rebinding failed: {e}"
+                    )),
+                }
+            }
+            [] => Some("Storage no longer exists. Create one to resume auto-upload.".to_owned()),
+            _ => Some(
+                "Storage no longer exists. Pick a storage again to resume auto-upload.".to_owned(),
+            ),
+        }
+    }
+
     /// Run one sync/auto-upload pass for all enabled bindings.
     pub async fn tick(&self) -> Result<()> {
         self.tick_filtered(|_| true).await
@@ -354,7 +398,7 @@ impl SyncEngine {
                         }
                     }
 
-                    match self.sync_binding_scoped(&binding, scope).await {
+                    let mut status = match self.sync_binding_scoped(&binding, scope).await {
                         Ok(s) => s,
                         Err(e) => {
                             warn!(binding = %binding.id, error = %e, "sync failed");
@@ -368,7 +412,21 @@ impl SyncEngine {
                                 ..Default::default()
                             }
                         }
+                    };
+
+                    // Deleting a storage on the server and creating a new one
+                    // leaves the binding pointing at an id that no longer
+                    // exists, and auto-upload then fails silently forever —
+                    // per-file upload errors don't abort the tick, so this
+                    // shows up as a status error, not as `Err` above. Checked
+                    // only when something already failed, so a healthy tick
+                    // costs no extra request.
+                    if status.last_error.is_some() {
+                        if let Some(msg) = self.heal_stale_storage(&binding).await {
+                            status.last_error = Some(msg);
+                        }
                     }
+                    status
                 })
                 .await
         });
@@ -1712,6 +1770,109 @@ mod tests {
             mode: BindingMode::Sync,
             enabled: true,
         }
+    }
+
+    /// Serve one canned `/api/storages` reply and hand back the base URL.
+    async fn storages_endpoint(body: String) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                let body = body.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let _ = sock.read(&mut buf).await;
+                    let resp = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                    let _ = sock.write_all(body.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    #[tokio::test]
+    async fn a_deleted_storage_repoints_the_binding_to_the_only_one_left() {
+        let live = uuid::Uuid::new_v4();
+        let base = storages_endpoint(format!(
+            r#"{{"storages":[{{"id":"{live}","name":"Photos"}}]}}"#
+        ))
+        .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        engine.set_credentials(base, "t".into()).await;
+        let binding = sync_binding_fixture(dir.path());
+        engine.upsert_binding(&binding).unwrap();
+
+        let msg = engine.heal_stale_storage(&binding).await;
+        assert!(msg.unwrap().contains("Photos"));
+        let stored = engine
+            .list_bindings()
+            .unwrap()
+            .into_iter()
+            .find(|b| b.id == binding.id)
+            .unwrap();
+        assert_eq!(
+            stored.storage_id, live,
+            "binding must follow the surviving storage"
+        );
+    }
+
+    #[tokio::test]
+    async fn several_storages_leave_the_choice_to_the_user() {
+        let a = uuid::Uuid::new_v4();
+        let b = uuid::Uuid::new_v4();
+        let base = storages_endpoint(format!(
+            r#"{{"storages":[{{"id":"{a}","name":"A"}},{{"id":"{b}","name":"B"}}]}}"#
+        ))
+        .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        engine.set_credentials(base, "t".into()).await;
+        let binding = sync_binding_fixture(dir.path());
+        engine.upsert_binding(&binding).unwrap();
+
+        assert!(engine
+            .heal_stale_storage(&binding)
+            .await
+            .unwrap()
+            .contains("Pick a storage"));
+        let stored = engine
+            .list_bindings()
+            .unwrap()
+            .into_iter()
+            .find(|b| b.id == binding.id)
+            .unwrap();
+        assert_eq!(
+            stored.storage_id, binding.storage_id,
+            "ambiguous case must not guess"
+        );
+    }
+
+    /// The storage is fine, so whatever failed was something else: the real
+    /// error must survive instead of being replaced by a storage message.
+    #[tokio::test]
+    async fn a_live_storage_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let binding = sync_binding_fixture(dir.path());
+        let base = storages_endpoint(format!(
+            r#"{{"storages":[{{"id":"{}","name":"Photos"}}]}}"#,
+            binding.storage_id
+        ))
+        .await;
+
+        let engine = test_engine(dir.path());
+        engine.set_credentials(base, "t".into()).await;
+        engine.upsert_binding(&binding).unwrap();
+
+        assert!(engine.heal_stale_storage(&binding).await.is_none());
     }
 
     #[tokio::test]

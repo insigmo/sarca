@@ -68,6 +68,10 @@ pub struct Config {
     /// Hard cap on files warmed in one run, so a huge storage cannot make the
     /// warmer run indefinitely.
     pub prefetch_max_items: usize,
+    /// Seconds between warmer sweeps. The warmer is not a one-shot startup job:
+    /// storages get added and files get uploaded while the process runs, and
+    /// anything not warmed is a slow first open for whoever hits it.
+    pub prefetch_interval_secs: u64,
 }
 
 impl Config {
@@ -140,6 +144,10 @@ impl Config {
         let prefetch_depth = Self::get_env_var_with_default("PREFETCH_DEPTH", 3u32)?;
         let prefetch_concurrency = Self::get_env_var_with_default("PREFETCH_CONCURRENCY", 3usize)?;
         let prefetch_max_items = Self::get_env_var_with_default("PREFETCH_MAX_ITEMS", 2000usize)?;
+        // Floor of 60s: a sweep that re-walks every storage tree back-to-back
+        // would spend the whole Telegram budget on cache checks.
+        let prefetch_interval_secs =
+            Self::get_env_var_with_default("PREFETCH_INTERVAL_SECS", 600u64)?.max(60);
 
         Ok(Self {
             sqlite_path,
@@ -169,6 +177,7 @@ impl Config {
             prefetch_depth,
             prefetch_concurrency,
             prefetch_max_items,
+            prefetch_interval_secs,
         })
     }
 
