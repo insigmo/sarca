@@ -9,6 +9,7 @@ vi.mock('../api', () => ({
 			getInlineMediaUrl: vi.fn().mockResolvedValue('/inline'),
 			download: vi.fn(),
 			recordRecent: vi.fn(),
+			thumb: vi.fn().mockRejectedValue(new Error('no thumb in test')),
 		},
 	},
 }))
@@ -20,6 +21,10 @@ vi.mock('../common/nativeClient', () => ({
 vi.mock('../common/previewCache', () => ({
 	getCachedPreview: vi.fn().mockResolvedValue(null),
 	putCachedPreview: vi.fn().mockResolvedValue(undefined),
+	// No cached grid thumb in these tests, so the viewer falls straight
+	// through to the spinner-then-real-image path these tests assert on.
+	getCachedThumb: vi.fn().mockResolvedValue(null),
+	putCachedThumb: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('./AlertStack', () => ({ alertStore: { addAlert: vi.fn() } }))
 

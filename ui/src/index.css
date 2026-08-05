@@ -3126,6 +3126,14 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	-webkit-user-drag: none;
 }
 
+/* Blurred grid-thumb stand-in shown while the full preview is still loading. */
+.file-viewer__image--placeholder {
+	filter: blur(8px);
+	transform: scale(1.02);
+	opacity: 0;
+	animation: sarca-fade 0.18s ease both;
+}
+
 /* Gesture layer for photos: pinch, double tap, drag, swipe. `touch-action:
    none` is what stops the browser from panning/zooming the page instead. */
 .file-viewer__zoom-surface {

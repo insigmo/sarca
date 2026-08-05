@@ -25,7 +25,7 @@ import {
 } from '../common/imageZoom'
 import { convertSize } from '../common/size_converter'
 import { nativeClientStore } from '../common/nativeClient'
-import { loadPreview } from '../common/previewLoader'
+import { loadPreview, loadThumb } from '../common/previewLoader'
 import { sanitizeHtml } from '../common/sanitizeHtml'
 import FileTypeIcon from './FileTypeIcon'
 import LoadingDots from './LoadingDots'
@@ -90,6 +90,7 @@ const FileViewer = (props) => {
 	const [markdownHtml, setMarkdownHtml] = createSignal('')
 	const [htmlDoc, setHtmlDoc] = createSignal('')
 	const [mediaUrl, setMediaUrl] = createSignal('')
+	const [placeholderUrl, setPlaceholderUrl] = createSignal('')
 	const [officeMode, setOfficeMode] = createSignal(false)
 
 	const [playing, setPlaying] = createSignal(false)
@@ -411,6 +412,7 @@ const FileViewer = (props) => {
 	createEffect(() => {
 		if (!props.open || !props.file) {
 			setMediaUrl('')
+			setPlaceholderUrl('')
 			setTextContent('')
 			setDocxHtml('')
 			setMarkdownHtml('')
@@ -428,8 +430,15 @@ const FileViewer = (props) => {
 		let cancelled = false
 		/** @type {string | null} */
 		let objectUrl = null
+		/** @type {string | null} */
+		let placeholderObjectUrl = null
 
 		setError(null)
+		// Cleared here, not just on close: switching between two images in the
+		// same session must not let the previous photo's (now revoked) URL
+		// leak through the loading gate below.
+		setMediaUrl('')
+		setPlaceholderUrl('')
 		setTextContent('')
 		setDocxHtml('')
 		setMarkdownHtml('')
@@ -505,6 +514,7 @@ const FileViewer = (props) => {
 			document.removeEventListener('fullscreenchange', onFsChange)
 			document.body.style.overflow = ''
 			if (objectUrl) URL.revokeObjectURL(objectUrl)
+			if (placeholderObjectUrl) URL.revokeObjectURL(placeholderObjectUrl)
 			clearHideChromeTimer()
 			if (document.fullscreenElement && viewerEl?.contains(document.fullscreenElement)) {
 				document.exitFullscreen().catch(() => {})
@@ -516,6 +526,25 @@ const FileViewer = (props) => {
 			setFirstChunkLoading(k === 'video')
 			if (k === 'image') {
 				setLoading(true)
+				// The grid thumbnail for this exact photo is usually already in
+				// IndexedDB (or decoded in the DOM a moment ago), so the viewer can
+				// open on a blurred stand-in instead of a blank spinner. cacheOnly
+				// keeps this off the network entirely — it must never add
+				// contention ahead of the real preview fetch below.
+				loadThumb({
+					scope: previewScope(),
+					path: file.path,
+					fetchBlob: (signal) => API.files.thumb(props.storageId, file.path, signal),
+					cacheOnly: true,
+				})
+					.then((blob) => {
+						if (cancelled) return
+						placeholderObjectUrl = URL.createObjectURL(blob)
+						setPlaceholderUrl(placeholderObjectUrl)
+					})
+					.catch(() => {
+						// No cached thumb yet for this photo; the spinner covers it.
+					})
 				;(async () => {
 					const path = file.path
 					try {
@@ -529,7 +558,16 @@ const FileViewer = (props) => {
 							native: isNative(),
 						})
 						objectUrl = URL.createObjectURL(blob)
-						if (!cancelled) setMediaUrl(objectUrl)
+						if (!cancelled) {
+							// Swap now: the real image is ready, so the blurred stand-in
+							// can be released instead of waiting for viewer close.
+							if (placeholderObjectUrl) {
+								URL.revokeObjectURL(placeholderObjectUrl)
+								placeholderObjectUrl = null
+								setPlaceholderUrl('')
+							}
+							setMediaUrl(objectUrl)
+						}
 					} catch (err) {
 						// Last resort: let the browser load <img src=preview?access_token=…>
 						// directly, which also covers a blocked fetch/CORS edge case.
@@ -987,7 +1025,7 @@ const FileViewer = (props) => {
 							if (e.target === e.currentTarget) props.onClose()
 						}}
 					>
-						<Show when={loading()}>
+						<Show when={loading() && !placeholderUrl()}>
 							<div class="file-viewer__loading">
 								<span>
 									Loading
@@ -1000,7 +1038,19 @@ const FileViewer = (props) => {
 							<div class="file-viewer__empty">{error()}</div>
 						</Show>
 
-						<Show when={!loading() && !error()}>
+						<Show when={!error() && (!loading() || placeholderUrl())}>
+							<Show when={kind() === 'image' && !mediaUrl() && placeholderUrl()}>
+								{/* Blurred stand-in from the grid thumb; swapped for the real
+								    image as soon as loadPreview resolves. Not zoom-attached —
+								    zoom/pan only ever touches the real, full-res image. */}
+								<img
+									class="file-viewer__image file-viewer__image--placeholder"
+									src={placeholderUrl()}
+									alt=""
+									draggable={false}
+								/>
+							</Show>
+
 							<Show when={kind() === 'image' && mediaUrl()}>
 								{/* Pinch, double-tap, drag and swipe all land here; the
 								    magnifier buttons drive the same state. */}
