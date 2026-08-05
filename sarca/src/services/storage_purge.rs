@@ -23,7 +23,7 @@ const FAILED_BATCH_DELAY: Duration = Duration::from_secs(1);
 pub struct StoragePurgeService;
 
 impl StoragePurgeService {
-    pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u8, idle: Duration) {
+    pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u16, idle: Duration) {
         tokio::spawn(async move {
             loop {
                 Self::run_once(&db, &base_url, rate_limit, idle).await;
@@ -31,7 +31,7 @@ impl StoragePurgeService {
         });
     }
 
-    async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u8, idle: Duration) {
+    async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u16, idle: Duration) {
         let repo = StoragePurgeRepository::new(db);
         if let Err(e) = repo.requeue_stale_in_progress(IN_PROGRESS_LEASE).await {
             tracing::warn!("[STORAGE PURGE] failed to requeue stale in-progress messages: {e}");

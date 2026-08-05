@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use sqlx::SqlitePool;
 use tokio::time::sleep;
@@ -12,11 +12,11 @@ use crate::{
 /// Manages storage workers by limiting their usage
 pub struct StorageWorkersScheduler<'d> {
     repo: StorageWorkersRepository<'d>,
-    rate: u8,
+    rate: u16,
 }
 
 impl<'d> StorageWorkersScheduler<'d> {
-    pub fn new(db: &'d SqlitePool, rate: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, rate: u16) -> Self {
         let repo = StorageWorkersRepository::new(db);
         Self {
             repo,
@@ -24,7 +24,28 @@ impl<'d> StorageWorkersScheduler<'d> {
         }
     }
 
+    /// Waits indefinitely for a token. Uploads must never give up early: losing
+    /// an upload because the bucket was briefly full is worse than a slow one.
     pub async fn get_token(&self, storage_id: Uuid) -> SarcaResult<String> {
+        self.get_token_impl(storage_id, None).await
+    }
+
+    /// Like `get_token`, but stops waiting and returns `StorageBusy` once
+    /// `deadline` passes. Only interactive read paths (thumb/preview) opt into
+    /// this — everything else keeps waiting via `get_token`.
+    pub async fn get_token_before(
+        &self,
+        storage_id: Uuid,
+        deadline: Instant,
+    ) -> SarcaResult<String> {
+        self.get_token_impl(storage_id, Some(deadline)).await
+    }
+
+    async fn get_token_impl(
+        &self,
+        storage_id: Uuid,
+        deadline: Option<Instant>,
+    ) -> SarcaResult<String> {
         // Distinguish "no workers bound yet" from "all workers rate-limited".
         // Without this check, callers that hit Telegram before attaching a worker
         // (e.g. storage create → getChat for channel title) loop forever and block boot.
@@ -36,6 +57,10 @@ impl<'d> StorageWorkersScheduler<'d> {
             // attempting
             if let Some(schema) = self.repo.get_token(storage_id, self.rate).await? {
                 return Ok(schema.token);
+            }
+
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(SarcaError::StorageBusy);
             }
 
             // waiting for a while

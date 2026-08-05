@@ -222,6 +222,21 @@ def test_thumbnail_and_preview_are_separate_documents(
     assert max(media.image_size(thumb.content)) <= 128
 
 
+def test_thumb_is_cached_on_disk_after_first_read(
+    sarca: SarcaClient, storage: str, mock, workdir
+) -> None:
+    upload_photo(sarca, storage, "warm_thumb.jpg")
+    sarca.thumb(storage, "warm_thumb.jpg")
+
+    mock.reset_calls()
+    r = sarca.thumb(storage, "warm_thumb.jpg")
+    assert r.status_code == 200
+    assert mock.calls("getFile") == 0, "cached thumb must not hit Telegram"
+
+    cached = list((workdir / "thumb_cache").glob("*.jpg"))
+    assert cached, "expected thumb_cache entries under WORK_DIR"
+
+
 def test_client_supplied_thumb_is_stored_verbatim(sarca: SarcaClient, storage: str) -> None:
     """The web client builds the grid tile itself; the server must not re-encode it."""
     tile = media.recompress_jpeg(media.big_photo(128, 96), quality=75)

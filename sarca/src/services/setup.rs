@@ -32,12 +32,12 @@ use crate::{
 pub struct SetupService<'d> {
     db: &'d SqlitePool,
     telegram_base_url: &'d str,
-    rate_limit: u8,
+    rate_limit: u16,
     storages_repo: StoragesRepository<'d>,
 }
 
 impl<'d> SetupService<'d> {
-    pub fn new(db: &'d SqlitePool, telegram_base_url: &'d str, rate_limit: u8) -> Self {
+    pub fn new(db: &'d SqlitePool, telegram_base_url: &'d str, rate_limit: u16) -> Self {
         Self {
             db,
             telegram_base_url,
