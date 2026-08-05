@@ -31,6 +31,7 @@
     "allow-sync-now",
     "allow-sync-statuses",
     "allow-sync-transfer-queue",
+    "allow-set-app-foreground",
     "allow-get-client-prefs",
     "allow-set-client-prefs",
     "allow-verify-app-lock-pin",

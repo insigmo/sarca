@@ -110,6 +110,16 @@ pub struct SyncEngine {
     scheduler: BindingScheduler,
 }
 
+/// Distinguishes a normal sync pass from the cheap remote-only pass used for
+/// the foreground fast-poll cadence. See [`SyncEngine::tick_pull_only`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TickScope {
+    /// Push local changes, then pull (for `Sync` bindings).
+    Full,
+    /// Skip `push_local` (and the local scan behind it) entirely; pull only.
+    PullOnly,
+}
+
 struct PushLocalResult {
     uploaded: usize,
     scanned: usize,
@@ -250,21 +260,19 @@ impl SyncEngine {
     // path, success or failure.
 
     /// Promote a previously-enqueued Waiting transfer to Active. Falls back
-    /// to [`begin`](TransferQueue::begin) if there was no waiting id (e.g.
-    /// the queue was over [`crate::transfer::MAX_WAITING`] at enqueue time).
+    /// to [`begin`](TransferQueue::begin) if `waiting_id` is no longer in the
+    /// queue (e.g. the binding was cleared concurrently).
     async fn transfer_promote(
         &self,
-        waiting_id: Option<&str>,
+        waiting_id: &str,
         binding_id: &str,
         direction: TransferDirection,
         relative_path: &str,
         size: Option<i64>,
     ) -> String {
         let mut queue = self.transfers.write().await;
-        if let Some(id) = waiting_id {
-            if queue.promote(id) {
-                return id.to_owned();
-            }
+        if queue.promote(waiting_id) {
+            return waiting_id.to_owned();
         }
         queue.begin(binding_id, direction, relative_path, size)
     }
@@ -283,6 +291,24 @@ impl SyncEngine {
     /// serialized behind a global lock, so Camera auto-upload and folder sync
     /// no longer block each other.
     pub async fn tick_filtered<F>(&self, allow: F) -> Result<()>
+    where
+        F: Fn(&Binding) -> bool,
+    {
+        self.tick_filtered_scoped(allow, TickScope::Full).await
+    }
+
+    /// Remote-only counterpart to [`tick_filtered`]: restricted to two-way
+    /// `Sync` bindings and skips `push_local` (and therefore the local
+    /// filesystem/MediaStore scan) entirely. This is the cheap tick the
+    /// foreground fast-poll cadence runs once [`remote_has_changes`] says
+    /// there is something to pull — see `start_background_loop` in
+    /// `client/src-tauri/src/state.rs` for why that split exists.
+    pub async fn tick_pull_only(&self) -> Result<()> {
+        self.tick_filtered_scoped(|b| matches!(b.mode, BindingMode::Sync), TickScope::PullOnly)
+            .await
+    }
+
+    async fn tick_filtered_scoped<F>(&self, allow: F, scope: TickScope) -> Result<()>
     where
         F: Fn(&Binding) -> bool,
     {
@@ -328,7 +354,7 @@ impl SyncEngine {
                         }
                     }
 
-                    match self.sync_binding(&binding).await {
+                    match self.sync_binding_scoped(&binding, scope).await {
                         Ok(s) => s,
                         Err(e) => {
                             warn!(binding = %binding.id, error = %e, "sync failed");
@@ -379,6 +405,37 @@ impl SyncEngine {
         self.tick_filtered(|b| b.id == binding_id && allow(b)).await
     }
 
+    /// One tiny changelog request (`limit=1`) per enabled `Sync` binding, no
+    /// disk walk, no hashing — the "is it worth doing a real pass" check that
+    /// keeps the 15s foreground poll cadence cheap enough for battery. See
+    /// `start_background_loop` in `client/src-tauri/src/state.rs`: it calls
+    /// this every tick and only runs [`tick_pull_only`](Self::tick_pull_only)
+    /// (or, on the periodic local-scan tick, a full pass) when it returns
+    /// `true`.
+    pub async fn remote_has_changes(&self) -> Result<bool> {
+        for binding in self.index.list_bindings()? {
+            if !binding.enabled || !matches!(binding.mode, BindingMode::Sync) {
+                continue;
+            }
+            let cursor = self.index.get_cursor(&binding.id)?;
+            // Never bootstrapped: there is no cursor to diff against, so
+            // treat it as "changed" rather than silently sitting at 0 until
+            // something else happens to touch this binding.
+            if cursor == 0 {
+                return Ok(true);
+            }
+            let page = self
+                .api()
+                .await
+                .changelog(binding.storage_id, cursor, 1)
+                .await?;
+            if !page.events.is_empty() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Continuous loop (desktop background / mobile foreground).
     pub async fn run_loop(self: Arc<Self>, mut shutdown: tokio::sync::watch::Receiver<bool>) {
         loop {
@@ -396,7 +453,12 @@ impl SyncEngine {
         }
     }
 
-    async fn sync_binding(&self, binding: &Binding) -> Result<SyncStatus> {
+    /// `scope == PullOnly` skips `push_local` (see [`tick_pull_only`]);
+    /// `Full` — what every existing caller through `sync_binding` got before
+    /// this split — is unchanged.
+    ///
+    /// [`tick_pull_only`]: SyncEngine::tick_pull_only
+    async fn sync_binding_scoped(&self, binding: &Binding, scope: TickScope) -> Result<SyncStatus> {
         let mut downloading = 0usize;
 
         // First-time: pull snapshot if cursor is 0 and mode is Sync.
@@ -408,8 +470,19 @@ impl SyncEngine {
         // Push local changes (both modes). Individual upload failures are
         // recorded and skipped, not propagated — a file the server will not
         // take must not stop the pull below, which is what made a single bad
-        // photo look like "nothing syncs at all".
-        let push = self.push_local(binding).await?;
+        // photo look like "nothing syncs at all". `PullOnly` skips this
+        // (and the local scan behind it) entirely — the caller already knows
+        // via `remote_has_changes` that this pass only needs to pull.
+        let push = match scope {
+            TickScope::Full => self.push_local(binding).await?,
+            TickScope::PullOnly => PushLocalResult {
+                uploaded: 0,
+                scanned: 0,
+                pending: 0,
+                failed: 0,
+                first_error: None,
+            },
+        };
         let (_scanned, pending, already_synced) =
             crate::types::scan_counters(push.scanned, push.pending);
 
@@ -527,7 +600,7 @@ impl SyncEngine {
                 tokio::fs::remove_file(&c.absolute_path).await.ok();
             }
         }
-        let pending: Vec<(LocalCandidate, Option<String>)> = {
+        let pending: Vec<(LocalCandidate, String)> = {
             let mut queue = self.transfers.write().await;
             pending_candidates
                 .into_iter()
@@ -654,7 +727,7 @@ impl SyncEngine {
         &self,
         binding: &Binding,
         candidate: LocalCandidate,
-        waiting_id: Option<String>,
+        waiting_id: String,
     ) -> Result<bool> {
         {
             let LocalCandidate {
@@ -668,7 +741,7 @@ impl SyncEngine {
 
             let tid = self
                 .transfer_promote(
-                    waiting_id.as_deref(),
+                    &waiting_id,
                     &binding.id,
                     TransferDirection::Upload,
                     &rel,
@@ -931,14 +1004,13 @@ fn filter_pending_candidates(
 
 /// Filters `candidates` down to those whose size/mtime differ from the
 /// index (or have no index entry yet), enqueuing each as Waiting in
-/// `queue`. The paired `Option<String>` is the waiting transfer id, or
-/// `None` if the queue was over [`crate::transfer::MAX_WAITING`].
+/// `queue`. The paired `String` is the waiting transfer id.
 pub fn select_pending_uploads(
     index: &LocalIndex,
     binding_id: &str,
     candidates: &[LocalCandidate],
     queue: &mut TransferQueue,
-) -> Result<Vec<(LocalCandidate, Option<String>)>> {
+) -> Result<Vec<(LocalCandidate, String)>> {
     let pending = filter_pending_candidates(index, binding_id, candidates)?;
     let mut out = Vec::with_capacity(pending.len());
     for c in pending {
@@ -1587,7 +1659,7 @@ mod tests {
         let mut q = TransferQueue::default();
         let pending = select_pending_uploads(&idx, id, &[c], &mut q).unwrap();
         assert_eq!(pending.len(), 1);
-        assert!(pending[0].1.is_some());
+        assert!(!pending[0].1.is_empty());
         assert_eq!(q.snapshot().uploading, 1);
         assert_eq!(q.snapshot().items[0].status, TransferStatus::Waiting);
     }
@@ -1629,5 +1701,84 @@ mod tests {
         let pending = select_pending_uploads(&idx, id, &[c], &mut q).unwrap();
         assert!(pending.is_empty());
         assert_eq!(q.snapshot().uploading, 0);
+    }
+
+    fn sync_binding_fixture(dir: &std::path::Path) -> Binding {
+        Binding {
+            id: "sync1".into(),
+            storage_id: uuid::Uuid::new_v4(),
+            remote_root: "Root".into(),
+            local_path: dir.join("sync1").to_string_lossy().into(),
+            mode: BindingMode::Sync,
+            enabled: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_has_changes_false_for_empty_changelog() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            let body = br#"{"events":[],"next_cursor":5,"has_more":false}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.write_all(body).await;
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        engine
+            .set_credentials(format!("http://{addr}"), "t".into())
+            .await;
+        let binding = sync_binding_fixture(dir.path());
+        engine.upsert_binding(&binding).unwrap();
+        // A cursor of 0 short-circuits to `true` (never bootstrapped), so
+        // this must be set to something else to actually exercise the
+        // changelog request.
+        engine.index.set_cursor(&binding.id, 5).unwrap();
+
+        assert!(!engine.remote_has_changes().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn remote_has_changes_true_for_nonempty_changelog() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            let body = format!(
+                r#"{{"events":[{{"id":1,"storage_id":"{}","file_id":null,"path":"a.jpg","op":"upsert","size":3,"is_file":true,"content_hash":null,"source_mtime":null,"created_at":"2024-01-01T00:00:00Z"}}],"next_cursor":6,"has_more":false}}"#,
+                uuid::Uuid::nil()
+            );
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.write_all(body.as_bytes()).await;
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+        engine
+            .set_credentials(format!("http://{addr}"), "t".into())
+            .await;
+        let binding = sync_binding_fixture(dir.path());
+        engine.upsert_binding(&binding).unwrap();
+        engine.index.set_cursor(&binding.id, 5).unwrap();
+
+        assert!(engine.remote_has_changes().await.unwrap());
     }
 }

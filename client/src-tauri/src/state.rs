@@ -1,8 +1,11 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex as StdMutex},
-    time::Duration,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex as StdMutex,
+    },
+    time::{Duration, Instant},
 };
 
 use anyhow::Result;
@@ -826,6 +829,38 @@ impl ClientPrefs {
     }
 }
 
+/// How stale `set_foreground`'s last ping may be before [`AppSyncState::is_foreground`]
+/// treats the app as backgrounded anyway (killed/navigated-away webview that
+/// never sent a final `false`).
+const FOREGROUND_STALE_AFTER: Duration = Duration::from_secs(180);
+
+/// Poll cadence while the webview reports foreground: fast enough that a
+/// change made elsewhere shows up on this device in roughly the time it
+/// takes to switch apps and look.
+const FOREGROUND_POLL: Duration = Duration::from_secs(15);
+/// Poll cadence once the webview goes quiet. Battery-driven, not
+/// user-facing — see the doc comment on `start_background_loop` for the two
+/// ways even this floor is not a hard guarantee on Android.
+const BACKGROUND_POLL: Duration = Duration::from_secs(15 * 60);
+/// Cheapest useful gap between full local disk / MediaStore scans while
+/// foregrounded. The remote check runs every `FOREGROUND_POLL`; the local
+/// scan does not, because an Android MediaStore query is expensive.
+const FOREGROUND_LOCAL_SCAN_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Whether `flag`/`last_ping` currently represent a foregrounded app. A free
+/// function (rather than a method) because `start_background_loop`'s spawned
+/// task only holds clones of the two `Arc`s, not `&AppSyncState` — see
+/// [`AppSyncState::is_foreground`], the `&self` wrapper every other caller uses.
+fn is_foreground_signal(flag: &AtomicBool, last_ping: &StdMutex<Instant>) -> bool {
+    if !flag.load(Ordering::Relaxed) {
+        return false;
+    }
+    last_ping
+        .lock()
+        .map(|guard| guard.elapsed() < FOREGROUND_STALE_AFTER)
+        .unwrap_or(false)
+}
+
 pub struct AppSyncState {
     pub engine: Arc<SyncEngine>,
     pub server: Arc<Mutex<ServerConfig>>,
@@ -842,6 +877,16 @@ pub struct AppSyncState {
     /// Bumped to interrupt the background-loop sleep and run a tick soon
     /// (app resume / foreground).
     wake_tx: tokio::sync::watch::Sender<u64>,
+    /// Best-effort mirror of the webview's `visibilitychange` state, set by
+    /// the `set_app_foreground` command. Tauri v2 has no `Paused` `RunEvent`
+    /// to pair with `Resumed`, so this is the only signal the background
+    /// loop has for "is anyone looking at this app right now".
+    foreground: Arc<AtomicBool>,
+    /// Last time the webview confirmed it is still foregrounded (an explicit
+    /// `true` ping or the periodic heartbeat). Guards against a webview that
+    /// was killed or navigated away without ever sending the final `false` —
+    /// without this, `foreground` would be stuck `true` forever.
+    last_foreground_ping: Arc<StdMutex<Instant>>,
 }
 
 impl AppSyncState {
@@ -882,6 +927,8 @@ impl AppSyncState {
             proxy: Arc::new(StdMutex::new(None)),
             shutdown_tx,
             wake_tx,
+            foreground: Arc::new(AtomicBool::new(true)),
+            last_foreground_ping: Arc::new(StdMutex::new(Instant::now())),
         })
     }
 
@@ -970,16 +1017,62 @@ impl AppSyncState {
         let _ = self.wake_tx.send(next);
     }
 
+    /// Records the webview's foreground state, as reported by
+    /// `set_app_foreground`. Any call — `true` or `false` — counts as proof
+    /// of life, so it also refreshes `last_foreground_ping`.
+    pub fn set_foreground(&self, active: bool) {
+        self.foreground.store(active, Ordering::Relaxed);
+        if let Ok(mut guard) = self.last_foreground_ping.lock() {
+            *guard = Instant::now();
+        }
+    }
+
+    /// Whether the app is foregrounded right now. `false` both when the
+    /// webview last reported `false` (backgrounded/paused) and when it has
+    /// gone quiet for 3 minutes — a webview that was killed or navigated
+    /// away without sending a final `false` looks identical to one that is
+    /// still open but stopped pinging, and both must fall back to the slow
+    /// background poll rather than spin at the foreground cadence forever.
+    ///
+    /// `start_background_loop`'s spawned task cannot hold `&self` (it outlives
+    /// the borrow), so it calls `is_foreground_signal` directly on cloned
+    /// `Arc`s instead of through this method — this is the `&self` wrapper
+    /// for every other caller (tests today; a future settings/debug surface
+    /// that wants to show the raw state is the expected next one).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn is_foreground(&self) -> bool {
+        is_foreground_signal(&self.foreground, &self.last_foreground_ping)
+    }
+
+    /// Drives sync forever, adapting cadence to `is_foreground()`.
+    ///
+    /// Two known gaps, deliberately not addressed here:
+    /// - **The process has to be alive.** On Android this tokio task dies
+    ///   with the process, so background polling only happens while nothing
+    ///   has swiped the app away or killed it for memory. Surviving that
+    ///   needs a WorkManager job or a foreground service; this change does
+    ///   not add one.
+    /// - **Doze is not exempt.** While the device is dozing,
+    ///   `tokio::time::sleep` is not guaranteed to fire on schedule, so
+    ///   `BACKGROUND_POLL` is a floor on the gap between ticks, not a promise
+    ///   of one every 15 minutes.
     pub fn start_background_loop(&self) {
         let engine = self.engine.clone();
         let data_dir = self.data_dir.clone();
         let mut rx = self.shutdown_tx.subscribe();
         let mut wake_rx = self.wake_tx.subscribe();
+        let foreground = self.foreground.clone();
+        let last_foreground_ping = self.last_foreground_ping.clone();
         tauri::async_runtime::spawn(async move {
             // Let the Android activity / WebView paint before the first heavy
             // MediaStore scan; otherwise startup looks like a black screen ANR.
             #[cfg(any(target_os = "android", target_os = "ios"))]
             tokio::time::sleep(Duration::from_secs(3)).await;
+
+            // Due immediately: nothing has run yet, so the first tick must be
+            // a full pass regardless of foreground state.
+            let mut last_local_scan = Instant::now() - FOREGROUND_LOCAL_SCAN_INTERVAL;
+            let mut woken = true;
 
             loop {
                 // Pick up tokens written by the webview / sync_now without waiting
@@ -995,28 +1088,52 @@ impl AppSyncState {
                     .ok()
                     .and_then(|s| serde_json::from_str::<ClientPrefs>(&s).ok())
                     .unwrap_or_default();
+                let fg = is_foreground_signal(&foreground, &last_foreground_ping);
+
                 // Never run discovery/upload while disconnected — MediaStore
                 // listing still blocks the UI thread via the plugin bridge and
                 // cannot upload without credentials anyway. Background sync
                 // is otherwise always on — there is no user-facing toggle.
                 if connected {
                     let allow_auto = crate::commands::allow_auto_upload(&prefs);
-                    if let Err(e) = engine
-                        .tick_filtered(|b| {
-                            if b.mode.is_upload_only() && !allow_auto {
-                                return false;
-                            }
-                            true
-                        })
-                        .await
-                    {
+                    // A full pass costs a local disk / MediaStore scan, so it
+                    // only runs when it is actually needed: backgrounded (every
+                    // background tick already only happens every
+                    // BACKGROUND_POLL), the local-scan interval elapsed while
+                    // foregrounded, or something (resume, "sync now") woke the
+                    // loop early and wants a real pass. Otherwise this is a
+                    // foreground fast-poll tick: ask the server cheaply via
+                    // `remote_has_changes` and only pull if it says yes.
+                    let due_for_full_pass =
+                        !fg || last_local_scan.elapsed() >= FOREGROUND_LOCAL_SCAN_INTERVAL || woken;
+                    let result = if due_for_full_pass {
+                        last_local_scan = Instant::now();
+                        engine
+                            .tick_filtered(|b| {
+                                if b.mode.is_upload_only() && !allow_auto {
+                                    return false;
+                                }
+                                true
+                            })
+                            .await
+                    } else {
+                        match engine.remote_has_changes().await {
+                            Ok(true) => engine.tick_pull_only().await,
+                            Ok(false) => Ok(()),
+                            Err(e) => Err(e),
+                        }
+                    };
+                    if let Err(e) = result {
                         tracing::warn!(error = %e, "sync tick error");
                         crate::client_log::write_line(&data_dir, &format!("sync tick error: {e}"));
                     }
                 }
+
+                woken = false;
+                let poll_interval = if fg { FOREGROUND_POLL } else { BACKGROUND_POLL };
                 tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_secs(30)) => {},
-                    _ = wake_rx.changed() => {},
+                    _ = tokio::time::sleep(poll_interval) => {},
+                    _ = wake_rx.changed() => { woken = true; },
                     _ = rx.changed() => {
                         if *rx.borrow() {
                             break;
@@ -1377,6 +1494,59 @@ pub fn navigate_to_sync_settings(app: &AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds an `AppSyncState` without a real `AppHandle` — every field is
+    /// constructible without one except `engine`, which follows the same
+    /// pattern `sarca-sync`'s own tests use for a throwaway `SyncEngine`.
+    fn bare_state(dir: &std::path::Path) -> AppSyncState {
+        let config = sarca_sync::SyncEngineConfig {
+            poll_interval: Duration::from_secs(30),
+            api: Arc::new(RwLock::new(SarcaApi::new("http://127.0.0.1", ""))),
+            data_dir: dir.to_path_buf(),
+            #[cfg(not(target_os = "android"))]
+            media_source: Arc::new(sarca_sync::FsMediaSource),
+        };
+        let engine =
+            Arc::new(SyncEngine::open(config, Arc::new(sarca_sync::KeepBothPrompt)).unwrap());
+        let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+        let (wake_tx, _) = tokio::sync::watch::channel(0u64);
+        AppSyncState {
+            engine,
+            server: Arc::new(Mutex::new(ServerConfig::default())),
+            pending_inject: Arc::new(StdMutex::new(None)),
+            shell_url: Arc::new(StdMutex::new(None)),
+            trusted_origin: Arc::new(StdMutex::new(None)),
+            data_dir: dir.to_path_buf(),
+            proxy: Arc::new(StdMutex::new(None)),
+            shutdown_tx,
+            wake_tx,
+            foreground: Arc::new(AtomicBool::new(true)),
+            last_foreground_ping: Arc::new(StdMutex::new(Instant::now())),
+        }
+    }
+
+    #[test]
+    fn is_foreground_flips_to_false_once_the_ping_is_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = bare_state(dir.path());
+        assert!(state.is_foreground(), "starts foregrounded by default");
+
+        state.set_foreground(true);
+        assert!(state.is_foreground(), "a fresh true ping stays foreground");
+
+        // Backdate the ping past the staleness window instead of sleeping
+        // for real — a killed/navigated-away webview never sends a final
+        // `false`, so this is the only way `is_foreground` ever flips back.
+        *state.last_foreground_ping.lock().unwrap() =
+            Instant::now() - FOREGROUND_STALE_AFTER - Duration::from_secs(1);
+        assert!(
+            !state.is_foreground(),
+            "a stale ping must read as backgrounded even though the flag is still true"
+        );
+
+        state.set_foreground(false);
+        assert!(!state.is_foreground(), "an explicit false is never stale");
+    }
 
     fn prefs_with_pin(pin: &str) -> ClientPrefs {
         let mut prefs = ClientPrefs::default();
