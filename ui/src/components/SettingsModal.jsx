@@ -10,7 +10,6 @@ import createLocalStore from '../../libs'
 import { clearSession } from '../common/auth'
 import { settingsStore } from '../common/settings'
 import { filesChromeStore } from '../common/filesChrome'
-import { storageSettingsStore } from '../common/storageSettings'
 import { formatBytes, nativeInvoke } from '../common/nativeBridge'
 import {
 	THEMES,
@@ -36,7 +35,6 @@ const SettingsModal = () => {
 	const [store, setStore] = createLocalStore()
 	const navigate = useNavigate()
 	const mode = useThemeMode()
-	const { open: openStorageSettings } = storageSettingsStore
 
 	/** @type {[import("solid-js").Accessor<import("../api").StorageWithInfo[]>, any]} */
 	const [storages, setStorages] = createSignal([])
@@ -77,26 +75,24 @@ const SettingsModal = () => {
 	const [newUserEmail, setNewUserEmail] = createSignal('')
 	const [newUserPassword, setNewUserPassword] = createSignal('')
 	const [usersBusy, setUsersBusy] = createSignal(false)
+	// Which admin row currently has its "change password" field expanded, or
+	// '' when none. Only one at a time — keeps the list from turning into a
+	// wall of open forms.
+	const [openPasswordRowId, setOpenPasswordRowId] = createSignal('')
+	const [rowNewPassword, setRowNewPassword] = createSignal('')
+	const [rowPasswordBusy, setRowPasswordBusy] = createSignal(false)
+	const [ownCurrentPassword, setOwnCurrentPassword] = createSignal('')
+	const [ownNewPassword, setOwnNewPassword] = createSignal('')
+	const [ownConfirmPassword, setOwnConfirmPassword] = createSignal('')
+	const [ownPasswordBusy, setOwnPasswordBusy] = createSignal(false)
 
 	const showSyncTab = () => isNative() && Boolean(chrome.storageId())
-	const showUsersTab = () => isSuperuser()
 
 	const logout = () => {
 		// Revoke server-side first; the local clear must not wait on the network.
 		API.auth.logout()
 		closeSettings()
 		navigate(clearSession(setStore))
-	}
-
-	const openCurrentStorageSettings = () => {
-		const id = chrome.storageId()
-		if (!id) return
-
-		closeSettings()
-		openStorageSettings({
-			id,
-			name: chrome.storageName() || 'Storage',
-		})
 	}
 
 	const refreshStorages = async () => {
@@ -182,6 +178,74 @@ const SettingsModal = () => {
 		}
 	}
 
+	const submitRowPassword = async (event, userId) => {
+		event.preventDefault()
+		const next = rowNewPassword()
+		if (!next) {
+			addAlert('New password is required', 'error')
+			return
+		}
+		setRowPasswordBusy(true)
+		try {
+			await API.users.setUserPassword(userId, next)
+			setRowNewPassword('')
+			setOpenPasswordRowId('')
+			addAlert('Password changed', 'success')
+		} catch (err) {
+			console.error(err)
+		} finally {
+			setRowPasswordBusy(false)
+		}
+	}
+
+	const toggleUserDisabled = async (u) => {
+		try {
+			await API.users.setUserDisabled(u.id, !u.disabled)
+			addAlert(u.disabled ? 'User enabled' : 'User disabled', 'success')
+			await fetchAdminUsers()
+		} catch (err) {
+			console.error(err)
+		}
+	}
+
+	// Server revokes every prior session on a password change (its
+	// sessions_valid_after moves forward), including the one making this
+	// request — so the response carries a fresh token pair that must be
+	// persisted the same way the login flow does, or this request's own
+	// tokens go stale and the next call 401s.
+	const changeOwnPassword = async (event) => {
+		event.preventDefault()
+		const current = ownCurrentPassword()
+		const next = ownNewPassword()
+		const confirm = ownConfirmPassword()
+		if (!current || !next) {
+			addAlert('Current and new password are required', 'error')
+			return
+		}
+		if (next !== confirm) {
+			addAlert('New password confirmation does not match', 'error')
+			return
+		}
+		setOwnPasswordBusy(true)
+		try {
+			const tokenData = await API.users.changeMyPassword(current, next)
+			setStore('access_token', tokenData.access_token)
+			setStore('refresh_token', tokenData.refresh_token)
+			setStore('user', {
+				...store.user,
+				email_verified: tokenData.email_verified,
+			})
+			setOwnCurrentPassword('')
+			setOwnNewPassword('')
+			setOwnConfirmPassword('')
+			addAlert('Password changed', 'success')
+		} catch (err) {
+			console.error(err)
+		} finally {
+			setOwnPasswordBusy(false)
+		}
+	}
+
 	createEffect(() => {
 		if (!isOpen()) return
 
@@ -206,32 +270,20 @@ const SettingsModal = () => {
 		if (!isOpen() || tab() !== 'access') return
 		accessStorageId()
 		fetchAccessUsers()
-	})
-
-	createEffect(() => {
-		if (!isOpen() || tab() !== 'users') return
 		refreshSuperuser().then((su) => {
 			if (su) fetchAdminUsers()
-			else setTab('general')
 		})
-	})
-
-	createEffect(() => {
-		if (!showUsersTab() && tab() === 'users') setTab('general')
-	})
-
-	createEffect(() => {
-		if (!isOpen() || tab() !== 'trash') return
-		API.settings
-			.getTrashSettings()
-			.then((s) => setTrashRetentionDays(s.retention_days))
-			.catch(() => {})
 	})
 
 	createEffect(() => {
 		if (!isOpen() || tab() !== 'general') return
 		const openId = chrome.storageId()
 		if (openId) refreshStorages()
+		// Folded in from the old 'trash' tab effect.
+		API.settings
+			.getTrashSettings()
+			.then((s) => setTrashRetentionDays(s.retention_days))
+			.catch(() => {})
 		if (isNative()) {
 			nativeInvoke('get_about')
 				.then((a) => setAbout(a || { version: '', platform: '' }))
@@ -256,17 +308,14 @@ const SettingsModal = () => {
 			nativeInvoke('get_client_prefs')
 				.then((p) => setLogsEnabled(Boolean(p?.enable_logs)))
 				.catch(() => {})
+			// Folded in from the old 'security' tab effect.
+			nativeInvoke('get_client_prefs')
+				.then((p) => {
+					setLockEnabled(Boolean(p?.app_lock_enabled))
+					setPinSet(Boolean(p?.app_lock_pin_set))
+				})
+				.catch(() => {})
 		}
-	})
-
-	createEffect(() => {
-		if (!isOpen() || tab() !== 'security' || !isNative()) return
-		nativeInvoke('get_client_prefs')
-			.then((p) => {
-				setLockEnabled(Boolean(p?.app_lock_enabled))
-				setPinSet(Boolean(p?.app_lock_pin_set))
-			})
-			.catch(() => {})
 	})
 
 	createEffect(() => {
@@ -435,8 +484,8 @@ const SettingsModal = () => {
 								<h2 id="settings-modal-title">Settings</h2>
 								<p class="settings-modal__sub">
 									{isNative()
-										? 'General, access, users, sync, trash, storage, and security'
-										: 'General, access, users, trash, storage, and security'}
+										? 'General, sync, and access'
+										: 'General and access'}
 								</p>
 							</div>
 							<IconButton
@@ -469,44 +518,6 @@ const SettingsModal = () => {
 										<span class="settings-nav__desc">Theme &amp; session</span>
 									</span>
 								</button>
-								<button
-									type="button"
-									class="settings-nav__item"
-									classList={{ 'settings-nav__item--active': tab() === 'access' }}
-									onClick={() => setTab('access')}
-								>
-									<span class="settings-nav__icon" aria-hidden="true">
-										<FluentIcon
-											name={
-												tab() === 'access' ? 'lockClosedFilled' : 'lockClosed'
-											}
-											size={20}
-										/>
-									</span>
-									<span class="settings-nav__text">
-										<span class="settings-nav__title">Access</span>
-										<span class="settings-nav__desc">Who can open</span>
-									</span>
-								</button>
-								<Show when={showUsersTab()}>
-									<button
-										type="button"
-										class="settings-nav__item"
-										classList={{ 'settings-nav__item--active': tab() === 'users' }}
-										onClick={() => setTab('users')}
-									>
-										<span class="settings-nav__icon" aria-hidden="true">
-											<FluentIcon
-												name={tab() === 'users' ? 'personFilled' : 'person'}
-												size={20}
-											/>
-										</span>
-										<span class="settings-nav__text">
-											<span class="settings-nav__title">Users</span>
-											<span class="settings-nav__desc">Create accounts</span>
-										</span>
-									</button>
-								</Show>
 								<Show when={showSyncTab()}>
 									<button
 										type="button"
@@ -531,58 +542,20 @@ const SettingsModal = () => {
 								<button
 									type="button"
 									class="settings-nav__item"
-									classList={{ 'settings-nav__item--active': tab() === 'trash' }}
-									onClick={() => setTab('trash')}
-								>
-									<span class="settings-nav__icon" aria-hidden="true">
-										<FluentIcon
-											name={tab() === 'trash' ? 'deleteFilled' : 'delete'}
-											size={20}
-										/>
-									</span>
-									<span class="settings-nav__text">
-										<span class="settings-nav__title">Trash</span>
-										<span class="settings-nav__desc">Auto-delete</span>
-									</span>
-								</button>
-								<button
-									type="button"
-									class="settings-nav__item"
-									classList={{ 'settings-nav__item--active': tab() === 'storage' }}
-									onClick={() => setTab('storage')}
-								>
-									<span class="settings-nav__icon" aria-hidden="true">
-										<FluentIcon
-											name={tab() === 'storage' ? 'storageFilled' : 'storage'}
-											size={20}
-										/>
-									</span>
-									<span class="settings-nav__text">
-										<span class="settings-nav__title">Storage</span>
-										<span class="settings-nav__desc">Bot &amp; channels</span>
-									</span>
-								</button>
-								<button
-									type="button"
-									class="settings-nav__item"
-									classList={{
-										'settings-nav__item--active': tab() === 'security',
-									}}
-									onClick={() => setTab('security')}
+									classList={{ 'settings-nav__item--active': tab() === 'access' }}
+									onClick={() => setTab('access')}
 								>
 									<span class="settings-nav__icon" aria-hidden="true">
 										<FluentIcon
 											name={
-												tab() === 'security'
-													? 'lockClosedFilled'
-													: 'lockClosed'
+												tab() === 'access' ? 'lockClosedFilled' : 'lockClosed'
 											}
 											size={20}
 										/>
 									</span>
 									<span class="settings-nav__text">
-										<span class="settings-nav__title">Security</span>
-										<span class="settings-nav__desc">App lock</span>
+										<span class="settings-nav__title">Access</span>
+										<span class="settings-nav__desc">Who can open</span>
 									</span>
 								</button>
 							</nav>
@@ -592,8 +565,8 @@ const SettingsModal = () => {
 									<p class="settings-bot-hint">
 										Telegram bot and channels are in{' '}
 										<strong>Storage settings</strong> — use the gear on a storage
-										card, open the <strong>Storage</strong> tab here while browsing
-										files, or (on desktop) the tune icon in the header.
+										card, or (on desktop) the tune icon in the header while
+										browsing files.
 									</p>
 
 									<div class="settings-access">
@@ -669,112 +642,200 @@ const SettingsModal = () => {
 										afterGrant={fetchAccessUsers}
 										onClose={() => setIsGrantVisible(false)}
 										storageId={accessStorageId()}
+										existingEmails={accessUsers().map((u) => u.email)}
 									/>
-								</Show>
 
-								<Show when={tab() === 'users' && showUsersTab()}>
 									<div class="settings-users">
-										<Typography
-											variant="body2"
-											color="text.secondary"
-											sx={{ mb: 2 }}
-										>
-											Only the superuser can create accounts. New users can sign in
-											with email and password.
+										<Typography variant="h6" sx={{ mt: 4, mb: 1 }}>
+											Accounts
 										</Typography>
-										<Box
-											component="form"
-											onSubmit={createAdminUser}
-											sx={{
-												display: 'flex',
-												flexDirection: 'column',
-												gap: 1.5,
-												mb: 3,
-											}}
-										>
-											<TextField
-												label="Email"
-												type="email"
-												required
-												value={newUserEmail()}
-												onChange={(e) => setNewUserEmail(e.target.value)}
-											/>
-											<TextField
-												label="Password"
-												type="password"
-												required
-												autoComplete="new-password"
-												value={newUserPassword()}
-												onChange={(e) => setNewUserPassword(e.target.value)}
-											/>
-											<Button
-												type="submit"
-												variant="contained"
-												color="secondary"
-												disabled={usersBusy()}
-											>
-												Create user
-											</Button>
-										</Box>
-										<div class="settings-users__list">
-											<For
-												each={adminUsers()}
-												fallback={
-													<Typography color="text.secondary">
-														No users yet.
+										<Show
+											when={isSuperuser()}
+											fallback={
+												<>
+													<Typography
+														variant="body2"
+														color="text.secondary"
+														sx={{ mb: 2 }}
+													>
+														Change the password for your own account.
 													</Typography>
-												}
+													<Box
+														component="form"
+														onSubmit={changeOwnPassword}
+														sx={{
+															display: 'flex',
+															flexDirection: 'column',
+															gap: 1.5,
+														}}
+													>
+														<TextField
+															label="Current password"
+															type="password"
+															required
+															autoComplete="current-password"
+															value={ownCurrentPassword()}
+															onChange={(e) =>
+																setOwnCurrentPassword(e.target.value)
+															}
+														/>
+														<TextField
+															label="New password"
+															type="password"
+															required
+															autoComplete="new-password"
+															value={ownNewPassword()}
+															onChange={(e) => setOwnNewPassword(e.target.value)}
+														/>
+														<TextField
+															label="Confirm new password"
+															type="password"
+															required
+															autoComplete="new-password"
+															value={ownConfirmPassword()}
+															onChange={(e) =>
+																setOwnConfirmPassword(e.target.value)
+															}
+														/>
+														<Button
+															type="submit"
+															variant="contained"
+															color="secondary"
+															disabled={ownPasswordBusy()}
+														>
+															Change my password
+														</Button>
+													</Box>
+												</>
+											}
+										>
+											<Typography
+												variant="body2"
+												color="text.secondary"
+												sx={{ mb: 2 }}
 											>
-												{(u) => (
-													<div class="settings-users__row">
-														<div>
-															<strong>{u.email}</strong>
-															<Show when={u.is_superuser}>
-																<span class="settings-users__badge">
-																	superuser
-																</span>
+												Only the superuser can create accounts. New users can sign
+												in with email and password.
+											</Typography>
+											<Box
+												component="form"
+												onSubmit={createAdminUser}
+												sx={{
+													display: 'flex',
+													flexDirection: 'column',
+													gap: 1.5,
+													mb: 3,
+												}}
+											>
+												<TextField
+													label="Email"
+													type="email"
+													required
+													value={newUserEmail()}
+													onChange={(e) => setNewUserEmail(e.target.value)}
+												/>
+												<TextField
+													label="Password"
+													type="password"
+													required
+													autoComplete="new-password"
+													value={newUserPassword()}
+													onChange={(e) => setNewUserPassword(e.target.value)}
+												/>
+												<Button
+													type="submit"
+													variant="contained"
+													color="secondary"
+													disabled={usersBusy()}
+												>
+													Create user
+												</Button>
+											</Box>
+											<div class="settings-users__list">
+												<For
+													each={adminUsers()}
+													fallback={
+														<Typography color="text.secondary">
+															No users yet.
+														</Typography>
+													}
+												>
+													{(u) => (
+														<div
+															class="settings-users__row"
+															classList={{
+																'settings-users__row--disabled': u.disabled,
+															}}
+														>
+															<div class="settings-users__row-main">
+																<div>
+																	<strong>{u.email}</strong>
+																	<Show when={u.is_superuser}>
+																		<span class="settings-users__badge">
+																			superuser
+																		</span>
+																	</Show>
+																	<Show when={u.disabled}>
+																		<span class="settings-users__badge">
+																			disabled
+																		</span>
+																	</Show>
+																</div>
+																<div class="settings-users__row-controls">
+																	<span class="settings-users__meta">
+																		{u.email_verified ? 'verified' : 'unverified'}
+																	</span>
+																	<Button
+																		size="small"
+																		onClick={() =>
+																			setOpenPasswordRowId(
+																				openPasswordRowId() === u.id ? '' : u.id,
+																			)
+																		}
+																	>
+																		Change password
+																	</Button>
+																	<SettingsSwitch
+																		id={`settings-users-disabled-${u.id}`}
+																		ariaLabel={`Enabled: ${u.email}`}
+																		checked={!u.disabled}
+																		disabled={store.user?.email === u.email}
+																		onChange={() => toggleUserDisabled(u)}
+																	/>
+																</div>
+															</div>
+															<Show when={openPasswordRowId() === u.id}>
+																<form
+																	class="settings-users__password-form"
+																	onSubmit={(e) => submitRowPassword(e, u.id)}
+																>
+																	<TextField
+																		size="small"
+																		label="New password"
+																		type="password"
+																		required
+																		autoComplete="new-password"
+																		value={rowNewPassword()}
+																		onChange={(e) =>
+																			setRowNewPassword(e.target.value)
+																		}
+																	/>
+																	<Button
+																		type="submit"
+																		size="small"
+																		variant="contained"
+																		color="secondary"
+																		disabled={rowPasswordBusy()}
+																	>
+																		Save
+																	</Button>
+																</form>
 															</Show>
 														</div>
-														<span class="settings-users__meta">
-															{u.email_verified ? 'verified' : 'unverified'}
-														</span>
-													</div>
-												)}
-											</For>
-										</div>
-									</div>
-								</Show>
-
-								<Show when={tab() === 'trash'}>
-									<div class="settings-trash">
-										<Typography
-											variant="body2"
-											color="text.secondary"
-											sx={{ mb: 2 }}
-										>
-											Deleted files stay in the trash for this many days (1–30),
-											then are permanently removed from Sarca and Telegram.
-										</Typography>
-										<TextField
-											type="number"
-											label="Days in trash"
-											fullWidth
-											inputProps={{ min: 1, max: 30, step: 1 }}
-											value={trashRetentionDays()}
-											onChange={(e) =>
-												setTrashRetentionDays(Number(e.target.value))
-											}
-										/>
-										<div style={{ 'margin-top': '16px' }}>
-											<Button
-												variant="contained"
-												color="secondary"
-												disabled={trashSettingsSaving()}
-												onClick={saveTrashSettings}
-											>
-												Save
-											</Button>
-										</div>
+													)}
+												</For>
+											</div>
+										</Show>
 									</div>
 								</Show>
 
@@ -841,6 +902,129 @@ const SettingsModal = () => {
 												</For>
 											</div>
 										</div>
+										<Show when={isSuperuser()}>
+											<div class="settings-trash">
+												<p class="settings-account__label">Trash retention</p>
+												<Typography
+													variant="body2"
+													color="text.secondary"
+													sx={{ mb: 2 }}
+												>
+													Deleted files stay in the trash for this many days
+													(1–30), then are permanently removed from Sarca and
+													Telegram.
+												</Typography>
+												<TextField
+													type="number"
+													label="Days in trash"
+													fullWidth
+													inputProps={{ min: 1, max: 30, step: 1 }}
+													value={trashRetentionDays()}
+													onChange={(e) =>
+														setTrashRetentionDays(Number(e.target.value))
+													}
+												/>
+												<div style={{ 'margin-top': '16px' }}>
+													<Button
+														variant="contained"
+														color="secondary"
+														disabled={trashSettingsSaving()}
+														onClick={saveTrashSettings}
+													>
+														Save
+													</Button>
+												</div>
+											</div>
+										</Show>
+										<p class="settings-bot-hint">
+											Require a PIN when opening the native app on this device.
+										</p>
+										<Show
+											when={isNative()}
+											fallback={
+												<p class="settings-account__hint">
+													App lock is available in the Sarca native client.
+												</p>
+											}
+										>
+											<AppLockToggle
+												checked={lockEnabled() || enablingLock()}
+												onChange={(on) => {
+													if (on) {
+														setEnablingLock(true)
+														setSecurityMsg('Enter a new PIN below, then save')
+													} else if (lockEnabled()) {
+														saveAppLock(false)
+													} else {
+														// Was never actually saved — just close the
+														// "entering PIN" UI, nothing to disable natively.
+														setEnablingLock(false)
+														setSecurityMsg('')
+														clearPinFields()
+													}
+												}}
+											/>
+											<Show when={pinSet()}>
+												<TextField
+													label="Current PIN"
+													type="password"
+													size="small"
+													fullWidth
+													sx={{ mt: 1 }}
+													value={pinCurrent()}
+													onChange={(_, v) => setPinCurrent(v)}
+													inputProps={{ inputMode: 'numeric', maxLength: 8 }}
+												/>
+											</Show>
+											<TextField
+												label={
+													pinSet() ? 'New PIN (4–8 digits)' : 'PIN (4–8 digits)'
+												}
+												type="password"
+												size="small"
+												fullWidth
+												sx={{ mt: 1 }}
+												value={pinDraft()}
+												onChange={(_, v) => setPinDraft(v)}
+												inputProps={{ inputMode: 'numeric', maxLength: 8 }}
+											/>
+											<TextField
+												label="Confirm new PIN"
+												type="password"
+												size="small"
+												fullWidth
+												sx={{ mt: 1 }}
+												value={pinConfirm()}
+												onChange={(_, v) => setPinConfirm(v)}
+												inputProps={{ inputMode: 'numeric', maxLength: 8 }}
+											/>
+											<div
+												class="settings-sync-panel__row"
+												style={{ 'margin-top': '8px' }}
+											>
+												<Button
+													variant="contained"
+													color="secondary"
+													onClick={() => saveAppLock(true)}
+												>
+													{lockEnabled() ? 'Save PIN' : 'Enable lock'}
+												</Button>
+												<Show when={lockEnabled()}>
+													<Button
+														variant="outlined"
+														color="error"
+														onClick={() => saveAppLock(false)}
+													>
+														Disable
+													</Button>
+												</Show>
+											</div>
+											<Show when={securityMsg()}>
+												<p class="settings-bot-hint" role="status">
+													{securityMsg()}
+												</p>
+											</Show>
+										</Show>
 										<Show when={isNative()}>
 											<div class="settings-account__row">
 												<div>
@@ -907,139 +1091,11 @@ const SettingsModal = () => {
 									</div>
 								</Show>
 
-								<Show when={tab() === 'storage'}>
-									<div class="settings-storage-tab">
-										<Show
-											when={chrome.storageId()}
-											fallback={
-												<>
-													<Typography color="text.secondary" sx={{ mb: 2 }}>
-														Open a storage first, then manage its bot and channels
-														here.
-													</Typography>
-													<Button
-														onClick={() => {
-															closeSettings()
-															navigate('/storages')
-														}}
-													>
-														Go to storages
-													</Button>
-												</>
-											}
-										>
-											<Typography color="text.secondary" sx={{ mb: 2 }}>
-												Manage bot and channels for{' '}
-												<strong>{chrome.storageName() || 'this storage'}</strong>.
-											</Typography>
-											<Button
-												variant="contained"
-												color="secondary"
-												startIcon={<FluentIcon name="options" size={18} />}
-												onClick={openCurrentStorageSettings}
-											>
-												Open storage settings
-											</Button>
-										</Show>
-									</div>
-								</Show>
-
 								<Show when={tab() === 'sync' && showSyncTab()}>
 									<SettingsSyncPanel
 										storageId={chrome.storageId()}
 										storageName={chrome.storageName()}
 									/>
-								</Show>
-
-								<Show when={tab() === 'security'}>
-									<div class="settings-account">
-										<p class="settings-bot-hint">
-											Require a PIN when opening the native app on this device.
-										</p>
-										<Show
-											when={isNative()}
-											fallback={
-												<p class="settings-account__hint">
-													App lock is available in the Sarca native client.
-												</p>
-											}
-										>
-											<AppLockToggle
-												checked={lockEnabled() || enablingLock()}
-												onChange={(on) => {
-													if (on) {
-														setEnablingLock(true)
-														setSecurityMsg('Enter a new PIN below, then save')
-													} else if (lockEnabled()) {
-														saveAppLock(false)
-													} else {
-														// Was never actually saved — just close the
-														// "entering PIN" UI, nothing to disable natively.
-														setEnablingLock(false)
-														setSecurityMsg('')
-														clearPinFields()
-													}
-												}}
-											/>
-											<Show when={pinSet()}>
-												<TextField
-													label="Current PIN"
-													type="password"
-													size="small"
-													fullWidth
-													sx={{ mt: 1 }}
-													value={pinCurrent()}
-													onChange={(_, v) => setPinCurrent(v)}
-													inputProps={{ inputMode: 'numeric', maxLength: 8 }}
-												/>
-											</Show>
-											<TextField
-												label={
-													pinSet() ? 'New PIN (4–8 digits)' : 'PIN (4–8 digits)'
-												}
-												type="password"
-												size="small"
-												fullWidth
-												sx={{ mt: 1 }}
-												value={pinDraft()}
-												onChange={(_, v) => setPinDraft(v)}
-												inputProps={{ inputMode: 'numeric', maxLength: 8 }}
-											/>
-											<TextField
-												label="Confirm new PIN"
-												type="password"
-												size="small"
-												fullWidth
-												sx={{ mt: 1 }}
-												value={pinConfirm()}
-												onChange={(_, v) => setPinConfirm(v)}
-												inputProps={{ inputMode: 'numeric', maxLength: 8 }}
-											/>
-											<div class="settings-sync-panel__row" style={{ 'margin-top': '8px' }}>
-												<Button
-													variant="contained"
-													color="secondary"
-													onClick={() => saveAppLock(true)}
-												>
-													{lockEnabled() ? 'Save PIN' : 'Enable lock'}
-												</Button>
-												<Show when={lockEnabled()}>
-													<Button
-														variant="outlined"
-														color="error"
-														onClick={() => saveAppLock(false)}
-													>
-														Disable
-													</Button>
-												</Show>
-											</div>
-											<Show when={securityMsg()}>
-												<p class="settings-bot-hint" role="status">
-													{securityMsg()}
-												</p>
-											</Show>
-										</Show>
-									</div>
 								</Show>
 							</div>
 						</div>

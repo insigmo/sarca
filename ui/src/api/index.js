@@ -34,10 +34,63 @@ const createUser = async (email, password) => {
 
 /**
  * List all users (superuser only).
- * @returns {Promise<{users: Array<{id: string, email: string, email_verified: boolean, is_superuser: boolean}>}>}
+ * @returns {Promise<{users: Array<{id: string, email: string, email_verified: boolean, is_superuser: boolean, disabled: boolean}>}>}
  */
 const listUsers = async () => {
 	return await apiRequest('/users', 'get', getAuthToken())
+}
+
+/**
+ * Change the caller's own password. The server revokes every session on a
+ * password change (including this one), so it hands back a fresh token pair
+ * that the caller must persist the same way the login flow does.
+ * @param {string} currentPassword
+ * @param {string} newPassword
+ * @returns {Promise<TokenData & {email_verified: boolean}>}
+ */
+const changeMyPassword = async (currentPassword, newPassword) => {
+	return await apiRequest('/users/me/password', 'put', getAuthToken(), {
+		current_password: currentPassword,
+		new_password: newPassword,
+	})
+}
+
+/**
+ * Set another user's password (superuser only). No current-password check;
+ * the target's sessions are revoked.
+ * @param {string} userId
+ * @param {string} newPassword
+ * @returns {Promise<void>}
+ */
+const setUserPassword = async (userId, newPassword) => {
+	return await apiRequest(
+		`/users/${userId}/password`,
+		'put',
+		getAuthToken(),
+		{ new_password: newPassword },
+	)
+}
+
+/**
+ * Enable or disable a user's account (superuser only). Disabling blocks
+ * login and revokes existing sessions immediately.
+ * @param {string} userId
+ * @param {boolean} disabled
+ * @returns {Promise<void>}
+ */
+const setUserDisabled = async (userId, disabled) => {
+	return await apiRequest(`/users/${userId}/disabled`, 'put', getAuthToken(), {
+		disabled,
+	})
+}
+
+/**
+ * Directory of registered users, for the grant-access autocomplete. Open to
+ * the superuser or any user holding AccessType::A on at least one storage.
+ * @returns {Promise<{users: Array<{id: string, email: string}>}>}
+ */
+const listUserDirectory = async () => {
+	return await apiRequest('/users/directory', 'get', getAuthToken())
 }
 
 /////////////////////////////////////////////////////////////
@@ -1321,6 +1374,10 @@ const API = {
 	users: {
 		createUser,
 		listUsers,
+		changeMyPassword,
+		setUserPassword,
+		setUserDisabled,
+		listUserDirectory,
 	},
 	auth: {
 		login,

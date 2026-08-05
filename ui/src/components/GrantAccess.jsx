@@ -1,4 +1,4 @@
-import { createEffect, createSignal } from 'solid-js'
+import { For, createEffect, createSignal } from 'solid-js'
 import Button from '@suid/material/Button'
 import TextField from '@suid/material/TextField'
 import Dialog from '@suid/material/Dialog'
@@ -7,6 +7,7 @@ import DialogContent from '@suid/material/DialogContent'
 import DialogTitle from '@suid/material/DialogTitle'
 import { useParams } from '@solidjs/router'
 
+import createLocalStore from '../../libs'
 import { makeAccessTypeUserFriendly } from './AccessTypeChip'
 import API from '../api'
 import { alertStore } from './AlertStack'
@@ -25,6 +26,8 @@ const ACCESS_OPTIONS = [
  * @property {string | undefined} email
  * @property {string} [storageId]
  * @property {'R' | 'W' | 'A'} [initialAccessType]
+ * @property {string[]} [existingEmails] Already-granted emails to leave out
+ *   of the suggestion list — nothing useful about re-suggesting them.
  */
 
 /**
@@ -33,13 +36,39 @@ const ACCESS_OPTIONS = [
 const GrantAccess = (props) => {
 	const { addAlert } = alertStore
 	const params = useParams()
+	const [store] = createLocalStore()
 	const getAction = () => (props.email?.length ? 'Change' : 'Grant')
 	const storageId = () => props.storageId || params.id
 	const [accessType, setAccessType] = createSignal(/** @type {'R' | 'W' | 'A'} */ ('R'))
+	/** @type {[import("solid-js").Accessor<Array<{id: string, email: string}>>, any]} */
+	const [directory, setDirectory] = createSignal([])
+	const suggestions = () => {
+		const taken = new Set(
+			(props.existingEmails || []).map((e) => e.toLowerCase()),
+		)
+		const self = (store.user?.email || '').toLowerCase()
+		return directory().filter(
+			(u) => !taken.has(u.email.toLowerCase()) && u.email.toLowerCase() !== self,
+		)
+	}
 
 	createEffect(() => {
 		if (!props.isVisible) return
 		setAccessType(props.initialAccessType || 'R')
+	})
+
+	// Load the directory fresh every time the dialog opens. On failure leave
+	// it empty — the TextField still works as free text and the server-side
+	// check remains the backstop.
+	createEffect(() => {
+		if (!props.isVisible) {
+			setDirectory([])
+			return
+		}
+		API.users
+			.listUserDirectory()
+			.then((data) => setDirectory(data?.users || []))
+			.catch(() => setDirectory([]))
 	})
 
 	/**
@@ -51,6 +80,21 @@ const GrantAccess = (props) => {
 		const data = new FormData(event.currentTarget)
 		const email = props.email || data.get('email')
 		const access_type = accessType()
+
+		// Skip the registered-user check when changing an existing grantee's
+		// access type — that path never lets the email be edited.
+		if (!props.email && directory().length) {
+			const known = directory().some(
+				(u) => u.email.toLowerCase() === String(email).toLowerCase(),
+			)
+			if (!known) {
+				addAlert(
+					'You can only grant access to registered users',
+					'error',
+				)
+				return
+			}
+		}
 
 		await API.access.grantAccess(storageId(), email, access_type)
 
@@ -80,7 +124,16 @@ const GrantAccess = (props) => {
 							name="email"
 							fullWidth
 							variant="standard"
+							inputProps={{ list: 'grant-access-emails', autocomplete: 'off' }}
 						/>
+						{/* @suid/material has no Autocomplete component; a native datalist
+							gets the same suggest-as-you-type behavior without a new
+							dependency, and works on mobile WebViews. */}
+						<datalist id="grant-access-emails">
+							<For each={suggestions()}>
+								{(u) => <option value={u.email} />}
+							</For>
+						</datalist>
 
 						<div class="access-type-picker">
 							<span class="access-type-picker__label">Access</span>

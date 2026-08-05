@@ -11,7 +11,7 @@ pub struct RefreshSchema {
     pub refresh_token: String,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct TokenSchema {
     pub access_token: String,
     pub refresh_token: String,
