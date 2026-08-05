@@ -132,7 +132,7 @@ pub struct DBFSElement {
     pub has_thumb: bool,
 }
 
-#[derive(Debug, sqlx::FromRow, Serialize)]
+#[derive(Debug, Clone, sqlx::FromRow, Serialize)]
 pub struct FSElement {
     pub path: String,
     pub name: String,
