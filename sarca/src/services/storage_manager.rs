@@ -338,15 +338,31 @@ impl<'d> StorageManagerService<'d> {
             tracing::warn!("preview cache warm skipped for {}: {e}", file.path);
         }
 
+        let original_size = file.size.max(0).cast_unsigned();
+        self.store_preview_document(file_id, &file.path, original_size, storage_id, chat_id, &jpeg)
+            .await
+    }
+
+    /// Upload `jpeg` as `file_id`'s preview Telegram document and record it,
+    /// so a later cache miss reads one small `getFile` instead of paying the
+    /// full re-download-and-re-encode again. Shared by the upload-time path
+    /// above and by the slow-path backfill below.
+    async fn store_preview_document(
+        &self,
+        file_id: Uuid,
+        path: &str,
+        original_size: u64,
+        storage_id: Uuid,
+        chat_id: ChatId,
+        jpeg: &[u8],
+    ) -> SarcaResult<()> {
         // An already-small photo gains nothing from a second copy in Telegram: reading
         // its single original chunk costs the same round trip as reading a preview
-        // document would. Keep the warm cache entry, skip the upload (and the bot's
-        // send budget); the preview endpoint re-encodes on demand if the cache is lost.
-        let original_size = file.size.max(0).cast_unsigned();
+        // document would. Skip the upload (and the bot's send budget); the preview
+        // endpoint re-encodes on demand if the cache is lost.
         if u64::try_from(jpeg.len()).unwrap_or(u64::MAX) * 10 >= original_size * 7 {
             tracing::debug!(
-                "preview for {} not stored: {} bytes vs {original_size} byte original",
-                file.path,
+                "preview for {path} not stored: {} bytes vs {original_size} byte original",
                 jpeg.len()
             );
             return Ok(());
@@ -354,7 +370,7 @@ impl<'d> StorageManagerService<'d> {
 
         let scheduler = StorageWorkersScheduler::new(self.db, self.rate_limit);
         let outcome = TelegramBotApi::new(self.telegram_baseurl, scheduler)
-            .upload(&jpeg, chat_id, storage_id)
+            .upload(jpeg, chat_id, storage_id)
             .await?;
 
         self.files_repo.set_preview(file_id, &outcome.file_id, outcome.message_id).await?;
@@ -368,6 +384,36 @@ impl<'d> StorageManagerService<'d> {
         );
 
         Ok(())
+    }
+
+    /// Backfill a stored preview for a file that predates them, after the
+    /// slow path in `preview_for_path` has already re-encoded one from the
+    /// original bytes to answer the current request. Paid once per file
+    /// instead of once per cache eviction from here on.
+    ///
+    /// Best-effort and silent: the caller has already served the bytes it
+    /// just built, so nothing here should — or can — surface to the request.
+    pub async fn backfill_preview(&self, file_id: Uuid, jpeg: Vec<u8>) {
+        if let Err(e) = self.backfill_preview_inner(file_id, jpeg).await {
+            tracing::warn!("preview backfill failed for {file_id}: {e}");
+        }
+    }
+
+    async fn backfill_preview_inner(&self, file_id: Uuid, jpeg: Vec<u8>) -> SarcaResult<()> {
+        let file = self.files_repo.get_by_id(file_id).await?;
+        let storage = self.storages_repo.get_by_file_id(file_id).await?;
+        let (primary, _) =
+            self.resolve_primary_channel(storage.id, storage.primary_position).await?;
+        let original_size = file.size.max(0).cast_unsigned();
+        self.store_preview_document(
+            file_id,
+            &file.path,
+            original_size,
+            storage.id,
+            primary.chat_id,
+            &jpeg,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
