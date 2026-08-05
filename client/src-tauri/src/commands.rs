@@ -1009,6 +1009,16 @@ pub async fn sync_transfer_queue(
     Ok(state.engine.transfer_queue().await)
 }
 
+/// Mirrors the webview's `visibilitychange`/heartbeat state into native sync
+/// state, so the background loop can poll fast while someone is watching and
+/// back off once they're not (Tauri v2 has no `RunEvent::Paused` to derive
+/// this from directly — see `AppSyncState::is_foreground`).
+#[tauri::command]
+pub fn set_app_foreground(state: State<'_, AppSyncState>, active: bool) -> Result<(), String> {
+    state.set_foreground(active);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_client_prefs(state: State<'_, AppSyncState>) -> Result<ClientPrefsDto, String> {
     Ok(load_prefs(&state).to_dto())

@@ -6,13 +6,20 @@ use crate::{
     common::{jwt_manager::AuthUser, password_manager::PasswordManager},
     config::Config,
     errors::{SarcaError, SarcaResult},
-    models::users::InDBUser,
+    models::users::{InDBUser, User},
     repositories::{
         access::AccessRepository,
         storages::StoragesRepository,
         users::UsersRepository,
     },
-    schemas::users::{InUser, UserOut},
+    schemas::users::{
+        ChangeOwnPassword,
+        InUser,
+        SetDisabled,
+        SetPassword,
+        UserDirectoryEntry,
+        UserOut,
+    },
     services::storage_purge::{
         enqueue_storage_telegram_purge_in_tx,
         snapshot_storage_telegram_purge,
@@ -53,6 +60,7 @@ impl<'d> UsersService<'d> {
                 UserOut {
                     is_superuser: u.email.eq_ignore_ascii_case(&config.superuser_email),
                     email_verified: u.email_verified(),
+                    disabled: u.is_disabled(),
                     id: u.id,
                     email: u.email,
                 }
@@ -73,6 +81,89 @@ impl<'d> UsersService<'d> {
         user.email_verified_at = Some(Utc::now());
         self.repo.create(user).await?;
         Ok(())
+    }
+
+    /// Verify the caller's current password and set a new one. Returns the
+    /// updated row so the router can re-issue tokens: `update_password_hash_by_id`
+    /// bumps `sessions_valid_after`, which would otherwise log the caller out
+    /// of the very request that just succeeded.
+    pub async fn change_own_password(
+        &self,
+        actor: &AuthUser,
+        body: ChangeOwnPassword,
+    ) -> SarcaResult<User> {
+        let user = self.repo.get_by_id(actor.id).await?;
+        let Some(ref hash) = user.password_hash else {
+            return Err(SarcaError::NotAuthenticated);
+        };
+        PasswordManager::verify(&body.current_password, hash)?;
+
+        let password_hash = PasswordManager::generate(&body.new_password)?;
+        self.repo.update_password_hash_by_id(user.id, &password_hash).await?;
+
+        self.repo.get_by_id(user.id).await
+    }
+
+    /// Set a user's password without the current-password check. The
+    /// target's sessions die; that is intended for an admin-forced reset.
+    pub async fn set_password_by_superuser(
+        &self,
+        actor: &AuthUser,
+        user_id: Uuid,
+        body: SetPassword,
+        config: &Config,
+    ) -> SarcaResult<()> {
+        Self::require_superuser(actor, config)?;
+        let password_hash = PasswordManager::generate(&body.new_password)?;
+        self.repo.update_password_hash_by_id(user_id, &password_hash).await
+    }
+
+    /// Disable or re-enable an account. The configured superuser and the
+    /// actor's own row are never valid targets — same guard shape as
+    /// [`Self::delete_by_superuser`].
+    pub async fn set_disabled_by_superuser(
+        &self,
+        actor: &AuthUser,
+        user_id: Uuid,
+        body: SetDisabled,
+        config: &Config,
+    ) -> SarcaResult<()> {
+        Self::require_superuser(actor, config)?;
+
+        let target = self.repo.get_by_id(user_id).await?;
+        if target.email.eq_ignore_ascii_case(&config.superuser_email) || target.id == actor.id {
+            return Err(SarcaError::Forbidden);
+        }
+
+        self.repo.set_disabled(user_id, body.disabled).await
+    }
+
+    /// Registered-user directory for the grant-access autocomplete. Open to
+    /// the superuser and to anyone holding `AccessType::A` on at least one
+    /// storage, not just the superuser — a storage admin should be able to
+    /// invite people without asking for a superuser's help.
+    pub async fn list_directory(
+        &self,
+        actor: &AuthUser,
+        config: &Config,
+    ) -> SarcaResult<Vec<UserDirectoryEntry>> {
+        if !actor.email.eq_ignore_ascii_case(&config.superuser_email)
+            && !AccessRepository::new(self.db).has_any_admin_access(actor.id).await?
+        {
+            return Err(SarcaError::Forbidden);
+        }
+
+        let entries = self.repo.list_directory().await?;
+        Ok(entries
+            .into_iter()
+            .filter(|(id, _)| *id != actor.id)
+            .map(|(id, email)| {
+                UserDirectoryEntry {
+                    id,
+                    email,
+                }
+            })
+            .collect())
     }
 
     /// Delete a user, their bots and grants, and every storage they alone owned.

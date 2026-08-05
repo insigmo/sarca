@@ -49,6 +49,7 @@ pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "list_bindings",
     "sync_statuses",
     "sync_transfer_queue",
+    "set_app_foreground",
     "sync_now",
     "add_binding",
     "remove_binding",
@@ -296,6 +297,13 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
         "sync_transfer_queue" => {
             let snap = commands::sync_transfer_queue(state.clone()).await?;
             serde_json::to_value(snap).map_err(|e| e.to_string())
+        }
+        "set_app_foreground" => {
+            let active = arg_value(&args, "active", "active")
+                .and_then(|v| v.as_bool())
+                .ok_or_else(|| "active required".to_string())?;
+            commands::set_app_foreground(state.clone(), active)?;
+            Ok(json!(null))
         }
         "sync_now" => {
             let binding_id = arg_str(&args, "binding_id", "bindingId");
@@ -649,6 +657,7 @@ mod tests {
             "sync_now",
             "sync_statuses",
             "sync_transfer_queue",
+            "set_app_foreground",
             "is_on_wifi",
             "get_about",
             "get_cache_size",

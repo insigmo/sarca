@@ -37,6 +37,7 @@ fn main() {
         "sync_now",
         "sync_statuses",
         "sync_transfer_queue",
+        "set_app_foreground",
         "get_client_prefs",
         "set_client_prefs",
         "verify_app_lock_pin",
