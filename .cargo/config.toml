@@ -3,17 +3,19 @@ rustflags = ["--cfg", "reqwest_unstable"]
 
 # Tauri Android sets RUSTFLAGS for linking, which replaces [build].rustflags.
 # Keep reqwest HTTP/3 cfg on mobile targets via target-specific flags (appended).
+# -z max-page-size=16384: align PT_LOAD segments to 16KB so the .so runs
+# on both 4KB and 16KB page-size devices (e.g. Pixel 9 in 16KB mode).
 [target.aarch64-linux-android]
-rustflags = ["--cfg", "reqwest_unstable"]
+rustflags = ["--cfg", "reqwest_unstable", "-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
 [target.armv7-linux-androideabi]
-rustflags = ["--cfg", "reqwest_unstable"]
+rustflags = ["--cfg", "reqwest_unstable", "-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
 [target.i686-linux-android]
-rustflags = ["--cfg", "reqwest_unstable"]
+rustflags = ["--cfg", "reqwest_unstable", "-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
 [target.x86_64-linux-android]
-rustflags = ["--cfg", "reqwest_unstable"]
+rustflags = ["--cfg", "reqwest_unstable", "-C", "link-arg=-Wl,-z,max-page-size=16384"]
 
 [target.aarch64-apple-ios]
 rustflags = ["--cfg", "reqwest_unstable"]
