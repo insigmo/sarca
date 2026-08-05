@@ -57,6 +57,17 @@ pub struct Config {
 
     /// Verbose (debug-level) tracing for requests and background jobs. `RUST_LOG` still wins.
     pub debug_log: bool,
+
+    /// Whether the startup media warmer runs at all.
+    pub prefetch_enabled: bool,
+    /// How many folder levels deep the warmer walks each storage's tree.
+    pub prefetch_depth: u32,
+    /// How many files the warmer warms at once, independent of `media_concurrency`
+    /// (acquired ahead of it — see `services::media_warmer`).
+    pub prefetch_concurrency: usize,
+    /// Hard cap on files warmed in one run, so a huge storage cannot make the
+    /// warmer run indefinitely.
+    pub prefetch_max_items: usize,
 }
 
 impl Config {
@@ -122,6 +133,14 @@ impl Config {
         let debug_log = Self::get_optional_env_var("DEBUG_LOG")
             .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
 
+        // Default true (unlike DEBUG_LOG): the warmer should just work out of
+        // the box, and only an explicit "0"/"false" opts out.
+        let prefetch_enabled = Self::get_optional_env_var("PREFETCH_ENABLED")
+            .is_none_or(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        let prefetch_depth = Self::get_env_var_with_default("PREFETCH_DEPTH", 3u32)?;
+        let prefetch_concurrency = Self::get_env_var_with_default("PREFETCH_CONCURRENCY", 3usize)?;
+        let prefetch_max_items = Self::get_env_var_with_default("PREFETCH_MAX_ITEMS", 2000usize)?;
+
         Ok(Self {
             sqlite_path,
             port,
@@ -146,6 +165,10 @@ impl Config {
             telegram_chunk_size_mb,
             telegram_video_chunk_size_mb,
             debug_log,
+            prefetch_enabled,
+            prefetch_depth,
+            prefetch_concurrency,
+            prefetch_max_items,
         })
     }
 

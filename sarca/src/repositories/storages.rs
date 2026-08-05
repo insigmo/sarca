@@ -85,6 +85,19 @@ impl<'d> StoragesRepository<'d> {
         Ok(result)
     }
 
+    /// Every storage id, for background jobs that walk all of them (the
+    /// startup media warmer) rather than a single user's list.
+    pub async fn list_all_ids(&self) -> SarcaResult<Vec<Uuid>> {
+        let rows: Vec<(Uuid,)> = sqlx::query_as(format!("SELECT id FROM {TABLE}").as_str())
+            .fetch_all(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
     pub async fn get_by_id(&self, id: Uuid) -> SarcaResult<Storage> {
         sqlx::query_as(format!("SELECT * FROM {TABLE} WHERE id = $1").as_str())
             .bind(id)

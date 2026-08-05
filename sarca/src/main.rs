@@ -13,6 +13,7 @@ use sarca::{
     server::Server,
     services::{
         channel_health::ChannelHealthService,
+        media_warmer,
         replication::ReplicationService,
         storage_purge::StoragePurgeService,
         trash_purge::TrashPurgeService,
@@ -186,8 +187,14 @@ async fn main() {
         Duration::from_secs(5),
     );
 
-    let app_state = AppState::new(db, config.clone(), tx);
-    let server = Server::build_server(Arc::new(app_state));
+    let app_state = Arc::new(AppState::new(db, config.clone(), tx));
+
+    // Best-effort cache warm-up. Spawned (not awaited) so a slow or huge
+    // storage tree never delays serving; never fails startup either — every
+    // error inside is logged and swallowed by the daemon itself.
+    media_warmer::spawn(app_state.clone());
+
+    let server = Server::build_server(app_state);
 
     let cert_store = CertStore::new(&config.certs_dir);
     cert_store
