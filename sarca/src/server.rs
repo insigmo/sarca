@@ -18,7 +18,7 @@ use axum::{
         },
     },
 };
-use tower::{ServiceBuilder, limit::ConcurrencyLimitLayer};
+use tower::ServiceBuilder;
 use tower_http::{
     cors,
     services::{ServeDir, ServeFile},
@@ -48,7 +48,7 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn build_server(workers: usize, app_state: Arc<AppState>) -> Self {
+    pub fn build_server(app_state: Arc<AppState>) -> Self {
         let ui_dir = resolve_ui_dir();
         let index = ui_dir.join("index.html");
         let assets = ui_dir.join("assets");
@@ -71,7 +71,7 @@ impl Server {
             .service(ServeFile::new(index));
 
         let router = Router::new()
-            .nest("/api", Self::build_api_router(workers, app_state))
+            .nest("/api", Self::build_api_router(app_state))
             .nest_service("/assets", serve_assets)
             .fallback_service(serve_ui);
         let router = with_security_headers(router);
@@ -83,7 +83,7 @@ impl Server {
     }
 
     #[inline]
-    fn build_api_router(workers: usize, app_state: Arc<AppState>) -> Router {
+    fn build_api_router(app_state: Arc<AppState>) -> Router {
         let app_cors = cors_layer();
 
         Router::new()
@@ -102,7 +102,6 @@ impl Server {
             )
             // Keep unknown /api/* from falling through to the SPA HTML fallback.
             .fallback(|| async { (StatusCode::NOT_FOUND, "Not Found") })
-            .layer(ConcurrencyLimitLayer::new(workers))
             .layer(app_cors)
             .layer(Self::request_trace_layer())
     }

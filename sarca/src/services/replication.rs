@@ -19,7 +19,7 @@ impl ReplicationService {
     /// Process one batch of pending/failed replicas: for each, find a live source replica
     /// for that chunk (preferring `copyMessage`, falling back to download + re-upload) and
     /// push it to the job's target channel. Returns how many jobs were attempted.
-    pub async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u8) -> usize {
+    pub async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u16) -> usize {
         let replicas_repo = ChunkReplicasRepository::new(db);
         let channels_repo = StorageChannelsRepository::new(db);
 
@@ -116,7 +116,7 @@ impl ReplicationService {
 
     /// Spawn a background loop draining pending replicas. Sleeps `idle_interval` between
     /// batches whenever a batch turns up empty, otherwise loops immediately to drain backlog.
-    pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u8, idle_interval: Duration) {
+    pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u16, idle_interval: Duration) {
         tokio::spawn(async move {
             loop {
                 let processed = Self::run_once(&db, &base_url, rate_limit).await;

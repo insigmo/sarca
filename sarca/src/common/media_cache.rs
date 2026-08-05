@@ -11,14 +11,19 @@ pub const PREVIEW_CACHE_LIMIT_BYTES: u64 = 1 << 30;
 pub const PREVIEW_CACHE_EVICT_BYTES: u64 = 100 << 20;
 pub const PREVIEW_FORMAT_VERSION: &str = "v1-1920-q80";
 
+pub const THUMB_CACHE_LIMIT_BYTES: u64 = 256 << 20;
+pub const THUMB_CACHE_EVICT_BYTES: u64 = 32 << 20;
+pub const THUMB_FORMAT_VERSION: &str = "v1-client";
+
 /// On-disk cache of encoded JPEGs under `WORK_DIR/<dir>`.
 ///
-/// Previews only. Grid thumbnails are built and kept by the client, so nothing
-/// here would ever be read for them.
+/// Covers both previews and grid thumbnails, each under its own root so a
+/// large preview working set cannot evict the much cheaper thumbnail tiles.
 #[derive(Clone, Debug)]
 pub struct MediaCache {
     root: PathBuf,
     limit: u64,
+    evict: u64,
     format_version: &'static str,
 }
 
@@ -34,7 +39,17 @@ impl MediaCache {
         Self {
             root: work_dir.as_ref().join("preview_cache"),
             limit: PREVIEW_CACHE_LIMIT_BYTES,
+            evict: PREVIEW_CACHE_EVICT_BYTES,
             format_version: PREVIEW_FORMAT_VERSION,
+        }
+    }
+
+    pub fn thumbs(work_dir: impl AsRef<Path>) -> Self {
+        Self {
+            root: work_dir.as_ref().join("thumb_cache"),
+            limit: THUMB_CACHE_LIMIT_BYTES,
+            evict: THUMB_CACHE_EVICT_BYTES,
+            format_version: THUMB_FORMAT_VERSION,
         }
     }
 
@@ -84,14 +99,16 @@ impl MediaCache {
             let _ = tokio::fs::remove_file(&tmp).await;
             return Err(e.to_string());
         }
-        self.ensure_under_limit(self.limit, PREVIEW_CACHE_EVICT_BYTES).await
+        self.ensure_under_limit(self.limit, self.evict).await
     }
 
-    /// Delete oldest files until total size is at or below `limit`.
-    pub async fn ensure_under_limit(&self, limit: u64, _min_evict: u64) -> Result<(), String> {
+    /// Once over `limit`, delete oldest files down to `limit - min_evict` so a
+    /// single put does not trigger an eviction pass on every subsequent put.
+    pub async fn ensure_under_limit(&self, limit: u64, min_evict: u64) -> Result<(), String> {
         // No grace needed: `get` reads the bytes into memory before returning,
         // so nothing here holds a path it has yet to open.
-        evict_oldest(&self.root, limit, Duration::ZERO).await
+        let target = limit.saturating_sub(min_evict);
+        evict_oldest(&self.root, target, Duration::ZERO).await
     }
 }
 
@@ -185,10 +202,12 @@ mod tests {
         write_file(&cache.path_for("mid"), &[0u8; 500]).await;
         write_file(&cache.path_for("new"), &[0u8; 400]).await;
 
+        // limit 900, min_evict 100 => evicts down to the 800-byte target, so
+        // both "old" and "mid" are removed and only "new" (400) survives.
         cache.ensure_under_limit(900, 100).await.unwrap();
 
         assert!(!cache.path_for("old").exists());
-        assert!(cache.path_for("mid").exists());
+        assert!(!cache.path_for("mid").exists());
         assert!(cache.path_for("new").exists());
 
         let mut total = 0u64;
@@ -198,7 +217,29 @@ mod tests {
                 total += meta.len();
             }
         }
-        assert!(total <= 900);
+        assert!(total <= 800);
+    }
+
+    #[tokio::test]
+    async fn thumbs_and_previews_use_separate_roots() {
+        let tmp = tempfile::tempdir().unwrap();
+        let previews = MediaCache::previews(tmp.path());
+        let thumbs = MediaCache::thumbs(tmp.path());
+        let storage_id = Uuid::new_v4();
+
+        assert_ne!(previews.root, thumbs.root);
+
+        let preview_key = previews.key(storage_id, "photos/a.jpg");
+        let thumb_key = thumbs.key(storage_id, "photos/a.jpg");
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xD9];
+        previews.put(&preview_key, &jpeg).await.unwrap();
+        thumbs.put(&thumb_key, &jpeg).await.unwrap();
+
+        // A large preview working set must not evict thumb tiles: bump the
+        // preview cache well past its limit and confirm the thumb survives.
+        previews.ensure_under_limit(0, 0).await.unwrap();
+        assert!(previews.get(&preview_key).await.is_none());
+        assert_eq!(thumbs.get(&thumb_key).await.as_deref(), Some(jpeg.as_slice()));
     }
 
     #[tokio::test]
