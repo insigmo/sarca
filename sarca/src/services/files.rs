@@ -17,6 +17,7 @@ use crate::{
             UploadProgressEvent,
         },
         jwt_manager::AuthUser,
+        media_cache::MediaCache,
     },
     errors::{SarcaError, SarcaResult},
     models::{
@@ -43,12 +44,19 @@ pub struct FilesService<'d> {
     access_repo: AccessRepository<'d>,
     db: &'d SqlitePool,
     base_url: &'d str,
-    rate_limit: u8,
+    rate_limit: u16,
+    work_dir: &'d str,
     tx: ClientSender,
 }
 
 impl<'d> FilesService<'d> {
-    pub fn new(db: &'d SqlitePool, tx: ClientSender, base_url: &'d str, rate_limit: u8) -> Self {
+    pub fn new(
+        db: &'d SqlitePool,
+        tx: ClientSender,
+        base_url: &'d str,
+        rate_limit: u16,
+        work_dir: &'d str,
+    ) -> Self {
         let repo = FilesRepository::new(db);
         let replicas_repo = ChunkReplicasRepository::new(db);
         let storage_workers_repo = StorageWorkersRepository::new(db);
@@ -61,8 +69,20 @@ impl<'d> FilesService<'d> {
             db,
             base_url,
             rate_limit,
+            work_dir,
             tx,
         }
+    }
+
+    fn invalidate_media_cache(&self, storage_id: Uuid, path: &str) {
+        let previews = MediaCache::previews(self.work_dir);
+        let thumbs = MediaCache::thumbs(self.work_dir);
+        let preview_key = previews.key(storage_id, path);
+        let thumb_key = thumbs.key(storage_id, path);
+        tokio::spawn(async move {
+            previews.remove(&preview_key).await;
+            thumbs.remove(&thumb_key).await;
+        });
     }
 
     pub async fn create_folder(
@@ -366,6 +386,10 @@ impl<'d> FilesService<'d> {
         // 2. soft-delete only (Telegram untouched)
         let deleted_target = self.repo.delete(path, storage_id).await?;
 
+        // The path is free for a new live file now; a stale cached tile at the
+        // same path must not bleed into whatever gets uploaded there next.
+        self.invalidate_media_cache(storage_id, &deleted_target);
+
         // 3. Shares are path-keyed — drop links that targeted this file/folder.
         let shares = ShareLinksRepository::new(self.db);
         if let Err(e) = shares.delete_for_target(storage_id, &deleted_target).await {
@@ -548,6 +572,7 @@ impl<'d> FilesService<'d> {
             Some("replace") => {
                 let live_ids = self.repo.list_live_ids_at_path(storage_id, &dest).await?;
                 purge_file_ids(self.db, self.base_url, self.rate_limit, &live_ids).await?;
+                self.invalidate_media_cache(storage_id, &dest);
                 Ok(dest)
             },
             Some("rename") => self.repo.next_available_live_path(&dest, storage_id).await,

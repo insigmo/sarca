@@ -129,8 +129,8 @@ class SarcaServer:
                 "REFRESH_TOKEN_EXPIRE_IN_DAYS": "14",
                 "SECRET_KEY": "e2e" * 40,
                 "TELEGRAM_API_BASE_URL": self.telegram_base_url,
-                # requests/min/bot, u8 — the fake Bot API has no flood control
-                "TELEGRAM_RATE_LIMIT": "255",
+                # requests/min/bot, u16 — the fake Bot API has no flood control
+                "TELEGRAM_RATE_LIMIT": "10000",
                 "TELEGRAM_CHUNK_SIZE_MB": "20",
                 "TELEGRAM_VIDEO_CHUNK_SIZE_MB": "20",
                 "WORK_DIR": str(self.work_dir),
