@@ -198,7 +198,9 @@ impl StoragesRouter {
         Path(id): Path<Uuid>,
         Json(in_schema): Json<GrantAccess>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        Self::service(&state).grant_access(id, in_schema, &user).await?;
+        Self::service(&state)
+            .grant_access(id, in_schema, &user, &state.config.superuser_email)
+            .await?;
         Ok(StatusCode::NO_CONTENT)
     }
 
@@ -217,7 +219,9 @@ impl StoragesRouter {
         Path(id): Path<Uuid>,
         Json(in_schema): Json<RestrictAccess>,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        Self::service(&state).restrict_access(id, in_schema, &user).await?;
+        Self::service(&state)
+            .restrict_access(id, in_schema, &user, &state.config.superuser_email)
+            .await?;
         Ok(StatusCode::NO_CONTENT)
     }
 }

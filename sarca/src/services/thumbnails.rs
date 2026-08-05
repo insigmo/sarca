@@ -53,7 +53,15 @@ pub async fn generate(
     };
 
     let raw = match kind {
-        ThumbKind::Image => generate_image(file_path).await?,
+        ThumbKind::Image => {
+            match generate_image(file_path, logical_path).await {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::warn!("image thumbnail skipped for {logical_path}: {e}");
+                    return Ok(None);
+                },
+            }
+        },
         ThumbKind::Video => {
             match generate_video(file_path, chunk_size_bytes).await {
                 Ok(bytes) => bytes,
@@ -141,9 +149,30 @@ pub async fn generate_preview_from_path(file_path: &Path) -> Result<Vec<u8>, Str
 }
 
 /// Encode raw image bytes to a screen-sized JPEG preview.
+///
+/// A format the `image` crate cannot open (HEIC/AVIF off a phone) is decoded by
+/// ffmpeg first and then resized on the same path, so a photo that used to have
+/// no preview at all — and therefore re-downloaded the full original on every
+/// open — now caches a small JPEG like every other picture.
 pub async fn generate_preview(raw: Vec<u8>) -> Result<Vec<u8>, String> {
+    let raw = std::sync::Arc::new(raw);
+    let direct = {
+        let raw = raw.clone();
+        tokio::task::spawn_blocking(move || {
+            resize_to_jpeg(&raw, PREVIEW_MAX_EDGE, PREVIEW_JPEG_QUALITY)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    };
+    let Err(decode_error) = direct else {
+        return direct;
+    };
+
+    let transcoded = transcode_image_bytes_to_jpeg(&raw)
+        .await
+        .map_err(|e| format!("{decode_error}; ffmpeg fallback: {e}"))?;
     tokio::task::spawn_blocking(move || {
-        resize_to_jpeg(&raw, PREVIEW_MAX_EDGE, PREVIEW_JPEG_QUALITY)
+        resize_to_jpeg(&transcoded, PREVIEW_MAX_EDGE, PREVIEW_JPEG_QUALITY)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -157,13 +186,81 @@ fn detect_kind(logical_path: &str) -> Option<ThumbKind> {
 
     match ext.as_str() {
         "jpg" | "jpeg" | "png" | "gif" | "webp" | "bmp" => Some(ThumbKind::Image),
+        // Phone-camera formats the `image` crate cannot decode. They are
+        // images all the same: ffmpeg turns them into a JPEG first, and
+        // everything downstream (thumb, preview, cache) is unchanged. Without
+        // this a HEIC photo has no preview at all, so every open re-downloads
+        // the full original.
+        ext if FFMPEG_IMAGE_EXTENSIONS.contains(&ext) => Some(ThumbKind::Image),
         "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" => Some(ThumbKind::Video),
         "pdf" => Some(ThumbKind::Pdf),
         _ => None,
     }
 }
 
-async fn generate_image(file_path: &Path) -> Result<Vec<u8>, String> {
+/// Image extensions the `image` crate has no decoder for, handed to ffmpeg
+/// instead. Kept next to [`transcode_image_to_jpeg`], which is what makes them
+/// usable.
+const FFMPEG_IMAGE_EXTENSIONS: [&str; 3] = ["heic", "heif", "avif"];
+
+fn needs_ffmpeg_decode(logical_path: &str) -> bool {
+    Path::new(logical_path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|ext| FFMPEG_IMAGE_EXTENSIONS.contains(&ext.as_str()))
+}
+
+/// Decode one still image with ffmpeg and hand back JPEG bytes.
+///
+/// Only used for formats the `image` crate cannot open; the result then goes
+/// through the ordinary resize/encode path, so there is exactly one place that
+/// decides preview and thumbnail sizes.
+async fn transcode_image_to_jpeg(file_path: &Path) -> Result<Vec<u8>, String> {
+    if which("ffmpeg").await.is_none() {
+        return Err("ffmpeg not found in PATH".into());
+    }
+
+    let tmp = tempfile_dir().await?;
+    let out = tmp.join("still.jpg");
+
+    let status = Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-i"])
+        .arg(file_path)
+        // One frame, high quality: the size-reducing pass happens afterwards.
+        .args(["-frames:v", "1", "-q:v", "2"])
+        .arg(&out)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .status()
+        .await
+        .map_err(|e| format!("spawn ffmpeg: {e}"))?;
+
+    if !status.success() || !out.exists() {
+        let _ = tokio::fs::remove_dir_all(&tmp).await;
+        return Err("ffmpeg could not decode the image".into());
+    }
+
+    let bytes = tokio::fs::read(&out).await.map_err(|e| format!("read transcoded image: {e}"));
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+    bytes
+}
+
+/// Same, from bytes already in memory (the preview slow path reassembles the
+/// original from Telegram chunks and never has it on disk).
+async fn transcode_image_bytes_to_jpeg(raw: &[u8]) -> Result<Vec<u8>, String> {
+    let tmp = tempfile_dir().await?;
+    let src = tmp.join("source.bin");
+    tokio::fs::write(&src, raw).await.map_err(|e| format!("spool image: {e}"))?;
+    let result = transcode_image_to_jpeg(&src).await;
+    let _ = tokio::fs::remove_dir_all(&tmp).await;
+    result
+}
+
+async fn generate_image(file_path: &Path, logical_path: &str) -> Result<Vec<u8>, String> {
+    if needs_ffmpeg_decode(logical_path) {
+        return transcode_image_to_jpeg(file_path).await;
+    }
     tokio::fs::read(file_path).await.map_err(|e| format!("read image: {e}"))
 }
 
@@ -391,8 +488,21 @@ mod tests {
     fn is_preview_image_matches_extensions() {
         assert!(is_preview_image("a.JPG"));
         assert!(is_preview_image("dir/x.webp"));
+        // Decoded by ffmpeg, but an image as far as previews are concerned.
+        assert!(is_preview_image("IMG_0001.HEIC"));
+        assert!(is_preview_image("shot.avif"));
         assert!(!is_preview_image("clip.mp4"));
         assert!(!is_preview_image("doc.pdf"));
+    }
+
+    #[test]
+    fn only_the_undecodable_formats_take_the_ffmpeg_path() {
+        assert!(needs_ffmpeg_decode("IMG_0001.HEIC"));
+        assert!(needs_ffmpeg_decode("x.heif"));
+        assert!(needs_ffmpeg_decode("dir/y.avif"));
+        assert!(!needs_ffmpeg_decode("a.jpg"));
+        assert!(!needs_ffmpeg_decode("a.png"));
+        assert!(!needs_ffmpeg_decode("clip.mp4"));
     }
 
     #[test]
