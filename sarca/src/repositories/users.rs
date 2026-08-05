@@ -250,6 +250,10 @@ mod tests {
             telegram_chunk_size_mb: 20,
             telegram_video_chunk_size_mb: 20,
             debug_log: false,
+            prefetch_enabled: false,
+            prefetch_depth: 3,
+            prefetch_concurrency: 3,
+            prefetch_max_items: 2000,
         }
     }
 

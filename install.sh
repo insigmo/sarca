@@ -362,6 +362,10 @@ write_or_merge_conf() {
     "PORT=8000" \
     "WORKERS=4" \
     "MEDIA_CONCURRENCY=16" \
+    "PREFETCH_ENABLED=true" \
+    "PREFETCH_DEPTH=3" \
+    "PREFETCH_CONCURRENCY=3" \
+    "PREFETCH_MAX_ITEMS=2000" \
     "CHANNEL_CAPACITY=32" \
     "SUPERUSER_EMAIL=admin@example.com" \
     "SUPERUSER_PASS=change-me" \
