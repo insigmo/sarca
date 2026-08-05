@@ -56,6 +56,7 @@ use crate::{
     },
     services::{
         files::FilesService,
+        storage_manager::StorageManagerService,
         storage_workers_scheduler::StorageWorkersScheduler,
         thumbnails,
     },
@@ -656,6 +657,10 @@ impl FilesRouter {
         let cache = ChunkCache::new(&state.config.work_dir);
         let is_video = crate::models::files::is_video(path, Some(&content_type));
         let media_semaphore = state.media_semaphore.clone();
+        // Prefetch is a background warm, not the read the caller is waiting
+        // on — it shares the thumb semaphore so it can never eat a permit the
+        // foreground Range read below needs.
+        let prefetch_semaphore = state.thumb_semaphore.clone();
 
         let channels =
             ordered_active_channels(&db, storage_id).await.map_err(<(StatusCode, String)>::from)?;
@@ -681,7 +686,7 @@ impl FilesRouter {
                         rate,
                         storage_id,
                         file_id,
-                        media_semaphore.clone(),
+                        prefetch_semaphore.clone(),
                     );
                 }
             }
@@ -711,7 +716,7 @@ impl FilesRouter {
                                 rate,
                                 storage_id,
                                 file_id,
-                                media_semaphore.clone(),
+                                prefetch_semaphore.clone(),
                             );
                         }
                     }
@@ -1005,7 +1010,10 @@ impl FilesRouter {
         }
 
         let scheduler = StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
-        let permit = state.media_semaphore.acquire().await.expect("media semaphore never closed");
+        // Thumbs get their own reserved-smaller semaphore so a scrolled folder
+        // can never fill every `media_semaphore` permit and delay the one
+        // preview/inline/download the user is actually waiting on.
+        let permit = state.thumb_semaphore.acquire().await.expect("thumb semaphore never closed");
         let deadline = Instant::now() + Self::MEDIA_READ_TOKEN_BUDGET;
         let result = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
             .download_before(thumb_id, storage_id, deadline)
@@ -1121,6 +1129,23 @@ impl FilesRouter {
         if let Err(e) = preview_cache.put(&cache_key, &jpeg).await {
             tracing::warn!("preview cache write skipped: {e}");
         }
+
+        // This file predates stored previews (or its preview document is gone),
+        // so every cache eviction re-pays the full download-and-re-encode above.
+        // Upload this re-encode as the stored preview so only the first miss
+        // ever costs that much again. Detached: the response below must not
+        // wait on it.
+        let db = state.db.clone();
+        let base_url = state.config.telegram_api_base_url.clone();
+        let rate = state.config.telegram_rate_limit;
+        let work_dir = state.config.work_dir.clone();
+        let file_id = file.id;
+        let backfill_jpeg = jpeg.clone();
+        tokio::spawn(async move {
+            StorageManagerService::new(&db, &base_url, rate, &work_dir)
+                .backfill_preview(file_id, backfill_jpeg)
+                .await;
+        });
 
         Ok(preview_jpeg_response(jpeg))
     }
@@ -1443,10 +1468,10 @@ fn prefetch_telegram_chunk(
     rate: u16,
     storage_id: Uuid,
     telegram_file_id: String,
-    media_semaphore: Arc<tokio::sync::Semaphore>,
+    semaphore: Arc<tokio::sync::Semaphore>,
 ) {
     tokio::spawn(async move {
-        let Ok(_permit) = media_semaphore.acquire().await else { return };
+        let Ok(_permit) = semaphore.acquire().await else { return };
         let scheduler = StorageWorkersScheduler::new(&db, rate);
         let api = TelegramBotApi::new(&base_url, scheduler);
         if let Err(e) = cache.ensure(&telegram_file_id, storage_id, &api).await {
