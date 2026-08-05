@@ -2,6 +2,7 @@ pub mod auth;
 pub mod channel_health;
 pub mod favorites;
 pub mod files;
+pub mod media_warmer;
 pub mod recent;
 pub mod replication;
 pub mod settings;
