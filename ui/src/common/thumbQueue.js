@@ -8,6 +8,11 @@
 
 const MAX_CONCURRENT = 6
 
+// A 503 means the storage's Telegram token bucket is temporarily empty, not
+// that the thumb is missing. Back off and retry a few times before giving up,
+// so a saturated storage doesn't poison the tile with a permanent failure.
+const RETRY_503_DELAYS_MS = [1000, 2000, 4000]
+
 /** @type {Array<{ run: (signal: AbortSignal) => Promise<any>, resolve: (v: any) => void, reject: (e: any) => void, ac: AbortController }>} */
 const waiters = []
 /** @type {Set<AbortController>} */
@@ -16,6 +21,41 @@ let active = 0
 
 function abortError() {
 	return new DOMException('Aborted', 'AbortError')
+}
+
+function delay(ms, signal) {
+	return new Promise((resolve, reject) => {
+		if (signal.aborted) {
+			reject(abortError())
+			return
+		}
+		const onAbort = () => {
+			clearTimeout(timer)
+			reject(abortError())
+		}
+		const timer = setTimeout(() => {
+			signal.removeEventListener('abort', onAbort)
+			resolve()
+		}, ms)
+		signal.addEventListener('abort', onAbort, { once: true })
+	})
+}
+
+/**
+ * @param {(signal: AbortSignal) => Promise<any>} run
+ * @param {AbortSignal} signal
+ */
+async function runWithBusyRetry(run, signal) {
+	for (let attempt = 0; ; attempt += 1) {
+		try {
+			return await run(signal)
+		} catch (e) {
+			if (e?.status !== 503 || attempt >= RETRY_503_DELAYS_MS.length) {
+				throw e
+			}
+			await delay(RETRY_503_DELAYS_MS[attempt], signal)
+		}
+	}
 }
 
 function pump() {
@@ -40,7 +80,7 @@ function pump() {
 						const onAbort = () => reject(abortError())
 						signal.addEventListener('abort', onAbort, { once: true })
 						Promise.resolve()
-							.then(() => entry.run(signal))
+							.then(() => runWithBusyRetry(entry.run, signal))
 							.then(
 								(v) => {
 									signal.removeEventListener('abort', onAbort)

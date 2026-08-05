@@ -65,6 +65,8 @@ pub enum SarcaError {
     HeaderMissed(String),
     #[error("{0} header should be a valid {1}")]
     HeaderIsInvalid(String, String),
+    #[error("storage is busy, retry shortly")]
+    StorageBusy,
 }
 
 impl From<SarcaError> for (StatusCode, String) {
@@ -87,6 +89,9 @@ impl From<SarcaError> for (StatusCode, String) {
             },
             SarcaError::DoesNotExist(_) => (StatusCode::NOT_FOUND, e.to_string()),
             SarcaError::FolderTooLargeForZip => (StatusCode::PAYLOAD_TOO_LARGE, e.to_string()),
+            // Distinct from TelegramAPIError/NoStorageWorkers below: this is a transient
+            // capacity wait, not a client mistake, so it must not join their 400 arm.
+            SarcaError::StorageBusy => (StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
             SarcaError::HeaderMissed(_)
             | SarcaError::HeaderIsInvalid(..)
             | SarcaError::InvalidFolderName

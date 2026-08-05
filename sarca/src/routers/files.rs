@@ -1,4 +1,11 @@
-use std::{collections::HashMap, io, path::Path, pin::Pin, sync::Arc};
+use std::{
+    collections::HashMap,
+    io,
+    path::Path,
+    pin::Pin,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_stream::try_stream;
 use axum::{
@@ -59,6 +66,9 @@ pub struct FilesRouter;
 impl FilesRouter {
     /// Max total uncompressed size of files packed into a folder ZIP.
     const MAX_FOLDER_ZIP_BYTES: i64 = 10 * 1024 * 1024 * 1024;
+    /// Thumb/preview reads give up on a saturated storage worker and return 503
+    /// rather than hold the request open; uploads keep waiting indefinitely.
+    const MEDIA_READ_TOKEN_BUDGET: Duration = Duration::from_secs(10);
 
     pub fn get_router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         Router::new()
@@ -78,6 +88,7 @@ impl FilesRouter {
             state.tx.clone(),
             &state.config.telegram_api_base_url,
             state.config.telegram_rate_limit,
+            &state.config.work_dir,
         )
     }
 
@@ -315,11 +326,12 @@ impl FilesRouter {
         let client_tx = state.tx.clone();
         let base_url = state.config.telegram_api_base_url.clone();
         let rate_limit = state.config.telegram_rate_limit;
+        let work_dir = state.config.work_dir.clone();
         let user = user.clone();
         let tmp_for_task = tmp_path.clone();
 
         let upload_task = tokio::spawn(async move {
-            let result = FilesService::new(&db, client_tx, &base_url, rate_limit)
+            let result = FilesService::new(&db, client_tx, &base_url, rate_limit, &work_dir)
                 .upload_anyway_from_path_with_progress(
                     in_file,
                     tmp_for_task.clone(),
@@ -643,6 +655,7 @@ impl FilesRouter {
         let db = state.db.clone();
         let cache = ChunkCache::new(&state.config.work_dir);
         let is_video = crate::models::files::is_video(path, Some(&content_type));
+        let media_semaphore = state.media_semaphore.clone();
 
         let channels =
             ordered_active_channels(&db, storage_id).await.map_err(<(StatusCode, String)>::from)?;
@@ -668,6 +681,7 @@ impl FilesRouter {
                         rate,
                         storage_id,
                         file_id,
+                        media_semaphore.clone(),
                     );
                 }
             }
@@ -697,15 +711,19 @@ impl FilesRouter {
                                 rate,
                                 storage_id,
                                 file_id,
+                                media_semaphore.clone(),
                             );
                         }
                     }
                 }
 
                 let chunk_candidates = candidates.get(&chunk.position).cloned().unwrap_or_default();
+                let permit =
+                    media_semaphore.acquire().await.expect("media semaphore never closed");
                 let cached = ensure_chunk_cached(&cache, &base_url, &db, rate, storage_id, &chunk_candidates)
                     .await
                     .map_err(|e| io::Error::other(e.to_string()))?;
+                drop(permit);
 
                 let mut file = tokio::fs::File::open(&cached)
                     .await
@@ -865,6 +883,11 @@ impl FilesRouter {
                 for chunk in chunks {
                     let chunk_candidates =
                         candidates.get(&chunk.position).cloned().unwrap_or_default();
+                    let _permit = state
+                        .media_semaphore
+                        .acquire()
+                        .await
+                        .expect("media semaphore never closed");
                     let mut stream = download_chunk_stream_with_failover(
                         &base_url,
                         &db,
@@ -967,15 +990,38 @@ impl FilesRouter {
             return Err((StatusCode::NOT_FOUND, "Thumbnail not found".to_owned()));
         };
 
-        // No server-side thumb cache on purpose: the client that uploaded the
-        // photo built this tile and keeps it in its own store, so a request here
-        // only happens on a device that has never seen the file. The response is
-        // `max-age`d, so even that device asks once.
+        let thumb_cache = MediaCache::thumbs(&state.config.work_dir);
+        let cache_key = thumb_cache.key(storage_id, path);
+
+        if let Some(bytes) = cached_jpeg(&thumb_cache, &cache_key).await {
+            return Ok(inline_jpeg_response(bytes, "thumb.jpg"));
+        }
+
+        // A grid renders the same tile from several components and the
+        // neighbours race; see the comment at `preview_for_path` above.
+        let _flight = SingleFlight::global().acquire(&format!("thumb:{cache_key}")).await;
+        if let Some(bytes) = cached_jpeg(&thumb_cache, &cache_key).await {
+            return Ok(inline_jpeg_response(bytes, "thumb.jpg"));
+        }
+
         let scheduler = StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
-        let bytes = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
-            .download(thumb_id, storage_id)
-            .await
-            .map_err(<(StatusCode, String)>::from)?;
+        let permit = state.media_semaphore.acquire().await.expect("media semaphore never closed");
+        let deadline = Instant::now() + Self::MEDIA_READ_TOKEN_BUDGET;
+        let result = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
+            .download_before(thumb_id, storage_id, deadline)
+            .await;
+        drop(permit);
+        let bytes = match result {
+            Ok(bytes) => bytes,
+            Err(SarcaError::StorageBusy) => return Ok(storage_busy_response()),
+            Err(e) => return Err(<(StatusCode, String)>::from(e)),
+        };
+
+        if is_jpeg(&bytes) {
+            if let Err(e) = thumb_cache.put(&cache_key, &bytes).await {
+                tracing::warn!("thumb cache write skipped: {e}");
+            }
+        }
 
         Ok(inline_jpeg_response(bytes, "thumb.jpg"))
     }
@@ -1036,10 +1082,14 @@ impl FilesRouter {
         if let Some(preview_id) = file.preview_telegram_file_id.as_deref() {
             let scheduler =
                 StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
-            match TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
-                .download(preview_id, storage_id)
-                .await
-            {
+            let permit =
+                state.media_semaphore.acquire().await.expect("media semaphore never closed");
+            let deadline = Instant::now() + Self::MEDIA_READ_TOKEN_BUDGET;
+            let result = TelegramBotApi::new(&state.config.telegram_api_base_url, scheduler)
+                .download_before(preview_id, storage_id, deadline)
+                .await;
+            drop(permit);
+            match result {
                 Ok(bytes) if is_jpeg(&bytes) => {
                     if let Err(e) = preview_cache.put(&cache_key, &bytes).await {
                         tracing::warn!("preview cache write skipped: {e}");
@@ -1047,6 +1097,7 @@ impl FilesRouter {
                     return Ok(preview_jpeg_response(bytes));
                 },
                 Ok(_) => tracing::warn!("stored preview for {path} is not a JPEG; re-encoding"),
+                Err(SarcaError::StorageBusy) => return Ok(storage_busy_response()),
                 // Fall through to the slow path: the file predates stored previews, or
                 // its preview document is gone from Telegram.
                 Err(e) => tracing::warn!("stored preview download failed for {path}: {e}"),
@@ -1087,6 +1138,7 @@ impl FilesRouter {
             state.tx.clone(),
             &state.config.telegram_api_base_url,
             state.config.telegram_rate_limit,
+            &state.config.work_dir,
         )
         .search(storage_id, path, search_path, &user)
         .await
@@ -1214,7 +1266,7 @@ async fn ensure_chunk_cached(
     cache: &ChunkCache,
     base_url: &str,
     db: &sqlx::SqlitePool,
-    rate: u8,
+    rate: u16,
     storage_id: Uuid,
     candidates: &[(String, Uuid)],
 ) -> SarcaResult<std::path::PathBuf> {
@@ -1241,7 +1293,7 @@ async fn ensure_chunk_cached(
 async fn download_chunk_stream_with_failover(
     base_url: &str,
     db: &sqlx::SqlitePool,
-    rate: u8,
+    rate: u16,
     storage_id: Uuid,
     candidates: &[(String, Uuid)],
 ) -> SarcaResult<Pin<Box<dyn Stream<Item = Result<tokio_util::bytes::Bytes, SarcaError>> + Send>>> {
@@ -1299,6 +1351,7 @@ async fn assemble_file_bytes(
         .map_err(<(StatusCode, String)>::from)?;
 
     let mut out = Vec::with_capacity(file_size as usize);
+    let _permit = state.media_semaphore.acquire().await.expect("media semaphore never closed");
 
     for (idx, chunk) in chunks.into_iter().enumerate() {
         let chunk_candidates = candidates.get(&chunk.position).cloned().unwrap_or_default();
@@ -1360,6 +1413,15 @@ fn preview_jpeg_response(bytes: Vec<u8>) -> Response {
     inline_jpeg_response(bytes, "preview.jpg")
 }
 
+/// 503 with `Retry-After` so `thumbQueue.js` backs off instead of hammering a
+/// storage that is already at its Telegram rate limit.
+fn storage_busy_response() -> Response {
+    let mut response =
+        (StatusCode::SERVICE_UNAVAILABLE, SarcaError::StorageBusy.to_string()).into_response();
+    response.headers_mut().insert(header::RETRY_AFTER, "5".parse().unwrap());
+    response
+}
+
 /// `Vec<u8>` responds as `application/octet-stream`, so the JPEG headers must
 /// *replace* the defaults — appending them would emit two Content-Type values.
 fn inline_jpeg_response(bytes: Vec<u8>, filename: &str) -> Response {
@@ -1378,11 +1440,13 @@ fn prefetch_telegram_chunk(
     cache: ChunkCache,
     base_url: String,
     db: sqlx::SqlitePool,
-    rate: u8,
+    rate: u16,
     storage_id: Uuid,
     telegram_file_id: String,
+    media_semaphore: Arc<tokio::sync::Semaphore>,
 ) {
     tokio::spawn(async move {
+        let Ok(_permit) = media_semaphore.acquire().await else { return };
         let scheduler = StorageWorkersScheduler::new(&db, rate);
         let api = TelegramBotApi::new(&base_url, scheduler);
         if let Err(e) = cache.ensure(&telegram_file_id, storage_id, &api).await {
