@@ -16,43 +16,16 @@ use tokio::process::Command;
 /// for roughly 20KB a tile.
 const THUMB_MAX_EDGE: u32 = 320;
 
-/// Longest edge the preview encoder starts from; also the top of
-/// [`PREVIEW_LADDER`].
-pub const PREVIEW_MAX_EDGE: u32 = 2560;
-
-/// Size a preview is allowed to reach.
+/// Quality the preview encoder uses when a source needs to be converted to
+/// JPEG (i.e. it wasn't one already).
 ///
-/// Everything about the preview is traded against this one number: it is what
-/// the viewer downloads on every photo open and what the client caches. 500KB
-/// buys a 2560px edge at a quality that still reads as the photograph rather
-/// than a JPEG of it.
-pub const PREVIEW_TARGET_BYTES: usize = 500 * 1024;
+/// The preview is never resized and never re-compressed once it is a JPEG —
+/// this quality only applies to the one-time PNG/HEIC/etc. -> JPEG
+/// conversion, so it stays high enough that the conversion itself is not
+/// visible.
+const PREVIEW_JPEG_QUALITY: u8 = 95;
 
-/// Widths tried in order, largest first.
-///
-/// Resolution is spent before quality: a slightly softer 2560px preview still
-/// beats a crisp 1600px one once the viewer scales it up to a 2K screen. A
-/// width is abandoned only when even [`PREVIEW_QUALITY_MIN`] overruns the
-/// budget there, which happens for dense, noisy frames — exactly the ones
-/// where the extra pixels were not buying visible detail anyway.
-const PREVIEW_EDGES: &[u32] = &[PREVIEW_MAX_EDGE, 2048, 1600, 1280, 1024];
-
-/// Quality bounds for the search at each width. The ceiling is below 100
-/// because the last few points cost a great deal of the budget for detail no
-/// viewer resolves; the floor is where JPEG blocking starts to be the thing
-/// you notice about the picture.
-const PREVIEW_QUALITY_MAX: u8 = 90;
-const PREVIEW_QUALITY_MIN: u8 = 45;
-
-/// Widest original passed through untouched, as a multiple of
-/// [`PREVIEW_MAX_EDGE`].
-///
-/// A small JPEG is served as-is, but "small" is measured in bytes and a
-/// heavily compressed 100MP scan is small in bytes and ruinous to decode on a
-/// phone. Past this the file goes through the ladder like any other.
-const PASSTHROUGH_MAX_EDGE: u32 = PREVIEW_MAX_EDGE * 2;
-
-/// Downscale kernel for previews and thumbnails.
+/// Downscale kernel for thumbnails.
 ///
 /// `Triangle` (bilinear) samples too few source pixels when the scale factor is
 /// large — a 12MP phone photo reduced to the preview edge is a >4x reduction —
@@ -78,17 +51,12 @@ pub struct ThumbAndPreview {
 
 fn build_thumb_and_preview(raw: &[u8], include_preview: bool) -> Result<ThumbAndPreview, String> {
     let img = decode_guarded(raw)?;
-    // Downscale once to preview size and take the thumbnail from *that*: the
-    // preview edge is 6x the thumbnail edge, so the result is indistinguishable
-    // from one built off the original, and it saves a second pass over the
-    // full-resolution pixels (plus, since both sizes now come from one decode,
-    // a second decode of the original).
-    let preview_img = resize_within(img, PREVIEW_MAX_EDGE);
-    let thumb = encode_jpeg(&resize_within_ref(&preview_img, THUMB_MAX_EDGE), THUMB_JPEG_QUALITY)?;
+    let thumb = encode_jpeg(&resize_within_ref(&img, THUMB_MAX_EDGE), THUMB_JPEG_QUALITY)?;
     let preview = if include_preview {
         match passthrough_preview(raw) {
             Some(as_is) => Some(as_is),
-            None => Some(encode_within_budget(&preview_img)?),
+            // Not a JPEG: convert at full resolution, no downscale.
+            None => Some(encode_jpeg(&img, PREVIEW_JPEG_QUALITY)?),
         }
     } else {
         None
@@ -106,78 +74,13 @@ fn is_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 3 && bytes[0..3] == [0xFF, 0xD8, 0xFF]
 }
 
-/// The original itself, when it is already a small enough JPEG to serve as the
-/// preview.
+/// The original itself, when it is already a JPEG.
 ///
-/// Re-encoding a file that is under budget can only lose detail: it decodes
-/// pixels that already went through one quantiser and puts them through a
-/// second. Anything at or below [`PREVIEW_TARGET_BYTES`] is therefore returned
-/// byte for byte, provided its dimensions are sane enough to decode in a
-/// viewer (see [`PASSTHROUGH_MAX_EDGE`]).
+/// A JPEG is always served byte for byte, whatever its size: re-encoding it
+/// can only lose detail, since it decodes pixels that already went through
+/// one quantiser and puts them through a second.
 fn passthrough_preview(raw: &[u8]) -> Option<Vec<u8>> {
-    if !is_jpeg(raw) || raw.len() > PREVIEW_TARGET_BYTES {
-        return None;
-    }
-    // Header read only: this must not cost a second full decode.
-    let (width, height) = image::ImageReader::new(std::io::Cursor::new(raw))
-        .with_guessed_format()
-        .ok()?
-        .into_dimensions()
-        .ok()?;
-    (width.max(height) <= PASSTHROUGH_MAX_EDGE).then(|| raw.to_vec())
-}
-
-/// Highest quality at which `img` encodes inside the budget, or `None` when
-/// even [`PREVIEW_QUALITY_MIN`] does not fit at this size.
-///
-/// JPEG size grows monotonically with the quality setting for a fixed image,
-/// so a binary search finds the best rung in ~6 encodes instead of walking the
-/// whole range.
-fn best_quality_within_budget(img: &image::DynamicImage) -> Result<Option<Vec<u8>>, String> {
-    let mut low = PREVIEW_QUALITY_MIN;
-    let mut high = PREVIEW_QUALITY_MAX;
-    let mut best = None;
-
-    while low <= high {
-        let quality = low + (high - low) / 2;
-        let jpeg = encode_jpeg(img, quality)?;
-        if jpeg.len() <= PREVIEW_TARGET_BYTES {
-            best = Some(jpeg);
-            low = quality + 1;
-        } else if quality == PREVIEW_QUALITY_MIN {
-            break;
-        } else {
-            high = quality - 1;
-        }
-    }
-
-    Ok(best)
-}
-
-/// Encode `img` into [`PREVIEW_TARGET_BYTES`], keeping as much of it as the
-/// budget allows.
-///
-/// A fixed quality cannot hit a byte target: the same setting yields 200KB for
-/// a flat sky and 1.5MB for foliage, which is why previews were both mushy on
-/// the photos that could have afforded more and oversized on the ones that
-/// could not. Each width gets a quality search; the first width where anything
-/// fits wins.
-fn encode_within_budget(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
-    let mut smallest = None;
-
-    for &max_edge in PREVIEW_EDGES {
-        let scaled = resize_within_ref(img, max_edge);
-        if let Some(fitted) = best_quality_within_budget(&scaled)? {
-            return Ok(fitted);
-        }
-        smallest = Some(scaled);
-    }
-
-    // Nothing fits even at the narrowest width and lowest quality. An
-    // over-budget preview still beats none, and it is still far smaller than
-    // the original the viewer would otherwise pull down whole.
-    let last = smallest.ok_or_else(|| "preview width ladder is empty".to_owned())?;
-    encode_jpeg(&last, PREVIEW_QUALITY_MIN)
+    is_jpeg(raw).then(|| raw.to_vec())
 }
 
 /// Try to build a JPEG thumbnail for the given file.
@@ -287,15 +190,15 @@ pub async fn generate_preview_from_path(file_path: &Path) -> Result<Vec<u8>, Str
     generate_preview(raw).await
 }
 
-/// Encode raw image bytes to a screen-sized JPEG preview.
+/// Encode raw image bytes to a full-resolution JPEG preview.
 ///
-/// An original already inside [`PREVIEW_TARGET_BYTES`] is returned untouched;
-/// everything else is fitted to that budget by [`encode_within_budget`].
+/// A JPEG original is returned untouched; anything else is converted to JPEG
+/// at full resolution by [`fit_preview`] — no downscale, no byte budget.
 ///
 /// A format the `image` crate cannot open (HEIC/AVIF off a phone) is decoded by
-/// ffmpeg first and then resized on the same path, so a photo that used to have
-/// no preview at all — and therefore re-downloaded the full original on every
-/// open — now caches a small JPEG like every other picture.
+/// ffmpeg first and then converted on the same path, so a photo that used to
+/// have no preview at all — and therefore re-downloaded the full original on
+/// every open — now caches a JPEG like every other picture.
 pub async fn generate_preview(raw: Vec<u8>) -> Result<Vec<u8>, String> {
     let raw = std::sync::Arc::new(raw);
     if let Some(as_is) = passthrough_preview(&raw) {
@@ -317,9 +220,9 @@ pub async fn generate_preview(raw: Vec<u8>) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())?
 }
 
-/// Decode `raw` and encode it to a preview inside the byte budget.
+/// Decode `raw` and encode it to a full-resolution JPEG preview.
 fn fit_preview(raw: &[u8]) -> Result<Vec<u8>, String> {
-    encode_within_budget(&resize_within(decode_guarded(raw)?, PREVIEW_MAX_EDGE))
+    encode_jpeg(&decode_guarded(raw)?, PREVIEW_JPEG_QUALITY)
 }
 
 fn detect_kind(logical_path: &str) -> Option<ThumbKind> {
@@ -527,6 +430,7 @@ fn decode_guarded(raw: &[u8]) -> Result<image::DynamicImage, String> {
     image::load_from_memory(raw).map_err(|e| format!("decode image: {e}"))
 }
 
+#[cfg(test)]
 fn resize_within(img: image::DynamicImage, max_edge: u32) -> image::DynamicImage {
     let (w, h) = img.dimensions();
     if w <= max_edge && h <= max_edge {
@@ -555,9 +459,8 @@ fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String
     Ok(out)
 }
 
-/// One-shot decode → downscale → encode. Production previews go through
-/// [`encode_within_budget`] instead, which needs the decoded image to try more
-/// than one setting; this stays for tests that assert a single rung.
+/// One-shot decode → downscale → encode. Used for the thumbnail-only tests;
+/// production previews go through [`fit_preview`], which does not downscale.
 #[cfg(test)]
 fn resize_to_jpeg(raw: &[u8], max_edge: u32, quality: u8) -> Result<Vec<u8>, String> {
     encode_jpeg(&resize_within(decode_guarded(raw)?, max_edge), quality)
@@ -630,73 +533,49 @@ mod tests {
     }
 
     #[test]
-    fn preview_shrinks_large_image_and_outputs_jpeg() {
+    fn preview_keeps_full_resolution_and_outputs_jpeg() {
         let raw = sample_png(3000, 2000);
         let jpeg = fit_preview(&raw).unwrap();
         assert!(jpeg.starts_with(&[0xFF, 0xD8, 0xFF]));
         let decoded = image::load_from_memory(&jpeg).unwrap();
-        assert!(decoded.width() <= PREVIEW_MAX_EDGE);
-        assert!(decoded.height() <= PREVIEW_MAX_EDGE);
+        assert_eq!(decoded.width(), 3000, "preview must not be downscaled");
+        assert_eq!(decoded.height(), 2000, "preview must not be downscaled");
     }
 
-    /// The budget is the whole contract: whatever the photo, the viewer must
-    /// not be handed more than this on open.
+    /// Dense, noisy content used to be squeezed to fit a byte budget. There is
+    /// no budget any more: quality stays fixed regardless of content.
     #[test]
-    fn preview_of_a_dense_photo_stays_inside_the_budget() {
+    fn preview_of_a_dense_photo_keeps_full_resolution() {
         let jpeg = fit_preview(&noisy_png(3000, 2250)).unwrap();
-        assert!(
-            jpeg.len() <= PREVIEW_TARGET_BYTES,
-            "noisy preview is {} bytes, over the {PREVIEW_TARGET_BYTES} budget",
-            jpeg.len()
-        );
+        let decoded = image::load_from_memory(&jpeg).unwrap();
+        assert_eq!(decoded.width(), 3000);
+        assert_eq!(decoded.height(), 2250);
     }
 
-    /// The other half of the contract: an easy photo must actually *spend* the
-    /// budget rather than settle for the old fixed quality.
     #[test]
     fn preview_of_a_plain_photo_keeps_full_resolution_and_high_quality() {
         let jpeg = fit_preview(&smooth_png(4000, 3000)).unwrap();
-        assert!(jpeg.len() <= PREVIEW_TARGET_BYTES);
-
         let decoded = image::load_from_memory(&jpeg).expect("preview decodes");
-        assert_eq!(
-            decoded.width(),
-            PREVIEW_MAX_EDGE,
-            "a photo that fits must keep the full preview width"
-        );
+        assert_eq!(decoded.width(), 4000, "a photo must keep its full resolution");
     }
 
     #[test]
-    fn a_small_jpeg_original_is_served_untouched() {
-        let small = encode_jpeg(&image::load_from_memory(&sample_png(1200, 900)).unwrap(), 80)
+    fn a_jpeg_original_is_served_untouched_regardless_of_size() {
+        let jpeg = encode_jpeg(&image::load_from_memory(&sample_png(1200, 900)).unwrap(), 80)
             .expect("sample encodes");
-        assert!(small.len() <= PREVIEW_TARGET_BYTES, "precondition: sample must be under budget");
 
         assert_eq!(
-            passthrough_preview(&small).as_deref(),
-            Some(small.as_slice()),
-            "an original already inside the budget must not be re-encoded"
+            passthrough_preview(&jpeg).as_deref(),
+            Some(jpeg.as_slice()),
+            "a JPEG original must not be re-encoded, whatever its size"
         );
     }
 
     #[test]
-    fn passthrough_refuses_large_bytes_wrong_format_and_absurd_dimensions() {
-        let over_budget = vec![0xFFu8; PREVIEW_TARGET_BYTES + 1];
-        assert!(passthrough_preview(&over_budget).is_none(), "byte budget must be enforced");
-
-        // PNG under the budget: the pipeline serves `image/jpeg`, so it cannot
-        // be passed through even though it is small.
+    fn passthrough_refuses_non_jpeg_formats() {
+        // PNG: the pipeline serves `image/jpeg`, so it cannot be passed
+        // through even though it decodes fine.
         assert!(passthrough_preview(&sample_png(64, 64)).is_none());
-
-        // Small in bytes, ruinous to decode: a flat image compresses to almost
-        // nothing at any size.
-        let huge = encode_jpeg(
-            &image::load_from_memory(&sample_png(PASSTHROUGH_MAX_EDGE + 16, 64)).unwrap(),
-            60,
-        )
-        .expect("wide sample encodes");
-        assert!(huge.len() <= PREVIEW_TARGET_BYTES, "precondition: must be small in bytes");
-        assert!(passthrough_preview(&huge).is_none(), "dimension guard must reject it");
     }
 
     #[test]
@@ -717,7 +596,8 @@ mod tests {
         let result = generate(&path, "photo.png", u64::MAX).await.unwrap().unwrap();
 
         let preview = image::load_from_memory(&result.preview.unwrap()).unwrap();
-        assert!(preview.width() <= PREVIEW_MAX_EDGE && preview.height() <= PREVIEW_MAX_EDGE);
+        assert_eq!(preview.width(), 3000, "preview must keep full resolution");
+        assert_eq!(preview.height(), 2000, "preview must keep full resolution");
         assert!(preview.width() > THUMB_MAX_EDGE);
     }
 
@@ -861,6 +741,7 @@ mod tests {
         assert!(thumb.width() <= THUMB_MAX_EDGE && thumb.height() <= THUMB_MAX_EDGE);
 
         let preview = image::load_from_memory(result.preview.as_ref().unwrap()).unwrap();
-        assert!(preview.width() <= PREVIEW_MAX_EDGE && preview.height() <= PREVIEW_MAX_EDGE);
+        assert_eq!(preview.width(), 3000, "preview must keep full resolution");
+        assert_eq!(preview.height(), 2000, "preview must keep full resolution");
     }
 }
