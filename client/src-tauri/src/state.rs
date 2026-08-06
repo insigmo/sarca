@@ -943,7 +943,9 @@ impl AppSyncState {
     /// runtime from within a runtime" and left Connect dead in the water.
     pub async fn start_proxy(&self, base_url: &str) -> Result<String, String> {
         self.stop_proxy();
-        let proxy = LocalProxy::start(base_url).await.map_err(|e| e.to_string())?;
+        let proxy = LocalProxy::start(base_url)
+            .await
+            .map_err(|e| e.to_string())?;
         let origin = proxy.origin();
         if let Ok(mut guard) = self.proxy.lock() {
             *guard = Some(proxy);
