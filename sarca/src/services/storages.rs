@@ -61,10 +61,16 @@ pub struct StoragesService<'d> {
     db: &'d SqlitePool,
     telegram_baseurl: &'d str,
     rate_limit: u16,
+    superuser_email: &'d str,
 }
 
 impl<'d> StoragesService<'d> {
-    pub fn new(db: &'d SqlitePool, telegram_baseurl: &'d str, rate_limit: u16) -> Self {
+    pub fn new(
+        db: &'d SqlitePool,
+        telegram_baseurl: &'d str,
+        rate_limit: u16,
+        superuser_email: &'d str,
+    ) -> Self {
         Self {
             repo: StoragesRepository::new(db),
             access_repo: AccessRepository::new(db),
@@ -73,6 +79,7 @@ impl<'d> StoragesService<'d> {
             db,
             telegram_baseurl,
             rate_limit,
+            superuser_email,
         }
     }
 
@@ -163,6 +170,30 @@ impl<'d> StoragesService<'d> {
                 );
                 let _ = self.repo.delete_storage(storage.id).await;
                 return Err(e);
+            }
+        }
+
+        // The superuser must be able to see and repair every storage, not only
+        // the ones it created: a storage it cannot see makes the UI fall back to
+        // the setup wizard, which then rejects the channels as already linked.
+        // Best-effort — a storage that exists beats one rolled back over an
+        // access row that the next boot re-adds anyway.
+        if !user.email.eq_ignore_ascii_case(self.superuser_email) {
+            if let Err(e) = self
+                .access_repo
+                .create_or_update(
+                    storage.id,
+                    GrantAccess {
+                        user_email: self.superuser_email.to_owned(),
+                        access_type: AccessType::A,
+                    },
+                )
+                .await
+            {
+                tracing::warn!(
+                    "[STORAGES SERVICE] could not grant the superuser access to storage {}: {e}",
+                    storage.id
+                );
             }
         }
 
@@ -521,10 +552,10 @@ impl<'d> StoragesService<'d> {
         &self,
         storage_id: Uuid,
         actor: &AuthUser,
-        superuser_email: &str,
         grants_admin: bool,
         is_target: impl Fn(&UserWithAccess) -> bool,
     ) -> SarcaResult<()> {
+        let superuser_email = self.superuser_email;
         if actor.email.eq_ignore_ascii_case(superuser_email) {
             return Ok(());
         }
@@ -548,13 +579,14 @@ impl<'d> StoragesService<'d> {
         id: Uuid,
         in_schema: GrantAccess,
         user: &AuthUser,
-        superuser_email: &str,
     ) -> SarcaResult<()> {
         check_access(&self.access_repo, user.id, id, &AccessType::A).await?;
 
         if in_schema.user_email == user.email {
             return Err(SarcaError::CannotManageAccessOfYourself);
         }
+
+        let superuser_email = self.superuser_email;
 
         // The superuser may have no access row on this storage at all, so the
         // email is checked directly as well as through the member list.
@@ -565,13 +597,9 @@ impl<'d> StoragesService<'d> {
         }
 
         let target_email = in_schema.user_email.clone();
-        self.guard_admin_target(
-            id,
-            user,
-            superuser_email,
-            in_schema.access_type == AccessType::A,
-            |m| m.email.eq_ignore_ascii_case(&target_email),
-        )
+        self.guard_admin_target(id, user, in_schema.access_type == AccessType::A, |m| {
+            m.email.eq_ignore_ascii_case(&target_email)
+        })
         .await?;
 
         self.access_repo.create_or_update(id, in_schema).await
@@ -592,7 +620,6 @@ impl<'d> StoragesService<'d> {
         id: Uuid,
         in_schema: RestrictAccess,
         user: &AuthUser,
-        superuser_email: &str,
     ) -> SarcaResult<()> {
         check_access(&self.access_repo, user.id, id, &AccessType::A).await?;
 
@@ -601,7 +628,7 @@ impl<'d> StoragesService<'d> {
         }
 
         let target_id = in_schema.user_id;
-        self.guard_admin_target(id, user, superuser_email, false, |m| m.id == target_id).await?;
+        self.guard_admin_target(id, user, false, |m| m.id == target_id).await?;
 
         self.access_repo.delete_access(in_schema.user_id, id).await
     }

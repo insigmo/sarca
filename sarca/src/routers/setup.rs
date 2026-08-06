@@ -37,6 +37,7 @@ impl SetupRouter {
             &state.db,
             &state.config.telegram_api_base_url,
             state.config.telegram_rate_limit,
+            &state.config.superuser_email,
         )
     }
 

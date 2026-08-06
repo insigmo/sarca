@@ -213,7 +213,7 @@ impl<'d> UsersRepository<'d> {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::time::Duration;
 
     use super::*;
@@ -225,7 +225,7 @@ mod tests {
         startup::{create_superuser, init_db},
     };
 
-    fn test_config(superuser_email: &str, superuser_pass: &str) -> Config {
+    pub fn test_config(superuser_email: &str, superuser_pass: &str) -> Config {
         Config {
             sqlite_path: String::new(),
             port: 8001,
