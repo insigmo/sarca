@@ -33,15 +33,22 @@ pub struct SetupService<'d> {
     db: &'d SqlitePool,
     telegram_base_url: &'d str,
     rate_limit: u16,
+    superuser_email: &'d str,
     storages_repo: StoragesRepository<'d>,
 }
 
 impl<'d> SetupService<'d> {
-    pub fn new(db: &'d SqlitePool, telegram_base_url: &'d str, rate_limit: u16) -> Self {
+    pub fn new(
+        db: &'d SqlitePool,
+        telegram_base_url: &'d str,
+        rate_limit: u16,
+        superuser_email: &'d str,
+    ) -> Self {
         Self {
             db,
             telegram_base_url,
             rate_limit,
+            superuser_email,
             storages_repo: StoragesRepository::new(db),
         }
     }
@@ -158,7 +165,12 @@ impl<'d> SetupService<'d> {
         let client = TelegramTokenClient::new(self.telegram_base_url, &token);
         let _me = client.get_me().await?;
 
-        let storages = StoragesService::new(self.db, self.telegram_base_url, self.rate_limit);
+        let storages = StoragesService::new(
+            self.db,
+            self.telegram_base_url,
+            self.rate_limit,
+            self.superuser_email,
+        );
 
         // Retry path: previous Finish may have left channels without a worker.
         if let Some(existing) = self.storage_owned_by_chats(&body.chat_ids, user).await? {
