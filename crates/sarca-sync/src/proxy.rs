@@ -42,6 +42,37 @@ const HOP_BY_HOP: &[&str] = &[
 
 type ProxyBody = http_body_util::combinators::BoxBody<Bytes, std::io::Error>;
 
+/// Bind `port`, retrying briefly before giving up.
+///
+/// Reconnecting stops the old proxy and starts a new one, and the accept loop
+/// only releases the socket once it observes the shutdown signal. Without the
+/// retry that handover lost the race with itself and silently moved the webview
+/// to a new origin — which is the entire thing a fixed port exists to prevent.
+async fn bind_preferred(port: u16) -> Option<TcpListener> {
+    const ATTEMPTS: u32 = 10;
+    const PAUSE: Duration = Duration::from_millis(20);
+
+    for attempt in 0..ATTEMPTS {
+        match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await {
+            Ok(listener) => return Some(listener),
+            Err(e) => {
+                if attempt + 1 == ATTEMPTS {
+                    tracing::warn!(port, error = %e, "preferred proxy port unavailable");
+                    return None;
+                }
+                tokio::time::sleep(PAUSE).await;
+            },
+        }
+    }
+    None
+}
+
+async fn bind_ephemeral() -> Result<TcpListener> {
+    TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .context("failed to bind a loopback port for the webview proxy")
+}
+
 /// A running proxy. Dropping it shuts the listener down and frees the port.
 pub struct LocalProxy {
     port: u16,
@@ -49,14 +80,33 @@ pub struct LocalProxy {
 }
 
 impl LocalProxy {
-    /// Bind a loopback port and forward everything to `base_url`.
+    /// Bind an ephemeral loopback port and forward everything to `base_url`.
     pub async fn start(base_url: &str) -> Result<Self> {
+        Self::start_on(base_url, None).await
+    }
+
+    /// Bind `preferred` (falling back to an ephemeral port) and forward
+    /// everything to `base_url`.
+    ///
+    /// The port is part of the webview's origin, and every web storage API —
+    /// localStorage, IndexedDB, the HTTP cache — is partitioned by origin. A
+    /// fresh ephemeral port per launch therefore handed the UI an empty
+    /// profile every time: the preview and thumbnail caches started cold, and
+    /// the session had to be re-established from disk. Reusing one port keeps
+    /// that state addressable across restarts.
+    pub async fn start_on(base_url: &str, preferred: Option<u16>) -> Result<Self> {
         let upstream = base_url.trim().trim_end_matches('/').to_owned();
         anyhow::ensure!(!upstream.is_empty(), "proxy needs an upstream base URL");
 
-        let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
-            .await
-            .context("failed to bind a loopback port for the webview proxy")?;
+        let listener = match preferred.filter(|p| *p != 0) {
+            Some(port) => match bind_preferred(port).await {
+                Some(listener) => listener,
+                // Something else holds it for real. A cold cache beats
+                // refusing to start.
+                None => bind_ephemeral().await?,
+            },
+            None => bind_ephemeral().await?,
+        };
         let port = listener.local_addr()?.port();
         let (tx, mut rx) = oneshot::channel();
 
@@ -271,6 +321,31 @@ mod tests {
     use std::net::TcpListener as StdListener;
 
     use super::*;
+
+    #[tokio::test]
+    async fn a_restart_reuses_the_recorded_port() {
+        let first = LocalProxy::start("https://example.invalid").await.unwrap();
+        let port = first.port();
+        first.stop();
+
+        let again = LocalProxy::start_on("https://example.invalid", Some(port))
+            .await
+            .unwrap();
+        assert_eq!(again.port(), port, "webview origin must survive a restart");
+        assert_eq!(again.origin(), format!("http://127.0.0.1:{port}"));
+    }
+
+    #[tokio::test]
+    async fn a_taken_port_falls_back_instead_of_failing_to_start() {
+        let squatter = StdListener::bind(("127.0.0.1", 0)).unwrap();
+        let taken = squatter.local_addr().unwrap().port();
+
+        let proxy = LocalProxy::start_on("https://example.invalid", Some(taken))
+            .await
+            .unwrap();
+        assert_ne!(proxy.port(), taken);
+        assert_ne!(proxy.port(), 0);
+    }
 
     #[test]
     fn only_literal_loopback_authorities_are_accepted() {
