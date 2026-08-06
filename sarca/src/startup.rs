@@ -4,8 +4,13 @@ use crate::{
     common::password_manager::PasswordManager,
     config::Config,
     errors::SarcaError,
-    models::users::InDBUser,
-    repositories::{storage_workers::StorageWorkersRepository, users::UsersRepository},
+    models::{access::AccessType, users::InDBUser},
+    repositories::{
+        access::AccessRepository,
+        storage_workers::StorageWorkersRepository,
+        storages::StoragesRepository,
+        users::UsersRepository,
+    },
 };
 
 /// Current embedded schema version for fresh `SQLite` databases (`schema_version`).
@@ -444,14 +449,119 @@ pub async fn create_superuser(db: &SqlitePool, config: &Config) {
         // in case of another error kind -> terminating process
         Err(err) => panic!("can't create superuser; terminating process: {err}"),
     }
+
+    grant_superuser_access_to_all_storages(db, config).await;
+}
+
+/// Make sure the superuser holds `A` on every storage.
+///
+/// Access is per-user rows, and the superuser only ever got one for storages it
+/// created itself. A storage created by anyone else was therefore invisible to
+/// it: the storage list came back empty, the UI concluded there were no
+/// storages and pushed the setup wizard, and the wizard then refused every
+/// channel as "already linked to another storage" — a dead end with no way out
+/// from inside the app, since granting access itself requires `A` on that very
+/// storage.
+///
+/// Runs on every boot (cheap, idempotent) so a storage created while the
+/// superuser was absent is picked up at the next restart.
+async fn grant_superuser_access_to_all_storages(db: &SqlitePool, config: &Config) {
+    let superuser = match UsersRepository::new(db).get_by_email(&config.superuser_email).await {
+        Ok(user) => user,
+        Err(e) => {
+            tracing::warn!("cannot resolve superuser to grant storage access: {e}");
+            return;
+        },
+    };
+
+    let storage_ids = match StoragesRepository::new(db).list_all_ids().await {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!("cannot list storages to grant superuser access: {e}");
+            return;
+        },
+    };
+
+    let access_repo = AccessRepository::new(db);
+    let mut granted = 0usize;
+    for storage_id in storage_ids {
+        match access_repo.has_access(superuser.id, storage_id, &AccessType::A).await {
+            Ok(true) => continue,
+            Ok(false) => {},
+            Err(e) => {
+                tracing::warn!("access check failed for storage {storage_id}: {e}");
+                continue;
+            },
+        }
+        match access_repo.grant_for_user_id(storage_id, superuser.id, AccessType::A).await {
+            Ok(()) => granted += 1,
+            Err(e) => tracing::warn!("superuser access grant failed for {storage_id}: {e}"),
+        }
+    }
+
+    if granted > 0 {
+        tracing::info!("granted the superuser admin access to {granted} storage(s)");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use uuid::Uuid;
+
     use super::*;
-    use crate::common::db::pool::get_pool;
+    use crate::{common::db::pool::get_pool, repositories::users::tests::test_config};
+
+    /// A storage created by someone else used to be invisible to the
+    /// superuser, which pushed the UI into the setup wizard and left it stuck
+    /// on "channels already linked to another storage".
+    #[tokio::test]
+    async fn boot_gives_the_superuser_access_to_a_storage_someone_else_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+
+        let config = test_config("root@sarca.test", "root-pass-123");
+        create_superuser(&pool, &config).await;
+
+        // Another account owns the only storage.
+        let other = UsersRepository::new(&pool)
+            .create(InDBUser::new_password("other@sarca.test".into(), "x".into()))
+            .await
+            .expect("create other user");
+        let storage_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO storages (id, name, primary_position) VALUES ($1, 'Cloud', 1)")
+            .bind(storage_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        AccessRepository::new(&pool)
+            .grant_for_user_id(storage_id, other.id, AccessType::A)
+            .await
+            .unwrap();
+
+        // Second boot: the superuser must come out of it holding admin access.
+        create_superuser(&pool, &config).await;
+
+        let superuser =
+            UsersRepository::new(&pool).get_by_email(&config.superuser_email).await.unwrap();
+        assert!(
+            AccessRepository::new(&pool)
+                .has_access(superuser.id, storage_id, &AccessType::A)
+                .await
+                .unwrap(),
+            "the superuser must see every storage, not only its own"
+        );
+        // The original owner keeps theirs.
+        assert!(
+            AccessRepository::new(&pool)
+                .has_access(other.id, storage_id, &AccessType::A)
+                .await
+                .unwrap()
+        );
+    }
 
     #[tokio::test]
     async fn init_db_creates_schema_on_empty_file() {
