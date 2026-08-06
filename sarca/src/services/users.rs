@@ -6,7 +6,10 @@ use crate::{
     common::{jwt_manager::AuthUser, password_manager::PasswordManager},
     config::Config,
     errors::{SarcaError, SarcaResult},
-    models::users::{InDBUser, User},
+    models::{
+        access::AccessType,
+        users::{InDBUser, User},
+    },
     repositories::{
         access::AccessRepository,
         storages::StoragesRepository,
@@ -195,11 +198,17 @@ impl<'d> UsersService<'d> {
             let holders = access_repo.list_users_with_access(storage.id).await?;
             // The superuser is auto-granted access to every storage on creation
             // (see StoragesService::create), so its presence doesn't mean the
-            // storage is genuinely shared with someone else.
-            if holders
+            // storage is genuinely shared with someone else. A storage is only
+            // orphaned if the deleted user was its admin/owner and everyone
+            // else with access is the superuser — a mere R/W grant to the
+            // target must not sweep away someone else's storage.
+            let mut non_superuser = holders
                 .iter()
-                .filter(|u| !u.email.eq_ignore_ascii_case(&config.superuser_email))
-                .all(|u| u.id == user_id)
+                .filter(|u| !u.email.eq_ignore_ascii_case(&config.superuser_email));
+            if non_superuser.all(|u| u.id == user_id)
+                && holders
+                    .iter()
+                    .any(|u| u.id == user_id && u.access_type == AccessType::A)
             {
                 orphaned.push(storage.id);
             }
