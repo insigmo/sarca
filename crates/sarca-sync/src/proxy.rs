@@ -22,10 +22,10 @@ use hyper::{
     body::{Frame, Incoming},
     header::{HeaderName, HeaderValue, HOST, LOCATION},
     service::service_fn,
-    Request, Response, StatusCode,
+    Method, Request, Response, StatusCode,
 };
 use hyper_util::rt::TokioIo;
-use reqwest::Client;
+use reqwest::{Client, Url};
 use tokio::{net::TcpListener, sync::oneshot};
 
 /// Headers that describe a single hop and must not be forwarded (RFC 9110 §7.6.1).
@@ -61,7 +61,7 @@ async fn bind_preferred(port: u16) -> Option<TcpListener> {
                     return None;
                 }
                 tokio::time::sleep(PAUSE).await;
-            },
+            }
         }
     }
     None
@@ -242,6 +242,7 @@ async fn proxy_request(
     let path = parts.uri.path_and_query().map_or("/", |p| p.as_str());
     let url = format!("{upstream}{path}");
 
+    let bodyless = matches!(parts.method, Method::GET | Method::HEAD);
     let mut outgoing = client.request(parts.method, &url);
     for (name, value) in &parts.headers {
         // `Host` belongs to the proxy origin; reqwest sets the upstream one.
@@ -252,13 +253,17 @@ async fn proxy_request(
     }
 
     // Stream the request body: uploads are multipart streams, not buffers.
-    let stream = BodyStream::new(body)
-        .try_filter_map(|frame| async move { Ok(frame.into_data().ok()) })
-        .map_err(std::io::Error::other);
-    let response = outgoing
-        .body(reqwest::Body::wrap_stream(stream))
-        .send()
-        .await?;
+    // A GET/HEAD carries none, and attaching an empty stream anyway made the
+    // request unclonable, which is how reqwest decides a redirect cannot be
+    // replayed — every page load then came back as a raw 3xx and the webview
+    // walked off the proxy origin. See `api::proxy_redirect_policy`.
+    if !bodyless {
+        let stream = BodyStream::new(body)
+            .try_filter_map(|frame| async move { Ok(frame.into_data().ok()) })
+            .map_err(std::io::Error::other);
+        outgoing = outgoing.body(reqwest::Body::wrap_stream(stream));
+    }
+    let response = outgoing.send().await?;
 
     let mut builder = Response::builder().status(response.status());
     for (name, value) in response.headers() {
@@ -304,6 +309,14 @@ fn body_from_bytes(bytes: Bytes) -> ProxyBody {
 /// Probe timeout for [`reachable_without_proxy`].
 const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// Probe timeout for [`canonical_base_url`].
+///
+/// Longer than [`PROBE_TIMEOUT`] because this request may walk a redirect chain
+/// and pay a fresh TLS handshake on the far side of it: a small self-hosted
+/// server behind Caddy took 6.5s for that round on a first connection, and at
+/// 5s the probe timed out and silently left the pre-redirect URL in place.
+const CANONICAL_PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Whether the webview can load `base_url` itself.
 ///
 /// The webview validates through the OS trust store, so this is a plain
@@ -314,6 +327,56 @@ pub async fn reachable_without_proxy(base_url: &str) -> bool {
     };
     let url = format!("{}/", base_url.trim().trim_end_matches('/'));
     client.get(url).send().await.is_ok()
+}
+
+/// The origin the server settles on once its own redirects are followed.
+///
+/// A Sarca server behind Caddy or nginx answers `http://host/` with a 308 to
+/// `https://host/`. Keeping the pre-redirect URL as the stored base cost twice
+/// over: `upload_file` streams its multipart body, which reqwest cannot replay
+/// across a redirect, so every auto-upload came back as the bare 308; and the
+/// webview followed the redirect off the loopback origin the native IPC bridge
+/// is keyed on, which failed Sync settings with "not allowed by ACL | Load
+/// failed | Native bridge timeout". Recording where the server actually lives
+/// takes the redirect out of every later request.
+///
+/// Falls back to the input whenever the probe cannot settle on something
+/// better, so an offline or slow server never rewrites a working config.
+pub async fn canonical_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim().trim_end_matches('/').to_owned();
+    if trimmed.is_empty() {
+        return trimmed;
+    }
+    let Ok(client) = crate::api::probe_http_client(CANONICAL_PROBE_TIMEOUT) else {
+        return trimmed;
+    };
+    let response = match client.get(format!("{trimmed}/")).send().await {
+        Ok(response) => response,
+        Err(e) => {
+            tracing::warn!(error = %e, base_url = %trimmed, "server URL probe failed");
+            return trimmed;
+        }
+    };
+    let settled = response.url();
+    let Some(host) = settled.host_str() else {
+        return trimmed;
+    };
+    // Only the origin: a server that redirects `/` to a landing page must not
+    // turn that page's path into the API base.
+    let origin = match settled.port() {
+        Some(port) => format!("{}://{host}:{port}", settled.scheme()),
+        None => format!("{}://{host}", settled.scheme()),
+    };
+    // A redirect that leaves the host is not this server telling us where it
+    // lives; it is a captive portal or a parked domain. Keep what we were given.
+    if Url::parse(&trimmed)
+        .ok()
+        .and_then(|u| u.host_str().map(str::to_owned))
+        != Some(host.to_owned())
+    {
+        return trimmed;
+    }
+    origin
 }
 
 #[cfg(test)]
@@ -345,6 +408,73 @@ mod tests {
             .unwrap();
         assert_ne!(proxy.port(), taken);
         assert_ne!(proxy.port(), 0);
+    }
+
+    /// Serves one 302 from `/` to `location`, then plain 200s.
+    async fn redirecting_upstream(location: &'static str) -> (String, tokio::task::JoinHandle<()>) {
+        let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let service = service_fn(move |req: Request<Incoming>| async move {
+                        let target = if req.uri().path() == "/" {
+                            location.replace("{addr}", &addr.to_string())
+                        } else {
+                            return Ok::<_, Infallible>(Response::new(body_from_bytes(
+                                Bytes::from_static(b"ok"),
+                            )));
+                        };
+                        Ok::<_, Infallible>(
+                            Response::builder()
+                                .status(302)
+                                .header(LOCATION, target)
+                                .body(body_from_bytes(Bytes::new()))
+                                .unwrap(),
+                        )
+                    });
+                    let _ = hyper::server::conn::http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
+                });
+            }
+        });
+        (format!("http://{addr}"), handle)
+    }
+
+    #[tokio::test]
+    async fn canonical_base_url_keeps_a_server_that_does_not_redirect() {
+        let (base, _server) = upstream().await;
+        assert_eq!(canonical_base_url(&base).await, base);
+        assert_eq!(canonical_base_url(&format!("{base}/")).await, base);
+    }
+
+    /// The API base is an origin. A server that sends `/` to its landing page
+    /// must not turn that page's path into the prefix every API call is built
+    /// from.
+    #[tokio::test]
+    async fn canonical_base_url_takes_the_origin_not_the_landing_path() {
+        let (base, _server) = redirecting_upstream("http://{addr}/welcome").await;
+        assert_eq!(canonical_base_url(&base).await, base);
+    }
+
+    /// A redirect off the host is a captive portal or a parked domain, not the
+    /// server saying where it lives.
+    #[tokio::test]
+    async fn canonical_base_url_ignores_a_redirect_to_another_host() {
+        let (base, _server) = redirecting_upstream("http://elsewhere.example/").await;
+        assert_eq!(canonical_base_url(&base).await, base);
+    }
+
+    #[tokio::test]
+    async fn canonical_base_url_keeps_the_input_when_the_server_is_unreachable() {
+        assert_eq!(
+            canonical_base_url("https://example.invalid").await,
+            "https://example.invalid"
+        );
+        assert_eq!(canonical_base_url("   ").await, "");
     }
 
     #[test]
@@ -413,6 +543,15 @@ mod tests {
                                     .unwrap(),
                             );
                         }
+                        if uri.starts_with("/offsite") {
+                            return Ok::<_, Infallible>(
+                                Response::builder()
+                                    .status(302)
+                                    .header(LOCATION, "http://elsewhere.example/x")
+                                    .body(body_from_bytes(Bytes::new()))
+                                    .unwrap(),
+                            );
+                        }
                         let body = req.into_body().collect().await.unwrap().to_bytes();
                         let echo = format!(
                             "{method} {uri} host={host} marker={marker} body={}",
@@ -452,8 +591,13 @@ mod tests {
         assert!(text.contains(&format!("host={upstream_host}")), "{text}");
     }
 
+    /// A page load must never come back as a bare 3xx: the webview would follow
+    /// it and land on the upstream origin, which has no capability grant, is not
+    /// the trusted IPC origin, and so fails every native command with "not
+    /// allowed by ACL | Load failed | Native bridge timeout". A Sarca server
+    /// behind Caddy sends exactly this as a 308 from :80 to its HTTPS origin.
     #[tokio::test]
-    async fn rewrites_a_redirect_back_to_the_proxy() {
+    async fn resolves_a_same_host_redirect_instead_of_handing_it_to_the_webview() {
         let (base, _server) = upstream().await;
         let proxy = LocalProxy::start(&base).await.unwrap();
 
@@ -467,10 +611,56 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(resp.status(), 200, "proxy must follow the redirect itself");
+        let text = resp.text().await.unwrap();
+        assert!(text.starts_with("GET /after "), "{text}");
+    }
+
+    /// A redirect the client declined to follow (redirect cap, or a 307/308
+    /// whose streamed request body cannot be replayed) still has to point back
+    /// at the loopback origin rather than the upstream one.
+    #[test]
+    fn rewrites_a_redirect_back_to_the_proxy() {
+        let rewritten = rewrite_location(
+            &HeaderValue::from_static("https://sarca.example.com/app?tab=sync"),
+            "https://sarca.example.com",
+            44327,
+        )
+        .expect("an upstream redirect must be rewritten");
+        assert_eq!(rewritten, "http://127.0.0.1:44327/app?tab=sync");
+
+        assert!(
+            rewrite_location(
+                &HeaderValue::from_static("http://elsewhere.example/x"),
+                "https://sarca.example.com",
+                44327,
+            )
+            .is_none(),
+            "an offsite redirect must be left alone"
+        );
+    }
+
+    /// Following a redirect off the upstream host would route third-party
+    /// traffic through the pinned client; it stays the webview's business.
+    #[tokio::test]
+    async fn passes_an_offsite_redirect_through_untouched() {
+        let (base, _server) = upstream().await;
+        let proxy = LocalProxy::start(&base).await.unwrap();
+
+        let client = Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        let resp = client
+            .get(format!("{}/offsite", proxy.origin()))
+            .send()
+            .await
+            .unwrap();
+
         assert_eq!(resp.status(), 302);
         assert_eq!(
             resp.headers().get(LOCATION).unwrap().to_str().unwrap(),
-            format!("http://127.0.0.1:{}/after", proxy.port())
+            "http://elsewhere.example/x"
         );
     }
 
