@@ -568,14 +568,68 @@ fn build_tcp_client(timeout: Duration) -> Result<Client> {
         .context("failed to create TCP HTTP client")
 }
 
+/// How many same-host redirects the webview proxy resolves before giving up.
+const MAX_PROXY_REDIRECTS: usize = 5;
+
+/// Redirect policy for the webview proxy: follow a redirect that stays on the
+/// upstream host, hand anything else to the webview.
+///
+/// A Sarca server fronted by Caddy or nginx answers plain HTTP with a 308 to
+/// its HTTPS origin. Passing that straight through moved the webview off the
+/// loopback origin the whole native bridge is keyed on — the Settings ACL, the
+/// `sarca-ipc` protocol handler and the navigation fallback all check that one
+/// origin — so Sync settings failed with "not allowed by ACL | Load failed |
+/// Native bridge timeout". Resolving it here keeps the page on a single origin,
+/// and the pinned TLS this client exists for covers the HTTPS leg the webview
+/// could not validate itself.
+///
+/// A redirect to another host is still returned untouched (following it would
+/// route third-party traffic through us), and HTTPS is never downgraded.
+fn proxy_redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let Some(previous) = attempt.previous().last() else {
+            return attempt.stop();
+        };
+        if attempt.previous().len() >= MAX_PROXY_REDIRECTS {
+            return attempt.stop();
+        }
+        let same_host = attempt.url().host_str() == previous.host_str();
+        let downgraded = previous.scheme() == "https" && attempt.url().scheme() != "https";
+        if same_host && !downgraded {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
+}
+
+/// Pinned client for one-shot probes against the configured server.
+///
+/// Same trust and redirect handling as the webview proxy, plus an overall
+/// timeout: a probe that hangs must not hold up connecting.
+pub(crate) fn probe_http_client(timeout: Duration) -> Result<Client> {
+    let builder = Client::builder()
+        .timeout(timeout)
+        .connect_timeout(CONNECT_TIMEOUT)
+        .redirect(proxy_redirect_policy());
+    let builder = match crate::pinning::pinned_tls_config() {
+        Some(config) => builder.use_preconfigured_tls(config),
+        None => builder,
+    };
+    builder
+        .build()
+        .context("failed to create server probe HTTP client")
+}
+
 /// Pinned client for the loopback webview proxy.
 ///
-/// No overall timeout (a request may be a multi-gigabyte transfer) and no
-/// redirect following, so the proxy can rewrite `Location` itself.
+/// No overall timeout (a request may be a multi-gigabyte transfer). Redirects
+/// that leave the upstream host are left for the proxy to rewrite `Location`
+/// on; see [`proxy_redirect_policy`] for the ones resolved here.
 pub(crate) fn proxy_http_client() -> Result<Client> {
     let builder = Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
-        .redirect(reqwest::redirect::Policy::none());
+        .redirect(proxy_redirect_policy());
     let builder = match crate::pinning::pinned_tls_config() {
         Some(config) => builder.use_preconfigured_tls(config),
         None => builder,

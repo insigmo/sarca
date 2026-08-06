@@ -6,7 +6,15 @@ use std::{
 use image::{GenericImageView, codecs::jpeg::JpegEncoder, imageops::FilterType};
 use tokio::process::Command;
 
-const THUMB_MAX_EDGE: u32 = 128;
+/// Longest edge of a grid tile thumbnail.
+///
+/// The grid lays tiles out at `minmax(112px, 1fr)`, so a tile is 112–180 CSS px
+/// wide and `object-fit: cover` scales the *short* edge up to fill it. At 128
+/// the tile was already upscaling on a 1x display and roughly 2.5x on a
+/// high-density one, which is what made uploaded photos read as mush. 320
+/// covers a 160px tile at `devicePixelRatio` 2 with the short edge to spare,
+/// for roughly 20KB a tile.
+const THUMB_MAX_EDGE: u32 = 320;
 pub const PREVIEW_MAX_EDGE: u32 = 2048;
 const PREVIEW_JPEG_QUALITY: u8 = 80;
 
@@ -36,10 +44,11 @@ pub struct ThumbAndPreview {
 
 fn build_thumb_and_preview(raw: &[u8], include_preview: bool) -> Result<ThumbAndPreview, String> {
     let img = decode_guarded(raw)?;
-    // Downscale once to preview size and take the thumbnail from *that*: at
-    // 128px the result is indistinguishable from one built off the original,
-    // and it saves a second pass over the full-resolution pixels (plus, since
-    // both sizes now come from one decode, a second decode of the original).
+    // Downscale once to preview size and take the thumbnail from *that*: the
+    // preview edge is 6x the thumbnail edge, so the result is indistinguishable
+    // from one built off the original, and it saves a second pass over the
+    // full-resolution pixels (plus, since both sizes now come from one decode,
+    // a second decode of the original).
     let preview_img = resize_within(img, PREVIEW_MAX_EDGE);
     let thumb = encode_jpeg(&resize_within_ref(&preview_img, THUMB_MAX_EDGE), THUMB_JPEG_QUALITY)?;
     let preview =

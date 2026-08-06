@@ -40,7 +40,7 @@ describe('canMakeThumb', () => {
 })
 
 describe('makeThumbBlob', () => {
-	it('fits the long edge to 128px and keeps the aspect ratio', async () => {
+	it('fits the long edge to THUMB_MAX_EDGE and keeps the aspect ratio', async () => {
 		const drawn = {}
 		stubOffscreen(drawn)
 		globalThis.createImageBitmap = vi
@@ -51,7 +51,7 @@ describe('makeThumbBlob', () => {
 
 		expect(blob.type).toBe('image/jpeg')
 		expect(drawn.width).toBe(THUMB_MAX_EDGE)
-		expect(drawn.height).toBe(96)
+		expect(drawn.height).toBe((THUMB_MAX_EDGE * 3) / 4)
 	})
 
 	it('does not upscale an already small image', async () => {
