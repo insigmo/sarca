@@ -64,7 +64,7 @@ fn preview_cache_path(state: &AppSyncState, scope: &str, logical_path: &str) -> 
     // to the same slot.
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
-    for field in [scope, logical_path, "v1-1920-q80"] {
+    for field in [scope, logical_path, "v2-full-res-q95"] {
         h.update((field.len() as u64).to_le_bytes());
         h.update(field.as_bytes());
     }
@@ -75,8 +75,14 @@ fn preview_cache_path(state: &AppSyncState, scope: &str, logical_path: &str) -> 
         .join(format!("{digest}.jpg"))
 }
 
-/// Ceiling for a cached preview: 8 MiB decoded, plus base64's 4/3 expansion.
-const MAX_PREVIEW_BYTES: usize = 8 * 1024 * 1024;
+/// Ceiling for a cached preview: 64 MiB decoded, plus base64's 4/3 expansion.
+///
+/// A preview is now the full-resolution JPEG, never a downscale, so a 100MP
+/// camera file lands here at tens of megabytes. The old 8 MiB ceiling rejected
+/// exactly the big photos the cache exists for, making every open re-download
+/// them; this only has to stop a single write from blowing past the cache
+/// limit before eviction can run.
+const MAX_PREVIEW_BYTES: usize = 64 * 1024 * 1024;
 const MAX_PREVIEW_B64_LEN: usize = MAX_PREVIEW_BYTES / 3 * 4 + 4;
 /// Cache keys are hashed, so their length only bounds the work we do.
 const MAX_CACHE_KEY_LEN: usize = 4096;
@@ -438,10 +444,12 @@ pub async fn update_session(
     email: Option<String>,
     email_verified: Option<bool>,
 ) -> Result<SessionDto, String> {
-    client_log::write_line(
-        state.data_dir(),
-        &format!("update_session email={email:?} email_verified={email_verified:?}"),
-    );
+    if email_verified == Some(false) {
+        client_log::write_line(
+            state.data_dir(),
+            &format!("update_session email={email:?} email_verified={email_verified:?}"),
+        );
+    }
     state
         .apply_webview_session(access_token, refresh_token, email, email_verified)
         .await?;
@@ -1173,8 +1181,8 @@ pub fn cache_put_preview(
     path: String,
     bytes_b64: String,
 ) -> Result<(), String> {
-    // A preview is a downscaled JPEG. Without a cap, a caller that reaches this
-    // command can fill the disk one oversized "preview" at a time — eviction
+    // A preview is a full-resolution JPEG. Without a cap, a caller that reaches
+    // this command can fill the disk one oversized "preview" at a time — eviction
     // only runs against the configured limit, which it would blow past in a
     // single write.
     if bytes_b64.len() > MAX_PREVIEW_B64_LEN {
