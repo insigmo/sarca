@@ -360,6 +360,14 @@ pub const OPEN_SYNC_JS: &str = r#"
     }
     return tryAt(0);
   }
+  // Commands that wait on a person: an OS folder dialog, a share sheet. Every
+  // other command is machine-speed, so making them all wait out the long
+  // timeout meant one dead bridge froze a Settings switch for a minute and a
+  // half with no error.
+  var __SARCA_INTERACTIVE_CMDS = ['pick_local_folder', 'export_logs', 'connect'];
+  function __sarcaNavTimeoutMs(cmd){
+    return __SARCA_INTERACTIVE_CMDS.indexOf(cmd) >= 0 ? 90000 : 12000;
+  }
   function __sarcaNavInvoke(cmd, args){
     return new Promise(function(resolve, reject){
       var id = 'r' + String(++window.__sarcaIpcSeq) + '_' + Date.now().toString(36);
@@ -387,7 +395,7 @@ pub const OPEN_SYNC_JS: &str = r#"
         if (!window.__sarcaIpcPending[id]) return;
         delete window.__sarcaIpcPending[id];
         reject(new Error('Native bridge timeout'));
-      }, 90000);
+      }, __sarcaNavTimeoutMs(cmd));
     });
   }
   function __sarcaCombineErr(errs){
@@ -943,9 +951,15 @@ impl AppSyncState {
     /// runtime from within a runtime" and left Connect dead in the water.
     pub async fn start_proxy(&self, base_url: &str) -> Result<String, String> {
         self.stop_proxy();
-        let proxy = LocalProxy::start(base_url)
+        // Reuse last run's port so the webview keeps the same origin, and with
+        // it the preview/thumbnail caches and the login stored against it.
+        let preferred = read_proxy_port(&self.data_dir);
+        let proxy = LocalProxy::start_on(base_url, preferred)
             .await
             .map_err(|e| e.to_string())?;
+        if Some(proxy.port()) != preferred {
+            write_proxy_port(&self.data_dir, proxy.port());
+        }
         let origin = proxy.origin();
         if let Ok(mut guard) = self.proxy.lock() {
             *guard = Some(proxy);
@@ -1348,6 +1362,22 @@ pub fn sync_settings_url(shell: &Url) -> Result<Url, String> {
     base.join("sync.html").map_err(|e| e.to_string())
 }
 
+/// Loopback port the webview proxy used last run, when one was recorded.
+///
+/// Ports below 1024 are never ours (we bind as an unprivileged process), so a
+/// file holding one is treated as absent rather than honoured.
+pub fn read_proxy_port(data_dir: &Path) -> Option<u16> {
+    let raw = fs::read_to_string(data_dir.join("proxy_port")).ok()?;
+    raw.trim().parse::<u16>().ok().filter(|p| *p >= 1024)
+}
+
+/// Best-effort: losing the record only costs one cold cache next launch.
+pub fn write_proxy_port(data_dir: &Path, port: u16) {
+    if let Err(e) = fs::write(data_dir.join("proxy_port"), port.to_string()) {
+        tracing::warn!(error = %e, "could not persist the webview proxy port");
+    }
+}
+
 pub fn load_server_config(data_dir: &Path) -> ServerConfig {
     let path = data_dir.join("server.json");
     fs::read_to_string(path)
@@ -1446,8 +1476,21 @@ pub async fn navigate_to_server(app: &AppHandle, cfg: &ServerConfig) -> Result<(
     // Give this one origin the Settings ACL right before we hand it the
     // WebView. Nothing is granted up front, so a page reached any other way
     // (redirect, iframe, a link the user clicked) has no capability at all.
+    // Re-granting the same origin is the ordinary case (every reconnect), and
+    // Tauri has no `remove_capability` to make it avoidable. Anything else here
+    // means the page will get "not allowed by ACL" on every command, so it is
+    // logged loudly rather than assumed benign.
     if let Err(e) = crate::remote_ipc::grant_remote_capability(app, &origin) {
-        tracing::debug!(error = %e, origin, "remote capability already granted");
+        let message = e.to_string();
+        if message.contains("already exists") || message.contains("already") {
+            tracing::debug!(error = %message, origin, "remote capability already granted");
+        } else {
+            tracing::error!(error = %message, origin, "remote capability grant failed");
+            crate::client_log::write_line(
+                state.data_dir(),
+                &format!("remote capability grant failed for {origin}: {message}"),
+            );
+        }
     }
     window.navigate(url).map_err(|e| e.to_string())
 }
@@ -1830,6 +1873,29 @@ mod tests {
         assert!(
             js.contains("__sarcaWatchSession"),
             "must watch localStorage so website login syncs tokens into native state"
+        );
+    }
+
+    /// A dead bridge used to hold every Settings control for 90 seconds,
+    /// because the navigation fallback's timeout was one flat value chosen for
+    /// the folder picker.
+    #[test]
+    fn nav_fallback_only_waits_a_long_time_on_commands_that_wait_on_a_person() {
+        let js = OPEN_SYNC_JS;
+        assert!(
+            js.contains("__sarcaNavTimeoutMs(cmd)"),
+            "the navigation fallback must pick its timeout per command"
+        );
+        for interactive in ["pick_local_folder", "export_logs", "connect"] {
+            assert!(
+                js.contains(&format!("'{interactive}'")),
+                "{interactive} opens UI and needs the long timeout"
+            );
+        }
+        assert!(js.contains("12000"), "non-interactive commands need a short timeout");
+        assert!(
+            !js.contains("}, 90000);"),
+            "no call site may hardcode the long timeout any more"
         );
     }
 
