@@ -13,7 +13,7 @@ pub const PREVIEW_FORMAT_VERSION: &str = "v2-2048-q80-lanczos3";
 
 pub const THUMB_CACHE_LIMIT_BYTES: u64 = 256 << 20;
 pub const THUMB_CACHE_EVICT_BYTES: u64 = 32 << 20;
-pub const THUMB_FORMAT_VERSION: &str = "v1-client";
+pub const THUMB_FORMAT_VERSION: &str = "v2-320";
 
 /// On-disk cache of encoded JPEGs under `WORK_DIR/<dir>`.
 ///

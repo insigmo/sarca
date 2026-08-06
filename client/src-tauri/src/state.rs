@@ -1443,11 +1443,38 @@ pub fn new_binding(
     })
 }
 
+/// Replace `cfg.base_url` with the origin the server redirects to, persisting
+/// the change so later launches and the sync engine start from it too.
+///
+/// A probe that fails or changes nothing leaves the config untouched, so an
+/// offline server never rewrites a configuration that works.
+async fn canonicalized_server(state: &AppSyncState, cfg: &ServerConfig) -> ServerConfig {
+    let canonical = sarca_sync::proxy::canonical_base_url(&cfg.base_url).await;
+    if canonical.is_empty() || canonical == cfg.base_url.trim_end_matches('/') {
+        return cfg.clone();
+    }
+    let mut updated = cfg.clone();
+    updated.base_url = canonical;
+    if let Err(e) = state.save_server(&updated).await {
+        tracing::warn!(error = %e, "could not persist the canonical server URL");
+        return cfg.clone();
+    }
+    tracing::info!(from = %cfg.base_url, to = %updated.base_url, "server URL followed a redirect");
+    updated
+}
+
 pub async fn navigate_to_server(app: &AppHandle, cfg: &ServerConfig) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window missing".to_string())?;
     let state = app.state::<AppSyncState>();
+
+    // Settle the server's own redirects first. A server behind Caddy answers
+    // plain HTTP with a 308 to its HTTPS origin, and until the stored base URL
+    // matches where it really lives, uploads come back as that raw 308 (their
+    // streamed multipart body cannot be replayed across a redirect) and the
+    // webview walks off the origin the whole IPC bridge is keyed on.
+    let cfg = &canonicalized_server(&state, cfg).await;
 
     // The webview cannot use our pinned trust, so a server it cannot validate
     // itself is served over loopback instead. A server it can reach directly
@@ -1892,7 +1919,10 @@ mod tests {
                 "{interactive} opens UI and needs the long timeout"
             );
         }
-        assert!(js.contains("12000"), "non-interactive commands need a short timeout");
+        assert!(
+            js.contains("12000"),
+            "non-interactive commands need a short timeout"
+        );
         assert!(
             !js.contains("}, 90000);"),
             "no call site may hardcode the long timeout any more"
