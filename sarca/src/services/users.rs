@@ -193,7 +193,14 @@ impl<'d> UsersService<'d> {
         let mut orphaned = Vec::new();
         for storage in storages {
             let holders = access_repo.list_users_with_access(storage.id).await?;
-            if holders.iter().all(|u| u.id == user_id) {
+            // The superuser is auto-granted access to every storage on creation
+            // (see StoragesService::create), so its presence doesn't mean the
+            // storage is genuinely shared with someone else.
+            if holders
+                .iter()
+                .filter(|u| !u.email.eq_ignore_ascii_case(&config.superuser_email))
+                .all(|u| u.id == user_id)
+            {
                 orphaned.push(storage.id);
             }
         }
