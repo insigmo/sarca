@@ -2,11 +2,14 @@
  * Client-side grid thumbnails.
  *
  * The browser already holds the full-resolution photo while uploading it, so
- * the 128px tile is free here: no server-side decode, and no round trip to
- * fetch back a picture the client just sent.
+ * the tile is free here: no server-side decode, and no round trip to fetch
+ * back a picture the client just sent.
+ *
+ * Keep THUMB_MAX_EDGE in step with `services::thumbnails::THUMB_MAX_EDGE` on
+ * the server — either side may produce the tile for the same grid.
  */
 
-export const THUMB_MAX_EDGE = 128
+export const THUMB_MAX_EDGE = 320
 const THUMB_QUALITY = 0.75
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp)$/i
 
