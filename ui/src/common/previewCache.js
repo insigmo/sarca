@@ -46,7 +46,13 @@ const openDb = () => {
 	return dbPromise
 }
 
-const cacheKey = (scope, path) => `${scope}:${path}`
+// Bumped whenever the server's preview encode format changes, so a stale
+// blob from before the change is never served from IndexedDB. The server
+// invalidates its own disk cache and stored preview documents on the same
+// kind of change (see PREVIEW_FORMAT_VERSION); this does the client half.
+const PREVIEW_FORMAT_VERSION = 'v2-full-res-q95'
+
+const cacheKey = (scope, path) => `${PREVIEW_FORMAT_VERSION}:${scope}:${path}`
 
 /**
  * @param {string} store
