@@ -82,6 +82,71 @@ describe('loadPreview', () => {
 		expect(fetchMock).toHaveBeenCalledTimes(1)
 	})
 
+	it('still caches on the native client when the IPC bridge answers nothing', async () => {
+		// Regression: the native client read and wrote *only* the on-disk cache
+		// behind `nativeInvoke`, and every failure there is swallowed — so a
+		// bridge that returns null left the viewer refetching the same photo
+		// from the server on every open.
+		const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => new Blob(['jpeg']) }))
+		vi.stubGlobal('fetch', fetchMock)
+
+		const opts = {
+			scope: 's1',
+			path: 'photos/a.jpg',
+			resolveUrl: async () => 'https://api/preview',
+			native: true,
+		}
+		await loadPreview(opts)
+		// Drop the in-process blob map so the second open has to come off a
+		// persistent layer rather than out of memory.
+		resetPreviewLoader()
+		await loadPreview(opts)
+
+		expect(fetchMock).toHaveBeenCalledTimes(1)
+	})
+
+	it('reopens a photo from memory without touching the persistent caches', async () => {
+		const { getCachedPreview } = await import('./previewCache')
+		const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => new Blob(['jpeg']) }))
+		vi.stubGlobal('fetch', fetchMock)
+
+		const opts = {
+			scope: 's1',
+			path: 'photos/a.jpg',
+			resolveUrl: async () => 'https://api/preview',
+			native: true,
+		}
+		await loadPreview(opts)
+		getCachedPreview.mockClear()
+		const again = await loadPreview(opts)
+
+		expect(again).toBeInstanceOf(Blob)
+		expect(getCachedPreview).not.toHaveBeenCalled()
+		expect(fetchMock).toHaveBeenCalledTimes(1)
+	})
+
+	it('hands back the preview without waiting on the native cache write', async () => {
+		const { nativeInvoke } = await import('./nativeBridge')
+		const stuck = deferred()
+		nativeInvoke.mockImplementation(async (cmd) => {
+			if (cmd === 'cache_put_preview') await stuck.promise
+			return null
+		})
+		const fetchMock = vi.fn(async () => ({ ok: true, blob: async () => new Blob(['jpeg']) }))
+		vi.stubGlobal('fetch', fetchMock)
+
+		const blob = await loadPreview({
+			scope: 's1',
+			path: 'photos/a.jpg',
+			resolveUrl: async () => 'https://api/preview',
+			native: true,
+		})
+
+		expect(blob).toBeInstanceOf(Blob)
+		stuck.resolve()
+		nativeInvoke.mockImplementation(async () => null)
+	})
+
 	it('retries after a failure instead of negatively caching the path', async () => {
 		let calls = 0
 		const fetchMock = vi.fn(async () => {

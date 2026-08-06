@@ -268,6 +268,14 @@ fn allow_unsafe_eval() -> bool {
 /// into script execution; no `X-Frame-Options`, so the UI could be framed and
 /// clickjacked; no `nosniff`, so an uploaded file served back could be sniffed
 /// into HTML and run on the app's own origin.
+///
+/// `connect-src` and `frame-src` name the native client's IPC endpoints because
+/// this same page is what the desktop/mobile shell loads, and its bridge to the
+/// Rust commands is a `fetch` of the `sarca-ipc` custom protocol with a
+/// cancelled iframe navigation behind it. Under `connect-src 'self'` /
+/// `frame-src 'none'` both were blocked, so Settings could not reach
+/// `list_bindings`, `set_client_prefs` or the preview cache at all. The schemes
+/// resolve to nothing in an ordinary browser, so naming them costs no reach.
 fn with_security_headers(router: Router) -> Router {
     // `style-src` needs 'unsafe-inline': SUID injects component styles as inline
     // <style> at runtime. Scripts stay 'self' only, which is what stops XSS.
@@ -278,9 +286,9 @@ fn with_security_headers(router: Router) -> Router {
          font-src 'self' data: https://fonts.gstatic.com; \
          img-src 'self' data: blob:; \
          media-src 'self' data: blob:; \
-         connect-src 'self'; \
+         connect-src 'self' sarca-ipc: http://sarca-ipc.localhost https://sarca-ipc.localhost; \
          worker-src 'self' blob:; \
-         frame-src 'none'; \
+         frame-src sarca-ipc: https://sarca.ipc; \
          object-src 'none'; \
          base-uri 'self'; \
          form-action 'self'; \
@@ -295,9 +303,9 @@ fn with_security_headers(router: Router) -> Router {
          font-src 'self' data: https://fonts.gstatic.com; \
          img-src 'self' data: blob:; \
          media-src 'self' data: blob:; \
-         connect-src 'self'; \
+         connect-src 'self' sarca-ipc: http://sarca-ipc.localhost https://sarca-ipc.localhost; \
          worker-src 'self' blob:; \
-         frame-src 'none'; \
+         frame-src sarca-ipc: https://sarca.ipc; \
          object-src 'none'; \
          base-uri 'self'; \
          form-action 'self'; \
@@ -479,6 +487,19 @@ mod tests {
         );
         assert!(csp.contains("frame-ancestors 'none'"));
         assert!(csp.contains("object-src 'none'"));
+
+        // The native client reaches its Rust commands from this page through a
+        // custom-protocol fetch and, failing that, a cancelled iframe
+        // navigation. `connect-src 'self'` and `frame-src 'none'` blocked both,
+        // which left Settings → Sync unable to call `list_bindings` at all.
+        for directive in [
+            "connect-src 'self' sarca-ipc: http://sarca-ipc.localhost https://sarca-ipc.localhost",
+            "frame-src sarca-ipc: https://sarca.ipc",
+        ] {
+            assert!(csp.contains(directive), "native IPC needs `{directive}`: {csp}");
+        }
+        // Framing *us* stays forbidden: only what this page may embed changed.
+        assert!(!csp.contains("frame-ancestors 'self'"));
 
         assert_eq!(
             headers.get("x-content-type-options").and_then(|v| v.to_str().ok()),

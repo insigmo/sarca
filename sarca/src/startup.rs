@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use sqlx::SqlitePool;
 
 use crate::{
@@ -415,6 +417,65 @@ async fn add_missing_columns(db: &SqlitePool) {
     }
 }
 
+/// Drop stored preview references when the preview encode parameters change.
+///
+/// The on-disk preview cache is keyed by [`PREVIEW_FORMAT_VERSION`], so it
+/// invalidates itself. The preview *documents* on Telegram do not: `preview`
+/// prefers `files.preview_telegram_file_id` over re-encoding, so without this
+/// every photo uploaded under the old parameters would keep serving the old
+/// encode forever. Clearing the reference sends the next open down the
+/// re-encode path, which backfills a fresh preview and pays the cost once.
+///
+/// The marker lives beside the cache in `work_dir`, so a wiped work directory
+/// re-runs this — harmless, since a wiped work directory has no cached previews
+/// to disagree with either.
+///
+/// Note: the old preview messages are left in the Telegram channel. Deleting
+/// them needs a per-file API round trip and a rate-limit budget; an orphaned
+/// document is a few hundred kilobytes.
+pub async fn reset_previews_on_format_change(db: &SqlitePool, work_dir: &Path) {
+    let marker = work_dir.join("preview_format");
+    let current = crate::common::media_cache::PREVIEW_FORMAT_VERSION;
+
+    match tokio::fs::read_to_string(&marker).await {
+        Ok(recorded) if recorded.trim() == current => return,
+        // A database that predates the marker has previews in the old format,
+        // so falling through and clearing them is the correct read of "absent".
+        Ok(_) | Err(_) => {},
+    }
+
+    match sqlx::query(
+        "UPDATE files
+            SET preview_telegram_file_id = NULL, preview_telegram_message_id = NULL
+          WHERE preview_telegram_file_id IS NOT NULL",
+    )
+    .execute(db)
+    .await
+    {
+        Ok(result) => {
+            let cleared = result.rows_affected();
+            if cleared > 0 {
+                tracing::info!(
+                    "preview format is now {current}: {cleared} preview(s) will rebuild"
+                );
+            }
+        },
+        Err(e) => {
+            // Leave the marker unwritten so the next boot retries.
+            tracing::error!("could not reset previews for format {current}: {e}");
+            return;
+        },
+    }
+
+    if let Err(e) = tokio::fs::create_dir_all(work_dir).await {
+        tracing::warn!("could not create {}: {e}", work_dir.display());
+        return;
+    }
+    if let Err(e) = tokio::fs::write(&marker, current).await {
+        tracing::warn!("could not record the preview format: {e}");
+    }
+}
+
 /// Remove storage workers that were never bound to a storage (legacy orphans).
 #[inline]
 pub async fn delete_orphan_storage_workers(db: &SqlitePool) {
@@ -633,5 +694,62 @@ mod tests {
         }
 
         init_db(&pool).await; // idempotent: no duplicate-column error
+    }
+
+    /// Previews already on Telegram are preferred over re-encoding, so a change
+    /// to the encode parameters is invisible until the reference is dropped.
+    #[tokio::test]
+    async fn a_new_preview_format_clears_stored_previews_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let work_dir = dir.path().join("work");
+        // One connection, so the pragma below applies to every query here.
+        let pool =
+            get_pool(dir.path().join("db.sqlite").to_str().unwrap(), 1, Duration::from_secs(5))
+                .await
+                .unwrap();
+        init_db(&pool).await;
+        // The rows below only need `files.preview_telegram_file_id` to be set;
+        // standing up a valid storage and worker graph would test nothing.
+        sqlx::query("PRAGMA foreign_keys = OFF").execute(&pool).await.unwrap();
+
+        async fn stored_previews(pool: &SqlitePool) -> i64 {
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM files WHERE preview_telegram_file_id IS NOT NULL",
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        }
+        async fn insert_photo(pool: &SqlitePool, suffix: &str) {
+            sqlx::query(
+                "INSERT INTO files (id, path, size, storage_id, is_uploaded,
+                                    preview_telegram_file_id, preview_telegram_message_id)
+                 VALUES (randomblob(16), $1, 1, randomblob(16), 1, $2, 7)",
+            )
+            .bind(format!("photos/{suffix}.jpg"))
+            .bind(format!("tg-{suffix}"))
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+
+        insert_photo(&pool, "a").await;
+        assert_eq!(stored_previews(&pool).await, 1);
+
+        reset_previews_on_format_change(&pool, &work_dir).await;
+        assert_eq!(
+            stored_previews(&pool).await,
+            0,
+            "an unrecorded format must invalidate stored previews"
+        );
+
+        // Second boot on the same format: a freshly rebuilt preview survives.
+        insert_photo(&pool, "b").await;
+        reset_previews_on_format_change(&pool, &work_dir).await;
+        assert_eq!(
+            stored_previews(&pool).await,
+            1,
+            "an unchanged format must not keep re-clearing previews"
+        );
     }
 }
