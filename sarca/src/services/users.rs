@@ -202,13 +202,10 @@ impl<'d> UsersService<'d> {
             // orphaned if the deleted user was its admin/owner and everyone
             // else with access is the superuser — a mere R/W grant to the
             // target must not sweep away someone else's storage.
-            let mut non_superuser = holders
-                .iter()
-                .filter(|u| !u.email.eq_ignore_ascii_case(&config.superuser_email));
+            let mut non_superuser =
+                holders.iter().filter(|u| !u.email.eq_ignore_ascii_case(&config.superuser_email));
             if non_superuser.all(|u| u.id == user_id)
-                && holders
-                    .iter()
-                    .any(|u| u.id == user_id && u.access_type == AccessType::A)
+                && holders.iter().any(|u| u.id == user_id && u.access_type == AccessType::A)
             {
                 orphaned.push(storage.id);
             }

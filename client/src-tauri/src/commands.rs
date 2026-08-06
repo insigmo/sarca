@@ -15,11 +15,11 @@ use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
 
 use crate::client_log;
+use crate::paths::validate_local_dir;
 use crate::startup::{
     is_usable_device_label, is_useless_hostname, read_device_label_cache, sanitize_device_label,
     write_device_label_cache,
 };
-use crate::paths::validate_local_dir;
 use crate::state::{
     navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding,
     read_webview_session, session_ready_for_sync, write_private, AppSyncState, ClientPrefs,
@@ -229,7 +229,11 @@ fn denied_sync_roots(app: &AppHandle, state: &AppSyncState) -> Vec<PathBuf> {
 }
 
 fn check_local_path(app: &AppHandle, state: &AppSyncState, raw: &str) -> Result<String, String> {
-    validate_local_dir(raw, &allowed_sync_roots(app), &denied_sync_roots(app, state))
+    validate_local_dir(
+        raw,
+        &allowed_sync_roots(app),
+        &denied_sync_roots(app, state),
+    )
 }
 
 fn dir_size(path: &Path) -> u64 {

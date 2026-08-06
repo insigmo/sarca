@@ -183,8 +183,7 @@ mod tests {
         let data = root.join("sarca-data");
         std::fs::create_dir_all(&data).unwrap();
 
-        let err =
-            validate_local_dir(data.to_str().unwrap(), &[root], &[data.clone()]).unwrap_err();
+        let err = validate_local_dir(data.to_str().unwrap(), &[root], &[data.clone()]).unwrap_err();
         assert!(err.contains("belongs to Sarca"), "{err}");
     }
 
@@ -192,7 +191,10 @@ mod tests {
     fn rejects_relative_empty_and_missing_paths() {
         let root = tmp_root("bad");
         for raw in ["", "   ", "Pictures", "../etc"] {
-            assert!(validate_local_dir(raw, &[root.clone()], &[]).is_err(), "{raw}");
+            assert!(
+                validate_local_dir(raw, &[root.clone()], &[]).is_err(),
+                "{raw}"
+            );
         }
         let missing = root.join("nope");
         assert!(validate_local_dir(missing.to_str().unwrap(), &[root], &[]).is_err());
