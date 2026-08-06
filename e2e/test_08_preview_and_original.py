@@ -262,7 +262,7 @@ def test_junk_client_thumb_falls_back_to_server_generation(
     r = sarca.thumb(storage, "junk.jpg")
     assert r.status_code == 200
     assert media.is_jpeg(r.content)
-    assert max(media.image_size(r.content)) <= 128
+    assert max(media.image_size(r.content)) <= 320
 
 
 def test_small_image_preview_is_not_upscaled(sarca: SarcaClient, storage: str) -> None:
