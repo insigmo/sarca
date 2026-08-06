@@ -20,7 +20,7 @@ from helpers.server import SarcaServer
 
 pytestmark = pytest.mark.mock_only
 
-PREVIEW_MAX_EDGE = 1920
+PREVIEW_MAX_EDGE = 2048
 
 
 def upload_photo(sarca: SarcaClient, storage: str, name: str = "photo.jpg") -> bytes:
