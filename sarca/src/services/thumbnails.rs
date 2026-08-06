@@ -7,8 +7,17 @@ use image::{GenericImageView, codecs::jpeg::JpegEncoder, imageops::FilterType};
 use tokio::process::Command;
 
 const THUMB_MAX_EDGE: u32 = 128;
-pub const PREVIEW_MAX_EDGE: u32 = 1920;
+pub const PREVIEW_MAX_EDGE: u32 = 2048;
 const PREVIEW_JPEG_QUALITY: u8 = 80;
+
+/// Downscale kernel for previews and thumbnails.
+///
+/// `Triangle` (bilinear) samples too few source pixels when the scale factor is
+/// large — a 12MP phone photo reduced to the preview edge is a >4x reduction —
+/// so it drops most of the detail it walks past and the result reads as soft.
+/// Lanczos3 keeps the high-frequency detail that makes a preview look like the
+/// photo, at a cost paid once per upload.
+const DOWNSCALE_FILTER: FilterType = FilterType::Lanczos3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ThumbKind {
@@ -388,7 +397,7 @@ fn resize_within(img: image::DynamicImage, max_edge: u32) -> image::DynamicImage
     if w <= max_edge && h <= max_edge {
         img
     } else {
-        img.resize(max_edge, max_edge, FilterType::Triangle)
+        img.resize(max_edge, max_edge, DOWNSCALE_FILTER)
     }
 }
 
@@ -399,7 +408,7 @@ fn resize_within_ref(img: &image::DynamicImage, max_edge: u32) -> image::Dynamic
     if w <= max_edge && h <= max_edge {
         img.clone()
     } else {
-        img.resize(max_edge, max_edge, FilterType::Triangle)
+        img.resize(max_edge, max_edge, DOWNSCALE_FILTER)
     }
 }
 
