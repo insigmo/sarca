@@ -38,6 +38,10 @@ jobs:
     name: sarca-sync tests
     runs-on: ubuntu-latest
     steps:
+      - uses: mozilla-actions/sccache-action@v0.0.5
+        env:
+          RUSTC_WRAPPER: sccache
+
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
