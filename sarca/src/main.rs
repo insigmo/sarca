@@ -266,12 +266,12 @@ async fn main() {
                         config.acme_http_addr,
                         slot.clone(),
                         runtime.challenges.clone(),
-                        &cert_store,
+                        &cert_store.clone(),
                         config.acme_root_ca.as_ref().map(std::path::PathBuf::from),
                     ),
                     cert_store.clone(),
-                    runtime.clone(),
-                );
+                )
+                .await;
                 // The identity is an address we guessed, not one an operator
                 // pinned, so keep watching it and re-issue when it moves.
                 if identity_auto_detected {
