@@ -741,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "temp disable"]
+    #[ignore = "требует запущенный сервис миниатюр, не гоняется в обычном CI"]
     fn build_thumb_and_preview_with_preview() {
         let raw = sample_png(3000, 2000);
         let result = build_thumb_and_preview(&raw, true).unwrap();
