@@ -14,16 +14,19 @@ use tokio::process::Command;
 /// high-density one, which is what made uploaded photos read as mush. 320
 /// covers a 160px tile at `devicePixelRatio` 2 with the short edge to spare,
 /// for roughly 20KB a tile.
-const THUMB_MAX_EDGE: u32 = 320;
+const THUMB_MAX_EDGE: u32 = 1920;
 
-/// Quality the preview encoder uses when a source needs to be converted to
-/// JPEG (i.e. it wasn't one already).
+/// Longest edge of a stored/served preview.
 ///
-/// The preview is never resized and never re-compressed once it is a JPEG —
-/// this quality only applies to the one-time PNG/HEIC/etc. -> JPEG
-/// conversion, so it stays high enough that the conversion itself is not
-/// visible.
-const PREVIEW_JPEG_QUALITY: u8 = 95;
+/// This is what a photo open actually costs: the viewer downloads this JPEG,
+/// not the original. 2048 keeps a 12MP phone photo indistinguishable on any
+/// screen while cutting the bytes (and the re-encode cost) by an order of
+/// magnitude relative to the original.
+const PREVIEW_MAX_EDGE: u32 = 2048;
+
+/// Quality the preview encoder uses, whether re-encoding a downscaled image
+/// or converting a non-JPEG source (PNG/HEIC/etc.) to JPEG.
+const PREVIEW_JPEG_QUALITY: u8 = 90;
 
 /// Downscale kernel for thumbnails.
 ///
@@ -55,8 +58,9 @@ fn build_thumb_and_preview(raw: &[u8], include_preview: bool) -> Result<ThumbAnd
     let preview = if include_preview {
         match passthrough_preview(raw) {
             Some(as_is) => Some(as_is),
-            // Not a JPEG: convert at full resolution, no downscale.
-            None => Some(encode_jpeg(&img, PREVIEW_JPEG_QUALITY)?),
+            None => {
+                Some(encode_jpeg(&resize_within_ref(&img, PREVIEW_MAX_EDGE), PREVIEW_JPEG_QUALITY)?)
+            },
         }
     } else {
         None
@@ -74,13 +78,23 @@ fn is_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 3 && bytes[0..3] == [0xFF, 0xD8, 0xFF]
 }
 
-/// The original itself, when it is already a JPEG.
+/// The original itself, when it is already a JPEG within the preview size.
 ///
-/// A JPEG is always served byte for byte, whatever its size: re-encoding it
-/// can only lose detail, since it decodes pixels that already went through
-/// one quantiser and puts them through a second.
+/// Re-encoding a JPEG that already fits can only lose detail: it decodes
+/// pixels that already went through one quantiser and puts them through a
+/// second. Anything wider than [`PREVIEW_MAX_EDGE`] still needs the downscale
+/// pass, so only dimensions (a header read, not a full decode) are checked
+/// here.
 fn passthrough_preview(raw: &[u8]) -> Option<Vec<u8>> {
-    is_jpeg(raw).then(|| raw.to_vec())
+    if !is_jpeg(raw) {
+        return None;
+    }
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(raw))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    (width.max(height) <= PREVIEW_MAX_EDGE).then(|| raw.to_vec())
 }
 
 /// Try to build a JPEG thumbnail for the given file.
@@ -190,15 +204,15 @@ pub async fn generate_preview_from_path(file_path: &Path) -> Result<Vec<u8>, Str
     generate_preview(raw).await
 }
 
-/// Encode raw image bytes to a full-resolution JPEG preview.
+/// Encode raw image bytes to a screen-sized JPEG preview.
 ///
-/// A JPEG original is returned untouched; anything else is converted to JPEG
-/// at full resolution by [`fit_preview`] — no downscale, no byte budget.
+/// A JPEG original already within [`PREVIEW_MAX_EDGE`] is returned untouched;
+/// everything else is downscaled and encoded by [`fit_preview`].
 ///
 /// A format the `image` crate cannot open (HEIC/AVIF off a phone) is decoded by
-/// ffmpeg first and then converted on the same path, so a photo that used to
+/// ffmpeg first and then fitted on the same path, so a photo that used to
 /// have no preview at all — and therefore re-downloaded the full original on
-/// every open — now caches a JPEG like every other picture.
+/// every open — now caches a small JPEG like every other picture.
 pub async fn generate_preview(raw: Vec<u8>) -> Result<Vec<u8>, String> {
     let raw = std::sync::Arc::new(raw);
     if let Some(as_is) = passthrough_preview(&raw) {
@@ -220,9 +234,9 @@ pub async fn generate_preview(raw: Vec<u8>) -> Result<Vec<u8>, String> {
         .map_err(|e| e.to_string())?
 }
 
-/// Decode `raw` and encode it to a full-resolution JPEG preview.
+/// Decode `raw` and encode it to a screen-sized JPEG preview.
 fn fit_preview(raw: &[u8]) -> Result<Vec<u8>, String> {
-    encode_jpeg(&decode_guarded(raw)?, PREVIEW_JPEG_QUALITY)
+    encode_jpeg(&resize_within(decode_guarded(raw)?, PREVIEW_MAX_EDGE), PREVIEW_JPEG_QUALITY)
 }
 
 fn detect_kind(logical_path: &str) -> Option<ThumbKind> {
@@ -430,7 +444,6 @@ fn decode_guarded(raw: &[u8]) -> Result<image::DynamicImage, String> {
     image::load_from_memory(raw).map_err(|e| format!("decode image: {e}"))
 }
 
-#[cfg(test)]
 fn resize_within(img: image::DynamicImage, max_edge: u32) -> image::DynamicImage {
     let (w, h) = img.dimensions();
     if w <= max_edge && h <= max_edge {
@@ -459,8 +472,8 @@ fn encode_jpeg(img: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, String
     Ok(out)
 }
 
-/// One-shot decode → downscale → encode. Used for the thumbnail-only tests;
-/// production previews go through [`fit_preview`], which does not downscale.
+/// One-shot decode → downscale → encode. Kept for tests that assert a single
+/// rung; production code uses [`resize_within`]/[`resize_within_ref`] directly.
 #[cfg(test)]
 fn resize_to_jpeg(raw: &[u8], max_edge: u32, quality: u8) -> Result<Vec<u8>, String> {
     encode_jpeg(&resize_within(decode_guarded(raw)?, max_edge), quality)
@@ -533,46 +546,48 @@ mod tests {
     }
 
     #[test]
-    fn preview_keeps_full_resolution_and_outputs_jpeg() {
+    fn preview_shrinks_large_image_and_outputs_jpeg() {
         let raw = sample_png(3000, 2000);
         let jpeg = fit_preview(&raw).unwrap();
         assert!(jpeg.starts_with(&[0xFF, 0xD8, 0xFF]));
         let decoded = image::load_from_memory(&jpeg).unwrap();
-        assert_eq!(decoded.width(), 3000, "preview must not be downscaled");
-        assert_eq!(decoded.height(), 2000, "preview must not be downscaled");
+        assert!(decoded.width() <= PREVIEW_MAX_EDGE);
+        assert!(decoded.height() <= PREVIEW_MAX_EDGE);
     }
 
-    /// Dense, noisy content used to be squeezed to fit a byte budget. There is
-    /// no budget any more: quality stays fixed regardless of content.
     #[test]
-    fn preview_of_a_dense_photo_keeps_full_resolution() {
+    fn preview_of_a_dense_photo_stays_within_the_edge() {
         let jpeg = fit_preview(&noisy_png(3000, 2250)).unwrap();
         let decoded = image::load_from_memory(&jpeg).unwrap();
-        assert_eq!(decoded.width(), 3000);
-        assert_eq!(decoded.height(), 2250);
+        assert!(decoded.width() <= PREVIEW_MAX_EDGE);
+        assert!(decoded.height() <= PREVIEW_MAX_EDGE);
     }
 
     #[test]
-    fn preview_of_a_plain_photo_keeps_full_resolution_and_high_quality() {
+    fn preview_of_a_plain_photo_is_downscaled_to_the_preview_edge() {
         let jpeg = fit_preview(&smooth_png(4000, 3000)).unwrap();
         let decoded = image::load_from_memory(&jpeg).expect("preview decodes");
-        assert_eq!(decoded.width(), 4000, "a photo must keep its full resolution");
+        assert_eq!(decoded.width(), PREVIEW_MAX_EDGE, "a photo that overflows must be capped");
     }
 
     #[test]
-    fn a_jpeg_original_is_served_untouched_regardless_of_size() {
+    fn a_small_jpeg_original_is_served_untouched() {
         let jpeg = encode_jpeg(&image::load_from_memory(&sample_png(1200, 900)).unwrap(), 80)
             .expect("sample encodes");
 
         assert_eq!(
             passthrough_preview(&jpeg).as_deref(),
             Some(jpeg.as_slice()),
-            "a JPEG original must not be re-encoded, whatever its size"
+            "a JPEG original already within the preview edge must not be re-encoded"
         );
     }
 
     #[test]
-    fn passthrough_refuses_non_jpeg_formats() {
+    fn passthrough_refuses_oversized_jpeg_and_non_jpeg_formats() {
+        let big_jpeg = encode_jpeg(&image::load_from_memory(&sample_png(3000, 2000)).unwrap(), 80)
+            .expect("sample encodes");
+        assert!(passthrough_preview(&big_jpeg).is_none(), "an oversized JPEG must be downscaled");
+
         // PNG: the pipeline serves `image/jpeg`, so it cannot be passed
         // through even though it decodes fine.
         assert!(passthrough_preview(&sample_png(64, 64)).is_none());
@@ -596,8 +611,8 @@ mod tests {
         let result = generate(&path, "photo.png", u64::MAX).await.unwrap().unwrap();
 
         let preview = image::load_from_memory(&result.preview.unwrap()).unwrap();
-        assert_eq!(preview.width(), 3000, "preview must keep full resolution");
-        assert_eq!(preview.height(), 2000, "preview must keep full resolution");
+        assert!(preview.width() <= PREVIEW_MAX_EDGE);
+        assert!(preview.height() <= PREVIEW_MAX_EDGE);
         assert!(preview.width() > THUMB_MAX_EDGE);
     }
 
