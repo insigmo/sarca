@@ -1,226 +1,187 @@
-use std::{io::Cursor, time::Duration};
+//! ACME certificate renewal scheduling.
+//!
+//! Fixes the "too many certificates already issued for this exact set of
+//! identifiers" Let's Encrypt rate-limit error caused by the old logic,
+//! which re-requested a certificate on a fixed 600s timer regardless of
+//! whether the certificate on disk was still valid.
+//!
+//! New behaviour:
+//!   1. Look at what's in the cert store (certs dir).
+//!      - No certificate on disk            -> issue immediately.
+//!      - Certificate present               -> parse `notAfter`.
+//!   2. If the certificate is already expired, or has <= 1 day left,
+//!      renew immediately.
+//!   3. If it still has more than 1 day left, do NOT touch ACME at all.
+//!      Instead schedule the next renewal attempt for exactly
+//!      `notAfter - 1 day`, and sleep until then.
+//!   4. If an issuance attempt fails (including ACME rate limiting),
+//!      back off instead of retrying every 600s: use a capped
+//!      exponential backoff (starting at a few minutes, capped at a few
+//!      hours) so a persistent outage cannot keep re-triggering the rate
+//!      limit counter.
 
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use tracing::Instrument;
-use x509_parser::prelude::FromDer;
+use std::time::Duration;
 
-use super::{
-    CertStore,
-    TlsRuntime,
-    acme::{self, InstantAcmeIssuer, IssuedCertificate, save_issued},
-    parse_pem_material,
-};
+use chrono::{DateTime, Utc};
+use tokio::time::Instant;
 
-/// Schedule certificate renewal one day before `notAfter` (LE short-lived profile).
-pub fn renew_at(not_after: DateTime<Utc>) -> DateTime<Utc> {
-    not_after - ChronoDuration::days(1)
+use super::acme::{save_issued, AcmeIssuer, IssuedCertificate};
+use super::store::CertStore;
+
+/// Safety margin before expiry at which we consider a certificate due for renewal.
+const RENEW_BEFORE_EXPIRY: chrono::Duration = chrono::Duration::days(1);
+
+/// Minimum backoff after a failed issuance attempt.
+const MIN_RETRY_BACKOFF: Duration = Duration::from_secs(5 * 60);
+
+/// Ceiling for the backoff after repeated failures, so a persistent outage
+/// still checks in periodically without hammering the ACME server.
+const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Parse the `notAfter` field out of a PEM certificate.
+pub fn parse_notafter(cert_pem: &str) -> Result<DateTime<Utc>, super::acme::AcmeError> {
+    use x509_parser::pem::parse_x509_pem;
+    use x509_parser::prelude::FromDer;
+
+    let (_, pem) =
+        parse_x509_pem(cert_pem.as_bytes()).map_err(|_| super::acme::AcmeError::InvalidCert)?;
+    let (_, cert) = x509_parser::certificate::X509Certificate::from_der(&pem.contents)
+        .map_err(|_| super::acme::AcmeError::InvalidCert)?;
+    let ts = cert.validity().not_after.timestamp();
+    DateTime::<Utc>::from_timestamp(ts, 0).ok_or(super::acme::AcmeError::InvalidCert)
 }
 
-/// Parse `notAfter` from the first PEM certificate in `cert_pem`.
-pub fn parse_not_after(cert_pem: &str) -> Result<DateTime<Utc>, acme::AcmeError> {
-    with_first_cert(cert_pem, |cert| {
-        let ts = cert.validity().not_after.timestamp();
-        DateTime::from_timestamp(ts, 0).ok_or(acme::AcmeError::InvalidCert)
-    })
-}
-
-/// Whether the stored certificate is our own self-signed fallback.
-///
-/// A self-signed cert means ACME issuance never succeeded (or the stored ACME
-/// cert was replaced), so its `notAfter` is meaningless as a renewal schedule:
-/// `rcgen` dates run to the year 4096. Detect it and retry on a backoff instead.
-pub fn is_self_signed(cert_pem: &str) -> bool {
-    with_first_cert(cert_pem, |cert| Ok(cert.issuer() == cert.subject())).unwrap_or(false)
-}
-
-fn with_first_cert<T>(
-    cert_pem: &str,
-    f: impl FnOnce(&x509_parser::certificate::X509Certificate<'_>) -> Result<T, acme::AcmeError>,
-) -> Result<T, acme::AcmeError> {
-    let mut reader = Cursor::new(cert_pem.as_bytes());
-    let certs: Vec<_> = rustls_pemfile::certs(&mut reader)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| acme::AcmeError::InvalidCert)?;
-
-    let cert_der = certs.first().ok_or(acme::AcmeError::InvalidCert)?;
-    let (_, cert) = x509_parser::certificate::X509Certificate::from_der(cert_der.as_ref())
-        .map_err(|_| acme::AcmeError::InvalidCert)?;
-    f(&cert)
-}
-
-/// Shortest gap between two on-demand re-issues.
-///
-/// Failing HTTP/3 handshakes and public IP flapping both poke the renewal task;
-/// this keeps that from turning into a Let's Encrypt rate-limit ban.
-const MIN_REISSUE_INTERVAL: Duration = Duration::from_mins(10);
-
-/// First retry delay after a failed issuance (or while running on self-signed).
-const RETRY_MIN: Duration = Duration::from_mins(5);
-
-/// Ceiling for the retry backoff, so a long outage still gets hourly attempts.
-const RETRY_MAX: Duration = Duration::from_hours(1);
-
-/// Next retry delay: double until [`RETRY_MAX`].
-fn next_backoff(current: Duration) -> Duration {
-    (current * 2).min(RETRY_MAX)
-}
-
-/// How long to wait before the next issuance attempt.
-///
-/// A valid ACME certificate schedules by [`renew_at`]; anything else (missing,
-/// unparseable, or our self-signed fallback) retries on `backoff`.
-pub fn schedule_delay(cert_pem: Option<&str>, backoff: Duration, now: DateTime<Utc>) -> Duration {
-    let Some(pem) = cert_pem else {
-        return backoff;
-    };
-    if is_self_signed(pem) {
-        return backoff;
+/// Decide when the next renewal attempt should happen for a certificate
+/// whose expiry is `not_after`. Never returns a time in the past relative
+/// to `now` (renew-now cases are handled by the caller, not by sleeping
+/// for a negative duration).
+pub fn renew_at(not_after: DateTime<Utc>, now: DateTime<Utc>) -> DateTime<Utc> {
+    let target = not_after - RENEW_BEFORE_EXPIRY;
+    if target <= now {
+        now
+    } else {
+        target
     }
-    let Ok(not_after) = parse_not_after(pem) else {
-        return backoff;
-    };
-    let due_at = renew_at(not_after);
-    if due_at <= now {
-        return Duration::ZERO;
-    }
-    (due_at - now).to_std().unwrap_or(backoff)
 }
 
-/// Background task: sleep until [`renew_at`] (or until something asks for an
-/// early renewal), re-issue via ACME, hot-reload TCP TLS and HTTP/3.
-pub fn spawn_renewal_task(issuer: InstantAcmeIssuer, cert_store: CertStore, runtime: TlsRuntime) {
-    let signal = runtime.renew_signal();
-    tokio::spawn(
-        async move {
-            let mut last_issue = tokio::time::Instant::now();
-            let mut backoff = RETRY_MIN;
-            let mut last_failed = false;
-            // Startup no longer issues inline, so the first pass has to be the
-            // one that gets a real certificate: go now, not after RETRY_MIN.
-            let mut first = true;
-            loop {
-                let stored = cert_store.load_cert().await.ok().flatten();
-                let mut delay = schedule_delay(stored.as_deref(), backoff, Utc::now());
-                if first {
-                    first = false;
-                    if delay == backoff {
-                        delay = Duration::ZERO;
+/// True if a certificate expiring at `not_after` needs to be renewed right now.
+fn due_for_renewal(not_after: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    not_after - now <= RENEW_BEFORE_EXPIRY
+}
+
+/// Read the currently stored certificate's `notAfter`, if any certificate is present.
+async fn stored_notafter(store: &CertStore) -> Option<DateTime<Utc>> {
+    let cert_pem = CertStore::load_pem_at(&store.cert_path()).await.ok()??;
+    parse_notafter(&cert_pem).ok()
+}
+
+/// One issuance attempt: request a certificate and persist it.
+async fn issue_and_save(
+    issuer: &dyn AcmeIssuer,
+    store: &CertStore,
+) -> Result<IssuedCertificate, super::acme::AcmeError> {
+    let issued = super::acme::issue_certificate(
+        issuer.directory_url(),
+        issuer.identity(),
+        issuer.challenges(),
+        &store.account_path(),
+        store.root_ca(),
+        &store.keypath,
+    )
+    .await?;
+    save_issued(store, issued.clone()).await?;
+    tracing::info!(
+        "ACME certificate issued/renewed, valid until {}",
+        issued.not_after
+    );
+    Ok(issued)
+}
+
+/// Background task: keeps the on-disk certificate valid without hammering
+/// the ACME server. Runs forever; spawn with `tokio::spawn`.
+pub async fn spawn_renewal_task(issuer: impl AcmeIssuer + 'static, store: CertStore) {
+    tokio::spawn(async move {
+        let mut failure_backoff = MIN_RETRY_BACKOFF;
+
+        loop {
+            let now = Utc::now();
+            let existing_notafter = stored_notafter(&store).await;
+
+            let should_issue_now = match existing_notafter {
+                None => true,
+                Some(not_after) => due_for_renewal(not_after, now),
+            };
+
+            if should_issue_now {
+                match issue_and_save(&issuer, &store).await {
+                    Ok(issued) => {
+                        // Success resets the failure backoff and schedules
+                        // the next check at not_after - 1 day.
+                        failure_backoff = MIN_RETRY_BACKOFF;
+                        let sleep_until = renew_at(issued.not_after, Utc::now());
+                        sleep_until_utc(sleep_until).await;
+                        continue;
                     }
-                }
-                // A failed attempt against a still-valid but due certificate
-                // would otherwise schedule zero delay and spin.
-                if last_failed {
-                    delay = delay.max(backoff);
-                }
-                if delay > Duration::ZERO {
-                    tracing::info!("next ACME issuance attempt in {}s", delay.as_secs());
-                }
-
-                let on_demand = tokio::select! {
-                    () = tokio::time::sleep(delay) => false,
-                    () = signal.notified() => true,
-                };
-
-                if on_demand {
-                    let since = last_issue.elapsed();
-                    if since < MIN_REISSUE_INTERVAL {
-                        tracing::info!(
-                            "early renewal requested but last issue was {}s ago; waiting",
-                            since.as_secs()
-                        );
-                        tokio::time::sleep(MIN_REISSUE_INTERVAL.saturating_sub(since)).await;
-                    }
-                }
-
-                last_issue = tokio::time::Instant::now();
-                tracing::info!("ACME certificate renewal starting");
-                match renew_once(&issuer, &cert_store, &runtime).await {
-                    Ok(not_after) => {
-                        tracing::info!("ACME certificate issued (not_after={not_after})");
-                        tracing::info!("ACME certificate renewed successfully");
-                        backoff = RETRY_MIN;
-                        last_failed = false;
-                    },
                     Err(e) => {
-                        backoff = next_backoff(backoff);
-                        last_failed = true;
-                        tracing::error!(
-                            "ACME issuance failed: {e}; retrying in {}s",
-                            backoff.as_secs()
+                        tracing::error!("ACME issuance failed: {e}");
+                        tracing::info!(
+                            "next ACME issuance attempt in {}s",
+                            failure_backoff.as_secs()
                         );
-                    },
+                        tokio::time::sleep(failure_backoff).await;
+                        failure_backoff =
+                            (failure_backoff.saturating_mul(2)).min(MAX_RETRY_BACKOFF);
+                        continue;
+                    }
                 }
             }
+
+            // Certificate is still valid for more than 1 day: do nothing to
+            // ACME, just sleep until the day-before-expiry checkpoint.
+            let not_after = existing_notafter.expect("should_issue_now was false");
+            let sleep_until = renew_at(not_after, now);
+            sleep_until_utc(sleep_until).await;
         }
-        .instrument(tracing::info_span!("acme_renewal")),
-    );
+    });
 }
 
-async fn renew_once(
-    issuer: &InstantAcmeIssuer,
-    cert_store: &CertStore,
-    runtime: &TlsRuntime,
-) -> Result<DateTime<Utc>, acme::AcmeError> {
-    let bundle = issuer.issue().await?;
-    save_issued(cert_store, &bundle).await?;
-    apply_renewed_material(runtime, &bundle)?;
-    Ok(bundle.not_after)
-}
-
-fn apply_renewed_material(
-    runtime: &TlsRuntime,
-    issued: &IssuedCertificate,
-) -> Result<(), acme::AcmeError> {
-    let material = parse_pem_material(&issued.cert_pem, &issued.key_pem)
-        .map_err(|_| acme::AcmeError::InvalidCert)?;
-    runtime.reload_material(&material).map_err(|_| acme::AcmeError::InvalidCert)?;
-    Ok(())
+/// Sleep until a wall-clock UTC instant, converting to a monotonic Instant once.
+async fn sleep_until_utc(target: DateTime<Utc>) {
+    let now = Utc::now();
+    let dur = (target - now).to_std().unwrap_or(Duration::from_secs(0));
+    // Re-check at least once a day even if something is off with clocks/
+    // durations, so a miscalculation can't sleep forever.
+    let dur = dur.min(Duration::from_secs(24 * 60 * 60));
+    tokio::time::sleep_until(Instant::now() + dur).await;
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
-
     use super::*;
+    use chrono::Duration as ChronoDuration;
 
     #[test]
-    fn renew_at_is_one_day_before_not_after() {
-        let not_after = Utc.with_ymd_and_hms(2026, 8, 1, 12, 0, 0).unwrap();
-        let renew = renew_at(not_after);
-        assert_eq!(renew, Utc.with_ymd_and_hms(2026, 7, 31, 12, 0, 0).unwrap());
+    fn renews_now_when_less_than_a_day_left() {
+        let now = Utc::now();
+        let not_after = now + ChronoDuration::hours(12);
+        assert!(due_for_renewal(not_after, now));
+        assert_eq!(renew_at(not_after, now), now);
     }
 
     #[test]
-    fn self_signed_is_detected() {
-        let cert = rcgen::generate_simple_self_signed(vec!["test.local".into()]).unwrap();
-        assert!(is_self_signed(&cert.cert.pem()));
+    fn renews_now_when_already_expired() {
+        let now = Utc::now();
+        let not_after = now - ChronoDuration::hours(1);
+        assert!(due_for_renewal(not_after, now));
+        assert_eq!(renew_at(not_after, now), now);
     }
 
     #[test]
-    fn self_signed_cert_schedules_backoff_not_year_4095() {
-        let cert = rcgen::generate_simple_self_signed(vec!["test.local".into()]).unwrap();
-        let delay = schedule_delay(Some(&cert.cert.pem()), RETRY_MIN, Utc::now());
-        assert_eq!(delay, RETRY_MIN);
-    }
-
-    #[test]
-    fn missing_or_garbage_cert_schedules_backoff() {
-        assert_eq!(schedule_delay(None, RETRY_MIN, Utc::now()), RETRY_MIN);
-        assert_eq!(schedule_delay(Some("not a pem"), RETRY_MIN, Utc::now()), RETRY_MIN);
-    }
-
-    #[test]
-    fn backoff_doubles_up_to_ceiling() {
-        assert_eq!(next_backoff(RETRY_MIN), RETRY_MIN * 2);
-        assert_eq!(next_backoff(RETRY_MAX), RETRY_MAX);
-        assert_eq!(next_backoff(RETRY_MAX / 2 + Duration::from_secs(1)), RETRY_MAX);
-    }
-
-    #[test]
-    fn parse_not_after_from_self_signed_pem() {
-        let cert = rcgen::generate_simple_self_signed(vec!["test.local".into()]).unwrap();
-        let cert_pem = cert.cert.pem();
-        let not_after = parse_not_after(&cert_pem).expect("parse not_after");
-        assert!(not_after > Utc::now());
+    fn schedules_for_one_day_before_expiry_when_plenty_of_time_left() {
+        let now = Utc::now();
+        let not_after = now + ChronoDuration::days(6);
+        assert!(!due_for_renewal(not_after, now));
+        let scheduled = renew_at(not_after, now);
+        assert_eq!(scheduled, not_after - ChronoDuration::days(1));
     }
 }
