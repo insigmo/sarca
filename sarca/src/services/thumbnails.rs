@@ -740,7 +740,7 @@ mod tests {
         assert!(result.preview.is_none());
     }
 
-	#[ignore]
+    #[ignore]
     #[test]
     fn build_thumb_and_preview_with_preview() {
         let raw = sample_png(3000, 2000);
