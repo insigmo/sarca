@@ -9,7 +9,7 @@
  * the server — either side may produce the tile for the same grid.
  */
 
-export const THUMB_MAX_EDGE = 320
+export const THUMB_MAX_EDGE = 1920
 const THUMB_QUALITY = 0.75
 const IMAGE_EXT = /\.(jpe?g|png|gif|webp|bmp)$/i
 
