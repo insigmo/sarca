@@ -34,6 +34,9 @@ from helpers.server import SarcaServer, build_binary, repo_root
 E2E_EMAIL = "e2e@sarca.test"
 E2E_PASSWORD = "e2e-password-123"
 
+os.environ["NO_AT_BRIDGE"] = "1"
+os.environ["WEBKIT_A11Y_BUS_TYPE"] = "none"
+
 EXTERNAL_BASE_URL = os.environ.get("SARCA_BASE_URL")
 TELEGRAM_MODE = os.environ.get("SARCA_E2E_TELEGRAM", "mock").lower()
 KEEP_TMP = os.environ.get("SARCA_E2E_KEEP_TMP") == "1"
@@ -301,6 +304,7 @@ def app(client_binary: Path, shim, tmp_path: Path):
     from helpers.pilot import ClientApp, PilotError
 
     instance = ClientApp(binary=client_binary, root=tmp_path / "client")
+
     try:
         instance.start()
     except PilotError:

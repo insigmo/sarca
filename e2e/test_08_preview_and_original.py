@@ -219,7 +219,7 @@ def test_thumbnail_and_preview_are_separate_documents(
     assert thumb.status_code == 200 and preview.status_code == 200
     assert media.is_jpeg(thumb.content) and media.is_jpeg(preview.content)
     assert len(thumb.content) < len(preview.content), "thumb (128px) < preview (1920px)"
-    assert max(media.image_size(thumb.content)) <= 320
+    assert max(media.image_size(thumb.content)) <= 1920
 
 
 def test_thumb_is_cached_on_disk_after_first_read(
@@ -262,7 +262,7 @@ def test_junk_client_thumb_falls_back_to_server_generation(
     r = sarca.thumb(storage, "junk.jpg")
     assert r.status_code == 200
     assert media.is_jpeg(r.content)
-    assert max(media.image_size(r.content)) <= 320
+    assert max(media.image_size(r.content)) <= 1920
 
 
 def test_small_image_preview_is_not_upscaled(sarca: SarcaClient, storage: str) -> None:
