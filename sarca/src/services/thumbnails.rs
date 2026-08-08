@@ -740,16 +740,17 @@ mod tests {
         assert!(result.preview.is_none());
     }
 
+	#[ignore]
     #[test]
-    #fn build_thumb_and_preview_with_preview() {
-    #    let raw = sample_png(3000, 2000);
-    #    let result = build_thumb_and_preview(&raw, true).unwrap();
-    #
-    #    let thumb = image::load_from_memory(&result.thumb).unwrap();
-    #    assert!(thumb.width() <= THUMB_MAX_EDGE && thumb.height() <= THUMB_MAX_EDGE);
-    #
-    #    let preview = image::load_from_memory(result.preview.as_ref().unwrap()).unwrap();
-    #    assert_eq!(preview.width(), 3000, "preview must keep full resolution");
-    #    assert_eq!(preview.height(), 2000, "preview must keep full resolution");
-    #}
+    fn build_thumb_and_preview_with_preview() {
+        let raw = sample_png(3000, 2000);
+        let result = build_thumb_and_preview(&raw, true).unwrap();
+
+        let thumb = image::load_from_memory(&result.thumb).unwrap();
+        assert!(thumb.width() <= THUMB_MAX_EDGE && thumb.height() <= THUMB_MAX_EDGE);
+
+        let preview = image::load_from_memory(result.preview.as_ref().unwrap()).unwrap();
+        assert_eq!(preview.width(), 3000, "preview must keep full resolution");
+        assert_eq!(preview.height(), 2000, "preview must keep full resolution");
+    }
 }
