@@ -52,3 +52,5 @@ target-android/
 CLAUDE.md
 .ua/
 docs/
+project_dump.txt
+project_dumper.py
