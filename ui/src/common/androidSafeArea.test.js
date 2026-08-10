@@ -38,8 +38,10 @@ describe('androidSafeArea', () => {
 		})
 		installAndroidSafeAreaFallbacks()
 		expect(document.documentElement.classList.contains('sarca-android')).toBe(true)
+		// Raised from 28px: devices with a cutout have a taller status bar and
+		// still report a 0 inset, which left error toasts under the tray.
 		expect(document.documentElement.style.getPropertyValue('--sarca-android-top')).toBe(
-			'28px',
+			'32px',
 		)
 		expect(
 			document.documentElement.style.getPropertyValue('--sarca-android-bottom'),

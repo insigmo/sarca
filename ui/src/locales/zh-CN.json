@@ -1,0 +1,66 @@
+{
+	"common": {
+		"cancel": "取消",
+		"confirm": "确认",
+		"close": "关闭",
+		"save": "保存",
+		"delete": "删除",
+		"rename": "重命名",
+		"copy": "复制",
+		"move": "移动",
+		"search": "搜索..",
+		"loading": "加载中…",
+		"retry": "重试"
+	},
+	"sidebar": {
+		"settings": "设置",
+		"moreOptions": "更多选项",
+		"disconnect": "断开连接",
+		"logOut": "退出登录",
+		"creatingStorage": "正在创建存储…",
+		"expand": "展开侧边栏",
+		"collapse": "收起侧边栏"
+	},
+	"files": {
+		"allFiles": "全部文件",
+		"favorites": "收藏",
+		"recent": "最近",
+		"shared": "共享链接",
+		"trash": "回收站",
+		"folderPath": "文件夹路径",
+		"openMenu": "打开文件菜单",
+		"selectedCount": "已选择 {{count}} 项",
+		"listView": "列表视图",
+		"tilesView": "平铺视图",
+		"title": "文件",
+		"new": "新建",
+		"createFolder": "新建文件夹",
+		"uploadFile": "上传文件",
+		"uploadFolder": "上传文件夹",
+		"sharedShort": "共享"
+	},
+	"storages": {
+		"newStorage": "新建存储",
+		"empty": "暂无存储",
+		"title": "存储"
+	},
+	"confirmDialog": {
+		"title": "{{action}}{{entity}}？",
+		"body": "确定要{{description}}吗？",
+		"logoutEntity": "账号",
+		"logoutAction": "退出登录",
+		"logoutDescription": "退出当前账号",
+		"disconnectEntity": "服务器",
+		"disconnectAction": "断开连接",
+		"disconnectDescription": "断开与此服务器的连接 — 重新登录时需要再次输入服务器地址",
+		"disconnectBusy": "正在断开连接 — 等待同步停止"
+	},
+	"errors": {
+		"bridgeWarmingUp": "应用仍在启动中，请重试。",
+		"disconnectFailed": "断开连接失败"
+	},
+	"settings": {
+		"language": "语言",
+		"languageSystem": "跟随系统"
+	}
+}

@@ -437,10 +437,26 @@ class ClientApp:
         else:
             raise PilotError(f"sign-in never stored a token; page says: {self.page_text()[:200]!r}")
 
+        self.pin_locale()
+
         # The login route leaves the app on whatever it last had; land on a real
         # page so the settings modal has a shell to open in. A brand-new account
         # with no storages is bounced to the setup wizard, which is fine.
         self.goto_until("/storages", "/storages", "/setup")
+
+    def pin_locale(self, code: str = "en") -> None:
+        """Force the UI language, then reload so the choice is applied.
+
+        The UI picks its language from the browser, so every assertion on a
+        visible label would otherwise depend on the locale of whatever machine
+        runs the suite.
+        """
+        current = self.eval_js("localStorage.getItem('sarca.locale')")
+        if current == code:
+            return
+        self.eval_js(f"localStorage.setItem('sarca.locale', {code!r}); 'ok'")
+        self.eval_js("window.location.reload(); 'ok'")
+        time.sleep(1.0)
 
     def page_text(self) -> str:
         return self.eval_js("(document.body.textContent || '').trim()") or ""
