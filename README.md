@@ -93,6 +93,8 @@ Latest release assets ([releases/latest](https://github.com/insigmo/sarca/releas
 
 Open the app, enter your server URL, sign in. See [`client/`](client/) for building from source.
 
+No iOS build ships today — the iOS job in CI is disabled (`if: false` in `client.yml`), pending Apple signing setup. The Android APK is unsigned unless you supply keystore secrets; Tauri still produces an installable APK without them.
+
 ## Usage
 
 1. Sign in with the admin email/password you set during install. More users: **Settings → Users**.
@@ -118,7 +120,34 @@ Full list: [`sarca.conf.example`](sarca.conf.example).
 | `TELEGRAM_*` | Bot API URL, rate limit, chunk size (≤20 MB) |
 | `WORK_DIR` | Upload spool + SQLite + certs directory |
 
+## How Sarca compares
+
+Sarca's actual trade-off: no storage bill, because Telegram is the storage backend — at the cost of trusting Telegram with your bytes and living inside the Bot API's limits.
+
+| | Sarca | Nextcloud | Seafile | Syncthing | rclone | Telegram-drive clones (TgDrive etc.) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Storage backend | Telegram channels (chunked, replicated) | Your disk/object storage | Your disk/object storage | Peer devices, no server | Whatever remote you point it at (S3, Drive, Telegram-style community remotes, …) | Telegram channels |
+| Storage cost | Free (Telegram's), but subject to their ToS/rate limits | You pay for disks/S3 | You pay for disks/S3 | You pay for your own disks | Depends on chosen remote | Free (Telegram's) |
+| Self-hosting burden | One Rust binary + SQLite, built-in ACME TLS | Full LAMP-ish stack, PHP, DB, more moving parts | App server + DB (MySQL/SQLite) + optional search | None — no server at all | None — it's a CLI/mount tool, not a service | Varies, usually similarly light |
+| Sync model | Client uploads/downloads via server API (`sarca-sync` engine) | Client-server sync (official desktop/mobile apps) | Client-server sync, block-level dedup | True P2P, no central point | One-shot/scheduled copy, not continuous sync | Client-server, similar to Sarca |
+| Mobile support | Android APK (Tauri); iOS build exists in CI but is disabled | Official iOS + Android apps | Official iOS + Android apps | Official Android app; no iOS | None (CLI only) | Varies by project, often Telegram itself as the "client" |
+| Encryption | TLS in transit (server↔client, server↔Telegram); file bytes are **not** end-to-end encrypted before they reach Telegram | Optional server-side encryption; E2E encryption app available | Optional per-library client-side encryption | Encrypted in transit by default (TLS); untrusted-device "sending only" mode | Encryption is opt-in via the `crypt` remote overlay | Varies; several add their own AES layer, which Sarca currently does not |
+| File size limits | No hard cap — files are split into ≤20 MB chunks per the Bot API, so very large files mean many chunks | Limited by your disk/storage backend only | Limited by your disk/storage backend only | Limited by your disk only | Limited by chosen remote | Same Bot API chunking as Sarca |
+| Redundancy | Built-in: `ReplicationService` copies chunks across multiple channels/bots | Whatever your storage/backup layer provides | Optional external replication | Each device is itself a replica | None built-in | Varies |
+| Maturity / ecosystem | Young, small project | Very mature, large ecosystem, plugins/marketplace | Mature, established | Mature, established | Mature, huge backend list | Mostly young hobby projects, similar risk profile to Sarca |
+
+Where Sarca is genuinely worse:
+
+- **No end-to-end encryption of file content.** Anyone with access to the bot tokens or the destination channels can read raw chunks; Sarca relies on TLS and Telegram's own storage security, not client-side crypto.
+- **Tied to a third party's API and ToS.** Rate limits, chunk size (20 MB), and channel/bot bans are Telegram's call, not yours — unlike Nextcloud/Seafile/Syncthing where you own the whole stack.
+- **No iOS client**, and the Android APK build is unsigned by default.
+- **Single SQLite database, no clustering.** Nextcloud/Seafile scale out with proper databases and object storage; Sarca is single-node.
+- **Small, young project.** Less battle-tested than Nextcloud, Seafile, or Syncthing, with a much smaller user base and ecosystem.
+- **Not a true P2P sync tool** like Syncthing — a central Sarca server is always in the path, so it inherits classic client-server availability concerns.
+
 ## Donations
+
+**GitHub Sponsors**: [github.com/sponsors/insigmo](https://github.com/sponsors/insigmo)
 
 **BTC**: `bc1qyd28yapuutcmfxmrpxtd835z3ds2q260jzh4v7`
 

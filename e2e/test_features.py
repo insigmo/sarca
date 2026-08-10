@@ -265,8 +265,9 @@ def test_favorites_star_then_unstar_round_trip(
         timeout=120.0,
     )
     assert r.status_code == 201, r.text
-    if b'"phase":"error"' in r.content or b'"phase": "error"' in r.content:
-        pytest.skip(f"upload failed: {r.text[:300]}")
+    assert b'"phase":"error"' not in r.content and b'"phase": "error"' not in r.content, (
+        f"upload failed: {r.text[:300]}"
+    )
 
     r = client.put(
         f"/api/storages/{storage_id}/favorites",
@@ -440,8 +441,9 @@ def test_share_file_download_and_inline_no_trailing_slash(
         timeout=120.0,
     )
     assert r.status_code == 201, r.text
-    if b'"phase":"error"' in r.content or b'"phase": "error"' in r.content:
-        pytest.skip(f"upload failed: {r.text[:300]}")
+    assert b'"phase":"error"' not in r.content and b'"phase": "error"' not in r.content, (
+        f"upload failed: {r.text[:300]}"
+    )
     assert b'"phase":"done"' in r.content or b'"phase": "done"' in r.content, r.text
 
     r = client.post(

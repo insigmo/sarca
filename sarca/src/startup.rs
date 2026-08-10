@@ -255,6 +255,14 @@ pub async fn init_db(db: &SqlitePool) {
           ON storage_purge_messages (status, id)
           WHERE status = 'pending';
         ",
+        // The stale-lease requeue filtered on `updated_at` with only the
+        // `pending` partial index above, so it scanned the whole table on
+        // every purge tick.
+        "
+        CREATE INDEX IF NOT EXISTS storage_purge_messages_in_progress_idx
+          ON storage_purge_messages (updated_at)
+          WHERE status = 'in_progress';
+        ",
         // updated_at touch
         "DROP TRIGGER IF EXISTS files_touch_updated_at;",
         r#"

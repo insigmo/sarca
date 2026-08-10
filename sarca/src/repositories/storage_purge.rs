@@ -136,11 +136,18 @@ impl<'d> StoragePurgeRepository<'d> {
 
         match result {
             Ok(rows) => {
-                sqlx::query("COMMIT").execute(&mut *conn).await.map_err(|e| {
-                    tracing::error!("storage purge claim_pending commit: {e}");
-                    SarcaError::Unknown
-                })?;
-                Ok(rows)
+                match sqlx::query("COMMIT").execute(&mut *conn).await {
+                    Ok(_) => Ok(rows),
+                    Err(e) => {
+                        tracing::error!("storage purge claim_pending commit: {e}");
+                        // Returning here without a ROLLBACK handed the connection
+                        // back to the pool still inside `BEGIN IMMEDIATE`, holding
+                        // the writer lock for whoever picked it up next — the
+                        // `database is locked` cascade seen in production.
+                        let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+                        Err(SarcaError::Unknown)
+                    },
+                }
             },
             Err(e) => {
                 let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;

@@ -1,6 +1,6 @@
 import { createMemo, createRoot, createSignal } from 'solid-js'
 
-import { nativeInvoke, pickLocalFolder } from './nativeBridge'
+import { describeNativeError, nativeInvoke, pickLocalFolder } from './nativeBridge'
 import {
 	bindingStorageId,
 	cameraBinding,
@@ -295,7 +295,7 @@ function createSyncSettingsStore() {
 			await maybeMigrateLegacyCameraRoot(binds)
 			await maybeMigrateStaleCameraStorage(binds)
 		} catch (e) {
-			setMsg(String(e))
+			setMsg(describeNativeError(e))
 		}
 	}
 
@@ -421,7 +421,7 @@ function createSyncSettingsStore() {
 			})
 			.catch(async (e) => {
 				if (pendingCameraOn() === enable) setPendingCameraOn(null)
-				setMsg(String(e))
+				setMsg(describeNativeError(e))
 				alertStore.addAlert(String(e), 'error')
 				await refresh()
 			})
@@ -479,8 +479,8 @@ function createSyncSettingsStore() {
 			kickSyncNow()
 			await refresh()
 		} catch (e) {
-			setMsg(String(e))
-			alertStore.addAlert(String(e), 'error')
+			setMsg(describeNativeError(e))
+			alertStore.addAlert(describeNativeError(e), 'error')
 			await refresh()
 		}
 	}
