@@ -117,6 +117,8 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 
 [dev-dependencies]
+# `test-util` gives tests the paused clock used by the supervisor backoff test.
+tokio = { version = "1.33.0", features = ["full", "test-util"] }
 hyper = { version = "1", default-features = false, features = ["client", "http1"] }
 http = "1"
 http-body-util = "0.1"

@@ -4,7 +4,12 @@ CHANNEL_CAPACITY=32
 
 # How many thumb/preview/download requests may block on Telegram at once.
 # Independent of WORKERS, which only sizes the DB pool.
-MEDIA_CONCURRENCY=16
+#
+# This is also the main memory knob: each in-flight item holds the file in RAM
+# and may spawn an ffmpeg process. On a small VPS 16 concurrent large videos is
+# enough to trigger the kernel OOM killer — keep it near 4 on a 1-2 GB host and
+# pair it with the container limit in compose.yml.
+MEDIA_CONCURRENCY=4
 
 # Background daemon that walks each storage's tree and warms the thumb/preview
 # caches ahead of time (and the first chunk of every video), so the first grid

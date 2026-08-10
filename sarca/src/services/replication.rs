@@ -13,6 +13,10 @@ use crate::{
 
 const BATCH_SIZE: i64 = 25;
 
+/// Minimum pause between two non-empty replication batches, so draining a
+/// backlog cannot monopolise the shared `SQLite` pool.
+const BUSY_BATCH_DELAY: Duration = Duration::from_millis(250);
+
 pub struct ReplicationService;
 
 impl ReplicationService {
@@ -117,13 +121,20 @@ impl ReplicationService {
     /// Spawn a background loop draining pending replicas. Sleeps `idle_interval` between
     /// batches whenever a batch turns up empty, otherwise loops immediately to drain backlog.
     pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u16, idle_interval: Duration) {
-        tokio::spawn(async move {
-            loop {
-                let processed = Self::run_once(&db, &base_url, rate_limit).await;
-                if processed > 0 {
-                    tracing::info!("[REPLICATION] tick replicated {processed} chunk(s)");
-                } else {
-                    tokio::time::sleep(idle_interval).await;
+        crate::common::supervisor::spawn_supervised("replication", move || {
+            let db = db.clone();
+            let base_url = base_url.clone();
+            async move {
+                loop {
+                    let processed = Self::run_once(&db, &base_url, rate_limit).await;
+                    if processed > 0 {
+                        tracing::info!("[REPLICATION] tick replicated {processed} chunk(s)");
+                        // Still yield the pool between batches; draining a large
+                        // backlog with no gap starved the HTTP handlers.
+                        tokio::time::sleep(BUSY_BATCH_DELAY).await;
+                    } else {
+                        tokio::time::sleep(idle_interval).await;
+                    }
                 }
             }
         });

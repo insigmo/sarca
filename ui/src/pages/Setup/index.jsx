@@ -12,6 +12,7 @@ import { useNavigate } from '@solidjs/router'
 import API from '../../api'
 import { alertStore } from '../../components/AlertStack'
 import LoadingDots from '../../components/LoadingDots'
+import { busyStore } from '../../common/busyStore'
 
 const POLL_MS = 0
 const POLL_TIMEOUT_MS = 120_000
@@ -258,6 +259,7 @@ const SetupWizard = () => {
 		// running while create_storage / set_bot talk to Telegram.
 		stopPolling()
 		setFinishing(true)
+		busyStore.setStorageCreating(true)
 		try {
 			const created = await API.setup.setupCreateStorage(
 				storageName().trim(),
@@ -270,6 +272,7 @@ const SetupWizard = () => {
 			/* apiRequest already alerts */
 		} finally {
 			setFinishing(false)
+			busyStore.setStorageCreating(false)
 		}
 	}
 

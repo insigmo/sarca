@@ -24,17 +24,16 @@ const AppLockGate = (props) => {
 		// this reason (see nativeClient.js). Treating the first failure as
 		// "not native, skip the lock" let a slow-injecting WebView (common on
 		// Android) start fully unlocked even with app lock + a PIN set.
-		// Retry on the same schedule instead of bypassing the lock outright.
-		for (let attempt = 0; attempt < 40 && isNative(); attempt++) {
-			try {
-				const prefs = await nativeInvoke('get_client_prefs')
-				if (prefs?.app_lock_enabled && prefs?.app_lock_pin_set) {
-					setNeeded(true)
-				}
-				return
-			} catch {
-				await new Promise((resolve) => setTimeout(resolve, 250))
+		//
+		// `nativeInvoke` now owns that wait for every caller, so this no longer
+		// runs its own retry loop; nesting the two multiplied the timeouts.
+		try {
+			const prefs = await nativeInvoke('get_client_prefs')
+			if (prefs?.app_lock_enabled && prefs?.app_lock_pin_set) {
+				setNeeded(true)
 			}
+		} catch {
+			// Bridge never came up within the warm-up window: nothing to unlock.
 		}
 	})
 

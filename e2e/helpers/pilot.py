@@ -338,6 +338,25 @@ class ClientApp:
 
     # ------------------------------------------------------------- app flows
 
+    def wait_for_styles(self, timeout_s: float = 15.0) -> None:
+        """Block until the page's stylesheet is actually applied.
+
+        Any assertion about rendered geometry is meaningless before CSS lands,
+        and a webview that came back from a relaunch can briefly present the
+        document with `document.styleSheets` still empty — every element then
+        measures at its unstyled defaults. One reload recovers it.
+        """
+        deadline = time.monotonic() + timeout_s
+        reloaded = False
+        while time.monotonic() < deadline:
+            if self.eval_js("document.styleSheets.length"):
+                return
+            if not reloaded and time.monotonic() > deadline - timeout_s / 2:
+                self.eval_js("window.location.reload(); 'ok'")
+                reloaded = True
+            time.sleep(0.25)
+        raise PilotError("the page never applied its stylesheet")
+
     def wait_for_url(self, *fragments: str, timeout_s: float = 30.0) -> str:
         deadline = time.monotonic() + timeout_s
         last = ""
@@ -755,6 +774,24 @@ class ClientApp:
                 return
             self.click(".files-page__nav-toggle", required=False, timeout_s=1.0)
         raise PilotError(f"the sidebar never offered {label!r}")
+
+    def sidebar_overflow_click(self, label: str, timeout_s: float = 25.0) -> None:
+        """Click a sidebar action that lives behind the overflow ("More options") menu.
+
+        Log out and Disconnect were moved out of the always-visible footer so a
+        stray click cannot end the session; reaching them now takes two steps.
+        """
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            self.sidebar_click("More options", timeout_s=max(1.0, deadline - time.monotonic()))
+            if self.click_text(label, required=False, timeout_s=2.0):
+                return
+        raise PilotError(f"the sidebar overflow menu never offered {label!r}")
+
+    def confirm_dialog(self, timeout_s: float = 10.0) -> None:
+        """Accept the ActionConfirmDialog that guards destructive actions."""
+        if not self.click_text("Confirm", required=False, timeout_s=timeout_s):
+            raise PilotError("no confirmation dialog appeared")
 
     def open_section(self, label: str) -> None:
         """Switch the file browser to All files / Favorites / Recent / Shared / Trash."""

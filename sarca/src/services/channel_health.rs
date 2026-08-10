@@ -124,10 +124,14 @@ impl ChannelHealthService {
         rate_limit: u16,
         interval: std::time::Duration,
     ) {
-        tokio::spawn(async move {
-            loop {
-                Self::run_once(&db, &base_url, rate_limit).await;
-                tokio::time::sleep(interval).await;
+        crate::common::supervisor::spawn_supervised("channel_health", move || {
+            let db = db.clone();
+            let base_url = base_url.clone();
+            async move {
+                loop {
+                    Self::run_once(&db, &base_url, rate_limit).await;
+                    tokio::time::sleep(interval).await;
+                }
             }
         });
     }
