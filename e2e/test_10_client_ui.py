@@ -135,6 +135,9 @@ def test_folder_name_sits_close_to_its_icon(
         signed_in.eval_js(f"window.location.assign('/storages/{storage_id}/files/'); 'ok'")
         signed_in.wait_for_url(f"/storages/{storage_id}/files")
         signed_in.wait_for(".fs-list-item", timeout_ms=20000)
+        # Everything below measures rendered boxes, so the stylesheet has to be
+        # live first — otherwise the rows report their unstyled defaults.
+        signed_in.wait_for_styles()
 
         measured = signed_in.eval_js(
             """

@@ -231,8 +231,14 @@ def tokens(sarca: SarcaClient) -> dict[str, str]:
 
 
 @pytest.fixture(scope="session")
-def auth_headers(tokens: dict[str, str]) -> dict[str, str]:
-    return {"Authorization": f"Bearer {tokens['access_token']}"}
+def auth_headers(sarca: SarcaClient) -> dict[str, str]:
+    """Live headers, not a snapshot.
+
+    Log out revokes every token the user holds (`tokens_valid_from`), so the
+    GUI suite re-logs in afterwards. A frozen copy of the header made every
+    later test in the session fail with 401.
+    """
+    return sarca.auth_headers
 
 
 @pytest.fixture

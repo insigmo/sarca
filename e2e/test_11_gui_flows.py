@@ -126,7 +126,10 @@ def test_sign_in_survives_a_relaunch_and_log_out_clears_it(
     # sidebar. The `storage` fixture is here to keep the list non-empty, and
     # this puts the app back on the page whose sidebar owns Log out.
     signed_in.goto_until("/storages")
-    signed_in.sidebar_click("Log out")
+    # Log out sits behind the sidebar's overflow menu and asks for confirmation,
+    # so a stray click cannot end the session.
+    signed_in.sidebar_overflow_click("Log out")
+    signed_in.confirm_dialog()
     signed_in.wait_for_url("/login")
     assert not signed_in.local_storage("access_token"), "log out left the token behind"
 

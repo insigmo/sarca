@@ -23,6 +23,7 @@ use tokio::time::Instant;
 
 use super::{
     acme::{AcmeError, InstantAcmeIssuer, IssuedCertificate, save_issued},
+    serve::{TlsRuntime, parse_pem_material},
     store::CertStore,
 };
 
@@ -59,9 +60,36 @@ fn due_for_renewal(not_after: DateTime<Utc>, now: DateTime<Utc>) -> bool {
     not_after - now <= RENEW_BEFORE_EXPIRY
 }
 
-/// Read the currently stored certificate's `notAfter`, if any certificate is present.
+/// True when a PEM certificate is self-signed, i.e. its issuer equals its
+/// subject.
+///
+/// The boot path calls `load_or_generate_material`, which writes a self-signed
+/// placeholder into the same store so the server can serve HTTPS before any CA
+/// has answered. Without this check the renewal task read that placeholder,
+/// saw a `notAfter` decades away, decided nothing was due and went to sleep —
+/// so a server with `SARCA_ACME=1` served a self-signed certificate forever and
+/// never once contacted the CA.
+fn is_self_signed(cert_pem: &str) -> bool {
+    use x509_parser::{pem::parse_x509_pem, prelude::FromDer};
+
+    let Ok((_, pem)) = parse_x509_pem(cert_pem.as_bytes()) else {
+        return false;
+    };
+    let Ok((_, cert)) = x509_parser::certificate::X509Certificate::from_der(&pem.contents) else {
+        return false;
+    };
+    cert.issuer() == cert.subject()
+}
+
+/// Read the `notAfter` of the stored CA-issued certificate, if there is one.
+///
+/// Returns `None` when nothing is stored or when the stored material is only
+/// the self-signed placeholder, both of which mean "ask the CA now".
 async fn stored_not_after(store: &CertStore) -> Option<DateTime<Utc>> {
     let cert_pem = CertStore::load_pem_at(&store.cert_path()).await.ok()??;
+    if is_self_signed(&cert_pem) {
+        return None;
+    }
     parse_not_after(&cert_pem).ok()
 }
 
@@ -76,15 +104,17 @@ async fn issue_and_save(
 ) -> Result<IssuedCertificate, AcmeError> {
     let cert = issuer.issue().await?;
     save_issued(store, &cert).await?;
-    tracing::info!("ACME certificate cert/renewed, valid until {}", cert.not_after);
+    let not_after = cert.not_after;
+    tracing::info!("ACME certificate issued (not_after={not_after})");
     Ok(cert)
 }
 
 /// Background task: keeps the on-disk certificate valid without hammering
 /// the ACME server. Runs forever; spawn with `tokio::spawn`.
-pub async fn spawn_renewal_task(issuer: InstantAcmeIssuer, store: CertStore) {
+pub async fn spawn_renewal_task(issuer: InstantAcmeIssuer, store: CertStore, runtime: TlsRuntime) {
     tokio::spawn(async move {
         let mut failure_backoff = MIN_RETRY_BACKOFF;
+        let renew_signal = runtime.renew_signal();
 
         loop {
             let now = Utc::now();
@@ -96,11 +126,27 @@ pub async fn spawn_renewal_task(issuer: InstantAcmeIssuer, store: CertStore) {
             if should_issue_now {
                 match issue_and_save(&issuer, &store).await {
                     Ok(cert) => {
+                        // The listeners were started with whatever material was
+                        // on disk at boot (usually the self-signed placeholder),
+                        // and only the resolver can hand them the new chain.
+                        // Skipping this left clients seeing a self-signed
+                        // certificate until the next process restart.
+                        match parse_pem_material(&cert.cert_pem, &cert.key_pem) {
+                            Ok(material) => {
+                                if let Err(e) = runtime.reload_material(&material) {
+                                    tracing::error!("failed to install renewed certificate: {e}");
+                                }
+                            },
+                            Err(e) => {
+                                tracing::error!("renewed certificate is unusable: {e}");
+                            },
+                        }
+
                         // Success resets the failure backoff and schedules
                         // the next check at not_after - 1 day.
                         failure_backoff = MIN_RETRY_BACKOFF;
                         let sleep_until = renew_at(cert.not_after, Utc::now());
-                        sleep_until_utc(sleep_until).await;
+                        sleep_until_utc(sleep_until, &renew_signal).await;
                         continue;
                     },
                     Err(e) => {
@@ -109,7 +155,10 @@ pub async fn spawn_renewal_task(issuer: InstantAcmeIssuer, store: CertStore) {
                             "next ACME issuance attempt in {}s",
                             failure_backoff.as_secs()
                         );
-                        tokio::time::sleep(failure_backoff).await;
+                        tokio::select! {
+                            () = tokio::time::sleep(failure_backoff) => {},
+                            () = renew_signal.notified() => {},
+                        }
                         failure_backoff =
                             (failure_backoff.saturating_mul(2)).min(MAX_RETRY_BACKOFF);
                         continue;
@@ -121,19 +170,26 @@ pub async fn spawn_renewal_task(issuer: InstantAcmeIssuer, store: CertStore) {
             // ACME, just sleep until the day-before-expiry checkpoint.
             let not_after = existing_not_after.expect("should_issue_now was false");
             let sleep_until = renew_at(not_after, now);
-            sleep_until_utc(sleep_until).await;
+            sleep_until_utc(sleep_until, &renew_signal).await;
         }
     });
 }
 
 /// Sleep until a wall-clock UTC instant, converting to a monotonic Instant once.
-async fn sleep_until_utc(target: DateTime<Utc>) {
+///
+/// Wakes early when something calls `TlsRuntime::request_renewal` — a public IP
+/// change or repeated HTTP/3 handshake failures. Before this the signal was
+/// never awaited by anyone, so both of those recovery paths were inert.
+async fn sleep_until_utc(target: DateTime<Utc>, renew_signal: &tokio::sync::Notify) {
     let now = Utc::now();
     let dur = (target - now).to_std().unwrap_or(Duration::from_secs(0));
     // Re-check at least once a day even if something is off with clocks/
     // durations, so a miscalculation can't sleep forever.
     let dur = dur.min(Duration::from_hours(24));
-    tokio::time::sleep_until(Instant::now() + dur).await;
+    tokio::select! {
+        () = tokio::time::sleep_until(Instant::now() + dur) => {},
+        () = renew_signal.notified() => {},
+    }
 }
 
 #[cfg(test)]
@@ -156,6 +212,16 @@ mod tests {
         let not_after = now - ChronoDuration::hours(1);
         assert!(due_for_renewal(not_after, now));
         assert_eq!(renew_at(not_after, now), now);
+    }
+
+    #[test]
+    fn a_self_signed_placeholder_never_counts_as_an_issued_certificate() {
+        let generated =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_owned()]).expect("self-signed");
+        assert!(
+            is_self_signed(&generated.cert.pem()),
+            "the boot placeholder must be recognised, or ACME issuance never runs"
+        );
     }
 
     #[test]

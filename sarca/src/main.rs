@@ -7,7 +7,11 @@ use std::{
 };
 
 use sarca::{
-    common::{channels::ClientMessage, db::pool::get_pool, routing::app_state::AppState},
+    common::{
+        channels::ClientMessage,
+        db::pool::{BACKGROUND_CONNECTIONS, get_pool},
+        routing::app_state::AppState,
+    },
     conf,
     config::Config,
     server::Server,
@@ -117,11 +121,12 @@ async fn main() {
     let (tx, rx) = mpsc::channel::<ClientMessage>(config.channel_capacity.into());
 
     eprintln!("opening SQLite database at {}…", config.sqlite_path);
-    let db = get_pool(&config.sqlite_path, config.workers.into(), db_timeout).await.unwrap_or_else(
-        |e| {
-            die(format!("{e}\nhint: check SQLITE_PATH in sarca.conf and its directory permissions"))
-        },
-    );
+    // Background loops need their own slots; sizing the pool to WORKERS alone
+    // let them starve the HTTP handlers under load.
+    let db_connections = u32::from(config.workers) + BACKGROUND_CONNECTIONS;
+    let db = get_pool(&config.sqlite_path, db_connections, db_timeout).await.unwrap_or_else(|e| {
+        die(format!("{e}\nhint: check SQLITE_PATH in sarca.conf and its directory permissions"))
+    });
     eprintln!("database ok");
 
     eprintln!("initializing schema…");
@@ -158,11 +163,15 @@ async fn main() {
     create_superuser(&db, &config).await;
     let config_copy = config.clone();
 
+    // Not supervised: the manager owns the single `rx` receiver, so it cannot be
+    // rebuilt after a panic. A returned `run()` is fatal for uploads and must be
+    // loud rather than silent.
     let manager_db = db.clone();
     tokio::spawn(async move {
         let mut manager = StorageManager::new(rx, manager_db, config_copy);
         tracing::debug!("running manager");
         manager.run().await;
+        tracing::error!("storage manager loop exited; uploads will no longer be processed");
     });
 
     ReplicationService::spawn_loop(
@@ -270,6 +279,7 @@ async fn main() {
                         config.acme_root_ca.as_ref().map(std::path::PathBuf::from),
                     ),
                     cert_store.clone(),
+                    runtime.clone(),
                 )
                 .await;
                 // The identity is an address we guessed, not one an operator

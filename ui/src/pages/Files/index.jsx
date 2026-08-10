@@ -40,6 +40,7 @@ import { sortFsElements, sortLabel } from '../../common/sortFs'
 import { formatBulkDeleteMessage } from '../../common/bulkDeleteMessage'
 import { createRafBatcher } from '../../common/rafBatch'
 import { shouldRefreshOnVisibilityEvent } from '../../common/visibilityRefresh'
+import { startAutoRefresh } from '../../common/autoRefresh'
 import {
 	fsLayerCacheKey,
 	readFsLayerCache,
@@ -1387,12 +1388,40 @@ const Files = () => {
 		document.addEventListener('visibilitychange', onVisibilityOrFocus)
 		window.addEventListener('focus', onVisibilityOrFocus)
 
+		// Silent background refresh: another device (or the native Camera
+		// auto-upload) can change this listing at any time, and there is no push
+		// channel from the server. The jittered 5-15s cadence keeps the view
+		// current without a spinner and without every client polling in lockstep.
+		const stopAutoRefresh = startAutoRefresh({
+			run: () => refreshCurrent(),
+			// Refreshing under the user's hands is worse than being slightly
+			// stale: it would drop a selection, close a menu, or swap the list
+			// out from under a drag. Uploads already schedule their own refresh.
+			isPaused: () =>
+				uploadQueueStore.hasActiveWork() ||
+				ptrRefreshing() ||
+				Boolean(viewerFile()) ||
+				Boolean(marqueeBox()) ||
+				Boolean(dropTargetPath()) ||
+				canvasDropActive() ||
+				Boolean(crumbDropPath()) ||
+				Boolean(sortMenuAnchor()) ||
+				Boolean(newFabAnchor()) ||
+				Boolean(folderPicker()) ||
+				Boolean(pathConflict()) ||
+				Boolean(restoreConflictPath()) ||
+				bulkDeleteOpen() ||
+				emptyTrashOpen() ||
+				Object.keys(selectedPaths()).length > 0,
+		})
+
 		onCleanup(() => {
 			window.clearTimeout(refreshTimer)
 			unsubItemDone()
 			unsubIdle()
 			document.removeEventListener('visibilitychange', onVisibilityOrFocus)
 			window.removeEventListener('focus', onVisibilityOrFocus)
+			stopAutoRefresh()
 		})
 	})
 	onCleanup(() => {

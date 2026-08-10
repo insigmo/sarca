@@ -3,18 +3,25 @@ use std::time::Duration;
 use sqlx::SqlitePool;
 
 use super::trash::purge_file_ids;
-use crate::repositories::{app_settings::AppSettingsRepository, files::FilesRepository};
+use crate::{
+    common::supervisor::spawn_supervised,
+    repositories::{app_settings::AppSettingsRepository, files::FilesRepository},
+};
 
 pub struct TrashPurgeService;
 
 impl TrashPurgeService {
     pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u16, interval: Duration) {
-        tokio::spawn(async move {
-            loop {
-                if let Err(e) = Self::run_once(&db, &base_url, rate_limit).await {
-                    tracing::warn!("[TRASH PURGE] cycle failed: {e}");
+        spawn_supervised("trash_purge", move || {
+            let db = db.clone();
+            let base_url = base_url.clone();
+            async move {
+                loop {
+                    if let Err(e) = Self::run_once(&db, &base_url, rate_limit).await {
+                        tracing::warn!("[TRASH PURGE] cycle failed: {e}");
+                    }
+                    tokio::time::sleep(interval).await;
                 }
-                tokio::time::sleep(interval).await;
             }
         });
     }

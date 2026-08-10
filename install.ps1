@@ -213,11 +213,11 @@ function Write-OrMergeEnv {
         TELEGRAM_CHUNK_SIZE_MB = "20"
         TELEGRAM_VIDEO_CHUNK_SIZE_MB = "20"
         WORK_DIR = $workUnix
-        DATABASE_USER = "sarca"
-        DATABASE_PASSWORD = "sarca"
-        DATABASE_NAME = "sarca"
-        DATABASE_HOST = "127.0.0.1"
-        DATABASE_PORT = "5432"
+        SQLITE_PATH = "$workUnix/sarca.sqlite"
+        TLS_HOSTNAME = ""
+        HTTPS_ADDR = "0.0.0.0:443"
+        ACME_HTTP_ADDR = "0.0.0.0:80"
+        CERTS_DIR = "$workUnix/certs"
     }
 
     if (-not (Test-Path $envFile)) {
@@ -306,13 +306,55 @@ Remove-Item $tmp -Recurse -Force
 $port = Get-EnvValue -Path $envFile -Key "PORT"
 if ([string]::IsNullOrWhiteSpace($port)) { $port = "8000" }
 
+$tlsHostname = Get-EnvValue -Path $envFile -Key "TLS_HOSTNAME"
+$httpsAddr = Get-EnvValue -Path $envFile -Key "HTTPS_ADDR"
+if ([string]::IsNullOrWhiteSpace($httpsAddr)) { $httpsAddr = "0.0.0.0:443" }
+$httpsPort = ($httpsAddr -split ':')[-1]
+
+if (-not [string]::IsNullOrWhiteSpace($tlsHostname)) {
+    $openUrl = "https://${tlsHostname}:$httpsPort"
+    $checkPort = [int]$httpsPort
+} else {
+    $openUrl = "http://127.0.0.1:$port"
+    $checkPort = [int]$port
+}
+
 Write-Host ""
 Write-Host "Installed $Version."
 Write-Host "  app:      $Prefix"
 Write-Host "  version:  $(Join-Path $Prefix 'VERSION')"
 Write-Host "  launcher: $launcherCmd"
 Write-Host ""
-Write-Host "Starting Sarca (Postgres must be reachable — DATABASE_* in sarca.conf)…"
-Start-Process -FilePath $launcherCmd -WindowStyle Hidden
-Write-Host "Started."
-Write-Host "Open http://127.0.0.1:$port"
+
+$logFile = Join-Path $Prefix "sarca.log"
+Write-Host "Starting Sarca… (log: $logFile)"
+$proc = Start-Process -FilePath $launcherCmd -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError "$logFile.err" -PassThru
+
+Start-Sleep -Seconds 3
+
+$stillRunning = -not $proc.HasExited
+$portListening = $false
+try {
+    $conn = Get-NetTCPConnection -LocalPort $checkPort -State Listen -ErrorAction SilentlyContinue
+    $portListening = [bool]$conn
+} catch {
+    $test = Test-NetConnection -ComputerName "127.0.0.1" -Port $checkPort -WarningAction SilentlyContinue
+    $portListening = $test.TcpTestSucceeded
+}
+
+if ($stillRunning -and $portListening) {
+    Write-Host "Started."
+    Write-Host "Open $openUrl"
+} else {
+    Write-Host "Sarca did not start correctly (process running: $stillRunning, port $checkPort listening: $portListening)." -ForegroundColor Red
+    Write-Host "Log tail ($logFile):" -ForegroundColor Red
+    if (Test-Path $logFile) {
+        Get-Content -Path $logFile -Tail 40 | ForEach-Object { Write-Host "  $_" }
+    }
+    $errLog = "$logFile.err"
+    if (Test-Path $errLog) {
+        Write-Host "Error log tail (${errLog}):" -ForegroundColor Red
+        Get-Content -Path $errLog -Tail 40 | ForEach-Object { Write-Host "  $_" }
+    }
+    exit 1
+}

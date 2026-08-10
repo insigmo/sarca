@@ -511,11 +511,30 @@ pub async fn connect(
     })
 }
 
+/// How long `disconnect` waits for the sync state to settle before tearing the
+/// session down anyway.
+const DISCONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 #[tauri::command]
 pub async fn disconnect(app: AppHandle, state: State<'_, AppSyncState>) -> Result<(), String> {
     client_log::write_line(state.data_dir(), "disconnect");
     let cfg = ServerConfig::default();
-    state.save_server(&cfg).await.map_err(|e| e.to_string())?;
+
+    // `save_server` takes the server mutex and then waits on the sync engine.
+    // Both are held for the length of a transfer, so pressing Disconnect during
+    // an upload used to hang the button until the upload finished — the UI just
+    // sat there with no way out.
+    //
+    // The cleared `server.json` is written before either await, so a forced
+    // teardown still leaves the client disconnected across a restart.
+    match tokio::time::timeout(DISCONNECT_TIMEOUT, state.save_server(&cfg)).await {
+        Ok(result) => result.map_err(|e| e.to_string())?,
+        Err(_) => {
+            tracing::warn!("disconnect: sync state busy, forcing teardown");
+            client_log::write_line(state.data_dir(), "disconnect: forced (sync state busy)");
+        },
+    }
+
     if let Ok(mut guard) = state.pending_inject.lock() {
         *guard = None;
     }
