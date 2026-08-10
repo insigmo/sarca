@@ -45,23 +45,35 @@ class SarcaClient:
         self.http = httpx.Client(base_url=self.base_url, timeout=timeout, verify=verify)
         self.access_token: str | None = None
         self.refresh_token: str | None = None
+        # Mutated in place, never rebound: the session-scoped `tokens` and
+        # `auth_headers` fixtures hand these very objects to every test, so
+        # re-logging in (the GUI suite logs out, which revokes every token for
+        # the user) has to be visible to holders of the old reference.
         self.login_payload: dict[str, Any] = {}
+        self.auth_headers: dict[str, str] = {}
+
+    def _apply_tokens(self, data: dict[str, Any]) -> None:
+        self.access_token = data.get("access_token") or self.access_token
+        self.refresh_token = data.get("refresh_token") or self.refresh_token
+        self.login_payload.clear()
+        self.login_payload.update(data)
+        self.auth_headers.clear()
+        if self.access_token:
+            self.auth_headers["Authorization"] = f"Bearer {self.access_token}"
 
     # ------------------------------------------------------------------- auth
     def login(self, email: str, password: str) -> dict[str, Any]:
         r = self.http.post("/api/auth/login", json={"email": email, "password": password})
         r.raise_for_status()
         data = r.json()
-        self.access_token = data["access_token"]
-        self.refresh_token = data["refresh_token"]
-        self.login_payload = data
+        self._apply_tokens(data)
         return data
 
     def refresh(self) -> dict[str, Any]:
         r = self.http.post("/api/auth/refresh", json={"refresh_token": self.refresh_token})
         r.raise_for_status()
         data = r.json()
-        self.access_token = data["access_token"]
+        self._apply_tokens(data)
         return data
 
     @property

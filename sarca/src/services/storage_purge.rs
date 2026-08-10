@@ -1,10 +1,11 @@
 use std::time::Duration;
 
 use sqlx::{Sqlite, SqlitePool, Transaction};
+use tokio::time::Instant;
 use uuid::Uuid;
 
 use crate::{
-    common::telegram_api::bot_api::TelegramBotApi,
+    common::{supervisor::spawn_supervised, telegram_api::bot_api::TelegramBotApi},
     errors::SarcaResult,
     repositories::{
         chunk_replicas::ChunkReplicasRepository,
@@ -20,28 +21,57 @@ const MAX_ATTEMPTS: i32 = 8;
 const IN_PROGRESS_LEASE: Duration = Duration::from_mins(10);
 const FAILED_BATCH_DELAY: Duration = Duration::from_secs(1);
 
+/// Minimum pause between two purge ticks, even when the previous batch was full.
+///
+/// Without it the loop re-entered `requeue_stale_in_progress`, `BEGIN IMMEDIATE`
+/// and `try_complete_jobs` with no gap, monopolising pool connections and
+/// producing the `database is locked` / `pool timed out` errors seen in
+/// production.
+const BUSY_BATCH_DELAY: Duration = Duration::from_millis(250);
+
+/// How often the stale-lease requeue runs. It is a full scan of the
+/// `in_progress` rows and does not need to run on every tick.
+const REQUEUE_INTERVAL: Duration = Duration::from_mins(1);
+
 pub struct StoragePurgeService;
 
 impl StoragePurgeService {
     pub fn spawn_loop(db: SqlitePool, base_url: String, rate_limit: u16, idle: Duration) {
-        tokio::spawn(async move {
-            loop {
-                Self::run_once(&db, &base_url, rate_limit, idle).await;
+        spawn_supervised("storage_purge", move || {
+            let db = db.clone();
+            let base_url = base_url.clone();
+            async move {
+                let mut last_requeue: Option<Instant> = None;
+                loop {
+                    let delay =
+                        Self::run_once(&db, &base_url, rate_limit, idle, &mut last_requeue).await;
+                    tokio::time::sleep(delay).await;
+                }
             }
         });
     }
 
-    async fn run_once(db: &SqlitePool, base_url: &str, rate_limit: u16, idle: Duration) {
+    /// Run one purge tick and return how long the caller should wait before the
+    /// next one.
+    async fn run_once(
+        db: &SqlitePool,
+        base_url: &str,
+        rate_limit: u16,
+        idle: Duration,
+        last_requeue: &mut Option<Instant>,
+    ) -> Duration {
         let repo = StoragePurgeRepository::new(db);
-        if let Err(e) = repo.requeue_stale_in_progress(IN_PROGRESS_LEASE).await {
-            tracing::warn!("[STORAGE PURGE] failed to requeue stale in-progress messages: {e}");
+        if last_requeue.is_none_or(|at| at.elapsed() >= REQUEUE_INTERVAL) {
+            if let Err(e) = repo.requeue_stale_in_progress(IN_PROGRESS_LEASE).await {
+                tracing::warn!("[STORAGE PURGE] failed to requeue stale in-progress messages: {e}");
+            }
+            *last_requeue = Some(Instant::now());
         }
         let batch = match repo.claim_pending(PURGE_BATCH_SIZE).await {
             Ok(batch) => batch,
             Err(e) => {
                 tracing::warn!("[STORAGE PURGE] failed to claim pending messages: {e}");
-                tokio::time::sleep(idle).await;
-                return;
+                return idle;
             },
         };
 
@@ -49,8 +79,7 @@ impl StoragePurgeService {
             if let Err(e) = repo.try_complete_jobs().await {
                 tracing::warn!("[STORAGE PURGE] failed to complete drained jobs: {e}");
             }
-            tokio::time::sleep(idle).await;
-            return;
+            return idle;
         }
 
         tracing::info!("[STORAGE PURGE] tick processing {} message(s)", batch.len());
@@ -93,9 +122,7 @@ impl StoragePurgeService {
         if let Err(e) = repo.try_complete_jobs().await {
             tracing::warn!("[STORAGE PURGE] failed to complete drained jobs: {e}");
         }
-        if had_telegram_error {
-            tokio::time::sleep(FAILED_BATCH_DELAY).await;
-        }
+        if had_telegram_error { FAILED_BATCH_DELAY } else { BUSY_BATCH_DELAY }
     }
 }
 

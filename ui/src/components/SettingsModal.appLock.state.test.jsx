@@ -10,6 +10,7 @@ vi.mock('../common/nativeBridge', () => ({
 	pickLocalFolder: vi.fn(),
 	isMobileNativePlatform: () => false,
 	formatBytes: (n) => String(n),
+	describeNativeError: (e) => String(e?.message || e || ''),
 }))
 
 vi.mock('../common/nativeClient', () => ({

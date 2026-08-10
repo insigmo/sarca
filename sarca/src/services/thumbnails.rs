@@ -741,7 +741,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "требует запущенный сервис миниатюр, не гоняется в обычном CI"]
     fn build_thumb_and_preview_with_preview() {
         let raw = sample_png(3000, 2000);
         let result = build_thumb_and_preview(&raw, true).unwrap();
@@ -749,8 +748,11 @@ mod tests {
         let thumb = image::load_from_memory(&result.thumb).unwrap();
         assert!(thumb.width() <= THUMB_MAX_EDGE && thumb.height() <= THUMB_MAX_EDGE);
 
+        // The preview is not the original: `build_thumb_and_preview` resizes it
+        // within `PREVIEW_MAX_EDGE`, keeping the aspect ratio. This test used to
+        // assert full resolution and was marked `#[ignore]` instead of updated.
         let preview = image::load_from_memory(result.preview.as_ref().unwrap()).unwrap();
-        assert_eq!(preview.width(), 3000, "preview must keep full resolution");
-        assert_eq!(preview.height(), 2000, "preview must keep full resolution");
+        assert_eq!(preview.width(), PREVIEW_MAX_EDGE, "long edge is clamped to the preview edge");
+        assert_eq!(preview.height(), PREVIEW_MAX_EDGE * 2 / 3, "aspect ratio must be preserved");
     }
 }

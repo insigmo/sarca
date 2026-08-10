@@ -1,40 +1,53 @@
 import Stack from '@suid/material/Stack'
 import Button from '@suid/material/Button'
 import IconButton from '@suid/material/IconButton'
-import { For, Show, createSignal, onCleanup, onMount } from 'solid-js'
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js'
 import { useNavigate } from '@solidjs/router'
 
-import API from '../../api'
 import { convertSize } from '../../common/size_converter'
 import { storageSettingsStore } from '../../common/storageSettings'
+import { storagesStore } from '../../common/storagesStore'
+import { startAutoRefresh } from '../../common/autoRefresh'
 import FileTypeIcon from '../../components/FileTypeIcon'
 import FilesSidebar from '../../components/FilesSidebar'
 import FluentIcon from '../../components/FluentIcon'
 import WaveDivider from '../../components/WaveDivider'
 
 const Storages = () => {
-	/**
-	 * @type {[import("solid-js").Accessor<import("../../api").StorageWithInfo[]>, any]}
-	 */
-	const [storages, setStorages] = createSignal([])
 	const [mobileNavOpen, setMobileNavOpen] = createSignal(false)
 	const navigate = useNavigate()
 	const { open: openStorageSettings } = storageSettingsStore
+	const { storages, loaded, refreshStorages } = storagesStore
 
-	onMount(async () => {
-		const storagesSchema = await API.storages.listStorages()
-		setStorages(storagesSchema.storages)
-		if (!storagesSchema.storages.length) {
+	// Whenever the list is loaded and empty - on first mount, or right after a
+	// delete elsewhere in the app - send the user straight into the setup
+	// wizard instead of showing a dead-end empty page.
+	createEffect(() => {
+		if (loaded() && !storages().length) {
 			navigate('/setup', { replace: true })
 		}
+	})
+
+	onMount(async () => {
+		await refreshStorages()
 
 		const mobileMediaQuery = window.matchMedia('(max-width: 840px)')
 		const closeMobileNavOnDesktop = (event) => {
 			if (!event.matches) setMobileNavOpen(false)
 		}
 		mobileMediaQuery.addEventListener('change', closeMobileNavOnDesktop)
+
+		// Storage usage and channel health move without any action from this
+		// page, so keep the cards current while it is on screen.
+		const stopAutoRefresh = startAutoRefresh({
+			run: () => refreshStorages(),
+			// The settings modal edits the very storage the refresh would replace.
+			isPaused: () => Boolean(storageSettingsStore.storage()),
+		})
+
 		onCleanup(() => {
 			mobileMediaQuery.removeEventListener('change', closeMobileNavOnDesktop)
+			stopAutoRefresh()
 		})
 	})
 
@@ -78,9 +91,7 @@ const Storages = () => {
 						when={storages().length}
 						fallback={
 							<div class="storages-empty">
-								No storages yet — the setup wizard will guide you, or set
-								TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID, and STORAGE_NAME in
-								sarca.conf.
+								{loaded() ? 'Redirecting to setup…' : 'Loading storages…'}
 							</div>
 						}
 					>

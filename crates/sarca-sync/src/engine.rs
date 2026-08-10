@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -108,6 +109,16 @@ pub struct SyncEngine {
     transfers: Arc<RwLock<TransferQueue>>,
     /// Runs enabled bindings concurrently (per-id skip-when-busy, max 2 in flight).
     scheduler: BindingScheduler,
+    /// Remote directories this process has already created (or confirmed to
+    /// exist) this session, keyed by `binding.id` + remote path.
+    ///
+    /// `ensure_remote_parents` used to POST `create_folder` for every path
+    /// segment of every file on every tick and throw the result away. Existing
+    /// folders answer 409, which the API layer treats as success, so nothing
+    /// broke — but a steady upload backlog turned into thousands of rejected
+    /// requests per minute against the server, which is what filled the
+    /// production logs and loaded the metadata database.
+    known_remote_dirs: Arc<RwLock<HashSet<(String, String)>>>,
 }
 
 /// Distinguishes a normal sync pass from the cheap remote-only pass used for
@@ -142,12 +153,16 @@ impl SyncEngine {
             statuses: Arc::new(RwLock::new(Vec::new())),
             transfers: Arc::new(RwLock::new(TransferQueue::default())),
             scheduler: BindingScheduler::new(2),
+            known_remote_dirs: Arc::new(RwLock::new(HashSet::new())),
         })
     }
 
     pub async fn set_credentials(&self, base_url: String, access_token: String) {
         let mut api = self.config.api.write().await;
         *api = SarcaApi::new(base_url, access_token);
+        // A different server (or a re-login after the remote tree changed)
+        // invalidates everything we believe about remote folders.
+        self.known_remote_dirs.write().await.clear();
     }
 
     async fn api(&self) -> tokio::sync::RwLockReadGuard<'_, SarcaApi> {
@@ -714,6 +729,11 @@ impl SyncEngine {
                         failed += 1;
                         let msg = format!("{e:#}");
                         self.note_upload_failure(&binding.id, &rel, &msg);
+                        // The cached remote-folder set is an optimistic guess.
+                        // If an upload fails, a folder we skipped re-creating
+                        // may have been removed on the server, so drop this
+                        // binding's entries and let the next tick recreate them.
+                        self.forget_remote_dirs(&binding.id).await;
                         if first_error.is_none() {
                             first_error = Some(msg);
                         }
@@ -998,6 +1018,11 @@ impl SyncEngine {
         Ok(downloaded)
     }
 
+    /// Drop every cached remote directory belonging to `binding_id`.
+    async fn forget_remote_dirs(&self, binding_id: &str) {
+        self.known_remote_dirs.write().await.retain(|(id, _)| id != binding_id);
+    }
+
     async fn ensure_remote_parents(&self, binding: &Binding, parent: &str) -> Result<()> {
         if parent.is_empty() {
             return Ok(());
@@ -1009,16 +1034,33 @@ impl SyncEngine {
             } else {
                 join_remote(&binding.remote_root, &built)
             };
-            self.api()
+            let next = if built.is_empty() {
+                part.to_owned()
+            } else {
+                format!("{built}/{part}")
+            };
+
+            let key = (binding.id.clone(), next.clone());
+            if self.known_remote_dirs.read().await.contains(&key) {
+                built = next;
+                continue;
+            }
+
+            // `create_folder` maps 409 (already exists) to `Ok`, so a success
+            // here means the folder exists either way and never needs asking
+            // about again this session. A real failure is deliberately not
+            // cached: the upload that follows will surface it.
+            if self
+                .api()
                 .await
                 .create_folder(binding.storage_id, &folder_parent, part)
                 .await
-                .ok();
-            if built.is_empty() {
-                built = part.to_owned();
-            } else {
-                built = format!("{built}/{part}");
+                .is_ok()
+            {
+                self.known_remote_dirs.write().await.insert(key);
             }
+
+            built = next;
         }
         Ok(())
     }

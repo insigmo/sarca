@@ -58,12 +58,14 @@ describe('AppLockGate', () => {
 	// The old code treated the *first* nativeInvoke('get_client_prefs')
 	// rejection as "we must be in a plain browser, skip the lock" and gave
 	// up permanently for the whole session — silently bypassing app lock.
-	// It must instead retry until the bridge comes up.
-	it('retries get_client_prefs instead of permanently bypassing the lock on a transient bridge failure', async () => {
-		nativeInvoke
-			.mockRejectedValueOnce(new Error('Native bridge unavailable'))
-			.mockRejectedValueOnce(new Error('Native bridge unavailable'))
-			.mockResolvedValue({ app_lock_enabled: true, app_lock_pin_set: true })
+	//
+	// The retry now lives in `nativeInvoke` itself, so every caller gets it
+	// (see nativeBridge.test.js) and this component issues exactly one call.
+	// What must still hold here: a bridge that comes up late still ends with
+	// the app locked, and the component adds no retry loop of its own on top
+	// of the bridge's — nesting the two multiplied the timeouts.
+	it('locks once the late-injected bridge answers, without its own retry loop', async () => {
+		nativeInvoke.mockResolvedValue({ app_lock_enabled: true, app_lock_pin_set: true })
 
 		const { findByLabelText } = render(() => (
 			<AppLockGate>
@@ -72,7 +74,25 @@ describe('AppLockGate', () => {
 		))
 
 		expect(await findByLabelText('App lock')).toBeInTheDocument()
-		expect(nativeInvoke.mock.calls.length).toBeGreaterThanOrEqual(3)
+		expect(nativeInvoke.mock.calls.filter(([cmd]) => cmd === 'get_client_prefs')).toHaveLength(
+			1,
+		)
+	})
+
+	// A bridge that never comes up leaves the app usable rather than wedged
+	// behind a PIN prompt it can never verify.
+	it('does not wedge the app when the bridge never comes up', async () => {
+		nativeInvoke.mockRejectedValue(new Error('Native bridge unavailable'))
+
+		const { queryByLabelText } = render(() => (
+			<AppLockGate>
+				<div>app content</div>
+			</AppLockGate>
+		))
+
+		await waitFor(() => expect(nativeInvoke).toHaveBeenCalled())
+		await Promise.resolve()
+		expect(queryByLabelText('App lock')).not.toBeInTheDocument()
 	})
 
 	// The PIN used to be returned by get_client_prefs and compared here, so

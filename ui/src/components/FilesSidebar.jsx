@@ -13,11 +13,15 @@ import { clearSession } from '../common/auth'
 import { settingsStore } from '../common/settings'
 import { isNativeClient } from '../common/nativeClient'
 import { nativeInvoke } from '../common/nativeBridge'
+import { busyStore } from '../common/busyStore'
 import { alertStore } from './AlertStack'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FluentIcon from './FluentIcon'
 
 const STORAGE_KEY = 'sarca.filesSidebarCollapsed'
+
+/** Shown on Log out / Disconnect while a storage is still being created. */
+const SESSION_LOCKED_HINT = 'Creating a storage…'
 
 /**
  * @typedef {'browse' | 'favorites' | 'recent' | 'shared' | 'trash'} FilesListMode
@@ -167,28 +171,57 @@ const SidebarNav = (props) => {
 					<FluentIcon name="settings" size={20} />
 					<span class="files-sidebar__label">Settings</span>
 				</button>
-				<Show when={props.showDisconnect}>
-					<button
-						type="button"
-						class="files-sidebar__item"
-						aria-label="Disconnect"
-						title="Disconnect"
-						onClick={props.onDisconnect}
-					>
-						<FluentIcon name="plugDisconnected" size={20} />
-						<span class="files-sidebar__label">Disconnect</span>
-					</button>
-				</Show>
-				<button
-					type="button"
-					class="files-sidebar__item files-sidebar__item--danger"
-					aria-label="Log out"
-					title="Log out"
-					onClick={props.onLogout}
+				<IconButton
+					size="small"
+					aria-label="More options"
+					title="More options"
+					aria-haspopup="menu"
+					aria-expanded={props.actionsMenuOpen()}
+					onClick={(e) => props.onOpenActionsMenu(e.currentTarget)}
+					class="files-sidebar__item"
 				>
-					<FluentIcon name="signOut" size={20} />
-					<span class="files-sidebar__label">Log out</span>
-				</button>
+					<FluentIcon name="options" size={20} />
+				</IconButton>
+				<MenuMUI
+					anchorEl={props.actionsMenuAnchor()}
+					open={props.actionsMenuOpen()}
+					onClose={props.onCloseActionsMenu}
+				>
+					<Show when={props.showDisconnect}>
+						<MenuItem
+							disabled={busyStore.isStorageCreating()}
+							title={busyStore.isStorageCreating() ? SESSION_LOCKED_HINT : undefined}
+							onClick={() => {
+								props.onCloseActionsMenu()
+								props.onDisconnect?.()
+							}}
+						>
+							<ListItemIcon>
+								<FluentIcon name="plugDisconnected" size={20} />
+							</ListItemIcon>
+							<ListItemText
+								primary="Disconnect"
+								secondary={busyStore.isStorageCreating() ? SESSION_LOCKED_HINT : undefined}
+							/>
+						</MenuItem>
+					</Show>
+					<MenuItem
+						disabled={busyStore.isStorageCreating()}
+						title={busyStore.isStorageCreating() ? SESSION_LOCKED_HINT : undefined}
+						onClick={() => {
+							props.onCloseActionsMenu()
+							props.onLogout?.()
+						}}
+					>
+						<ListItemIcon>
+							<FluentIcon name="signOut" size={20} />
+						</ListItemIcon>
+						<ListItemText
+							primary="Log out"
+							secondary={busyStore.isStorageCreating() ? SESSION_LOCKED_HINT : undefined}
+						/>
+					</MenuItem>
+				</MenuMUI>
 			</div>
 		</nav>
 	)
@@ -234,7 +267,10 @@ const FilesSidebar = (props) => {
 		props.onMobileClose?.()
 	}
 
-	const logout = () => {
+	const confirmLogout = () => {
+		// The dialog may have been opened before storage creation started, so
+		// re-check here as well as on the menu item.
+		if (busyStore.isStorageCreating()) return
 		// Revoke server-side first; the local clear must not wait on the network.
 		API.auth.logout()
 		props.onMobileClose?.()
@@ -245,6 +281,9 @@ const FilesSidebar = (props) => {
 	const { addAlert } = alertStore
 	const [disconnectConfirmOpen, setDisconnectConfirmOpen] = createSignal(false)
 	const [disconnecting, setDisconnecting] = createSignal(false)
+	const [logoutConfirmOpen, setLogoutConfirmOpen] = createSignal(false)
+	const [actionsMenuAnchor, setActionsMenuAnchor] = createSignal(null)
+	const actionsMenuOpen = () => Boolean(actionsMenuAnchor())
 
 	const requestDisconnect = () => {
 		props.onMobileClose?.()
@@ -252,7 +291,7 @@ const FilesSidebar = (props) => {
 	}
 
 	const confirmDisconnect = async () => {
-		if (disconnecting()) return
+		if (disconnecting() || busyStore.isStorageCreating()) return
 		setDisconnecting(true)
 		try {
 			await nativeInvoke('disconnect')
@@ -263,6 +302,12 @@ const FilesSidebar = (props) => {
 		} finally {
 			setDisconnecting(false)
 		}
+	}
+
+	const requestLogout = () => {
+		setActionsMenuAnchor(null)
+		props.onMobileClose?.()
+		setLogoutConfirmOpen(true)
 	}
 
 	createEffect(() => {
@@ -290,13 +335,17 @@ const FilesSidebar = (props) => {
 		createDisabled: props.createDisabled,
 		onSelect: select,
 		onOpenSettings: openSidebarSettings,
-		onLogout: logout,
+		onLogout: requestLogout,
 		showDisconnect,
 		onDisconnect: requestDisconnect,
 		onCreateFolder: props.onCreateFolder,
 		onUploadFile: props.onUploadFile,
 		onUploadFolder: props.onUploadFolder,
 		onAfterAction: () => props.onMobileClose?.(),
+		actionsMenuAnchor,
+		actionsMenuOpen,
+		onOpenActionsMenu: (el) => setActionsMenuAnchor(el),
+		onCloseActionsMenu: () => setActionsMenuAnchor(null),
 	})
 
 	return (
@@ -347,9 +396,27 @@ const FilesSidebar = (props) => {
 				isOpened={disconnectConfirmOpen()}
 				entity="server"
 				action="Disconnect"
-				actionDescription="disconnect from this server — you'll need to enter the server address again to sign back in"
+				actionDescription={
+					disconnecting()
+						? 'disconnecting — waiting for sync to stop'
+						: "disconnect from this server — you'll need to enter the server address again to sign back in"
+				}
 				onConfirm={confirmDisconnect}
-				onCancel={() => setDisconnectConfirmOpen(false)}
+				onCancel={() => {
+					// Cancel is meaningless once the native call is in flight;
+					// closing the dialog would hide the fact it is still running.
+					if (disconnecting()) return
+					setDisconnectConfirmOpen(false)
+				}}
+			/>
+
+			<ActionConfirmDialog
+				isOpened={logoutConfirmOpen()}
+				entity="account"
+				action="Log out"
+				actionDescription="log out from your account"
+				onConfirm={confirmLogout}
+				onCancel={() => setLogoutConfirmOpen(false)}
 			/>
 		</>
 	)

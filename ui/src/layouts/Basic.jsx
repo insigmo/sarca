@@ -9,6 +9,7 @@ import Toolbar from '@suid/material/Toolbar'
 
 import { checkAuth } from '../common/auth_guard'
 import { storageSettingsStore } from '../common/storageSettings'
+import { storagesStore } from '../common/storagesStore'
 import { filesChromeStore } from '../common/filesChrome'
 import { installTextSelectionGuard } from '../common/suppressTextSelection'
 import { installAndroidSafeAreaFallbacks } from '../common/androidSafeArea'
@@ -26,6 +27,7 @@ const BasicLayout = () => {
 	})
 	const navigate = useNavigate()
 	const { storage, close, patchName } = storageSettingsStore
+	const { refreshStorages } = storagesStore
 	const chrome = filesChromeStore
 
 	return (
@@ -59,10 +61,17 @@ const BasicLayout = () => {
 						chrome.setStorageName(updated.name)
 					}
 				}}
-				onDeleted={(id) => {
+				onDeleted={async (id) => {
 					close()
 					if (chrome.storageId() === id) {
 						navigate('/storages')
+					}
+					// Storages page reads the same store, so this refresh alone
+					// updates its grid; the effect there sends the user to /setup
+					// once the list is confirmed empty.
+					const list = await refreshStorages()
+					if (!list.length) {
+						navigate('/setup', { replace: true })
 					}
 				}}
 			/>

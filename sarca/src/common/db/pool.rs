@@ -6,7 +6,19 @@ use sqlx::{
 };
 
 /// How long `SQLite` waits for a competing writer before returning `SQLITE_BUSY`.
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+///
+/// Deliberately larger than the pool's acquire timeout: a writer that waits its
+/// turn is healthy, a writer that gives up with `database is locked` is not.
+/// The 5s value this replaced turned every slow batch into a hard error.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Connections reserved for the background loops (storage manager, replication,
+/// channel health, trash purge, storage purge) on top of the HTTP workers.
+///
+/// Without this headroom `max_connections == WORKERS`, and the loops starved the
+/// request handlers until they failed with `pool timed out while waiting for an
+/// open connection`.
+pub const BACKGROUND_CONNECTIONS: u32 = 6;
 
 /// Open (creating if needed) the `SQLite` metadata database at `path`.
 ///
@@ -26,10 +38,16 @@ pub async fn get_pool(
         .foreign_keys(true)
         .journal_mode(SqliteJournalMode::Wal)
         .synchronous(SqliteSynchronous::Normal)
-        .busy_timeout(BUSY_TIMEOUT);
+        .busy_timeout(BUSY_TIMEOUT)
+        // Keep the WAL from growing unbounded between checkpoints on a busy
+        // VPS, and keep sorting/temp tables off the disk.
+        .pragma("wal_autocheckpoint", "1000")
+        .pragma("cache_size", "-32000")
+        .pragma("temp_store", "MEMORY");
 
     let connect = SqlitePoolOptions::new()
         .max_connections(max_connection.max(1))
+        .min_connections(1)
         .acquire_timeout(timeout)
         .connect_with(options);
 
