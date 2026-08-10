@@ -18,6 +18,7 @@ import {
 	themeLabels,
 	useThemeMode,
 } from '../common/theme'
+import { i18n, LOCALES } from '../common/i18n'
 import { alertStore } from './AlertStack'
 import Access from './Access'
 import FluentIcon from './FluentIcon'
@@ -897,6 +898,39 @@ const SettingsModal = () => {
 															onClick={() => setThemeMode(t)}
 														>
 															{themeLabels[t]}
+														</button>
+													)}
+												</For>
+											</div>
+										</div>
+										{/* `t` is shadowed by the theme loop below, so this
+										    section goes through `i18n.t` explicitly. */}
+										<div class="settings-account__row settings-account__row--theme">
+											<div>
+												<p class="settings-account__label">
+													{i18n.t('settings.language')}
+												</p>
+											</div>
+											<div
+												class="theme-picker"
+												role="radiogroup"
+												aria-label={i18n.t('settings.language')}
+											>
+												<For each={LOCALES}>
+													{(entry) => (
+														<button
+															type="button"
+															role="radio"
+															lang={entry.code}
+															aria-checked={i18n.locale() === entry.code}
+															class="theme-picker__option"
+															classList={{
+																'theme-picker__option--active':
+																	i18n.locale() === entry.code,
+															}}
+															onClick={() => i18n.setLocale(entry.code)}
+														>
+															{entry.label}
 														</button>
 													)}
 												</For>

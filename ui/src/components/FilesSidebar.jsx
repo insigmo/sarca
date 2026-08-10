@@ -14,6 +14,7 @@ import { settingsStore } from '../common/settings'
 import { isNativeClient } from '../common/nativeClient'
 import { nativeInvoke } from '../common/nativeBridge'
 import { busyStore } from '../common/busyStore'
+import { t } from '../common/i18n'
 import { alertStore } from './AlertStack'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FluentIcon from './FluentIcon'
@@ -21,7 +22,7 @@ import FluentIcon from './FluentIcon'
 const STORAGE_KEY = 'sarca.filesSidebarCollapsed'
 
 /** Shown on Log out / Disconnect while a storage is still being created. */
-const SESSION_LOCKED_HINT = 'Creating a storage…'
+const sessionLockedHint = () => t('sidebar.creatingStorage')
 
 /**
  * @typedef {'browse' | 'favorites' | 'recent' | 'shared' | 'trash'} FilesListMode
@@ -46,8 +47,8 @@ const SidebarNewButton = (props) => {
 				type="button"
 				class="files-sidebar__new"
 				classList={{ 'files-sidebar__new--collapsed': props.collapsed }}
-				aria-label="New"
-				title="New"
+				aria-label={t('files.new')}
+				title={t('files.new')}
 				aria-haspopup="menu"
 				aria-expanded={open()}
 				disabled={props.disabled}
@@ -57,7 +58,7 @@ const SidebarNewButton = (props) => {
 				}}
 			>
 				<FluentIcon name="add" size={18} />
-				<span class="files-sidebar__new-label">New</span>
+				<span class="files-sidebar__new-label">{t('files.new')}</span>
 			</button>
 			<MenuMUI
 				anchorEl={anchorEl()}
@@ -70,19 +71,19 @@ const SidebarNewButton = (props) => {
 					<ListItemIcon>
 						<FluentIcon name="folderAdd" size={20} />
 					</ListItemIcon>
-					<ListItemText>Create folder</ListItemText>
+					<ListItemText>{t('files.createFolder')}</ListItemText>
 				</MenuItem>
 				<MenuItem onClick={() => run(props.onUploadFile)}>
 					<ListItemIcon>
 						<FluentIcon name="documentArrowUp" size={20} />
 					</ListItemIcon>
-					<ListItemText>Upload file</ListItemText>
+					<ListItemText>{t('files.uploadFile')}</ListItemText>
 				</MenuItem>
 				<MenuItem onClick={() => run(props.onUploadFolder)}>
 					<ListItemIcon>
 						<FluentIcon name="folderArrowUp" size={20} />
 					</ListItemIcon>
-					<ListItemText>Upload folder</ListItemText>
+					<ListItemText>{t('files.uploadFolder')}</ListItemText>
 				</MenuItem>
 			</MenuMUI>
 		</>
@@ -117,19 +118,19 @@ const SidebarNav = (props) => {
 	return (
 		<nav
 			class="files-sidebar__nav"
-			aria-label={props.variant === 'storages' ? 'Storages' : 'Files'}
+			aria-label={props.variant === 'storages' ? t('storages.title') : t('files.title')}
 		>
 			<div class="files-sidebar__top">
 				<Show when={props.variant === 'files'}>
 					<A
 						href="/storages"
 						class="files-sidebar__item"
-						aria-label="Storages"
-						title="Storages"
+						aria-label={t('storages.title')}
+						title={t('storages.title')}
 						onClick={() => props.onAfterAction?.()}
 					>
 						<FluentIcon name="storage" size={20} />
-						<span class="files-sidebar__label">Storages</span>
+						<span class="files-sidebar__label">{t('storages.title')}</span>
 					</A>
 					<div class="files-sidebar__divider" aria-hidden="true" />
 					<SidebarNewButton
@@ -140,22 +141,22 @@ const SidebarNav = (props) => {
 						onUploadFolder={props.onUploadFolder}
 						onAfterAction={props.onAfterAction}
 					/>
-					{item('browse', 'All files', 'folder', 'folderFilled')}
-					{item('favorites', 'Favorites', 'star', 'starFilled')}
-					{item('recent', 'Recent', 'history', 'historyFilled')}
-					{item('shared', 'Shared', 'link', 'linkFilled')}
-					{item('trash', 'Trash', 'delete', 'deleteFilled')}
+					{item('browse', t('files.allFiles'), 'folder', 'folderFilled')}
+					{item('favorites', t('files.favorites'), 'star', 'starFilled')}
+					{item('recent', t('files.recent'), 'history', 'historyFilled')}
+					{item('shared', t('files.sharedShort'), 'link', 'linkFilled')}
+					{item('trash', t('files.trash'), 'delete', 'deleteFilled')}
 				</Show>
 				<Show when={props.variant === 'storages'}>
 					<A
 						href="/storages"
 						class="files-sidebar__item files-sidebar__item--active"
 						aria-current="page"
-						aria-label="Storages"
-						title="Storages"
+						aria-label={t('storages.title')}
+						title={t('storages.title')}
 					>
 						<FluentIcon name="storageFilled" size={20} />
-						<span class="files-sidebar__label">Storages</span>
+						<span class="files-sidebar__label">{t('storages.title')}</span>
 					</A>
 				</Show>
 			</div>
@@ -164,17 +165,17 @@ const SidebarNav = (props) => {
 				<button
 					type="button"
 					class="files-sidebar__item"
-					aria-label="Settings"
-					title="Settings"
+					aria-label={t('sidebar.settings')}
+					title={t('sidebar.settings')}
 					onClick={props.onOpenSettings}
 				>
 					<FluentIcon name="settings" size={20} />
-					<span class="files-sidebar__label">Settings</span>
+					<span class="files-sidebar__label">{t('sidebar.settings')}</span>
 				</button>
 				<IconButton
 					size="small"
-					aria-label="More options"
-					title="More options"
+					aria-label={t('sidebar.moreOptions')}
+					title={t('sidebar.moreOptions')}
 					aria-haspopup="menu"
 					aria-expanded={props.actionsMenuOpen()}
 					onClick={(e) => props.onOpenActionsMenu(e.currentTarget)}
@@ -190,7 +191,7 @@ const SidebarNav = (props) => {
 					<Show when={props.showDisconnect}>
 						<MenuItem
 							disabled={busyStore.isStorageCreating()}
-							title={busyStore.isStorageCreating() ? SESSION_LOCKED_HINT : undefined}
+							title={busyStore.isStorageCreating() ? sessionLockedHint() : undefined}
 							onClick={() => {
 								props.onCloseActionsMenu()
 								props.onDisconnect?.()
@@ -200,14 +201,14 @@ const SidebarNav = (props) => {
 								<FluentIcon name="plugDisconnected" size={20} />
 							</ListItemIcon>
 							<ListItemText
-								primary="Disconnect"
-								secondary={busyStore.isStorageCreating() ? SESSION_LOCKED_HINT : undefined}
+								primary={t('sidebar.disconnect')}
+								secondary={busyStore.isStorageCreating() ? sessionLockedHint() : undefined}
 							/>
 						</MenuItem>
 					</Show>
 					<MenuItem
 						disabled={busyStore.isStorageCreating()}
-						title={busyStore.isStorageCreating() ? SESSION_LOCKED_HINT : undefined}
+						title={busyStore.isStorageCreating() ? sessionLockedHint() : undefined}
 						onClick={() => {
 							props.onCloseActionsMenu()
 							props.onLogout?.()
@@ -217,8 +218,8 @@ const SidebarNav = (props) => {
 							<FluentIcon name="signOut" size={20} />
 						</ListItemIcon>
 						<ListItemText
-							primary="Log out"
-							secondary={busyStore.isStorageCreating() ? SESSION_LOCKED_HINT : undefined}
+							primary={t('sidebar.logOut')}
+							secondary={busyStore.isStorageCreating() ? sessionLockedHint() : undefined}
 						/>
 					</MenuItem>
 				</MenuMUI>
@@ -298,7 +299,7 @@ const FilesSidebar = (props) => {
 			setDisconnectConfirmOpen(false)
 			// Native side navigates the webview to the connect shell on success.
 		} catch (e) {
-			addAlert(e?.message || 'Failed to disconnect', 'error')
+			addAlert(e?.message || t('errors.disconnectFailed'), 'error')
 		} finally {
 			setDisconnecting(false)
 		}
@@ -394,12 +395,12 @@ const FilesSidebar = (props) => {
 
 			<ActionConfirmDialog
 				isOpened={disconnectConfirmOpen()}
-				entity="server"
-				action="Disconnect"
+				entity={t('confirmDialog.disconnectEntity')}
+				action={t('confirmDialog.disconnectAction')}
 				actionDescription={
 					disconnecting()
-						? 'disconnecting — waiting for sync to stop'
-						: "disconnect from this server — you'll need to enter the server address again to sign back in"
+						? t('confirmDialog.disconnectBusy')
+						: t('confirmDialog.disconnectDescription')
 				}
 				onConfirm={confirmDisconnect}
 				onCancel={() => {
@@ -412,9 +413,9 @@ const FilesSidebar = (props) => {
 
 			<ActionConfirmDialog
 				isOpened={logoutConfirmOpen()}
-				entity="account"
-				action="Log out"
-				actionDescription="log out from your account"
+				entity={t('confirmDialog.logoutEntity')}
+				action={t('confirmDialog.logoutAction')}
+				actionDescription={t('confirmDialog.logoutDescription')}
 				onConfirm={confirmLogout}
 				onCancel={() => setLogoutConfirmOpen(false)}
 			/>

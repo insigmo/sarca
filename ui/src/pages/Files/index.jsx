@@ -28,6 +28,7 @@ import FileViewer from '../../components/FileViewer'
 import RestoreConflictDialog from '../../components/RestoreConflictDialog'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import FilesSidebar from '../../components/FilesSidebar'
+import FilesSearch from '../../components/FilesSearch'
 import FluentIcon from '../../components/FluentIcon'
 import SharedLinksPanel from '../../components/SharedLinksPanel'
 import { filesChromeStore } from '../../common/filesChrome'
@@ -1846,6 +1847,8 @@ const Files = () => {
 										: 'Trash'}
 						</Typography>
 					</Show>
+
+					<FilesSearch />
 
 					<Show when={selectionModeEnabled() && selectionActive()}>
 						<div class="files-bulk-bar">

@@ -46,23 +46,35 @@ const AlertStack = () => {
 
 	return (
 		<Stack
+			class="alert-stack"
 			sx={{
 				position: 'fixed',
 				zIndex: 99999,
 				right: '1rem',
-				top: '5rem',
-				'@media (max-width: 840px)': {
-					top: 'calc(56px + 12px + max(var(--sarca-safe-top), var(--sarca-android-top)))',
-				},
+				// The old offset added a hardcoded 56px for an app bar that no
+				// longer exists, and it applied on /login too, where there never
+				// was one. Only the real status-bar inset matters now — on a
+				// device with a tall cutout the text used to run under the tray.
+				top: 'calc(1rem + max(var(--sarca-safe-top), var(--sarca-android-top)))',
+				left: 'auto',
 				maxWidth: 360,
 				width: '30vw',
 				minWidth: 240,
+				'@media (max-width: 840px)': {
+					// Phones: full width minus the gutters, so a long message
+					// wraps instead of growing a tall narrow column.
+					left: '1rem',
+					width: 'auto',
+					maxWidth: 'none',
+					minWidth: 0,
+				},
 			}}
 			spacing={1}
 		>
 			<For each={alertList()}>
 				{(alert) => (
 					<Alert
+						class="alert-stack__item"
 						severity={alert.severity}
 						onClose={() => dismissAlert(alert.id)}
 					>
