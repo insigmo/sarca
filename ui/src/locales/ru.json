@@ -1,0 +1,66 @@
+{
+	"common": {
+		"cancel": "Отмена",
+		"confirm": "Подтвердить",
+		"close": "Закрыть",
+		"save": "Сохранить",
+		"delete": "Удалить",
+		"rename": "Переименовать",
+		"copy": "Копировать",
+		"move": "Переместить",
+		"search": "Поиск..",
+		"loading": "Загрузка…",
+		"retry": "Повторить"
+	},
+	"sidebar": {
+		"settings": "Настройки",
+		"moreOptions": "Ещё",
+		"disconnect": "Отключиться",
+		"logOut": "Выйти",
+		"creatingStorage": "Создаётся хранилище…",
+		"expand": "Развернуть панель",
+		"collapse": "Свернуть панель"
+	},
+	"files": {
+		"allFiles": "Все файлы",
+		"favorites": "Избранное",
+		"recent": "Недавние",
+		"shared": "Ссылки",
+		"trash": "Корзина",
+		"folderPath": "Путь к папке",
+		"openMenu": "Открыть меню файлов",
+		"selectedCount": "Выбрано: {{count}}",
+		"listView": "Списком",
+		"tilesView": "Плитками",
+		"title": "Файлы",
+		"new": "Создать",
+		"createFolder": "Создать папку",
+		"uploadFile": "Загрузить файл",
+		"uploadFolder": "Загрузить папку",
+		"sharedShort": "Ссылки"
+	},
+	"storages": {
+		"newStorage": "Новое хранилище",
+		"empty": "Хранилищ пока нет",
+		"title": "Хранилища"
+	},
+	"confirmDialog": {
+		"title": "{{action}} — {{entity}}?",
+		"body": "Вы уверены, что хотите {{description}}?",
+		"logoutEntity": "аккаунт",
+		"logoutAction": "Выйти",
+		"logoutDescription": "выйти из аккаунта",
+		"disconnectEntity": "сервер",
+		"disconnectAction": "Отключиться",
+		"disconnectDescription": "отключиться от этого сервера — чтобы войти снова, потребуется заново указать его адрес",
+		"disconnectBusy": "отключение — ждём остановки синхронизации"
+	},
+	"errors": {
+		"bridgeWarmingUp": "Приложение ещё запускается. Попробуйте ещё раз.",
+		"disconnectFailed": "Не удалось отключиться"
+	},
+	"settings": {
+		"language": "Язык",
+		"languageSystem": "Как в системе"
+	}
+}

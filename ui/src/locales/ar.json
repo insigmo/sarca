@@ -1,0 +1,66 @@
+{
+	"common": {
+		"cancel": "إلغاء",
+		"confirm": "تأكيد",
+		"close": "إغلاق",
+		"save": "حفظ",
+		"delete": "حذف",
+		"rename": "إعادة تسمية",
+		"copy": "نسخ",
+		"move": "نقل",
+		"search": "بحث..",
+		"loading": "جارٍ التحميل…",
+		"retry": "إعادة المحاولة"
+	},
+	"sidebar": {
+		"settings": "الإعدادات",
+		"moreOptions": "خيارات أخرى",
+		"disconnect": "قطع الاتصال",
+		"logOut": "تسجيل الخروج",
+		"creatingStorage": "جارٍ إنشاء مساحة تخزين…",
+		"expand": "توسيع الشريط الجانبي",
+		"collapse": "طي الشريط الجانبي"
+	},
+	"files": {
+		"allFiles": "كل الملفات",
+		"favorites": "المفضلة",
+		"recent": "الأحدث",
+		"shared": "الروابط المشتركة",
+		"trash": "المهملات",
+		"folderPath": "مسار المجلد",
+		"openMenu": "فتح قائمة الملفات",
+		"selectedCount": "تم تحديد {{count}}",
+		"listView": "عرض القائمة",
+		"tilesView": "عرض المربعات",
+		"title": "الملفات",
+		"new": "جديد",
+		"createFolder": "إنشاء مجلد",
+		"uploadFile": "رفع ملف",
+		"uploadFolder": "رفع مجلد",
+		"sharedShort": "المشتركة"
+	},
+	"storages": {
+		"newStorage": "مساحة تخزين جديدة",
+		"empty": "لا توجد مساحات تخزين بعد",
+		"title": "مساحات التخزين"
+	},
+	"confirmDialog": {
+		"title": "{{action}} {{entity}}؟",
+		"body": "هل أنت متأكد أنك تريد {{description}}؟",
+		"logoutEntity": "الحساب",
+		"logoutAction": "تسجيل الخروج",
+		"logoutDescription": "تسجيل الخروج من حسابك",
+		"disconnectEntity": "الخادم",
+		"disconnectAction": "قطع الاتصال",
+		"disconnectDescription": "قطع الاتصال بهذا الخادم — ستحتاج إلى إدخال عنوانه مرة أخرى لتسجيل الدخول",
+		"disconnectBusy": "جارٍ قطع الاتصال — بانتظار توقف المزامنة"
+	},
+	"errors": {
+		"bridgeWarmingUp": "التطبيق ما زال قيد البدء. حاول مرة أخرى.",
+		"disconnectFailed": "تعذّر قطع الاتصال"
+	},
+	"settings": {
+		"language": "اللغة",
+		"languageSystem": "لغة النظام"
+	}
+}

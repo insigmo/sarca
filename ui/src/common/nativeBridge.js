@@ -1,3 +1,5 @@
+import { t } from './i18n'
+
 /** How long a caller waits for the bridge to come up before giving up. */
 const BRIDGE_READY_TIMEOUT_MS = 12_000
 /** Gap between warm-up attempts while the bridge is still coming up. */
@@ -81,10 +83,11 @@ export async function nativeInvoke(cmd, args = {}) {
  * @param {string} [fallback]
  * @returns {string}
  */
-export function describeNativeError(error, fallback = 'The app is still starting up. Try again.') {
-	if (isBridgeWarmingUp(error)) return fallback
+export function describeNativeError(error, fallback = null) {
+	const generic = fallback ?? t('errors.bridgeWarmingUp')
+	if (isBridgeWarmingUp(error)) return generic
 	const message = String(error?.message || error || '').trim()
-	return message || fallback
+	return message || generic
 }
 
 /**

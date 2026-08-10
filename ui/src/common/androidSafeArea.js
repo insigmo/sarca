@@ -3,7 +3,13 @@
  * Set CSS fallbacks so chrome clears the status / nav bars.
  */
 
-const ANDROID_TOP_FALLBACK = '28px'
+// A stock Android status bar is 24dp, but devices with a cutout or a rounded
+// camera housing report more, and the WebView still hands us 0 for
+// `env(safe-area-inset-top)`. 28px cleared the common case and left error
+// toasts running under the tray on taller ones. The CSS always takes
+// `max(env(...), this)`, so overshooting costs a few pixels of margin on
+// devices that do report a real inset.
+const ANDROID_TOP_FALLBACK = '32px'
 const ANDROID_BOTTOM_FALLBACK = '20px'
 
 /**

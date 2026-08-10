@@ -1,11 +1,9 @@
 import { onCleanup, onMount } from 'solid-js'
 import { Outlet, useNavigate } from '@solidjs/router'
-import Header from '../components/Header'
 import SettingsModal from '../components/SettingsModal'
 import StorageSettingsModal from '../components/StorageSettingsModal'
 import Box from '@suid/material/Box'
 import CssBaseline from '@suid/material/CssBaseline'
-import Toolbar from '@suid/material/Toolbar'
 
 import { checkAuth } from '../common/auth_guard'
 import { storageSettingsStore } from '../common/storageSettings'
@@ -13,6 +11,7 @@ import { storagesStore } from '../common/storagesStore'
 import { filesChromeStore } from '../common/filesChrome'
 import { installTextSelectionGuard } from '../common/suppressTextSelection'
 import { installAndroidSafeAreaFallbacks } from '../common/androidSafeArea'
+import { installWheelScrollFix } from '../common/wheelScroll'
 
 const BasicLayout = () => {
 	onMount(() => {
@@ -20,8 +19,10 @@ const BasicLayout = () => {
 		installAndroidSafeAreaFallbacks()
 		document.body.classList.add('sarca-no-select')
 		const stopGuard = installTextSelectionGuard()
+		const stopWheelFix = installWheelScrollFix()
 		onCleanup(() => {
 			stopGuard()
+			stopWheelFix()
 			document.body.classList.remove('sarca-no-select')
 		})
 	})
@@ -33,17 +34,11 @@ const BasicLayout = () => {
 	return (
 		<>
 			<CssBaseline />
-			<Header />
+			{/* The fixed app bar is gone: it spent 56-64px of every screen on a
+			    wordmark and a search field, and the search now sits in the files
+			    toolbar beside the breadcrumb it filters. The safe-area inset it
+			    used to absorb moves onto the shell root. */}
 			<Box class="app-shell-root">
-				<Toolbar
-					class="app-shell-toolbar-spacer"
-					sx={{
-						minHeight: { xs: 56, sm: 64 },
-						paddingTop: 'max(var(--sarca-safe-top), var(--sarca-android-top))',
-						boxSizing: 'content-box',
-					}}
-				/>
-
 				<Box class="app-shell-stage">
 					<div class="app-shell-outlet app-shell-main">
 						<Outlet />
