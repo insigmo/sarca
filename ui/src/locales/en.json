@@ -1,0 +1,66 @@
+{
+	"common": {
+		"cancel": "Cancel",
+		"confirm": "Confirm",
+		"close": "Close",
+		"save": "Save",
+		"delete": "Delete",
+		"rename": "Rename",
+		"copy": "Copy",
+		"move": "Move",
+		"search": "Search..",
+		"loading": "Loading…",
+		"retry": "Retry"
+	},
+	"sidebar": {
+		"settings": "Settings",
+		"moreOptions": "More options",
+		"disconnect": "Disconnect",
+		"logOut": "Log out",
+		"creatingStorage": "Creating a storage…",
+		"expand": "Expand sidebar",
+		"collapse": "Collapse sidebar"
+	},
+	"files": {
+		"allFiles": "All files",
+		"favorites": "Favorites",
+		"recent": "Recent",
+		"shared": "Shared links",
+		"trash": "Trash",
+		"folderPath": "Folder path",
+		"openMenu": "Open files menu",
+		"selectedCount": "{{count}} selected",
+		"listView": "List view",
+		"tilesView": "Tiles view",
+		"title": "Files",
+		"new": "New",
+		"createFolder": "Create folder",
+		"uploadFile": "Upload file",
+		"uploadFolder": "Upload folder",
+		"sharedShort": "Shared"
+	},
+	"storages": {
+		"newStorage": "New storage",
+		"empty": "No storages yet",
+		"title": "Storages"
+	},
+	"confirmDialog": {
+		"title": "{{action}} {{entity}}?",
+		"body": "Are you sure you want to {{description}}?",
+		"logoutEntity": "account",
+		"logoutAction": "Log out",
+		"logoutDescription": "log out from your account",
+		"disconnectEntity": "server",
+		"disconnectAction": "Disconnect",
+		"disconnectDescription": "disconnect from this server — you'll need to enter the server address again to sign back in",
+		"disconnectBusy": "disconnecting — waiting for sync to stop"
+	},
+	"errors": {
+		"bridgeWarmingUp": "The app is still starting up. Try again.",
+		"disconnectFailed": "Failed to disconnect"
+	},
+	"settings": {
+		"language": "Language",
+		"languageSystem": "System default"
+	}
+}

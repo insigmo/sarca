@@ -5,6 +5,8 @@ import DialogContent from '@suid/material/DialogContent'
 import DialogTitle from '@suid/material/DialogTitle'
 import DialogContentText from '@suid/material/DialogContentText'
 
+import { t } from '../common/i18n'
+
 /**
  * @typedef {Object} ActionConfirmDialogProps
  * @property {boolean} isOpened
@@ -23,20 +25,20 @@ const ActionConfirmDialog = (props) => {
 	return (
 		<Dialog open={props.isOpened} onClose={props.onCancel}>
 			<DialogTitle>
-				{props.action} {props.entity}?
+				{t('confirmDialog.title', { action: props.action, entity: props.entity })}
 			</DialogTitle>
 			<DialogContent>
 				<DialogContentText>
-					Are you sure you want to {props.actionDescription}?
+					{t('confirmDialog.body', { description: props.actionDescription })}
 				</DialogContentText>
 			</DialogContent>
 
 			<DialogActions>
 				<Button onClick={props.onConfirm} color="warning">
-					Confirm
+					{t('common.confirm')}
 				</Button>
 				<Button onClick={props.onCancel} color="info">
-					Cancel
+					{t('common.cancel')}
 				</Button>
 			</DialogActions>
 		</Dialog>

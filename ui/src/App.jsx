@@ -14,6 +14,7 @@ import NotFound from './pages/404'
 import { initTheme, useThemeMode } from './common/theme'
 import { bindOpenSettingsDeepLink } from './common/nativeClient'
 import { installAndroidSafeAreaFallbacks } from './common/androidSafeArea'
+import { i18n } from './common/i18n'
 import AppLockGate from './components/AppLockGate'
 
 /** Legacy workers routes → storages (bot is in storage settings). */
@@ -177,6 +178,9 @@ const App = () => {
 	const mode = useThemeMode()
 	onMount(() => {
 		initTheme()
+		// Sets <html lang/dir> from the saved choice or the browser language,
+		// before anything renders — Arabic needs dir="rtl" on the first paint.
+		i18n.install()
 		installAndroidSafeAreaFallbacks()
 		return bindOpenSettingsDeepLink()
 	})

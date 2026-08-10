@@ -1,0 +1,66 @@
+{
+	"common": {
+		"cancel": "Cancelar",
+		"confirm": "Confirmar",
+		"close": "Cerrar",
+		"save": "Guardar",
+		"delete": "Eliminar",
+		"rename": "Renombrar",
+		"copy": "Copiar",
+		"move": "Mover",
+		"search": "Buscar..",
+		"loading": "Cargando…",
+		"retry": "Reintentar"
+	},
+	"sidebar": {
+		"settings": "Ajustes",
+		"moreOptions": "Más opciones",
+		"disconnect": "Desconectar",
+		"logOut": "Cerrar sesión",
+		"creatingStorage": "Creando un almacenamiento…",
+		"expand": "Expandir panel",
+		"collapse": "Contraer panel"
+	},
+	"files": {
+		"allFiles": "Todos los archivos",
+		"favorites": "Favoritos",
+		"recent": "Recientes",
+		"shared": "Enlaces compartidos",
+		"trash": "Papelera",
+		"folderPath": "Ruta de la carpeta",
+		"openMenu": "Abrir menú de archivos",
+		"selectedCount": "{{count}} seleccionados",
+		"listView": "Vista de lista",
+		"tilesView": "Vista de mosaico",
+		"title": "Archivos",
+		"new": "Nuevo",
+		"createFolder": "Crear carpeta",
+		"uploadFile": "Subir archivo",
+		"uploadFolder": "Subir carpeta",
+		"sharedShort": "Compartidos"
+	},
+	"storages": {
+		"newStorage": "Nuevo almacenamiento",
+		"empty": "Aún no hay almacenamientos",
+		"title": "Almacenamientos"
+	},
+	"confirmDialog": {
+		"title": "¿{{action}} {{entity}}?",
+		"body": "¿Seguro que quieres {{description}}?",
+		"logoutEntity": "cuenta",
+		"logoutAction": "Cerrar sesión",
+		"logoutDescription": "cerrar la sesión de tu cuenta",
+		"disconnectEntity": "servidor",
+		"disconnectAction": "Desconectar",
+		"disconnectDescription": "desconectarte de este servidor — tendrás que volver a introducir su dirección para iniciar sesión de nuevo",
+		"disconnectBusy": "desconectando — esperando a que se detenga la sincronización"
+	},
+	"errors": {
+		"bridgeWarmingUp": "La aplicación aún se está iniciando. Inténtalo de nuevo.",
+		"disconnectFailed": "No se pudo desconectar"
+	},
+	"settings": {
+		"language": "Idioma",
+		"languageSystem": "Predeterminado del sistema"
+	}
+}

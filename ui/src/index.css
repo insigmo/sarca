@@ -109,6 +109,47 @@
 	box-sizing: border-box;
 }
 
+/* Scrollbars. Firefox takes the standard properties; WebKitGTK (the Linux
+   client) ignores them and would otherwise draw the wide default GTK bar over
+   the file list. Both are declared so every platform looks the same. */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: color-mix(in srgb, var(--sarca-ink) 28%, transparent) transparent;
+}
+
+::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+	border: 3px solid transparent;
+	background-clip: content-box;
+	border-radius: 8px;
+	background-color: color-mix(in srgb, var(--sarca-ink) 28%, transparent);
+}
+
+::-webkit-scrollbar-thumb:hover {
+	background-color: color-mix(in srgb, var(--sarca-ink) 45%, transparent);
+}
+
+::-webkit-scrollbar-corner {
+	background: transparent;
+}
+
+/* A wheel that reaches the end of the list must not start scrolling whatever
+   is behind it — on WebKitGTK that chaining is what makes the page feel like
+   it jumps. */
+.files-canvas,
+.files-shell__main,
+.files-sidebar__top {
+	overscroll-behavior: contain;
+}
+
 ::selection {
 	background: color-mix(in srgb, var(--sarca-teal) 35%, transparent);
 	color: var(--sarca-ink);
@@ -223,6 +264,10 @@ a.default-link:hover {
 	max-height: 100dvh;
 	min-height: 0;
 	overflow: hidden;
+	/* The removed app bar used to absorb the status-bar inset for the whole
+	   app; the shell root owns it now, so nothing renders under the notch. */
+	padding-top: max(var(--sarca-safe-top), var(--sarca-android-top));
+	box-sizing: border-box;
 }
 
 .app-shell-stage {
@@ -248,17 +293,9 @@ a.default-link:hover {
 	box-sizing: border-box;
 }
 
-/* —— Header —— */
-.sarca-appbar.MuiAppBar-root {
-	background: var(--sarca-header-bg) !important;
-	backdrop-filter: blur(20px) saturate(1.3);
-	-webkit-backdrop-filter: blur(20px) saturate(1.3);
-	border-bottom: 1px solid var(--sarca-border);
-	box-shadow: var(--sarca-shadow-soft) !important;
-	color: var(--sarca-header-ink) !important;
-	padding-top: max(var(--sarca-safe-top), var(--sarca-android-top));
-}
-
+/* —— Header ——
+   The fixed AppBar was removed; the search pill it carried now lives in the
+   files toolbar (see .files-page__search). */
 .sarca-header-icon {
 	color: var(--sarca-header-icon) !important;
 	background: var(--sarca-header-icon-bg) !important;
@@ -894,6 +931,23 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	margin-bottom: 0;
 	padding-inline: 0;
 	flex-shrink: 0;
+}
+
+/* Server errors can be long, and an alert that grows without limit walked off
+   the top of the screen and under the status bar on phones. Wrap, then scroll. */
+.alert-stack__item .MuiAlert-message {
+	max-height: 40vh;
+	overflow-y: auto;
+	overflow-wrap: anywhere;
+	word-break: break-word;
+}
+
+/* Sits between the breadcrumb and the view controls. Shrinks first so a deep
+   folder path never pushes the toolbar onto a second row. */
+.files-page__search {
+	flex: 0 1 320px;
+	min-width: 0;
+	margin-inline-start: auto;
 }
 
 .files-breadcrumb {
@@ -2504,21 +2558,17 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 }
 
 @media (max-width: 840px) {
-	.header-brand-text {
-		display: none !important;
-	}
-
 	.fs-grid-item__star,
 	.fs-list-item__star {
 		display: none !important;
 	}
 
-	.sarca-appbar .MuiToolbar-root {
-		min-height: 56px;
-	}
-
-	.app-shell-toolbar-spacer {
-		min-height: 56px !important;
+	/* Narrow screens give the search its own toolbar row rather than
+	   squeezing it against the breadcrumb. */
+	.files-page__search {
+		flex: 1 1 100%;
+		margin-inline-start: 0;
+		order: 1;
 	}
 
 	.app-shell-main {
