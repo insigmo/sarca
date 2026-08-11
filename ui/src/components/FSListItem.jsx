@@ -713,7 +713,7 @@ const FSListItem = (props) => {
 								<ListItemIcon>
 									<FluentIcon name="eye" size={20} />
 								</ListItemIcon>
-								<ListItemText>Open</ListItemText>
+								<ListItemText>{t('viewer.open')}</ListItemText>
 							</MenuItem>
 
 							<Show when={canFavorite()}>
@@ -727,8 +727,8 @@ const FSListItem = (props) => {
 									</ListItemIcon>
 									<ListItemText>
 										{favorited()
-											? 'Remove from favorites'
-											: 'Add to favorites'}
+											? t('viewer.removeFavorite')
+											: t('viewer.addFavorite')}
 									</ListItemText>
 								</MenuItem>
 							</Show>
@@ -737,7 +737,7 @@ const FSListItem = (props) => {
 								<ListItemIcon>
 									<FluentIcon name="info" size={20} />
 								</ListItemIcon>
-								<ListItemText>Info</ListItemText>
+								<ListItemText>{t('viewer.info')}</ListItemText>
 							</MenuItem>
 
 							<MenuItem
@@ -747,28 +747,28 @@ const FSListItem = (props) => {
 								<ListItemIcon>
 									<FluentIcon name="arrowDownload" size={20} />
 								</ListItemIcon>
-								<ListItemText>Download</ListItemText>
+								<ListItemText>{t('viewer.download')}</ListItemText>
 							</MenuItem>
 
 							<MenuItem onClick={rename}>
 								<ListItemIcon>
 									<FluentIcon name="rename" size={20} />
 								</ListItemIcon>
-								<ListItemText>Rename</ListItemText>
+								<ListItemText>{t('common.rename')}</ListItemText>
 							</MenuItem>
 
 							<MenuItem onClick={copyTo}>
 								<ListItemIcon>
 									<FluentIcon name="copy" size={20} />
 								</ListItemIcon>
-								<ListItemText>Copy to…</ListItemText>
+								<ListItemText>{t('viewer.copyTo')}</ListItemText>
 							</MenuItem>
 
 							<MenuItem onClick={moveTo}>
 								<ListItemIcon>
 									<FluentIcon name="arrowMove" size={20} />
 								</ListItemIcon>
-								<ListItemText>Move to…</ListItemText>
+								<ListItemText>{t('viewer.moveTo')}</ListItemText>
 							</MenuItem>
 
 							<Show when={canShare()}>
@@ -776,7 +776,7 @@ const FSListItem = (props) => {
 									<ListItemIcon>
 										<FluentIcon name="link" size={20} />
 									</ListItemIcon>
-									<ListItemText>Share link…</ListItemText>
+									<ListItemText>{t('viewer.shareLink')}</ListItemText>
 								</MenuItem>
 							</Show>
 
@@ -784,7 +784,7 @@ const FSListItem = (props) => {
 								<ListItemIcon>
 									<FluentIcon name="delete" size={20} />
 								</ListItemIcon>
-								<ListItemText>Delete</ListItemText>
+								<ListItemText>{t('common.delete')}</ListItemText>
 							</MenuItem>
 						</>
 					}
@@ -798,24 +798,24 @@ const FSListItem = (props) => {
 						<ListItemIcon>
 							<FluentIcon name="arrowUndo" size={20} />
 						</ListItemIcon>
-						<ListItemText>Restore</ListItemText>
+						<ListItemText>{t('viewer.restore')}</ListItemText>
 					</MenuItem>
 					<MenuItem onClick={openActionConfirmDialog}>
 						<ListItemIcon>
 							<FluentIcon name="deleteDismiss" size={20} />
 						</ListItemIcon>
-						<ListItemText>Delete forever</ListItemText>
+						<ListItemText>{t('viewer.deleteForever')}</ListItemText>
 					</MenuItem>
 				</Show>
 			</MenuMUI>
 
 			<ActionConfirmDialog
-				action={props.trashMode ? 'Delete forever' : 'Move to trash'}
-				entity={props.fsElement.is_file ? 'file' : 'folder'}
+				action={props.trashMode ? t('viewer.deleteForever') : t('viewer.moveToTrash')}
+				entity={props.fsElement.is_file ? t('viewer.entityFile') : t('viewer.entityFolder')}
 				actionDescription={
 					props.trashMode
-						? `permanently delete ${props.fsElement.name} (including Telegram copies)`
-						: `move ${props.fsElement.name} to trash`
+						? t('viewer.deleteForeverDescription', { name: props.fsElement.name })
+						: t('viewer.moveToTrashDescription', { name: props.fsElement.name })
 				}
 				isOpened={isActionConfirmDialogOpened()}
 				onConfirm={props.trashMode ? confirmDeleteForever : deleteFile}
@@ -842,11 +842,11 @@ const FSListItem = (props) => {
 				<Portal mount={document.body}>
 					<div class="download-preparing" role="status" aria-live="polite">
 						<div class="download-preparing__text">
-							{props.fsElement.is_file ? 'Preparing download' : 'Preparing ZIP archive'}
+							{props.fsElement.is_file ? t('viewer.preparingDownload') : t('viewer.preparingZip')}
 							<LoadingDots />
 						</div>
 						<div class="download-preparing__hint">
-							This may take a while for large folders
+							{t('viewer.preparingLargeFolderHint')}
 						</div>
 					</div>
 				</Portal>

@@ -9,6 +9,7 @@ import ActionConfirmDialog from './ActionConfirmDialog'
 import { alertStore } from './AlertStack'
 import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
+import { t } from '../common/i18n'
 
 /**
  * @typedef {Object} AccessProps
@@ -71,7 +72,7 @@ const Access = (props) => {
 			await API.access.restrictAccess(storageId(), userID)
 			setIsRestrictConfirmOpened(false)
 			addAlert(
-				`Restricted access for the user with email ${selectedUserEmail()}`,
+				t('storageDialogs.restrictedAccess', { email: selectedUserEmail() }),
 				'success',
 			)
 
@@ -87,7 +88,9 @@ const Access = (props) => {
 			<div class="access-list">
 				<Show
 					when={props.users.length}
-					fallback={<p class="access-list__empty">No users with access yet</p>}
+					fallback={
+						<p class="access-list__empty">{t('storageDialogs.noUsersWithAccess')}</p>
+					}
 				>
 					<For each={props.users}>
 						{(user) => (
@@ -100,7 +103,9 @@ const Access = (props) => {
 									<IconButton
 										size="small"
 										disabled={!canManage(user)}
-										aria-label={`Edit access for ${user.email}`}
+										aria-label={t('storageDialogs.editAccessAria', {
+											email: user.email,
+										})}
 										onClick={() => onEditButtonClicked(user)}
 									>
 										<FluentIcon name="edit" size={18} />
@@ -108,7 +113,9 @@ const Access = (props) => {
 									<IconButton
 										size="small"
 										disabled={!canManage(user)}
-										aria-label={`Remove access for ${user.email}`}
+										aria-label={t('storageDialogs.removeAccessAria', {
+											email: user.email,
+										})}
 										onClick={() => onDeleteButtonClicked(user.email)}
 									>
 										<FluentIcon name="delete" size={18} />
@@ -121,9 +128,11 @@ const Access = (props) => {
 			</div>
 
 			<ActionConfirmDialog
-				action="Restrict"
-				actionDescription={`restrict access for the user with email "${selectedUserEmail()}"`}
-				entity="access"
+				action={t('storageDialogs.restrictAction')}
+				actionDescription={t('storageDialogs.restrictAccessDescription', {
+					email: selectedUserEmail(),
+				})}
+				entity={t('storageDialogs.accessEntity')}
 				isOpened={isRestrictConfirmOpened()}
 				onCancel={() => setIsRestrictConfirmOpened(false)}
 				onConfirm={onRestrict}

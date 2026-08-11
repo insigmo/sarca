@@ -1,5 +1,6 @@
 import { Index, Show, createSignal, onCleanup, onMount } from 'solid-js'
 import IconButton from '@suid/material/IconButton'
+import { t } from '../common/i18n'
 
 import { uploadQueueStore } from '../common/uploadQueue'
 import FileTypeIcon from './FileTypeIcon'
@@ -189,7 +190,7 @@ const UploadManager = () => {
 					<div class="upload-mgr__actions">
 						<IconButton
 							size="small"
-							aria-label={q.collapsed() ? 'Expand' : 'Collapse'}
+							aria-label={q.collapsed() ? t('upload.expand') : t('upload.collapse')}
 							onClick={() => q.toggleCollapsed()}
 							sx={{ color: 'var(--sarca-ink-soft)' }}
 						>
@@ -204,7 +205,7 @@ const UploadManager = () => {
 						</IconButton>
 						<IconButton
 							size="small"
-							aria-label="Close"
+							aria-label={t('common.close')}
 							onClick={() => q.dismiss()}
 							sx={{ color: 'var(--sarca-ink-soft)' }}
 						>
@@ -222,7 +223,7 @@ const UploadManager = () => {
 								class="upload-mgr__cancel"
 								onClick={() => q.cancelAll()}
 							>
-								Cancel
+								{t('common.cancel')}
 							</button>
 						</div>
 					</Show>
@@ -282,13 +283,13 @@ const UploadManager = () => {
 												class="upload-mgr__status-text"
 												title={
 													item().status === 'error'
-														? item().error || 'Upload failed'
-														: 'Upload canceled'
+														? item().error || t('upload.failed')
+														: t('upload.canceled')
 												}
 											>
 												{item().status === 'error'
-													? item().error || 'Upload failed'
-													: 'Upload canceled'}
+													? item().error || t('upload.failed')
+													: t('upload.canceled')}
 											</span>
 										</Show>
 									</span>
@@ -300,8 +301,8 @@ const UploadManager = () => {
 					<button
 						type="button"
 						class="upload-mgr__resize"
-						aria-label="Resize upload panel"
-						title="Resize"
+						aria-label={t('upload.resizePanel')}
+						title={t('upload.resize')}
 						onPointerDown={onResizePointerDown}
 					/>
 				</Show>
