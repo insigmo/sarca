@@ -5,6 +5,8 @@ import DialogContent from '@suid/material/DialogContent'
 import DialogTitle from '@suid/material/DialogTitle'
 import DialogContentText from '@suid/material/DialogContentText'
 
+import { t } from '../common/i18n'
+
 /**
  * Shared Replace / Rename / Cancel dialog for path conflicts
  * (trash restore, copy, move).
@@ -23,11 +25,11 @@ import DialogContentText from '@suid/material/DialogContentText'
  * @param {RestoreConflictDialogProps} props
  */
 const RestoreConflictDialog = (props) => {
-	const title = () => props.title || 'Path already exists'
+	const title = () => props.title || t('folderDialogs.conflict.title')
 	const message = () =>
 		props.message ||
-		`A live file or folder already exists at “${props.path}”. Replace it, continue under a new name, or cancel?`
-	const renameLabel = () => props.renameLabel || 'Rename'
+		t('folderDialogs.conflict.message', { path: props.path })
+	const renameLabel = () => props.renameLabel || t('folderDialogs.conflict.rename')
 
 	return (
 		<Dialog open={props.isOpened} onClose={props.onCancel}>
@@ -37,13 +39,13 @@ const RestoreConflictDialog = (props) => {
 			</DialogContent>
 			<DialogActions>
 				<Button onClick={() => props.onChoose('replace')} color="warning">
-					Replace
+					{t('folderDialogs.conflict.replace')}
 				</Button>
 				<Button onClick={() => props.onChoose('rename')} color="secondary">
 					{renameLabel()}
 				</Button>
 				<Button onClick={props.onCancel} color="info">
-					Cancel
+					{t('folderDialogs.conflict.cancel')}
 				</Button>
 			</DialogActions>
 		</Dialog>

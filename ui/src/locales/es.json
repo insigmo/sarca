@@ -437,5 +437,156 @@
 		"thirtyDays": "30 días",
 		"uploadedCount": "Subidos: {{count}}",
 		"userEmailLabel": "Correo del usuario"
+	},
+	"auth": {
+		"login": {
+			"tagline": "Inicia sesión en tu almacenamiento en la nube",
+			"email": "Correo electrónico",
+			"password": "Contraseña",
+			"signIn": "Iniciar sesión"
+		},
+		"notFound": {
+			"message": "Esta página no está en tu almacenamiento",
+			"backToStorages": "Volver a los almacenamientos"
+		},
+		"lock": {
+			"ariaLabel": "Bloqueo de la aplicación",
+			"title": "Aplicación bloqueada",
+			"prompt": "Introduce tu PIN para continuar.",
+			"pinLabel": "PIN",
+			"unlock": "Desbloquear",
+			"incorrectPin": "PIN incorrecto"
+		}
+	},
+	"folderDialogs": {
+		"picker": {
+			"titleCopy": "Copiar a…",
+			"titleMove": "Mover a…",
+			"copyItem": "Copiar “{{name}}”",
+			"moveItem": "Mover “{{name}}”",
+			"destination": "Destino: {{path}}",
+			"parentFolder": "Carpeta superior",
+			"noSubfoldersCopy": "No hay subcarpetas aquí — aún puedes copiar en esta carpeta.",
+			"noSubfoldersMove": "No hay subcarpetas aquí — aún puedes mover a esta carpeta.",
+			"confirmCopy": "Copiar aquí",
+			"confirmMove": "Mover aquí",
+			"cancel": "Cancelar",
+			"loadError": "No se pudieron cargar las carpetas"
+		},
+		"create": {
+			"title": "Nueva carpeta",
+			"nameLabel": "Nombre de la nueva carpeta",
+			"nameError": "El nombre de la carpeta no puede contener el símbolo \"/\"",
+			"submit": "Crear",
+			"cancel": "Cancelar"
+		},
+		"conflict": {
+			"title": "La ruta ya existe",
+			"message": "Ya existe un archivo o carpeta en “{{path}}”. ¿Reemplazarlo, continuar con un nuevo nombre o cancelar?",
+			"replace": "Reemplazar",
+			"rename": "Renombrar",
+			"cancel": "Cancelar"
+		}
+	},
+	"misc": {
+		"sharedLinks": {
+			"neverExpires": "Nunca caduca",
+			"expires": "Caduca {{date}}",
+			"linkCopied": "Enlace copiado",
+			"copyFailed": "No se pudo copiar el enlace",
+			"linkRevoked": "Enlace de compartición revocado",
+			"empty": "Aún no hay enlaces compartidos — abre el menú de un archivo o carpeta para crear uno.",
+			"password": "Contraseña",
+			"copyLink": "Copiar enlace",
+			"revokeLink": "Revocar enlace"
+		},
+		"accessType": {
+			"admin": "Administrador",
+			"edit": "Edición",
+			"view": "Vista"
+		},
+		"search": {
+			"placeholder": "Buscar.."
+		},
+		"alerts": {
+			"close": "Cerrar"
+		}
+	},
+	"publicShare": {
+		"sharedWithYou": "Compartido contigo",
+		"linkUnavailable": "Enlace no disponible",
+		"linkUnavailableDetail": "Este recurso compartido puede haber caducado, haber sido revocado o no haber existido nunca.",
+		"passwordRequired": "Se requiere contraseña",
+		"passwordPrompt": "Introduce la contraseña para abrir este recurso compartido.",
+		"passwordLabel": "Contraseña",
+		"unlocking": "Desbloqueando…",
+		"unlock": "Desbloquear",
+		"incorrectPassword": "Contraseña incorrecta",
+		"unlockFailed": "No se pudo desbloquear",
+		"shareUnavailable": "Este enlace compartido no está disponible",
+		"failedToOpenShare": "No se pudo abrir el recurso compartido",
+		"failedToListFolder": "No se pudo listar la carpeta",
+		"sharedItem": "Elemento compartido",
+		"preview": "Vista previa",
+		"download": "Descargar",
+		"previewHint": "Usa la vista previa para abrir imágenes, vídeos, PDF y texto en el navegador.",
+		"shareRoot": "Raíz del recurso compartido",
+		"preparingZip": "Preparando ZIP…",
+		"downloadZip": "Descargar ZIP",
+		"folderEmpty": "Esta carpeta está vacía",
+		"downloadStarted": "Descarga iniciada",
+		"downloadFailed": "Error al descargar",
+		"zipReady": "ZIP listo — descarga iniciada",
+		"zipDownloadFailed": "Error al descargar el ZIP",
+		"preparingZipArchive": "Preparando archivo ZIP",
+		"zipHint": "Esto puede tardar un poco en carpetas grandes"
+	},
+	"setup": {
+		"title": "Configuración",
+		"newStorage": "Nuevo almacenamiento",
+		"newStorageDesc": "Crea un bot de Telegram y un canal privado, luego comprueba que el bot se añadió como administrador.",
+		"storageName": "Nombre del almacenamiento",
+		"continue": "Continuar",
+		"botStep1Click": "1. Haz clic en",
+		"botStep2": "2. Envía el comando",
+		"botStep3": "3. Crea el bot nuevo y copia el token.",
+		"botToken": "Token del bot",
+		"back": "Atrás",
+		"validateBot": "Validar bot",
+		"botTokenInvalid": "El token del bot parece inválido — cópialo de nuevo desde @BotFather",
+		"notAddedMsg": "El bot no se añadió a ningún canal, o no recibió permisos de administrador. Vuelve a añadirlo como administrador mientras se ejecuta la comprobación, o pega el id del canal abajo.",
+		"botLabel": "Bot:",
+		"channelStep1Prefix": "1. Crea un",
+		"channelStep1Bold": "canal privado",
+		"channelStep1Suffix": "en Telegram.",
+		"channelStep2Prefix": "2. Añade",
+		"yourBot": "tu bot",
+		"channelStep2Admin": "como administrador",
+		"channelStep2WhileChecking": "mientras se ejecuta la comprobación",
+		"or": "o",
+		"channelStep2Forward": "reenvía cualquier publicación del canal al bot en un chat privado,",
+		"channelStep2PasteLink": "pega un",
+		"channelStep2LinkSuffix": "enlace / id de chat abajo.",
+		"listeningForChannels": "Buscando canales con permisos de administrador",
+		"chatIdLabel": "Id de chat o enlace t.me/c/…",
+		"chatIdHelper": "Canal privado: reenvía una publicación al bot, o pega t.me/c/… / -100…",
+		"checking": "Comprobando…",
+		"addById": "Añadir por id",
+		"checkChannel": "Comprobar canal",
+		"stop": "Detener",
+		"detectAnotherChannel": "Detectar otro canal",
+		"creating": "Creando…",
+		"finish": "Finalizar",
+		"enterChatIdHint": "Introduce un id de chat como -100… o un enlace t.me/c/…",
+		"channelAlreadyAdded": "Ese canal ya fue añadido",
+		"verifyingChatId": "Verificando id de chat…",
+		"foundChannelOne": "Canal encontrado: {{labels}}",
+		"foundChannelMany": "Se encontraron {{n}} canales: {{labels}}",
+		"chatIdVerifyFailed": "No se pudo verificar ese id de chat. Comprueba que el bot sea administrador allí.",
+		"channelVerifyFailed": "Error al verificar el canal",
+		"addAtLeastOneChannel": "Añade al menos un canal",
+		"storageReady": "Almacenamiento “{{name}}” listo",
+		"loadStatusFailed": "No se pudo cargar el estado de configuración",
+		"channelDetectFailed": "Error al detectar el canal"
 	}
 }

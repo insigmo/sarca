@@ -5,16 +5,17 @@ import IconButton from '@suid/material/IconButton'
 import Typography from '@suid/material/Typography'
 
 import API from '../api'
+import { t } from '../common/i18n'
 import { copyToClipboard } from '../utils/clipboard'
 import { alertStore } from './AlertStack'
 import FluentIcon from './FluentIcon'
 
 const formatExpiry = (iso) => {
-	if (!iso) return 'Never expires'
+	if (!iso) return t('misc.sharedLinks.neverExpires')
 	const date = new Date(iso)
 	return Number.isNaN(date.getTime())
 		? String(iso)
-		: `Expires ${date.toLocaleString()}`
+		: t('misc.sharedLinks.expires', { date: date.toLocaleString() })
 }
 
 /** Active shares only (API may still return soft-revoked rows on older servers). */
@@ -56,8 +57,8 @@ const SharedLinksPanel = (props) => {
 	const copyUrl = async (link) => {
 		const url = API.shares.shareAbsoluteUrl(link.token, link.url_path)
 		const ok = await copyToClipboard(url)
-		if (ok) addAlert('Link copied', 'success')
-		else addAlert('Failed to copy link', 'error')
+		if (ok) addAlert(t('misc.sharedLinks.linkCopied'), 'success')
+		else addAlert(t('misc.sharedLinks.copyFailed'), 'error')
 	}
 
 	const revoke = async (link) => {
@@ -66,7 +67,7 @@ const SharedLinksPanel = (props) => {
 		setRevokingId(id)
 		try {
 			await API.shares.revokeShare(props.storageId, id)
-			addAlert('Share link revoked', 'success')
+			addAlert(t('misc.sharedLinks.linkRevoked'), 'success')
 			// Drop immediately; bump gen so an in-flight list cannot restore it.
 			loadGen += 1
 			setLinks((prev) =>
@@ -89,7 +90,7 @@ const SharedLinksPanel = (props) => {
 			</Show>
 			<Show when={!loading() && !links().length}>
 				<Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
-					No share links yet — open a file or folder menu to create one.
+					{t('misc.sharedLinks.empty')}
 				</Typography>
 			</Show>
 			<ul class="shared-links-panel__list">
@@ -102,15 +103,15 @@ const SharedLinksPanel = (props) => {
 									{formatExpiry(link.expires_at)}
 								</p>
 								<Show when={link.has_password}>
-									<Chip size="small" label="Password" />
+									<Chip size="small" label={t('misc.sharedLinks.password')} />
 								</Show>
 							</div>
 							<div class="shared-links-panel__actions">
-								<IconButton aria-label="Copy link" onClick={() => copyUrl(link)}>
+								<IconButton aria-label={t('misc.sharedLinks.copyLink')} onClick={() => copyUrl(link)}>
 									<FluentIcon name="copy" size={18} />
 								</IconButton>
 								<IconButton
-									aria-label="Revoke link"
+									aria-label={t('misc.sharedLinks.revokeLink')}
 									disabled={revokingId() === link.id}
 									onClick={() => revoke(link)}
 								>

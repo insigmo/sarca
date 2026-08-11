@@ -437,5 +437,156 @@
 		"thirtyDays": "30 дней",
 		"uploadedCount": "Загружено: {{count}}",
 		"userEmailLabel": "Email пользователя"
+	},
+	"auth": {
+		"login": {
+			"tagline": "Войдите в своё облачное хранилище",
+			"email": "Эл. почта",
+			"password": "Пароль",
+			"signIn": "Войти"
+		},
+		"notFound": {
+			"message": "Такой страницы нет в вашем хранилище",
+			"backToStorages": "К хранилищам"
+		},
+		"lock": {
+			"ariaLabel": "Блокировка приложения",
+			"title": "Приложение заблокировано",
+			"prompt": "Введите PIN-код, чтобы продолжить.",
+			"pinLabel": "PIN-код",
+			"unlock": "Разблокировать",
+			"incorrectPin": "Неверный PIN-код"
+		}
+	},
+	"folderDialogs": {
+		"picker": {
+			"titleCopy": "Копировать в…",
+			"titleMove": "Переместить в…",
+			"copyItem": "Копирование «{{name}}»",
+			"moveItem": "Перемещение «{{name}}»",
+			"destination": "Назначение: {{path}}",
+			"parentFolder": "Родительская папка",
+			"noSubfoldersCopy": "Здесь нет подпапок — можно скопировать прямо сюда.",
+			"noSubfoldersMove": "Здесь нет подпапок — можно переместить прямо сюда.",
+			"confirmCopy": "Копировать сюда",
+			"confirmMove": "Переместить сюда",
+			"cancel": "Отмена",
+			"loadError": "Не удалось загрузить папки"
+		},
+		"create": {
+			"title": "Новая папка",
+			"nameLabel": "Имя новой папки",
+			"nameError": "Имя папки не может содержать символ \"/\"",
+			"submit": "Создать",
+			"cancel": "Отмена"
+		},
+		"conflict": {
+			"title": "Такой путь уже существует",
+			"message": "По пути «{{path}}» уже есть файл или папка. Заменить, продолжить с новым именем или отменить?",
+			"replace": "Заменить",
+			"rename": "Переименовать",
+			"cancel": "Отмена"
+		}
+	},
+	"misc": {
+		"sharedLinks": {
+			"neverExpires": "Никогда не истекает",
+			"expires": "Истекает {{date}}",
+			"linkCopied": "Ссылка скопирована",
+			"copyFailed": "Не удалось скопировать ссылку",
+			"linkRevoked": "Ссылка отозвана",
+			"empty": "Пока нет ссылок — откройте меню файла или папки, чтобы создать одну.",
+			"password": "Пароль",
+			"copyLink": "Скопировать ссылку",
+			"revokeLink": "Отозвать ссылку"
+		},
+		"accessType": {
+			"admin": "Админ",
+			"edit": "Редактирование",
+			"view": "Просмотр"
+		},
+		"search": {
+			"placeholder": "Поиск.."
+		},
+		"alerts": {
+			"close": "Закрыть"
+		}
+	},
+	"publicShare": {
+		"sharedWithYou": "Доступно вам",
+		"linkUnavailable": "Ссылка недоступна",
+		"linkUnavailableDetail": "Возможно, срок действия ссылки истёк, доступ отозван или она никогда не существовала.",
+		"passwordRequired": "Требуется пароль",
+		"passwordPrompt": "Введите пароль, чтобы открыть этот доступ.",
+		"passwordLabel": "Пароль",
+		"unlocking": "Разблокировка…",
+		"unlock": "Разблокировать",
+		"incorrectPassword": "Неверный пароль",
+		"unlockFailed": "Не удалось разблокировать",
+		"shareUnavailable": "Эта ссылка недоступна",
+		"failedToOpenShare": "Не удалось открыть доступ",
+		"failedToListFolder": "Не удалось получить список папки",
+		"sharedItem": "Общий объект",
+		"preview": "Просмотр",
+		"download": "Скачать",
+		"previewHint": "Используйте просмотр, чтобы открыть изображения, видео, PDF и текст в браузере.",
+		"shareRoot": "Корень доступа",
+		"preparingZip": "Подготовка ZIP…",
+		"downloadZip": "Скачать ZIP",
+		"folderEmpty": "Эта папка пуста",
+		"downloadStarted": "Скачивание начато",
+		"downloadFailed": "Не удалось скачать",
+		"zipReady": "ZIP готов — скачивание начато",
+		"zipDownloadFailed": "Не удалось скачать ZIP",
+		"preparingZipArchive": "Подготовка ZIP-архива",
+		"zipHint": "Это может занять некоторое время для больших папок"
+	},
+	"setup": {
+		"title": "Настройка",
+		"newStorage": "Новое хранилище",
+		"newStorageDesc": "Создайте Telegram-бота и приватный канал, затем проверьте, что бот добавлен администратором.",
+		"storageName": "Название хранилища",
+		"continue": "Продолжить",
+		"botStep1Click": "1. Перейдите к",
+		"botStep2": "2. Отправьте команду",
+		"botStep3": "3. Создайте бота и скопируйте токен.",
+		"botToken": "Токен бота",
+		"back": "Назад",
+		"validateBot": "Проверить бота",
+		"botTokenInvalid": "Токен бота выглядит некорректным — скопируйте его заново у @BotFather",
+		"notAddedMsg": "Бот не был добавлен в канал или не получил права администратора. Добавьте бота администратором, пока идёт проверка, либо вставьте id канала ниже.",
+		"botLabel": "Бот:",
+		"channelStep1Prefix": "1. Создайте",
+		"channelStep1Bold": "приватный канал",
+		"channelStep1Suffix": "в Telegram.",
+		"channelStep2Prefix": "2. Добавьте",
+		"yourBot": "вашего бота",
+		"channelStep2Admin": "администратором",
+		"channelStep2WhileChecking": "пока идёт проверка",
+		"or": "или",
+		"channelStep2Forward": "перешлите любое сообщение из канала боту в личный чат,",
+		"channelStep2PasteLink": "вставьте",
+		"channelStep2LinkSuffix": "ссылку / id чата ниже.",
+		"listeningForChannels": "Ожидание каналов с правами администратора",
+		"chatIdLabel": "Id чата или ссылка t.me/c/…",
+		"chatIdHelper": "Приватный канал: перешлите сообщение боту или вставьте t.me/c/… / -100…",
+		"checking": "Проверка…",
+		"addById": "Добавить по id",
+		"checkChannel": "Проверить канал",
+		"stop": "Остановить",
+		"detectAnotherChannel": "Найти ещё один канал",
+		"creating": "Создание…",
+		"finish": "Завершить",
+		"enterChatIdHint": "Введите id чата, например -100…, или ссылку t.me/c/…",
+		"channelAlreadyAdded": "Этот канал уже добавлен",
+		"verifyingChatId": "Проверка id чата…",
+		"foundChannelOne": "Найден канал: {{labels}}",
+		"foundChannelMany": "Найдено каналов: {{n}} — {{labels}}",
+		"chatIdVerifyFailed": "Не удалось проверить этот id чата. Убедитесь, что бот является администратором.",
+		"channelVerifyFailed": "Не удалось проверить канал",
+		"addAtLeastOneChannel": "Добавьте хотя бы один канал",
+		"storageReady": "Хранилище «{{name}}» готово",
+		"loadStatusFailed": "Не удалось загрузить статус настройки",
+		"channelDetectFailed": "Не удалось найти канал"
 	}
 }

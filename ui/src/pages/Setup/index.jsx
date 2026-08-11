@@ -13,6 +13,7 @@ import API from '../../api'
 import { alertStore } from '../../components/AlertStack'
 import LoadingDots from '../../components/LoadingDots'
 import { busyStore } from '../../common/busyStore'
+import { t } from '../../common/i18n'
 
 const POLL_MS = 0
 const POLL_TIMEOUT_MS = 120_000
@@ -82,7 +83,7 @@ const SetupWizard = () => {
 		try {
 			await API.setup.getSetupStatus()
 		} catch {
-			addAlert('Failed to load setup status', 'error')
+			addAlert(t('setup.loadStatusFailed'), 'error')
 			navigate('/storages')
 		} finally {
 			setLoading(false)
@@ -111,7 +112,7 @@ const SetupWizard = () => {
 	const handleValidateBot = () => {
 		const trimmed = token().trim()
 		if (!isValidBotToken(trimmed)) {
-			addAlert('Bot token looks invalid — copy it again from @BotFather', 'error')
+			addAlert(t('setup.botTokenInvalid'), 'error')
 			return
 		}
 		setBotUsername('')
@@ -120,9 +121,6 @@ const SetupWizard = () => {
 		stopPolling()
 		setStep(2)
 	}
-
-	const NOT_ADDED_MSG =
-		'Bot was not added to a channel, or was not given admin rights. Re-add the bot as admin while checking runs, or paste the channel id below.'
 
 	const startPolling = () => {
 		stopPolling()
@@ -141,7 +139,7 @@ const SetupWizard = () => {
 			if (epoch !== pollEpoch) return
 			if (Date.now() - pollStartedAt > POLL_TIMEOUT_MS) {
 				stopPolling()
-				setPollError(NOT_ADDED_MSG)
+				setPollError(t('setup.notAddedMsg'))
 				return
 			}
 			try {
@@ -169,8 +167,11 @@ const SetupWizard = () => {
 						.join(', ')
 					addAlert(
 						hits.length === 1
-							? `Found channel: ${labels}`
-							: `Found ${Math.min(hits.length, MAX_CHANNELS - exclude.length)} channels: ${labels}`,
+							? t('setup.foundChannelOne', { labels })
+							: t('setup.foundChannelMany', {
+									n: Math.min(hits.length, MAX_CHANNELS - exclude.length),
+									labels,
+								}),
 						'success',
 					)
 					// Keep polling until the storage is full (up to 3).
@@ -188,7 +189,7 @@ const SetupWizard = () => {
 			} catch (e) {
 				if (epoch !== pollEpoch) return
 				stopPolling()
-				setPollError(e?.message || 'Channel detect failed')
+				setPollError(e?.message || t('setup.channelDetectFailed'))
 			}
 		}
 		tick()
@@ -197,11 +198,11 @@ const SetupWizard = () => {
 	const handleProbeChatId = async () => {
 		const chatId = parseTelegramChatId(chatIdInput())
 		if (chatId == null) {
-			addAlert('Enter a chat id like -100… or a t.me/c/… link', 'warning')
+			addAlert(t('setup.enterChatIdHint'), 'warning')
 			return
 		}
 		if (channels().some((c) => c.chat_id === chatId)) {
-			addAlert('That channel is already added', 'info')
+			addAlert(t('setup.channelAlreadyAdded'), 'info')
 			return
 		}
 		setChatIdInput('')
@@ -209,7 +210,7 @@ const SetupWizard = () => {
 		// Avoid concurrent getUpdates (409): feed the active poller when possible.
 		if (polling()) {
 			pendingProbeIds.push(chatId)
-			addAlert('Verifying chat id…', 'info')
+			addAlert(t('setup.verifyingChatId'), 'info')
 			return
 		}
 		setProbeBusy(true)
@@ -233,18 +234,15 @@ const SetupWizard = () => {
 				const labels = hits.map((h) => h.title || h.chat_id).join(', ')
 				addAlert(
 					hits.length === 1
-						? `Found channel: ${labels}`
-						: `Found ${hits.length} channels: ${labels}`,
+						? t('setup.foundChannelOne', { labels })
+						: t('setup.foundChannelMany', { n: hits.length, labels }),
 					'success',
 				)
 				return
 			}
-			setPollError(
-				res.hint ||
-					'Could not verify that chat id. Check the bot is an admin there.',
-			)
+			setPollError(res.hint || t('setup.chatIdVerifyFailed'))
 		} catch (e) {
-			setPollError(e?.message || 'Channel verify failed')
+			setPollError(e?.message || t('setup.channelVerifyFailed'))
 		} finally {
 			setProbeBusy(false)
 		}
@@ -252,7 +250,7 @@ const SetupWizard = () => {
 
 	const handleFinish = async () => {
 		if (!channels().length) {
-			addAlert('Add at least one channel', 'error')
+			addAlert(t('setup.addAtLeastOneChannel'), 'error')
 			return
 		}
 		// Stop listening so Finish is not blocked and we do not keep getUpdates
@@ -266,7 +264,7 @@ const SetupWizard = () => {
 				token().trim(),
 				channels().map((c) => c.chat_id),
 			)
-			addAlert(`Storage “${created.name}” ready`, 'success')
+			addAlert(t('setup.storageReady', { name: created.name }), 'success')
 			navigate(`/storages/${created.id}/files`)
 		} catch {
 			/* apiRequest already alerts */
@@ -287,16 +285,15 @@ const SetupWizard = () => {
 		>
 			<Stack class="setup-wizard" spacing={2.5}>
 				<div class="page-header">
-					<h1>Setup</h1>
+					<h1>{t('setup.title')}</h1>
 				</div>
 
 				<Box class="setup-wizard__card">
 					<Typography variant="h5" component="h2" gutterBottom>
-						New storage
+						{t('setup.newStorage')}
 					</Typography>
 					<Typography color="text.secondary" sx={{ mb: 2 }}>
-						Create a Telegram bot and a private channel, then check that the bot
-						was added as an admin.
+						{t('setup.newStorageDesc')}
 					</Typography>
 
 					<Show when={step() === 0}>
@@ -310,7 +307,7 @@ const SetupWizard = () => {
 						>
 							<Stack spacing={2}>
 								<TextField
-									label="Storage name"
+									label={t('setup.storageName')}
 									value={storageName()}
 									onChange={(e) => setStorageName(e.target.value)}
 									autoFocus
@@ -320,7 +317,7 @@ const SetupWizard = () => {
 									variant="contained"
 									disabled={!storageName().trim()}
 								>
-									Continue
+									{t('setup.continue')}
 								</Button>
 							</Stack>
 						</Box>
@@ -337,7 +334,7 @@ const SetupWizard = () => {
 						>
 							<Stack spacing={2}>
 								<Typography>
-									1. Click{' '}
+									{t('setup.botStep1Click')}{' '}
 									<Link
 										href="https://t.me/BotFather"
 										target="_blank"
@@ -347,13 +344,13 @@ const SetupWizard = () => {
 									</Link>
 								</Typography>
 								<Typography>
-									2. Send a command <code>/newbot</code>
+									{t('setup.botStep2')} <code>/newbot</code>
 								</Typography>
 								<Typography>
-									3. Create new bot and copy the token.
+									{t('setup.botStep3')}
 								</Typography>
 								<TextField
-									label="Bot token"
+									label={t('setup.botToken')}
 									value={token()}
 									onChange={(e) => setToken(e.target.value)}
 									autoComplete="off"
@@ -361,14 +358,14 @@ const SetupWizard = () => {
 								/>
 								<Stack direction="row" spacing={1}>
 									<Button type="button" onClick={() => setStep(0)}>
-										Back
+										{t('setup.back')}
 									</Button>
 									<Button
 										type="submit"
 										variant="contained"
 										disabled={!token().trim()}
 									>
-										Validate bot
+										{t('setup.validateBot')}
 									</Button>
 								</Stack>
 							</Stack>
@@ -379,23 +376,29 @@ const SetupWizard = () => {
 						<Stack spacing={2}>
 							<Show when={botUsername()}>
 								<Typography>
-									Bot: <strong>@{botUsername()}</strong>
+									{t('setup.botLabel')} <strong>@{botUsername()}</strong>
 								</Typography>
 							</Show>
 							<Typography>
-								1. Create a <strong>private channel</strong> in Telegram.
+								{t('setup.channelStep1Prefix')}{' '}
+								<strong>{t('setup.channelStep1Bold')}</strong>{' '}
+								{t('setup.channelStep1Suffix')}
 							</Typography>
 							<Typography>
-								2. Add <strong>@{botUsername() || 'your bot'}</strong> as an
-								admin <em>while checking runs</em>,{' '}
-								<strong>or</strong> forward any post from the channel to the
-								bot in a private chat, <strong>or</strong> paste a{' '}
-								<code>t.me/c/…</code> link / chat id below.
+								{t('setup.channelStep2Prefix')}{' '}
+								<strong>@{botUsername() || t('setup.yourBot')}</strong>{' '}
+								{t('setup.channelStep2Admin')}{' '}
+								<em>{t('setup.channelStep2WhileChecking')}</em>,{' '}
+								<strong>{t('setup.or')}</strong>{' '}
+								{t('setup.channelStep2Forward')}{' '}
+								<strong>{t('setup.or')}</strong>{' '}
+								{t('setup.channelStep2PasteLink')}{' '}
+								<code>t.me/c/…</code> {t('setup.channelStep2LinkSuffix')}
 							</Typography>
 
 							<Show when={polling()}>
 								<Typography variant="body2">
-									Listening for admin channels
+									{t('setup.listeningForChannels')}
 									<LoadingDots />
 								</Typography>
 							</Show>
@@ -435,10 +438,10 @@ const SetupWizard = () => {
 									alignItems={{ sm: 'flex-start' }}
 								>
 									<TextField
-										label="Chat id or t.me/c/… link"
+										label={t('setup.chatIdLabel')}
 										value={chatIdInput()}
 										onChange={(e) => setChatIdInput(e.target.value)}
-										helperText="Private channel: forward a post to the bot, or paste t.me/c/… / -100…"
+										helperText={t('setup.chatIdHelper')}
 										fullWidth
 									/>
 									<Button
@@ -447,7 +450,7 @@ const SetupWizard = () => {
 										onClick={handleProbeChatId}
 										sx={{ flexShrink: 0, mt: { sm: 0.5 } }}
 									>
-										{probeBusy() ? 'Checking…' : 'Add by id'}
+										{probeBusy() ? t('setup.checking') : t('setup.addById')}
 									</Button>
 								</Stack>
 							</Show>
@@ -460,11 +463,11 @@ const SetupWizard = () => {
 										setStep(1)
 									}}
 								>
-									Back
+									{t('setup.back')}
 								</Button>
 								<Show when={!polling() && channels().length === 0}>
 									<Button variant="contained" onClick={startPolling}>
-										Check channel
+										{t('setup.checkChannel')}
 									</Button>
 								</Show>
 								<Show when={polling()}>
@@ -475,7 +478,7 @@ const SetupWizard = () => {
 											setPollError('')
 										}}
 									>
-										Stop
+										{t('setup.stop')}
 									</Button>
 								</Show>
 								<Show
@@ -486,7 +489,7 @@ const SetupWizard = () => {
 									}
 								>
 									<Button variant="outlined" onClick={startPolling}>
-										Detect another channel
+										{t('setup.detectAnotherChannel')}
 									</Button>
 								</Show>
 								<Button
@@ -494,7 +497,7 @@ const SetupWizard = () => {
 									disabled={!channels().length || finishing()}
 									onClick={handleFinish}
 								>
-									{finishing() ? 'Creating…' : 'Finish'}
+									{finishing() ? t('setup.creating') : t('setup.finish')}
 								</Button>
 							</Stack>
 						</Stack>
