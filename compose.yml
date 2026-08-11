@@ -19,15 +19,9 @@ services:
     env_file:
       - sarca.conf
     restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 512m
-    memswap_limit: 2g
-    deploy:
-      resources:
-        limits:
-          memory: 2g
-        reservations:
-          memory: 512m
+    mem_limit: 256m
+    mem_reservation: 256m
+    memswap_limit: 3328m   # 256m RAM + 3072m (3g) swap = 3328m
 
 volumes:
   sarca-work-volume:
