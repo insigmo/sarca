@@ -311,7 +311,23 @@ class ClientApp:
         return payload
 
     def wait_for(self, selector: str, timeout_ms: int = 15000) -> None:
-        self.run("wait", selector, "--timeout", str(timeout_ms), timeout=timeout_ms / 1000 + 10)
+        # Right after a (re)launch the window exists but the webview can still
+        # be on about:blank, with no `document.body` yet. tauri-pilot's own
+        # `wait` hands that straight to a `MutationObserver.observe`, which
+        # throws instead of waiting since its target isn't a Node yet. Retry
+        # across that one transient error instead of failing the whole wait.
+        deadline = time.monotonic() + timeout_ms / 1000
+        while True:
+            remaining_ms = max(int((deadline - time.monotonic()) * 1000), 1)
+            try:
+                self.run(
+                    "wait", selector, "--timeout", str(remaining_ms), timeout=remaining_ms / 1000 + 10
+                )
+                return
+            except PilotError as err:
+                if "MutationObserver" not in str(err) or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
 
     def url(self) -> str:
         return self.run("url")
