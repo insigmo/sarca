@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use axum::{
     Router,
@@ -29,7 +29,6 @@ use tracing::Level;
 
 use crate::{
     common::routing::app_state::AppState,
-    conf,
     routers::{
         auth::AuthRouter,
         public_shares::PublicSharesRouter,
@@ -141,35 +140,6 @@ impl Server {
                     }
                 },
             )
-    }
-
-    /// Plain HTTP on `PORT` (e2e / dev when `SARCA_PLAIN_HTTP=1` or no TLS config).
-    pub async fn run(self, addr: &SocketAddr) {
-        let listener = tokio::net::TcpListener::bind(addr).await.unwrap_or_else(|e| {
-            eprintln!();
-            eprintln!("error: cannot bind to {addr}: {e}");
-            eprintln!(
-                "hint: port {} is probably already in use — stop the other process or set a free \
-                 PORT in {}",
-                addr.port(),
-                conf::CONF_NAME
-            );
-            std::process::exit(1);
-        });
-
-        let public = format!("http://127.0.0.1:{}", addr.port());
-        eprintln!();
-        eprintln!("========================================");
-        eprintln!("  Sarca is running");
-        eprintln!("  UI:      {public}");
-        eprintln!("  API:     {public}/api");
-        eprintln!("  Listen:  http://{addr}");
-        eprintln!("  UI dir:  {}", self.ui_dir.display());
-        eprintln!("========================================");
-        eprintln!();
-        tracing::info!("listening on {public} (bound to {addr})");
-
-        axum::serve(listener, self.router).await.unwrap();
     }
 
     /// HTTP/3 (UDP) + TCP HTTPS on `HTTPS_ADDR`, ACME http-01 + redirect on `ACME_HTTP_ADDR`.

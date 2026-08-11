@@ -343,11 +343,15 @@ configure_tls() {
   echo "Set TLS_HOSTNAME=${hostname}"
 }
 
-conf_port() {
+conf_https_port() {
   local env_file="$1"
-  local port
-  port="$(env_get_value "${env_file}" PORT)"
-  echo "${port:-8000}"
+  local addr port
+  addr="$(env_get_value "${env_file}" HTTPS_ADDR)"
+  port="${addr##*:}"
+  case "${port}" in
+    '' | *[!0-9]*) echo 443 ;;
+    *) echo "${port}" ;;
+  esac
 }
 
 write_or_merge_conf() {
@@ -359,7 +363,6 @@ write_or_merge_conf() {
 
   # Defaults for a fresh install / soft-merge on upgrade.
   set -- \
-    "PORT=8000" \
     "WORKERS=4" \
     "MEDIA_CONCURRENCY=16" \
     "PREFETCH_ENABLED=true" \
@@ -518,8 +521,8 @@ EOF
     echo "Add to PATH:  export PATH=\"${BIN_DIR}:\$PATH\""
   fi
 
-  local port log_file tls_host open_url
-  port="$(conf_port "${PREFIX}/sarca.conf")"
+  local https_port log_file tls_host open_url
+  https_port="$(conf_https_port "${PREFIX}/sarca.conf")"
   tls_host="$(env_get_value "${PREFIX}/sarca.conf" TLS_HOSTNAME)"
   log_file="${PREFIX}/sarca.log"
   echo
@@ -531,8 +534,8 @@ EOF
     echo "Open ${open_url} (HTTPS + HTTP/3)"
     echo "Ensure firewall allows: 80/tcp (ACME), 443/tcp (HTTPS), 443/udp (HTTP/3)"
   else
-    open_url="http://127.0.0.1:${port}"
-    echo "Open ${open_url}"
+    open_url="https://127.0.0.1:${https_port}"
+    echo "Open ${open_url} (self-signed certificate — accept the browser warning)"
   fi
 }
 
@@ -573,8 +576,7 @@ install_docker() {
   rm -f "${dest}/docker/sarca-entrypoint.sh"
 
   need_cmd docker
-  local port tls_host
-  port="$(conf_port "${dest}/sarca.conf")"
+  local tls_host
   tls_host="$(env_get_value "${dest}/sarca.conf" TLS_HOSTNAME)"
   echo
   echo "Starting Docker stack in ${dest}…"
@@ -588,7 +590,7 @@ install_docker() {
     echo "Open https://${tls_host} (HTTPS + HTTP/3)"
     echo "Ensure firewall allows: 80/tcp (ACME), 443/tcp (HTTPS), 443/udp (HTTP/3)"
   else
-    echo "Open http://127.0.0.1:${port}"
+    echo "Open https://127.0.0.1:8443 (self-signed certificate — accept the browser warning)"
   fi
   echo "Logs: docker logs -f sarca"
 }

@@ -1,10 +1,4 @@
-use std::{
-    env,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::Path,
-    sync::Arc,
-    time::Duration,
-};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use sarca::{
     common::{
@@ -85,22 +79,16 @@ async fn main() {
         tracing::error!("{info}\n{backtrace}");
     }));
 
-    let port = config.port;
-    eprintln!("starting Sarca (PORT={port} from config)…");
-    tracing::info!("starting Sarca on port {port}");
+    eprintln!("starting Sarca…");
+    tracing::info!("starting Sarca");
     if config.debug_log {
         tracing::info!("DEBUG_LOG=1 — verbose request/action logging enabled");
     }
 
-    let plain_http = env::var("SARCA_PLAIN_HTTP")
-        .ok()
-        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
-
     // No TLS_HOSTNAME: fall back to the machine's public IP so the server still
-    // comes up on HTTPS (TCP + HTTP/3) with an ACME-issuable identity. Only a
-    // host with no usable address at all drops to plain HTTP.
+    // comes up on HTTPS (TCP + HTTP/3) with an ACME-issuable identity.
     let mut identity_auto_detected = false;
-    if !plain_http && config.tls_hostname.is_none() {
+    if config.tls_hostname.is_none() {
         eprintln!("TLS_HOSTNAME unset — detecting public IP…");
         match detect_public_ip().await {
             Some(ip) => {
@@ -110,7 +98,7 @@ async fn main() {
             },
             None => {
                 tracing::warn!(
-                    "TLS_HOSTNAME unset and no public IP could be detected — plain HTTP on PORT"
+                    "TLS_HOSTNAME unset and no public IP could be detected — using self-signed identity"
                 );
             },
         }
@@ -216,11 +204,7 @@ async fn main() {
         .ensure_dir()
         .await
         .unwrap_or_else(|e| die(format!("failed to create CERTS_DIR: {e}")));
-    let has_certs = cert_store.load_cert().await.ok().flatten().is_some()
-        && cert_store.load_key().await.ok().flatten().is_some();
-    let tls_mode = !plain_http && (config.tls_hostname.is_some() || has_certs);
-
-    if tls_mode {
+    {
         let identity =
             config.tls_identity().unwrap_or_else(|e| die(format!("invalid TLS_HOSTNAME: {e}")));
         // One slot shared by startup issuance, the renewal task and the public
@@ -296,14 +280,6 @@ async fn main() {
             config.acme_http_addr
         );
         server.run_tls(runtime, Some(acme_task)).await;
-    } else {
-        if plain_http {
-            tracing::info!("SARCA_PLAIN_HTTP=1 — plain HTTP on PORT (dev/e2e escape hatch)");
-        } else {
-            tracing::info!("no TLS identity or certs — plain HTTP on PORT");
-        }
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
-        server.run(&addr).await;
     }
 }
 
