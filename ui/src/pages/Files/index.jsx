@@ -1073,7 +1073,7 @@ const Files = () => {
 			const item = items[i]
 			if (mode === 'move' && isBlockedDest(item.path, dest)) {
 				addAlert(
-					`Cannot move "${item.name}" into itself or a subfolder`,
+					t('files.cannotMoveIntoItself', { name: item.name }),
 					'error',
 				)
 				continue
@@ -1115,15 +1115,15 @@ const Files = () => {
 		if (done.length === 1) {
 			addAlert(
 				mode === 'copy'
-					? `Copied "${done[0]}"`
-					: `Moved "${done[0]}"`,
+					? t('files.copiedOne', { name: done[0] })
+					: t('files.movedOne', { name: done[0] }),
 				'success',
 			)
 		} else if (done.length > 1) {
 			addAlert(
 				mode === 'copy'
-					? `Copied ${done.length} items`
-					: `Moved ${done.length} items`,
+					? t('files.copiedMany', { count: done.length })
+					: t('files.movedMany', { count: done.length }),
 				'success',
 			)
 		}
@@ -1463,7 +1463,7 @@ const Files = () => {
 		const folderBase = folderDestPath(routerFolderPath())
 
 		await API.files.createFolder(params.id, folderBase, folderName)
-		addAlert(`Created folder "${folderName}"`, 'success')
+		addAlert(t('files.createdFolder', { name: folderName }), 'success')
 		await fetchFSLayer()
 	}
 
@@ -1482,7 +1482,7 @@ const Files = () => {
 	 */
 	const uploadEntries = (entries, baseParentPath) => {
 		if (!entries.length) {
-			addAlert('No files to upload', 'error')
+			addAlert(t('files.noFilesToUpload'), 'error')
 			return
 		}
 		const currentPath = folderDestPath(baseParentPath)
@@ -1512,7 +1512,7 @@ const Files = () => {
 
 		if (files.length > MAX_FILE_PICKER) {
 			addAlert(
-				`You can upload up to ${MAX_FILE_PICKER} files at a time`,
+				t('files.uploadLimit', { max: MAX_FILE_PICKER }),
 				'warning',
 			)
 			files = files.slice(0, MAX_FILE_PICKER)
@@ -1541,7 +1541,7 @@ const Files = () => {
 			return !shouldSkipUploadEntry(rel)
 		})
 		if (!files.length) {
-			addAlert('No files to upload in the selected folder', 'error')
+			addAlert(t('files.noFilesToUploadInFolder'), 'error')
 			return
 		}
 

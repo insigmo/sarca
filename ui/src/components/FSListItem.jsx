@@ -336,14 +336,14 @@ const FSListItem = (props) => {
 			return
 		}
 		const currentName = props.fsElement.name
-		const newName = window.prompt('New name', currentName)
+		const newName = window.prompt(t('viewer.renamePrompt'), currentName)
 		if (!newName || newName === currentName) {
 			return
 		}
 		API.files
 			.rename(params.id, normalizedPath(), newName)
 			.then(() => {
-				addAlert(`Renamed to "${newName}"`, 'success')
+				addAlert(t('viewer.renamedTo', { name: newName }), 'success')
 				props.onDelete()
 			})
 			.catch((err) => {
@@ -377,7 +377,7 @@ const FSListItem = (props) => {
 	}
 
 	const sizeLabel = () => {
-		if (!props.fsElement.is_file) return 'Folder'
+		if (!props.fsElement.is_file) return t('viewer.kindFolder')
 		const size = Number(props.fsElement.size)
 		if (!Number.isFinite(size) || size < 0) return '—'
 		return convertSize(size)
@@ -524,13 +524,13 @@ const FSListItem = (props) => {
 									onClick={toggleFavorite}
 									aria-label={
 										favorited()
-											? 'Remove from favorites'
-											: 'Add to favorites'
+											? t('viewer.removeFavorite')
+											: t('viewer.addFavorite')
 									}
 									title={
 										favorited()
-											? 'Remove from favorites'
-											: 'Add to favorites'
+											? t('viewer.removeFavorite')
+											: t('viewer.addFavorite')
 									}
 								>
 									{favorited() ? (
@@ -638,13 +638,13 @@ const FSListItem = (props) => {
 									onClick={toggleFavorite}
 									aria-label={
 										favorited()
-											? 'Remove from favorites'
-											: 'Add to favorites'
+											? t('viewer.removeFavorite')
+											: t('viewer.addFavorite')
 									}
 									title={
 										favorited()
-											? 'Remove from favorites'
-											: 'Add to favorites'
+											? t('viewer.removeFavorite')
+											: t('viewer.addFavorite')
 									}
 								>
 									{favorited() ? (
@@ -669,10 +669,10 @@ const FSListItem = (props) => {
 										openActionConfirmDialog()
 									}}
 									aria-label={
-										props.trashMode ? 'Delete forever' : 'Delete'
+										props.trashMode ? t('viewer.deleteForever') : t('common.delete')
 									}
 									title={
-										props.trashMode ? 'Delete forever' : 'Delete'
+										props.trashMode ? t('viewer.deleteForever') : t('common.delete')
 									}
 								>
 									{props.trashMode ? (
