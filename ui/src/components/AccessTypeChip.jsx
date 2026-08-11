@@ -1,11 +1,13 @@
+import { t } from '../common/i18n'
+
 export const makeAccessTypeUserFriendly = (at) => {
 	switch (at) {
 		case 'A':
-			return 'Admin'
+			return t('misc.accessType.admin')
 		case 'W':
-			return 'Edit'
+			return t('misc.accessType.edit')
 		case 'R':
-			return 'View'
+			return t('misc.accessType.view')
 		default:
 			return at
 	}
