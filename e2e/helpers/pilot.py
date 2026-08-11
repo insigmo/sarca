@@ -800,13 +800,33 @@ class ClientApp:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             self.sidebar_click("More options", timeout_s=max(1.0, deadline - time.monotonic()))
-            if self.click_text(label, required=False, timeout_s=2.0):
-                return
+            # The menu mounts asynchronously. Clicking the label before it is
+            # there fails, and re-clicking the trigger then lands on the menu's
+            # backdrop and closes it again — the loop fought itself and never
+            # settled. Wait for the items first.
+            if self._wait_for_menu_items(timeout_s=min(5.0, max(1.0, deadline - time.monotonic()))):
+                if self.click_text(label, required=False, timeout_s=2.0):
+                    return
         raise PilotError(f"the sidebar overflow menu never offered {label!r}")
+
+    def _wait_for_menu_items(self, timeout_s: float = 5.0) -> bool:
+        """True once an open MUI menu has rendered at least one item."""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.eval_js("document.querySelectorAll('li[role=menuitem]').length"):
+                return True
+            time.sleep(0.1)
+        return False
 
     def confirm_dialog(self, timeout_s: float = 10.0) -> None:
         """Accept the ActionConfirmDialog that guards destructive actions."""
-        if not self.click_text("Confirm", required=False, timeout_s=timeout_s):
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.eval_js("document.querySelectorAll('[role=dialog]').length"):
+                break
+            time.sleep(0.1)
+        remaining = max(1.0, deadline - time.monotonic())
+        if not self.click_text("Confirm", required=False, timeout_s=remaining):
             raise PilotError("no confirmation dialog appeared")
 
     def open_section(self, label: str) -> None:

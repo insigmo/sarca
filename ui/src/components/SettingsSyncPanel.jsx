@@ -8,6 +8,7 @@ import LoadingDots from './LoadingDots'
 import { formatBytes, isMobileNativePlatform } from '../common/nativeBridge'
 import { syncSettingsStore } from '../common/syncSettingsStore'
 import { filesChromeStore } from '../common/filesChrome'
+import { t } from '../common/i18n'
 import SettingsSwitch from './SettingsSwitch'
 
 /**
@@ -53,7 +54,7 @@ const SettingsSyncPanel = (props) => {
 	return (
 		<div class="settings-sync-panel">
 			<div class="settings-toggle">
-				<span>Enable photo and video auto-upload</span>
+				<span>{t('settings.enableAutoUpload')}</span>
 				{/*
 				  * Always interactive, never disabled while the native work runs:
 				  * the switch renders the user's intent immediately and the store
@@ -69,7 +70,7 @@ const SettingsSyncPanel = (props) => {
 			<Show when={sync.autoBinding()}>
 				<p class="settings-sync-panel__meta">
 					{sync.autoBinding().local_path} →{' '}
-					{sync.autoBinding().remote_root || 'Camera'}
+					{sync.autoBinding().remote_root || t('settings.cameraFolderName')}
 				</p>
 				<div class="settings-sync-panel__row">
 					<Button
@@ -82,14 +83,14 @@ const SettingsSyncPanel = (props) => {
 							await sync.changeLocalFolder(path)
 						}}
 					>
-						Change local folder
+						{t('settings.changeLocalFolder')}
 					</Button>
 				</div>
 			</Show>
 
 			<Show when={sync.autoBinding() && isMobile()}>
 				<div class="settings-toggle">
-					<span>Upload on Wi‑Fi only</span>
+					<span>{t('settings.uploadOnWifiOnly')}</span>
 					<SettingsSwitch
 						id="settings-wifi-switch"
 						checked={sync.prefs().wifi_only !== false}
@@ -106,7 +107,7 @@ const SettingsSyncPanel = (props) => {
 					color="secondary"
 					onClick={() => sync.runSyncNow()}
 				>
-					Upload now
+					{t('settings.uploadNow')}
 				</Button>
 			</div>
 
@@ -114,14 +115,14 @@ const SettingsSyncPanel = (props) => {
 			    working?", so it must not be hidden behind another tap. */}
 			<div class="settings-sync-panel__section">
 				<Typography variant="subtitle2" sx={{ mb: 1 }}>
-					Uploading
+					{t('settings.uploading')}
 					<span class="settings-sync-panel__queue-count">
 						{sync.transferSnap().uploading}
 					</span>
 				</Typography>
 				<Show
 					when={sync.uploadItems().length}
-					fallback={<p class="settings-account__hint">No transfers yet.</p>}
+					fallback={<p class="settings-account__hint">{t('settings.noTransfersYet')}</p>}
 				>
 					<ul class="settings-sync-panel__transfer-list">
 						<For each={sync.uploadItems()}>

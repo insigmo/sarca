@@ -1762,14 +1762,17 @@ const Files = () => {
 	const conflictMessage = () => {
 		const pending = pathConflict()
 		if (pending) {
-			const verb = pending.mode === 'copy' ? 'copy' : 'move'
-			return `A live file or folder already exists at the destination for “${pending.name}”. Replace it, ${verb} under a new name, or cancel?`
+			const verb =
+				pending.mode === 'copy'
+					? t('files.copyVerb')
+					: t('files.moveVerb')
+			return t('files.conflictMessage', { name: pending.name, verb })
 		}
 		return undefined
 	}
 
 	const conflictRenameLabel = () =>
-		pathConflict() ? 'Keep both' : 'Rename'
+		pathConflict() ? t('files.keepBoth') : t('common.rename')
 
 	return (
 		<>
@@ -1794,14 +1797,14 @@ const Files = () => {
 				<div class="files-page__toolbar">
 					<IconButton
 						class="files-page__nav-toggle"
-						aria-label="Open files menu"
+						aria-label={t('files.openMenu')}
 						onClick={() => setMobileNavOpen(true)}
 					>
 						<FluentIcon name="navigation" size={22} />
 					</IconButton>
 
 					<Show when={browseMode()}>
-						<nav class="files-breadcrumb" aria-label="Folder path">
+						<nav class="files-breadcrumb" aria-label={t('files.folderPath')}>
 							<For each={pathCrumbs()}>
 								{(crumb, index) => (
 									<>
@@ -1821,7 +1824,7 @@ const Files = () => {
 												'files-breadcrumb__crumb--drop':
 													crumbDropPath() === crumb.path,
 											}}
-											title={crumb.path || 'All files'}
+											title={crumb.path || t('files.allFiles')}
 											onClick={() => goToFolder(crumb.path)}
 											onDragOver={(e) =>
 												onCrumbDragOver(crumb.path, e)
@@ -1846,12 +1849,12 @@ const Files = () => {
 							sx={{ mr: 'auto' }}
 						>
 							{listMode() === 'favorites'
-								? 'Favorites'
+								? t('files.favorites')
 								: listMode() === 'recent'
-									? 'Recent'
+									? t('files.recent')
 									: listMode() === 'shared'
-										? 'Shared links'
-										: 'Trash'}
+										? t('files.shared')
+										: t('files.trash')}
 						</Typography>
 					</Show>
 
@@ -1860,7 +1863,7 @@ const Files = () => {
 					<Show when={selectionModeEnabled() && selectionActive()}>
 						<div class="files-bulk-bar">
 							<span class="files-bulk-bar__count">
-								{selectedCount()} selected
+								{t('files.selectedCount', { count: selectedCount() })}
 							</span>
 							<Show
 								when={trashMode()}
@@ -1873,7 +1876,7 @@ const Files = () => {
 											startIcon={<FluentIcon name="copy" size={18} />}
 											onClick={openBulkCopy}
 										>
-											Copy
+											{t('common.copy')}
 										</Button>
 										<Button
 											variant="outlined"
@@ -1882,7 +1885,7 @@ const Files = () => {
 											startIcon={<FluentIcon name="arrowMove" size={18} />}
 											onClick={openBulkMove}
 										>
-											Move
+											{t('common.move')}
 										</Button>
 										<Button
 											variant="outlined"
@@ -1891,7 +1894,7 @@ const Files = () => {
 											startIcon={<FluentIcon name="delete" size={18} />}
 											onClick={() => setBulkDeleteOpen(true)}
 										>
-											Delete
+											{t('common.delete')}
 										</Button>
 									</>
 								}
@@ -1903,7 +1906,7 @@ const Files = () => {
 									startIcon={<FluentIcon name="arrowUndo" size={18} />}
 									onClick={confirmBulkRestore}
 								>
-									Restore
+									{t('files.restore')}
 								</Button>
 								<Button
 									variant="outlined"
@@ -1912,12 +1915,12 @@ const Files = () => {
 									startIcon={<FluentIcon name="deleteDismiss" size={18} />}
 									onClick={() => setBulkDeleteOpen(true)}
 								>
-									Delete forever
+									{t('files.deleteForever')}
 								</Button>
 							</Show>
 							<IconButton
 								size="small"
-								aria-label="Clear selection"
+								aria-label={t('files.clearSelection')}
 								onClick={clearSelection}
 							>
 								<FluentIcon name="dismiss" size={18} />
@@ -1944,25 +1947,25 @@ const Files = () => {
 								selected={sortField() === 'name'}
 								onClick={() => chooseSortField('name')}
 							>
-								Name
+								{t('files.sortName')}
 							</MenuItem>
 							<MenuItem
 								selected={sortField() === 'size'}
 								onClick={() => chooseSortField('size')}
 							>
-								Size
+								{t('files.sortSize')}
 							</MenuItem>
 							<MenuItem
 								selected={sortField() === 'mtime'}
 								onClick={() => chooseSortField('mtime')}
 							>
-								Date modified
+								{t('files.sortDateModified')}
 							</MenuItem>
 							<MenuItem
 								selected={sortField() === 'type'}
 								onClick={() => chooseSortField('type')}
 							>
-								File type
+								{t('files.sortFileType')}
 							</MenuItem>
 							<Divider />
 							<MenuItem
@@ -1972,7 +1975,7 @@ const Files = () => {
 									setSortMenuAnchor(null)
 								}}
 							>
-								Ascending
+								{t('files.sortAscending')}
 							</MenuItem>
 							<MenuItem
 								selected={sortDir() === 'desc'}
@@ -1981,7 +1984,7 @@ const Files = () => {
 									setSortMenuAnchor(null)
 								}}
 							>
-								Descending
+								{t('files.sortDescending')}
 							</MenuItem>
 						</MenuMUI>
 					</Show>
@@ -1990,7 +1993,7 @@ const Files = () => {
 						<div
 							class="files-view-toggle"
 							role="group"
-							aria-label="View mode"
+							aria-label={t('files.viewModeGroup')}
 						>
 							<IconButton
 								size="small"
@@ -1999,7 +2002,7 @@ const Files = () => {
 									'files-view-toggle__btn--active':
 										viewMode() === 'list',
 								}}
-								aria-label="List view"
+								aria-label={t('files.listView')}
 								aria-pressed={viewMode() === 'list'}
 								onClick={() => setAndPersistViewMode('list')}
 							>
@@ -2015,7 +2018,7 @@ const Files = () => {
 									'files-view-toggle__btn--active':
 										viewMode() === 'tiles',
 								}}
-								aria-label="Tiles view"
+								aria-label={t('files.tilesView')}
 								aria-pressed={viewMode() === 'tiles'}
 								onClick={() => setAndPersistViewMode('tiles')}
 							>
@@ -2033,7 +2036,7 @@ const Files = () => {
 							color="warning"
 							onClick={() => setEmptyTrashOpen(true)}
 						>
-							Empty trash
+							{t('files.emptyTrash')}
 						</Button>
 					</Show>
 				</div>
@@ -2096,14 +2099,14 @@ const Files = () => {
 								onMouseDown={(e) => e.preventDefault()}
 							>
 								{listMode() === 'trash'
-									? 'Trash is empty'
+									? t('files.trashEmptyState')
 									: listMode() === 'favorites'
-										? 'No favorites yet — star a file to pin it here'
+										? t('files.noFavorites')
 										: listMode() === 'recent'
-											? 'No recently opened files'
+											? t('files.noRecent')
 											: chrome.isSearching()
-												? 'No search results'
-												: 'No files yet'}
+												? t('files.noSearchResults')
+												: t('files.noFilesYet')}
 							</div>
 						}
 					>
@@ -2192,8 +2195,8 @@ const Files = () => {
 				<button
 					type="button"
 					class="files-new-fab"
-					aria-label="New"
-					title="New"
+					aria-label={t('files.new')}
+					title={t('files.new')}
 					aria-haspopup="menu"
 					aria-expanded={Boolean(newFabAnchor())}
 					disabled={!browseMode()}
@@ -2220,7 +2223,7 @@ const Files = () => {
 						<ListItemIcon>
 							<FluentIcon name="folderAdd" size={20} />
 						</ListItemIcon>
-						<ListItemText>Create folder</ListItemText>
+						<ListItemText>{t('files.createFolder')}</ListItemText>
 					</MenuItem>
 					<MenuItem
 						onClick={() => {
@@ -2231,7 +2234,7 @@ const Files = () => {
 						<ListItemIcon>
 							<FluentIcon name="documentArrowUp" size={20} />
 						</ListItemIcon>
-						<ListItemText>Upload file</ListItemText>
+						<ListItemText>{t('files.uploadFile')}</ListItemText>
 					</MenuItem>
 					<MenuItem
 						onClick={() => {
@@ -2242,7 +2245,7 @@ const Files = () => {
 						<ListItemIcon>
 							<FluentIcon name="folderArrowUp" size={20} />
 						</ListItemIcon>
-						<ListItemText>Upload folder</ListItemText>
+						<ListItemText>{t('files.uploadFolder')}</ListItemText>
 					</MenuItem>
 				</MenuMUI>
 
@@ -2258,7 +2261,9 @@ const Files = () => {
 						folderPicker()?.items?.length === 1
 							? folderPicker().items[0].name
 							: folderPicker()?.items?.length
-								? `${folderPicker().items.length} items`
+								? t('files.itemsCount', {
+										count: folderPicker().items.length,
+									})
 								: undefined
 					}
 					onCancel={() => setFolderPicker(null)}
@@ -2266,18 +2271,24 @@ const Files = () => {
 				/>
 
 				<ActionConfirmDialog
-					action={trashMode() ? 'Delete forever' : 'Delete'}
+					action={trashMode() ? t('files.deleteForever') : t('common.delete')}
 					entity={
-						selectedCount() === 1 ? 'item' : `${selectedCount()} items`
+						selectedCount() === 1
+							? t('files.item')
+							: t('files.itemsCount', { count: selectedCount() })
 					}
 					actionDescription={
 						trashMode()
 							? selectedCount() === 1
-								? 'permanently delete this item (including Telegram copies)'
-								: `permanently delete ${selectedCount()} items (including Telegram copies)`
+								? t('files.confirmDeleteForeverOne')
+								: t('files.confirmDeleteForeverMany', {
+										count: selectedCount(),
+									})
 							: selectedCount() === 1
-								? 'move this item to trash'
-								: `move ${selectedCount()} items to trash`
+								? t('files.confirmDeleteOne')
+								: t('files.confirmDeleteMany', {
+										count: selectedCount(),
+									})
 					}
 					isOpened={bulkDeleteOpen()}
 					onConfirm={confirmBulkDelete}
@@ -2285,9 +2296,9 @@ const Files = () => {
 				/>
 
 				<ActionConfirmDialog
-					action="Empty"
-					entity="trash"
-					actionDescription="permanently delete all files in the trash, including Telegram copies"
+					action={t('files.emptyAction')}
+					entity={t('files.trashEntity')}
+					actionDescription={t('files.confirmEmptyTrashDescription')}
 					isOpened={emptyTrashOpen()}
 					onConfirm={confirmEmptyTrash}
 					onCancel={() => setEmptyTrashOpen(false)}

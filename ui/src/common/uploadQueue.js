@@ -1,5 +1,5 @@
 import { createEffect, createRoot, createSignal, onCleanup } from 'solid-js'
-
+import { t } from './i18n'
 import API from '../api'
 import { alertStore } from '../components/AlertStack'
 
@@ -44,9 +44,9 @@ const abortControllers = new Map()
 
 /** Humanize upload errors (disk full, etc.). Rate limits are retried server-side. */
 const formatUploadError = (err) => {
-	const msg = String(err?.message || err || 'Upload failed')
+	const msg = String(err?.message || err || t('upload.failed'))
 	if (/disk full|no space|INSUFFICIENT_STORAGE/i.test(msg)) {
-		return 'Server disk is full — free space under WORK_DIR and try again.'
+		return t('upload.diskFull')
 	}
 	return msg
 }
@@ -299,7 +299,7 @@ export const uploadQueueStore = createRoot(() => {
 			// never mislabel network/Telegram errors that merely contain the word "abort".
 			const msg =
 				isAbortError(err) || ac.signal.aborted
-					? 'Upload interrupted'
+					? t('upload.interrupted')
 					: formatUploadError(err)
 			patchItem(id, {
 				status: 'error',
@@ -464,17 +464,17 @@ export const uploadQueueStore = createRoot(() => {
 		const started = transferStartedAt()
 		const elapsedMs = started ? Date.now() - started : 0
 		if (!started || uploaded < 64 * 1024 || elapsedMs < 1500) {
-			return 'Uploading…'
+			return t('upload.uploading')
 		}
 
 		const rate = uploaded / (elapsedMs / 1000)
-		if (!(rate > 0) || !(total > uploaded)) return 'Uploading…'
+		if (!(rate > 0) || !(total > uploaded)) return t('upload.uploading')
 
 		const secLeft = (total - uploaded) / rate
-		if (!Number.isFinite(secLeft) || secLeft < 0) return 'Uploading…'
-		if (secLeft < 60) return 'Less than a minute left…'
+		if (!Number.isFinite(secLeft) || secLeft < 0) return t('upload.uploading')
+		if (secLeft < 60) return t('upload.lessThanMinute')
 		const mins = Math.round(secLeft / 60)
-		if (mins < 60) return `${mins} min left…`
+		if (mins < 60) return t('upload.minutesLeft', { mins })
 		const hours = Math.floor(mins / 60)
 		const rem = mins % 60
 		return rem ? `${hours} hr ${rem} min left…` : `${hours} hr left…`
@@ -486,25 +486,27 @@ export const uploadQueueStore = createRoot(() => {
 			(i) => i.status === 'queued' || i.status === 'uploading',
 		)
 		if (pending.length) {
-			return `Uploading ${pending.length} item${pending.length === 1 ? '' : 's'}`
+			return t(pending.length === 1 ? 'upload.uploadingOne' : 'upload.uploadingMany', {
+				count: pending.length,
+			})
 		}
 		const canceled = list.filter((i) => i.status === 'canceled').length
 		if (canceledBatch() || (canceled > 0 && !list.some((i) => i.status === 'done'))) {
 			const n = canceled || list.length
-			return `${n} upload${n === 1 ? '' : 's'} canceled`
+			return t(n === 1 ? 'upload.canceledOne' : 'upload.canceledMany', { count: n })
 		}
 		if (canceled > 0) {
-			return `${canceled} upload${canceled === 1 ? '' : 's'} canceled`
+			return t(canceled === 1 ? 'upload.canceledOne' : 'upload.canceledMany', { count: canceled })
 		}
 		const done = list.filter((i) => i.status === 'done').length
 		const errors = list.filter((i) => i.status === 'error').length
 		if (errors && !done) {
-			return `${errors} upload${errors === 1 ? '' : 's'} failed`
+			return t(errors === 1 ? 'upload.failedOne' : 'upload.failedMany', { count: errors })
 		}
 		if (done) {
-			return `${done} upload${done === 1 ? '' : 's'} complete`
+			return t(done === 1 ? 'upload.completeOne' : 'upload.completeMany', { count: done })
 		}
-		return 'Uploads'
+		return t('upload.title')
 	}
 
 	const showCancelStrip = () => hasActiveWork()

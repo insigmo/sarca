@@ -19,6 +19,7 @@ import ActionConfirmDialog from './ActionConfirmDialog'
 import SettingsSyncPanel from './SettingsSyncPanel'
 import { nativeClientStore } from '../common/nativeClient'
 import FluentIcon from './FluentIcon'
+import { t } from '../common/i18n'
 
 const MAX_CHANNELS = 3
 
@@ -36,7 +37,7 @@ const MAX_CHANNELS = 3
  */
 export const validateChatId = (value) => {
 	if (value === '' || value === null || value === undefined) {
-		return 'Chat id is required'
+		return t('storageDialogs.chatIdRequired')
 	}
 	const n = Number(value)
 	// Number.isInteger (not just isFinite) — a fractional value like "-100.5"
@@ -44,7 +45,7 @@ export const validateChatId = (value) => {
 	// parseInt(draftChatId(), 10) in saveChannel, saving the wrong chat id
 	// with no indication to the user that their input was altered.
 	if (!Number.isInteger(n) || n >= 0) {
-		return 'Chat id must be a negative integer'
+		return t('storageDialogs.chatIdNegativeInteger')
 	}
 	return null
 }
@@ -94,7 +95,7 @@ const StorageSettingsModal = (props) => {
 			setBot(detail.bot || null)
 		} catch (err) {
 			console.error(err)
-			setDetailError('Could not load channels. Try reopening settings.')
+			setDetailError(t('storageDialogs.couldNotLoadChannels'))
 			setChannels([])
 			setReplication(null)
 			setBot(null)
@@ -143,18 +144,18 @@ const StorageSettingsModal = (props) => {
 
 		const next = name().trim()
 		if (!next) {
-			addAlert('Storage name is required', 'error')
+			addAlert(t('storageDialogs.storageNameRequired'), 'error')
 			return
 		}
 		if (next === storage.name) {
-			addAlert('Name unchanged', 'info')
+			addAlert(t('storageDialogs.nameUnchanged'), 'info')
 			return
 		}
 
 		setSaving(true)
 		try {
 			const updated = await API.storages.renameStorage(storage.id, next)
-			addAlert(`Renamed storage to "${updated.name}"`, 'success')
+			addAlert(t('storageDialogs.renamedStorage', { name: updated.name }), 'success')
 			props.onRenamed({ ...storage, name: updated.name })
 		} catch (err) {
 			console.error(err)
@@ -170,7 +171,7 @@ const StorageSettingsModal = (props) => {
 		setSaving(true)
 		try {
 			await API.storages.deleteStorage(storage.id)
-			addAlert(`Deleted storage "${storage.name}" and all its files`, 'success')
+			addAlert(t('storageDialogs.deletedStorage', { name: storage.name }), 'success')
 			setConfirmDelete(false)
 			props.onDeleted(storage.id)
 			props.onClose()
@@ -222,13 +223,13 @@ const StorageSettingsModal = (props) => {
 					chatId,
 					trimmedName || undefined,
 				)
-				addAlert('Channel added', 'success')
+				addAlert(t('storageDialogs.channelAdded'), 'success')
 			} else {
 				await API.storages.updateChannel(storage.id, editingId(), {
 					chat_id: chatId,
 					name: trimmedName || undefined,
 				})
-				addAlert('Channel updated', 'success')
+				addAlert(t('storageDialogs.channelUpdated'), 'success')
 			}
 			setEditingId(null)
 			await refreshDetail()
@@ -242,7 +243,7 @@ const StorageSettingsModal = (props) => {
 	const requestRemoveChannel = (channel) => {
 		const activeCount = channels().filter((c) => c.status === 'active').length
 		if (channel.status === 'active' && activeCount <= 1) {
-			addAlert('Cannot remove the last active channel', 'error')
+			addAlert(t('storageDialogs.cannotRemoveLastActiveChannel'), 'error')
 			return
 		}
 		setPendingRemoveChannel(channel)
@@ -256,7 +257,7 @@ const StorageSettingsModal = (props) => {
 
 		try {
 			await API.storages.removeChannel(storage.id, channel.id)
-			addAlert('Channel removed', 'success')
+			addAlert(t('storageDialogs.channelRemoved'), 'success')
 			await refreshDetail()
 		} catch (err) {
 			console.error(err)
@@ -270,7 +271,7 @@ const StorageSettingsModal = (props) => {
 		setRetrying(true)
 		try {
 			await API.storages.retryReplication(storage.id)
-			addAlert('Retrying failed uploads', 'success')
+			addAlert(t('storageDialogs.retryingFailedUploads'), 'success')
 			await refreshDetail()
 		} catch (err) {
 			console.error(err)
@@ -289,26 +290,24 @@ const StorageSettingsModal = (props) => {
 			setChannels(result.channels || [])
 			const n = result.added?.length || 0
 			if (n > 0) {
-				addAlert(n === 1 ? 'Added 1 channel' : `Added ${n} channels`, 'success')
+				addAlert(
+					n === 1
+						? t('storageDialogs.addedOneChannel')
+						: t('storageDialogs.addedNChannels', { count: n }),
+					'success',
+				)
 			} else if (result.hint) {
 				addAlert(result.hint, 'warning')
 			} else if (result.skipped_full) {
-				addAlert('Already at 3 channels — remove one to add more', 'info')
+				addAlert(t('storageDialogs.alreadyAtMaxChannels', { max: MAX_CHANNELS }), 'info')
 			} else if (result.skipped_in_use?.length) {
-				addAlert('Found channel(s) already used by another storage', 'warning')
+				addAlert(t('storageDialogs.foundChannelsInUse'), 'warning')
 			} else {
-				addAlert(
-					'No new channels found. Add the bot as admin to a channel, then refresh.',
-					'info',
-				)
+				addAlert(t('storageDialogs.noNewChannelsFound'), 'info')
 			}
 		} catch (err) {
 			console.error(err)
-			addAlert(
-				err?.message ||
-					'Could not refresh channels. Is a bot attached to this storage?',
-				'error',
-			)
+			addAlert(err?.message || t('storageDialogs.couldNotRefreshChannels'), 'error')
 		} finally {
 			setRefreshingChannels(false)
 		}
@@ -332,7 +331,7 @@ const StorageSettingsModal = (props) => {
 
 		const token = botToken().trim()
 		if (!token || !token.includes(':')) {
-			setBotFormError('Paste a valid bot token from @BotFather')
+			setBotFormError(t('storageDialogs.pasteValidBotToken'))
 			return
 		}
 
@@ -345,14 +344,16 @@ const StorageSettingsModal = (props) => {
 			setEditingBot(false)
 			setBotToken('')
 			addAlert(
-				hadBot ? `Bot updated to "${next.name}"` : `Bot "${next.name}" attached`,
+				hadBot
+					? t('storageDialogs.botUpdated', { name: next.name })
+					: t('storageDialogs.botAttached', { name: next.name }),
 				'success',
 			)
 			await refreshDetail()
 			setBot(next)
 		} catch (err) {
 			console.error(err)
-			setBotFormError(err?.message || 'Could not save bot token')
+			setBotFormError(err?.message || t('storageDialogs.couldNotSaveBotToken'))
 		} finally {
 			setSavingBot(false)
 		}
@@ -361,7 +362,7 @@ const StorageSettingsModal = (props) => {
 	const channelEditor = () => (
 		<div class="channel-row__edit-form">
 			<TextField
-				label="Chat id"
+				label={t('storageDialogs.chatIdLabel')}
 				type="number"
 				size="small"
 				value={draftChatId()}
@@ -372,16 +373,14 @@ const StorageSettingsModal = (props) => {
 				error={typeof draftError() === 'string'}
 				helperText={
 					draftError() ||
-					(editingId() === 'new'
-						? 'Get chat ID via @userinfobot or @getidsbot.'
-						: '')
+					(editingId() === 'new' ? t('storageDialogs.chatIdHelper') : '')
 				}
 				fullWidth
 				required
 				autoFocus
 			/>
 			<TextField
-				label="Name (optional)"
+				label={t('storageDialogs.nameOptionalLabel')}
 				size="small"
 				value={draftName()}
 				onChange={(_, v) => setDraftName(v)}
@@ -395,10 +394,10 @@ const StorageSettingsModal = (props) => {
 					disabled={savingChannel()}
 					onClick={saveChannel}
 				>
-					Save
+					{t('common.save')}
 				</Button>
 				<Button size="small" disabled={savingChannel()} onClick={cancelEditChannel}>
-					Cancel
+					{t('common.cancel')}
 				</Button>
 			</div>
 		</div>
@@ -424,13 +423,13 @@ const StorageSettingsModal = (props) => {
 						>
 							<div class="settings-modal__header">
 								<div>
-									<h2 id="storage-settings-title">Storage settings</h2>
+									<h2 id="storage-settings-title">{t('storageDialogs.storageSettingsTitle')}</h2>
 									<p class="settings-modal__sub">
-										{props.storage?.name || 'Storage'}
+										{props.storage?.name || t('storages.title')}
 									</p>
 								</div>
 								<IconButton
-									aria-label="Close storage settings"
+									aria-label={t('storageDialogs.closeStorageSettingsAria')}
 									onClick={props.onClose}
 									class="sarca-header-icon"
 									size="small"
@@ -440,8 +439,11 @@ const StorageSettingsModal = (props) => {
 							</div>
 
 							<div class="settings-modal__layout">
-								<nav class="settings-nav" aria-label="Storage settings sections">
-									<p class="settings-nav__label">Menu</p>
+								<nav
+									class="settings-nav"
+									aria-label={t('storageDialogs.storageSettingsSectionsAria')}
+								>
+									<p class="settings-nav__label">{t('storageDialogs.menuLabel')}</p>
 									<button
 										type="button"
 										class="settings-nav__item"
@@ -452,8 +454,12 @@ const StorageSettingsModal = (props) => {
 											<BadgeOutlinedIcon fontSize="small" />
 										</span>
 										<span class="settings-nav__text">
-											<span class="settings-nav__title">General</span>
-											<span class="settings-nav__desc">Name & delete</span>
+											<span class="settings-nav__title">
+												{t('storageDialogs.navGeneral')}
+											</span>
+											<span class="settings-nav__desc">
+												{t('storageDialogs.navGeneralDesc')}
+											</span>
 										</span>
 									</button>
 									<Show when={isNative()}>
@@ -472,9 +478,11 @@ const StorageSettingsModal = (props) => {
 												/>
 											</span>
 											<span class="settings-nav__text">
-												<span class="settings-nav__title">Sync</span>
+												<span class="settings-nav__title">
+													{t('storageDialogs.navSync')}
+												</span>
 												<span class="settings-nav__desc">
-													Auto-upload &amp; folders
+													{t('storageDialogs.navSyncDesc')}
 												</span>
 											</span>
 										</button>
@@ -491,9 +499,14 @@ const StorageSettingsModal = (props) => {
 											<HubOutlinedIcon fontSize="small" />
 										</span>
 										<span class="settings-nav__text">
-											<span class="settings-nav__title">Channels</span>
+											<span class="settings-nav__title">
+												{t('storageDialogs.navChannels')}
+											</span>
 											<span class="settings-nav__desc">
-												Bot · {channels().length}/{MAX_CHANNELS}
+												{t('storageDialogs.navChannelsDesc', {
+													count: channels().length,
+													max: MAX_CHANNELS,
+												})}
 											</span>
 										</span>
 									</button>
@@ -503,10 +516,10 @@ const StorageSettingsModal = (props) => {
 									<Show when={tab() === 'general'}>
 										<form class="storage-settings-form" onSubmit={saveName}>
 											<p class="settings-panel__lead">
-												Rename this storage. The name is only shown in Sarca.
+												{t('storageDialogs.renameLead')}
 											</p>
 											<TextField
-												label="Name"
+												label={t('storageDialogs.nameLabel')}
 												name="name"
 												value={name()}
 												onChange={(_, v) => setName(v)}
@@ -522,15 +535,14 @@ const StorageSettingsModal = (props) => {
 													color="secondary"
 													disabled={saving() || !name().trim()}
 												>
-													Save
+													{t('common.save')}
 												</Button>
 											</div>
 										</form>
 
 										<div class="storage-settings-danger">
 											<p class="settings-panel__lead">
-												Permanently delete this storage and all its files. This
-												cannot be undone.
+												{t('storageDialogs.deleteStorageLead')}
 											</p>
 											<Button
 												variant="outlined"
@@ -539,7 +551,7 @@ const StorageSettingsModal = (props) => {
 												disabled={saving()}
 												onClick={() => setConfirmDelete(true)}
 											>
-												Delete storage and files
+												{t('storageDialogs.deleteStorageAndFiles')}
 											</Button>
 										</div>
 									</Show>
@@ -555,8 +567,7 @@ const StorageSettingsModal = (props) => {
 										<div class="bot-section">
 											<div class="bot-section__head">
 												<p class="settings-panel__lead">
-													One bot per storage. Paste a new token to replace
-													it.
+													{t('storageDialogs.botLead')}
 												</p>
 												<Show when={!editingBot()}>
 													<Button
@@ -564,7 +575,9 @@ const StorageSettingsModal = (props) => {
 														size="small"
 														onClick={startEditBot}
 													>
-														{bot() ? 'Change bot' : 'Add bot'}
+														{bot()
+															? t('storageDialogs.changeBot')
+															: t('storageDialogs.addBot')}
 													</Button>
 												</Show>
 											</div>
@@ -572,7 +585,7 @@ const StorageSettingsModal = (props) => {
 											<Show when={editingBot()}>
 												<div class="bot-section__form">
 													<TextField
-														label="Bot token"
+														label={t('storageDialogs.botTokenLabel')}
 														value={botToken()}
 														onChange={(_, v) => {
 															setBotToken(v)
@@ -585,7 +598,7 @@ const StorageSettingsModal = (props) => {
 														error={Boolean(botFormError())}
 														helperText={
 															botFormError() ||
-															'From @BotFather → your bot → API Token'
+															t('storageDialogs.botTokenHelper')
 														}
 														disabled={savingBot()}
 													/>
@@ -597,14 +610,16 @@ const StorageSettingsModal = (props) => {
 															disabled={savingBot() || !botToken().trim()}
 															onClick={saveBot}
 														>
-															{savingBot() ? 'Saving…' : 'Save bot'}
+															{savingBot()
+																? t('storageDialogs.savingBot')
+																: t('storageDialogs.saveBotButton')}
 														</Button>
 														<Button
 															size="small"
 															disabled={savingBot()}
 															onClick={cancelEditBot}
 														>
-															Cancel
+															{t('common.cancel')}
 														</Button>
 													</div>
 												</div>
@@ -615,15 +630,18 @@ const StorageSettingsModal = (props) => {
 													when={bot()}
 													fallback={
 														<div class="bot-section__empty">
-															No bot attached yet — click Add bot and paste a
-															token from @BotFather.
+															{t('storageDialogs.noBotAttached')}
 														</div>
 													}
 												>
 													<div class="bot-section__card">
-														<span class="bot-section__label">Name</span>
+														<span class="bot-section__label">
+															{t('storageDialogs.botNameLabel')}
+														</span>
 														<span class="bot-section__name">{bot().name}</span>
-														<span class="bot-section__label">Token</span>
+														<span class="bot-section__label">
+															{t('storageDialogs.botTokenFieldLabel')}
+														</span>
 														<span class="bot-section__token">
 															{bot().token_masked}
 														</span>
@@ -635,8 +653,7 @@ const StorageSettingsModal = (props) => {
 										<div class="channels-section">
 											<div class="channels-section__head">
 												<p class="settings-panel__lead">
-													Up to {MAX_CHANNELS} Telegram channels for this
-													storage.
+													{t('storageDialogs.channelsLead', { max: MAX_CHANNELS })}
 												</p>
 												<Button
 													variant="outlined"
@@ -650,7 +667,9 @@ const StorageSettingsModal = (props) => {
 													}
 													onClick={refreshChannelsFromBot}
 												>
-													{refreshingChannels() ? 'Refreshing…' : 'Refresh'}
+													{refreshingChannels()
+														? t('storageDialogs.refreshing')
+														: t('storageDialogs.refresh')}
 												</Button>
 											</div>
 
@@ -663,7 +682,7 @@ const StorageSettingsModal = (props) => {
 													color="text.secondary"
 													sx={{ fontSize: '0.85rem' }}
 												>
-													Loading channels…
+													{t('storageDialogs.loadingChannels')}
 												</Typography>
 											</Show>
 
@@ -684,7 +703,7 @@ const StorageSettingsModal = (props) => {
 																			<div class="channel-row__info">
 																				<span class="channel-row__name">
 																					{channel.name ||
-																						`Channel ${channel.position}`}
+																								t('storageDialogs.channelPosition', { position: channel.position })}
 																				</span>
 																				<span
 																					class="channel-row__chatid"
@@ -696,21 +715,21 @@ const StorageSettingsModal = (props) => {
 																					class={`channel-status channel-status--${channel.status}`}
 																				>
 																					{channel.status === 'active'
-																						? 'Active'
-																						: 'Deleted'}
+																								? t('storageDialogs.channelActive')
+																								: t('storageDialogs.channelDeleted')}
 																				</span>
 																			</div>
 																			<div class="channel-row__actions">
 																				<IconButton
 																					size="small"
-																					aria-label={`Edit channel ${channel.name || channel.position}`}
+																							aria-label={t('storageDialogs.editChannelAria', { name: channel.name || channel.position })}
 																					onClick={() => startEditChannel(channel)}
 																				>
 																					<EditIcon fontSize="small" />
 																				</IconButton>
 																				<IconButton
 																					size="small"
-																					aria-label={`Remove channel ${channel.name || channel.position}`}
+																							aria-label={t('storageDialogs.removeChannelAria', { name: channel.name || channel.position })}
 																					onClick={() =>
 																						requestRemoveChannel(channel)
 																					}
@@ -729,8 +748,7 @@ const StorageSettingsModal = (props) => {
 																						verticalAlign: 'text-bottom',
 																					}}
 																				/>
-																				Channel deleted in Telegram. Set a new
-																				chat id or add another channel.
+																				{t('storageDialogs.channelDeadMessage')}
 																			</p>
 																		</Show>
 																	</>
@@ -755,17 +773,29 @@ const StorageSettingsModal = (props) => {
 													disabled={channels().length >= MAX_CHANNELS}
 													onClick={startAddChannel}
 												>
-													Add channel
+													{t('storageDialogs.addChannel')}
 												</Button>
 											</Show>
 
 											<Show when={replication()}>
 												<div class="replication-summary">
-													<h3>Replication</h3>
+													<h3>{t('storageDialogs.replicationTitle')}</h3>
 													<div class="replication-summary__stats">
-														<span>Uploaded: {replication().uploaded}</span>
-														<span>Pending: {replication().pending}</span>
-														<span>Failed: {replication().failed}</span>
+														<span>
+															{t('storageDialogs.uploadedCount', {
+																count: replication().uploaded,
+															})}
+														</span>
+														<span>
+															{t('storageDialogs.pendingCount', {
+																count: replication().pending,
+															})}
+														</span>
+														<span>
+															{t('storageDialogs.failedCount', {
+																count: replication().failed,
+															})}
+														</span>
 													</div>
 													<Button
 														variant="outlined"
@@ -775,7 +805,7 @@ const StorageSettingsModal = (props) => {
 														disabled={retrying() || !replication().failed}
 														onClick={retryReplication}
 													>
-														Retry failed
+														{t('storageDialogs.retryFailed')}
 													</Button>
 												</div>
 											</Show>
@@ -790,20 +820,25 @@ const StorageSettingsModal = (props) => {
 
 			<ActionConfirmDialog
 				isOpened={confirmDelete()}
-				entity="storage"
-				action="Delete"
-				actionDescription={`permanently delete storage "${props.storage?.name || ''}" and all its files`}
+				entity={t('storageDialogs.storageEntity')}
+				action={t('common.delete')}
+				actionDescription={t('storageDialogs.deleteStorageDescription', {
+					name: props.storage?.name || '',
+				})}
 				onConfirm={deleteStorage}
 				onCancel={() => setConfirmDelete(false)}
 			/>
 
 			<ActionConfirmDialog
 				isOpened={Boolean(pendingRemoveChannel())}
-				entity="channel"
-				action="Remove"
-				actionDescription={`remove channel "${
-					pendingRemoveChannel()?.name || `#${pendingRemoveChannel()?.position}`
-				}" (id ${pendingRemoveChannel()?.chat_id}) from this storage`}
+				entity={t('storageDialogs.channelEntity')}
+				action={t('storageDialogs.removeAction')}
+				actionDescription={t('storageDialogs.removeChannelDescription', {
+					name:
+						pendingRemoveChannel()?.name ||
+						`#${pendingRemoveChannel()?.position}`,
+					chatId: pendingRemoveChannel()?.chat_id,
+				})}
 				onConfirm={confirmRemoveChannel}
 				onCancel={() => setPendingRemoveChannel(null)}
 			/>

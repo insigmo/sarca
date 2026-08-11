@@ -11,11 +11,12 @@ import createLocalStore from '../../libs'
 import { makeAccessTypeUserFriendly } from './AccessTypeChip'
 import API from '../api'
 import { alertStore } from './AlertStack'
+import { t } from '../common/i18n'
 
-const ACCESS_OPTIONS = [
-	{ value: 'R', label: 'View', hint: 'Read only' },
-	{ value: 'W', label: 'Edit', hint: 'Upload & change' },
-	{ value: 'A', label: 'Admin', hint: 'Full control' },
+const ACCESS_OPTIONS = () => [
+	{ value: 'R', label: t('storageDialogs.accessView'), hint: t('storageDialogs.accessViewHint') },
+	{ value: 'W', label: t('storageDialogs.accessEdit'), hint: t('storageDialogs.accessEditHint') },
+	{ value: 'A', label: t('storageDialogs.accessAdmin'), hint: t('storageDialogs.accessAdminHint') },
 ]
 
 /**
@@ -37,15 +38,18 @@ const GrantAccess = (props) => {
 	const { addAlert } = alertStore
 	const params = useParams()
 	const [store] = createLocalStore()
-	const getAction = () => (props.email?.length ? 'Change' : 'Grant')
+	const getAction = () =>
+		props.email?.length
+			? t('storageDialogs.actionChange')
+			: t('storageDialogs.actionGrant')
 	const storageId = () => props.storageId || params.id
 	const [accessType, setAccessType] = createSignal(/** @type {'R' | 'W' | 'A'} */ ('R'))
 	// Handing out Admin is the superuser's call — the server answers 403 to
 	// anyone else, so the option is not offered rather than offered and refused.
 	const accessOptions = () =>
 		store.user?.is_superuser
-			? ACCESS_OPTIONS
-			: ACCESS_OPTIONS.filter((o) => o.value !== 'A')
+			? ACCESS_OPTIONS()
+			: ACCESS_OPTIONS().filter((o) => o.value !== 'A')
 	/** @type {[import("solid-js").Accessor<Array<{id: string, email: string}>>, any]} */
 	const [directory, setDirectory] = createSignal([])
 	const suggestions = () => {
@@ -94,10 +98,7 @@ const GrantAccess = (props) => {
 				(u) => u.email.toLowerCase() === String(email).toLowerCase(),
 			)
 			if (!known) {
-				addAlert(
-					'You can only grant access to registered users',
-					'error',
-				)
+				addAlert(t('storageDialogs.registeredUsersOnly'), 'error')
 				return
 			}
 		}
@@ -106,7 +107,10 @@ const GrantAccess = (props) => {
 
 		props.onClose()
 		addAlert(
-			`Granted "${makeAccessTypeUserFriendly(access_type)}" access to the user with email "${email}"`,
+			t('storageDialogs.grantedAccess', {
+				accessType: makeAccessTypeUserFriendly(access_type),
+				email,
+			}),
 			'success',
 		)
 
@@ -117,7 +121,9 @@ const GrantAccess = (props) => {
 		<>
 			<Dialog open={props.isVisible} onClose={props.onClose}>
 				<form onSubmit={onGrant}>
-					<DialogTitle>{getAction()} access</DialogTitle>
+					<DialogTitle>
+						{t('storageDialogs.accessDialogTitle', { action: getAction() })}
+					</DialogTitle>
 					<DialogContent>
 						<TextField
 							required
@@ -125,7 +131,7 @@ const GrantAccess = (props) => {
 							disabled={Boolean(props.email)}
 							margin="normal"
 							id="email"
-							label="User's email"
+							label={t('storageDialogs.userEmailLabel')}
 							type="email"
 							name="email"
 							fullWidth
@@ -142,11 +148,13 @@ const GrantAccess = (props) => {
 						</datalist>
 
 						<div class="access-type-picker">
-							<span class="access-type-picker__label">Access</span>
+							<span class="access-type-picker__label">
+								{t('storageDialogs.accessLabel')}
+							</span>
 							<div
 								class="access-type-picker__options"
 								role="radiogroup"
-								aria-label="Access"
+								aria-label={t('storageDialogs.accessLabel')}
 							>
 								{accessOptions().map((opt) => (
 									<button
@@ -175,7 +183,7 @@ const GrantAccess = (props) => {
 						</Button>
 
 						<Button onClick={props.onClose} color="error">
-							Cancel
+							{t('common.cancel')}
 						</Button>
 					</DialogActions>
 				</form>

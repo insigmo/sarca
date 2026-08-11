@@ -28,6 +28,7 @@ import { nativeClientStore } from '../common/nativeClient'
 import { loadPreview } from '../common/previewLoader'
 import { acquireObjectUrl, releaseObjectUrl } from '../common/objectUrlPool'
 import { sanitizeHtml } from '../common/sanitizeHtml'
+import { t } from '../common/i18n'
 import FileTypeIcon from './FileTypeIcon'
 import LoadingDots from './LoadingDots'
 import { alertStore } from './AlertStack'
@@ -550,8 +551,8 @@ const FileViewer = (props) => {
 						} catch (urlErr) {
 							console.error(urlErr)
 							if (!cancelled) {
-								setError('Could not open this file')
-								addAlert('Could not open this file', 'error')
+								setError(t('viewer.openFailed'))
+								addAlert(t('viewer.openFailed'), 'error')
 							}
 						}
 					} finally {
@@ -599,11 +600,11 @@ const FileViewer = (props) => {
 						breaks: true,
 					})
 					if (cancelled) return
-					setMarkdownHtml(await sanitizeHtml(html) || '<p><em>Empty document</em></p>')
+					setMarkdownHtml(await sanitizeHtml(html) || `<p><em>${t('viewer.emptyDocument')}</em></p>`)
 				} else if (k === 'html') {
 					const raw = await blob.text()
 					if (cancelled) return
-					setHtmlDoc(raw || '<!doctype html><p><em>Empty document</em></p>')
+					setHtmlDoc(raw || `<!doctype html><p><em>${t('viewer.emptyDocument')}</em></p>`)
 				} else if (k === 'text') {
 					setTextContent(await blob.text())
 				} else {
@@ -611,13 +612,13 @@ const FileViewer = (props) => {
 					const arrayBuffer = await blob.arrayBuffer()
 					const result = await mammoth.convertToHtml({ arrayBuffer })
 					if (cancelled) return
-					setDocxHtml(await sanitizeHtml(result.value) || '<p><em>Empty document</em></p>')
+					setDocxHtml(await sanitizeHtml(result.value) || `<p><em>${t('viewer.emptyDocument')}</em></p>`)
 				}
 			} catch (err) {
 				console.error(err)
 				if (!cancelled) {
-					setError('Could not open this file')
-					addAlert('Could not open this file', 'error')
+					setError(t('viewer.openFailed'))
+					addAlert(t('viewer.openFailed'), 'error')
 				}
 			} finally {
 				if (!cancelled) setLoading(false)
@@ -675,10 +676,10 @@ const FileViewer = (props) => {
 			a.click()
 			URL.revokeObjectURL(href)
 			a.remove()
-			addAlert('Download started', 'success')
+			addAlert(t('viewer.downloadStarted'), 'success')
 		} catch (err) {
 			console.error(err)
-			addAlert('Download failed', 'error')
+			addAlert(t('viewer.downloadFailed'), 'error')
 		} finally {
 			setIsDownloading(false)
 		}
@@ -779,7 +780,7 @@ const FileViewer = (props) => {
 				type="button"
 				class="file-viewer__ctrl-btn"
 				onClick={toggleMute}
-				aria-label={muted() || volume() === 0 ? 'Unmute' : 'Mute'}
+				aria-label={muted() || volume() === 0 ? t('viewer.unmute') : t('viewer.mute')}
 			>
 				<VolumeGlyph />
 			</button>
@@ -787,7 +788,7 @@ const FileViewer = (props) => {
 				class="file-viewer__volume-slider"
 				onClick={seekVolume}
 				role="slider"
-				aria-label="Volume"
+				aria-label={t('viewer.volume')}
 				aria-valuemin={0}
 				aria-valuemax={100}
 				aria-valuenow={Math.round((muted() ? 0 : volume()) * 100)}
@@ -847,7 +848,7 @@ const FileViewer = (props) => {
 							<span class="file-viewer__title">{props.file.name}</span>
 							<span class="file-viewer__meta">
 								{convertSize(props.file.size || 0)}
-								{streamKinds() ? ' · streaming' : ''}
+								{streamKinds() ? ` · ${t('viewer.streaming')}` : ''}
 								{viewableFiles().length > 1
 									? ` · ${currentIndex() + 1}/${viewableFiles().length}`
 									: ''}
@@ -863,12 +864,12 @@ const FileViewer = (props) => {
 								  * Every handler already clamps, so a press at the end is a
 								  * no-op.
 								  */}
-								<div class="file-viewer__zoom" role="group" aria-label="Zoom">
+								<div class="file-viewer__zoom" role="group" aria-label={t('viewer.zoom')}>
 									<button
 										type="button"
 										class="file-viewer__zoom-btn"
-										aria-label="Zoom out"
-										title="Zoom out (-)"
+										aria-label={t('viewer.zoomOut')}
+										title={t('viewer.zoomOutTitle')}
 										aria-disabled={zoom() <= ZOOM_MIN}
 										onClick={zoomOut}
 									>
@@ -877,8 +878,8 @@ const FileViewer = (props) => {
 									<button
 										type="button"
 										class="file-viewer__zoom-level"
-										aria-label="Reset zoom"
-										title="Reset zoom (0)"
+										aria-label={t('viewer.resetZoom')}
+										title={t('viewer.resetZoomTitle')}
 										aria-disabled={zoom() === ZOOM_MIN}
 										onClick={resetZoom}
 									>
@@ -887,8 +888,8 @@ const FileViewer = (props) => {
 									<button
 										type="button"
 										class="file-viewer__zoom-btn"
-										aria-label="Zoom in"
-										title="Zoom in (+)"
+										aria-label={t('viewer.zoomIn')}
+										title={t('viewer.zoomInTitle')}
 										aria-disabled={zoom() >= ZOOM_MAX}
 										onClick={zoomIn}
 									>
@@ -899,8 +900,8 @@ const FileViewer = (props) => {
 							<button
 								type="button"
 								class="file-viewer__download"
-								aria-label="Download"
-								title="Download"
+								aria-label={t('viewer.download')}
+								title={t('viewer.download')}
 								disabled={isDownloading()}
 								onClick={downloadFile}
 							>
@@ -909,8 +910,8 @@ const FileViewer = (props) => {
 							<button
 								type="button"
 								class="file-viewer__close"
-								aria-label="Close"
-								title="Close"
+								aria-label={t('common.close')}
+								title={t('common.close')}
 								onClick={props.onClose}
 							>
 								<CloseIcon fontSize="inherit" />
@@ -951,8 +952,8 @@ const FileViewer = (props) => {
 							classList={{
 								'file-viewer__nav--peek': !isDocNavKind() || navPeekLeft(),
 							}}
-							aria-label="Previous file"
-							title="Previous file"
+							aria-label={t('viewer.previousFile')}
+							title={t('viewer.previousFile')}
 							tabIndex={isDocNavKind() && !navPeekLeft() ? -1 : 0}
 							onClick={goPrev}
 							onMouseEnter={() => {
@@ -975,8 +976,8 @@ const FileViewer = (props) => {
 							classList={{
 								'file-viewer__nav--peek': !isDocNavKind() || navPeekRight(),
 							}}
-							aria-label="Next file"
-							title="Next file"
+							aria-label={t('viewer.nextFile')}
+							title={t('viewer.nextFile')}
 							tabIndex={isDocNavKind() && !navPeekRight() ? -1 : 0}
 							onClick={goNext}
 							onMouseEnter={() => {
@@ -1001,7 +1002,7 @@ const FileViewer = (props) => {
 						<Show when={loading()}>
 							<div class="file-viewer__loading">
 								<span>
-									Loading
+									{t('viewer.loading')}
 									<LoadingDots />
 								</span>
 							</div>
@@ -1035,8 +1036,8 @@ const FileViewer = (props) => {
 											transform: `translate(${zoomOffset().x}px, ${zoomOffset().y}px) scale(${zoom()})`,
 										}}
 										onError={() => {
-											setError('Could not open this file')
-											addAlert('Could not open this file', 'error')
+											setError(t('viewer.openFailed'))
+											addAlert(t('viewer.openFailed'), 'error')
 										}}
 									/>
 								</div>
@@ -1091,7 +1092,7 @@ const FileViewer = (props) => {
 											type="button"
 											class="file-viewer__ctrl-btn"
 											onClick={togglePlay}
-											aria-label={playing() ? 'Pause' : 'Play'}
+											aria-label={playing() ? t('viewer.pause') : t('viewer.play')}
 										>
 											<Show when={playing()} fallback={<PlayArrowIcon />}>
 												<PauseIcon />
@@ -1120,7 +1121,7 @@ const FileViewer = (props) => {
 											class="file-viewer__ctrl-btn"
 											onClick={toggleFullscreen}
 											aria-label={
-												isFullscreen() ? 'Exit fullscreen' : 'Fullscreen'
+												isFullscreen() ? t('viewer.exitFullscreen') : t('viewer.fullscreen')
 											}
 										>
 											<Show
@@ -1154,7 +1155,7 @@ const FileViewer = (props) => {
 											type="button"
 											class="file-viewer__ctrl-btn file-viewer__ctrl-btn--lg"
 											onClick={togglePlay}
-											aria-label={playing() ? 'Pause' : 'Play'}
+											aria-label={playing() ? t('viewer.pause') : t('viewer.play')}
 										>
 											<Show when={playing()} fallback={<PlayArrowIcon />}>
 												<PauseIcon />
@@ -1223,12 +1224,12 @@ const FileViewer = (props) => {
 									/>
 									<p>
 										{kind() === 'presentation'
-											? 'Presentations open best in PowerPoint or LibreOffice.'
+											? t('viewer.officePresentation')
 											: kind() === 'spreadsheet'
-												? 'Spreadsheets open best in Excel or LibreOffice.'
+												? t('viewer.officeSpreadsheet')
 												: kind() === 'document'
-													? 'This document format needs an external app to view fully.'
-													: 'Preview is not available for this file type.'}
+													? t('viewer.officeDocument')
+													: t('viewer.officeGeneric')}
 									</p>
 									<Button
 										variant="contained"
@@ -1236,7 +1237,7 @@ const FileViewer = (props) => {
 										startIcon={<DownloadIcon />}
 										onClick={downloadFile}
 									>
-										Download & open
+										{t('viewer.downloadAndOpen')}
 									</Button>
 								</div>
 							</Show>
@@ -1247,11 +1248,11 @@ const FileViewer = (props) => {
 					<Show when={isDownloading()}>
 						<div class="download-preparing" role="status" aria-live="polite">
 							<div class="download-preparing__text">
-								Preparing download
+								{t('viewer.preparingDownload')}
 								<LoadingDots />
 							</div>
 							<div class="download-preparing__hint">
-								Please wait while the file is prepared
+								{t('viewer.preparingDownloadHint')}
 							</div>
 						</div>
 					</Show>
