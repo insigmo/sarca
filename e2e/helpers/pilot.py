@@ -397,8 +397,12 @@ class ClientApp:
         self.wait_for("body[data-shim-ready]")
         self.fill("#serverUrl", base_url)
         self.run("click", "#submit")
-        # The Rust side navigates the webview once the server answers.
-        self.wait_for_url(base_url.split("://", 1)[-1])
+        # The Rust side navigates the webview once the server answers. Against
+        # a self-signed e2e server the webview cannot validate the cert
+        # itself, so Rust routes it through a loopback proxy on its own port
+        # instead of the raw base_url — match on the /login landing route
+        # too, not just the base_url host, so the proxied case is caught.
+        self.wait_for_url(base_url.split("://", 1)[-1], "/login")
         self.wait_for("input[name=email]", timeout_ms=30000)
 
     def login(self, email: str, password: str) -> None:
