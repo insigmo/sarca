@@ -1,35 +1,35 @@
 {
-  "name": "sarca-ui",
-  "version": "0.0.135",
-  "description": "Sarca web UI",
-  "scripts": {
-    "start": "vite",
-    "dev": "vite",
-    "build": "vite build",
-    "serve": "vite preview",
-    "test": "vitest run",
-    "test:watch": "vitest"
-  },
-  "license": "MIT",
-  "devDependencies": {
-    "@solidjs/testing-library": "^0.8.10",
-    "@testing-library/jest-dom": "^7.0.0",
-    "jsdom": "^29.1.1",
-    "vite": "^7.3.6",
-    "vite-plugin-solid": "^2.11.14",
-    "vitest": "^3.2.7"
-  },
-  "dependencies": {
-    "@fluentui/svg-icons": "^1.1.334",
-    "@solidjs/router": "^0.9.1",
-    "@suid/icons-material": "^0.6.11",
-    "@suid/material": "^0.15.1",
-    "@suid/vite-plugin": "^0.1.5",
-    "dompurify": "^3.4.13",
-    "mammoth": "^1.12.0",
-    "marked": "^18.0.7",
-    "material-icon-theme": "^5.37.0",
-    "solid-js": "^1.9.14"
-  },
-  "packageManager": "pnpm@11.20.0+sha512.9a6f330a95b66446ea088faf1521405a8a01f07fde7124cc9958dfed52d4bb436737e65b08f85f37b46fcba375092558ac51262b816844b22f63406ed166bfee"
+	"name": "sarca-ui",
+	"version": "0.0.135",
+	"description": "Sarca web UI",
+	"scripts": {
+		"start": "vite",
+		"dev": "vite",
+		"build": "vite build",
+		"serve": "vite preview",
+		"test": "vitest run",
+		"test:watch": "vitest"
+	},
+	"license": "MIT",
+	"devDependencies": {
+		"@solidjs/testing-library": "^0.8.10",
+		"@testing-library/jest-dom": "^7.0.0",
+		"jsdom": "^29.1.1",
+		"vite": "^7.3.6",
+		"vite-plugin-solid": "^2.11.14",
+		"vitest": "^3.2.7"
+	},
+	"dependencies": {
+		"@fluentui/svg-icons": "^1.1.334",
+		"@solidjs/router": "^0.9.1",
+		"@suid/icons-material": "^0.6.11",
+		"@suid/material": "^0.15.1",
+		"@suid/vite-plugin": "^0.1.5",
+		"dompurify": "^3.4.13",
+		"mammoth": "^1.12.0",
+		"marked": "^18.0.7",
+		"material-icon-theme": "^5.37.0",
+		"solid-js": "^1.9.14"
+	},
+	"packageManager": "pnpm@11.20.0+sha512.9a6f330a95b66446ea088faf1521405a8a01f07fde7124cc9958dfed52d4bb436737e65b08f85f37b46fcba375092558ac51262b816844b22f63406ed166bfee"
 }

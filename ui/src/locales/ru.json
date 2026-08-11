@@ -42,7 +42,18 @@
 	"storages": {
 		"newStorage": "Новое хранилище",
 		"empty": "Хранилищ пока нет",
-		"title": "Хранилища"
+		"title": "Хранилища",
+		"openMenu": "Открыть меню",
+		"redirectingToSetup": "Переходим к настройке…",
+		"loading": "Загрузка хранилищ…",
+		"cardMeta": "{{files}} · {{size}}",
+		"fileOne": "{{count}} файл",
+		"fileMany": "{{count}} файл.",
+		"settingsFor": "Настройки хранилища {{name}}",
+		"settingsHint": "Бот, каналы, переименование…",
+		"openStorage": "Открыть хранилище {{name}}",
+		"deadChannel": "Канал удалён — откройте настройки, чтобы исправить",
+		"deadChannelFor": "В хранилище {{name}} удалён канал — откройте настройки, чтобы исправить"
 	},
 	"confirmDialog": {
 		"title": "{{action}} — {{entity}}?",

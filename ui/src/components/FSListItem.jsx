@@ -12,6 +12,7 @@ import { convertSize } from '../common/size_converter'
 import { loadThumb } from '../common/previewLoader'
 import { acquireObjectUrl, releaseObjectUrl } from '../common/objectUrlPool'
 import { fileKind } from '../common/fileKind'
+import { t } from '../common/i18n'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FileInfoDialog from './FileInfo'
 import FileTypeIcon from './FileTypeIcon'
@@ -276,10 +277,7 @@ const FSListItem = (props) => {
 		const maxFolderBytes = 10 * 1024 * 1024 * 1024
 
 		if (!isFile && (props.fsElement.size || 0) > maxFolderBytes) {
-			addAlert(
-				'Folder is larger than 10 GB. Download files in smaller pieces.',
-				'error',
-			)
+			addAlert(t('viewer.folderTooLarge'), 'error')
 			return
 		}
 
@@ -302,7 +300,7 @@ const FSListItem = (props) => {
 			URL.revokeObjectURL(href)
 			a.remove()
 			addAlert(
-				isFile ? 'Download started' : 'ZIP ready — download started',
+				isFile ? t('viewer.downloadStarted') : t('viewer.zipDownloadStarted'),
 				'success',
 			)
 		} catch (err) {
