@@ -42,7 +42,18 @@
 	"storages": {
 		"newStorage": "مساحة تخزين جديدة",
 		"empty": "لا توجد مساحات تخزين بعد",
-		"title": "مساحات التخزين"
+		"title": "مساحات التخزين",
+		"openMenu": "فتح القائمة",
+		"redirectingToSetup": "جارٍ الانتقال إلى الإعداد…",
+		"loading": "جارٍ تحميل مساحات التخزين…",
+		"cardMeta": "{{files}} · {{size}}",
+		"fileOne": "ملف واحد",
+		"fileMany": "{{count}} ملفات",
+		"settingsFor": "إعدادات {{name}}",
+		"settingsHint": "البوت والقنوات وإعادة التسمية…",
+		"openStorage": "فتح مساحة التخزين {{name}}",
+		"deadChannel": "تم حذف إحدى القنوات — افتح الإعدادات لإصلاح ذلك",
+		"deadChannelFor": "مساحة {{name}} بها قناة محذوفة — افتح الإعدادات لإصلاح ذلك"
 	},
 	"confirmDialog": {
 		"title": "{{action}} {{entity}}؟",

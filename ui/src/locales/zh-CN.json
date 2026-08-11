@@ -42,7 +42,18 @@
 	"storages": {
 		"newStorage": "新建存储",
 		"empty": "暂无存储",
-		"title": "存储"
+		"title": "存储",
+		"openMenu": "打开菜单",
+		"redirectingToSetup": "正在跳转到设置…",
+		"loading": "正在加载存储…",
+		"cardMeta": "{{files}} · {{size}}",
+		"fileOne": "{{count}} 个文件",
+		"fileMany": "{{count}} 个文件",
+		"settingsFor": "{{name}} 的设置",
+		"settingsHint": "机器人、频道、重命名…",
+		"openStorage": "打开存储 {{name}}",
+		"deadChannel": "某个频道已被删除 — 请打开设置修复",
+		"deadChannelFor": "{{name}} 有一个已删除的频道 — 请打开设置修复"
 	},
 	"confirmDialog": {
 		"title": "{{action}}{{entity}}？",

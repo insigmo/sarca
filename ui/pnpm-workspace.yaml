@@ -1,2 +1,10 @@
 allowBuilds:
   esbuild: true
+
+# nanoid reaches us only through @suid/vite-plugin > vite > postcss, whose own
+# range is ^3.3.16. GHSA-2v37-7h3g-55p8 (a custom generator can loop forever
+# when size is 0) is fixed in 3.3.17, so the patched release satisfies postcss
+# as-is. Do not "fix" this by pinning nanoid 6: that line is ESM-only and
+# requires Node >=22, and postcss loads it as CommonJS.
+overrides:
+  nanoid@<3.3.17: '^3.3.17'
