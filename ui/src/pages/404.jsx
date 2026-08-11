@@ -2,6 +2,7 @@ import Typography from '@suid/material/Typography'
 import Box from '@suid/material/Box'
 import Button from '@suid/material/Button'
 import { A } from '@solidjs/router'
+import { t } from '../common/i18n'
 
 const NotFound = () => {
 	return (
@@ -28,10 +29,10 @@ const NotFound = () => {
 				404
 			</Typography>
 			<Typography variant="h5" color="text.secondary">
-				This page is not in your storage
+				{t('auth.notFound.message')}
 			</Typography>
 			<Button component={A} href="/storages" variant="contained" color="secondary" sx={{ mt: 2 }}>
-				Back to storages
+				{t('auth.notFound.backToStorages')}
 			</Button>
 		</Box>
 	)

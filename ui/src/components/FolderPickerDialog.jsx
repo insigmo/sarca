@@ -13,6 +13,7 @@ import { For, Show, createEffect, createSignal } from 'solid-js'
 
 import API from '../api'
 import FluentIcon from './FluentIcon'
+import { t } from '../common/i18n'
 
 /**
  * @typedef {Object} FolderPickerDialogProps
@@ -66,7 +67,7 @@ const FolderPickerDialog = (props) => {
 		} catch (err) {
 			console.error(err)
 			setFolders([])
-			setError(err.message || 'Failed to load folders')
+			setError(err.message || t('folderDialogs.picker.loadError'))
 		} finally {
 			setLoading(false)
 		}
@@ -86,10 +87,14 @@ const FolderPickerDialog = (props) => {
 	}
 
 	const title = () =>
-		props.mode === 'copy' ? 'Copy to…' : 'Move to…'
+		props.mode === 'copy'
+			? t('folderDialogs.picker.titleCopy')
+			: t('folderDialogs.picker.titleMove')
 
 	const confirmLabel = () =>
-		props.mode === 'copy' ? 'Copy here' : 'Move here'
+		props.mode === 'copy'
+			? t('folderDialogs.picker.confirmCopy')
+			: t('folderDialogs.picker.confirmMove')
 
 	const goUp = () => {
 		const p = browsePath()
@@ -128,7 +133,9 @@ const FolderPickerDialog = (props) => {
 			<DialogContent>
 				<Show when={props.itemName}>
 					<Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-						{props.mode === 'copy' ? 'Copy' : 'Move'} “{props.itemName}”
+						{props.mode === 'copy'
+							? t('folderDialogs.picker.copyItem', { name: props.itemName })
+							: t('folderDialogs.picker.moveItem', { name: props.itemName })}
 					</Typography>
 				</Show>
 				<Typography
@@ -136,7 +143,7 @@ const FolderPickerDialog = (props) => {
 					display="block"
 					sx={{ mb: 1, fontFamily: 'monospace' }}
 				>
-					Destination: {displayPath()}
+					{t('folderDialogs.picker.destination', { path: displayPath() })}
 				</Typography>
 
 				<Show when={loading()}>
@@ -164,7 +171,10 @@ const FolderPickerDialog = (props) => {
 								<ListItemIcon sx={{ minWidth: 36 }}>
 									<FluentIcon name="arrowUp" size={20} />
 								</ListItemIcon>
-								<ListItemText primary=".." secondary="Parent folder" />
+								<ListItemText
+									primary=".."
+									secondary={t('folderDialogs.picker.parentFolder')}
+								/>
 							</ListItemButton>
 						</Show>
 						<Show
@@ -175,9 +185,9 @@ const FolderPickerDialog = (props) => {
 									color="text.secondary"
 									sx={{ py: 2, textAlign: 'center' }}
 								>
-									No subfolders here — you can still{' '}
-									{props.mode === 'copy' ? 'copy' : 'move'} into this
-									folder.
+									{props.mode === 'copy'
+										? t('folderDialogs.picker.noSubfoldersCopy')
+										: t('folderDialogs.picker.noSubfoldersMove')}
 								</Typography>
 							}
 						>
@@ -208,7 +218,7 @@ const FolderPickerDialog = (props) => {
 					color="info"
 					disabled={submitting()}
 				>
-					Cancel
+					{t('folderDialogs.picker.cancel')}
 				</Button>
 			</DialogActions>
 		</Dialog>

@@ -437,5 +437,156 @@
 		"thirtyDays": "30 days",
 		"uploadedCount": "Uploaded: {{count}}",
 		"userEmailLabel": "User's email"
+	},
+	"auth": {
+		"login": {
+			"tagline": "Sign in to your cloud storage",
+			"email": "Email",
+			"password": "Password",
+			"signIn": "Sign in"
+		},
+		"notFound": {
+			"message": "This page is not in your storage",
+			"backToStorages": "Back to storages"
+		},
+		"lock": {
+			"ariaLabel": "App lock",
+			"title": "App locked",
+			"prompt": "Enter your PIN to continue.",
+			"pinLabel": "PIN",
+			"unlock": "Unlock",
+			"incorrectPin": "Incorrect PIN"
+		}
+	},
+	"folderDialogs": {
+		"picker": {
+			"titleCopy": "Copy to…",
+			"titleMove": "Move to…",
+			"copyItem": "Copy “{{name}}”",
+			"moveItem": "Move “{{name}}”",
+			"destination": "Destination: {{path}}",
+			"parentFolder": "Parent folder",
+			"noSubfoldersCopy": "No subfolders here — you can still copy into this folder.",
+			"noSubfoldersMove": "No subfolders here — you can still move into this folder.",
+			"confirmCopy": "Copy here",
+			"confirmMove": "Move here",
+			"cancel": "Cancel",
+			"loadError": "Failed to load folders"
+		},
+		"create": {
+			"title": "Create folder",
+			"nameLabel": "New folder name",
+			"nameError": "Folder name cannot have a \"/\" symbol",
+			"submit": "Create",
+			"cancel": "Cancel"
+		},
+		"conflict": {
+			"title": "Path already exists",
+			"message": "A live file or folder already exists at “{{path}}”. Replace it, continue under a new name, or cancel?",
+			"replace": "Replace",
+			"rename": "Rename",
+			"cancel": "Cancel"
+		}
+	},
+	"misc": {
+		"sharedLinks": {
+			"neverExpires": "Never expires",
+			"expires": "Expires {{date}}",
+			"linkCopied": "Link copied",
+			"copyFailed": "Failed to copy link",
+			"linkRevoked": "Share link revoked",
+			"empty": "No share links yet — open a file or folder menu to create one.",
+			"password": "Password",
+			"copyLink": "Copy link",
+			"revokeLink": "Revoke link"
+		},
+		"accessType": {
+			"admin": "Admin",
+			"edit": "Edit",
+			"view": "View"
+		},
+		"search": {
+			"placeholder": "Search.."
+		},
+		"alerts": {
+			"close": "Close"
+		}
+	},
+	"publicShare": {
+		"sharedWithYou": "Shared with you",
+		"linkUnavailable": "Link unavailable",
+		"linkUnavailableDetail": "This share may have expired, been revoked, or never existed.",
+		"passwordRequired": "Password required",
+		"passwordPrompt": "Enter the password to open this share.",
+		"passwordLabel": "Password",
+		"unlocking": "Unlocking…",
+		"unlock": "Unlock",
+		"incorrectPassword": "Incorrect password",
+		"unlockFailed": "Unlock failed",
+		"shareUnavailable": "This share link is unavailable",
+		"failedToOpenShare": "Failed to open share",
+		"failedToListFolder": "Failed to list folder",
+		"sharedItem": "Shared item",
+		"preview": "Preview",
+		"download": "Download",
+		"previewHint": "Use Preview to open images, video, PDF, and text in the browser.",
+		"shareRoot": "Share root",
+		"preparingZip": "Preparing ZIP…",
+		"downloadZip": "Download ZIP",
+		"folderEmpty": "This folder is empty",
+		"downloadStarted": "Download started",
+		"downloadFailed": "Download failed",
+		"zipReady": "ZIP ready — download started",
+		"zipDownloadFailed": "ZIP download failed",
+		"preparingZipArchive": "Preparing ZIP archive",
+		"zipHint": "This may take a while for large folders"
+	},
+	"setup": {
+		"title": "Setup",
+		"newStorage": "New storage",
+		"newStorageDesc": "Create a Telegram bot and a private channel, then check that the bot was added as an admin.",
+		"storageName": "Storage name",
+		"continue": "Continue",
+		"botStep1Click": "1. Click",
+		"botStep2": "2. Send a command",
+		"botStep3": "3. Create new bot and copy the token.",
+		"botToken": "Bot token",
+		"back": "Back",
+		"validateBot": "Validate bot",
+		"botTokenInvalid": "Bot token looks invalid — copy it again from @BotFather",
+		"notAddedMsg": "Bot was not added to a channel, or was not given admin rights. Re-add the bot as admin while checking runs, or paste the channel id below.",
+		"botLabel": "Bot:",
+		"channelStep1Prefix": "1. Create a",
+		"channelStep1Bold": "private channel",
+		"channelStep1Suffix": "in Telegram.",
+		"channelStep2Prefix": "2. Add",
+		"yourBot": "your bot",
+		"channelStep2Admin": "as an admin",
+		"channelStep2WhileChecking": "while checking runs",
+		"or": "or",
+		"channelStep2Forward": "forward any post from the channel to the bot in a private chat,",
+		"channelStep2PasteLink": "paste a",
+		"channelStep2LinkSuffix": "link / chat id below.",
+		"listeningForChannels": "Listening for admin channels",
+		"chatIdLabel": "Chat id or t.me/c/… link",
+		"chatIdHelper": "Private channel: forward a post to the bot, or paste t.me/c/… / -100…",
+		"checking": "Checking…",
+		"addById": "Add by id",
+		"checkChannel": "Check channel",
+		"stop": "Stop",
+		"detectAnotherChannel": "Detect another channel",
+		"creating": "Creating…",
+		"finish": "Finish",
+		"enterChatIdHint": "Enter a chat id like -100… or a t.me/c/… link",
+		"channelAlreadyAdded": "That channel is already added",
+		"verifyingChatId": "Verifying chat id…",
+		"foundChannelOne": "Found channel: {{labels}}",
+		"foundChannelMany": "Found {{n}} channels: {{labels}}",
+		"chatIdVerifyFailed": "Could not verify that chat id. Check the bot is an admin there.",
+		"channelVerifyFailed": "Channel verify failed",
+		"addAtLeastOneChannel": "Add at least one channel",
+		"storageReady": "Storage “{{name}}” ready",
+		"loadStatusFailed": "Failed to load setup status",
+		"channelDetectFailed": "Channel detect failed"
 	}
 }

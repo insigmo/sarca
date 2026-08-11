@@ -98,7 +98,7 @@
 		"redirectingToSetup": "جارٍ الانتقال إلى الإعداد…",
 		"loading": "جارٍ تحميل مساحات التخزين…",
 		"cardMeta": "{{files}} · {{size}}",
-		"fileOne": "ملف واحد",
+		"fileOne": "{{count}} ملف",
 		"fileMany": "{{count}} ملفات",
 		"settingsFor": "إعدادات {{name}}",
 		"settingsHint": "البوت والقنوات وإعادة التسمية…",
@@ -306,13 +306,13 @@
 		"uploading": "جارٍ الرفع…",
 		"lessThanMinute": "بقي أقل من دقيقة…",
 		"minutesLeft": "بقي {{mins}} دقيقة…",
-		"uploadingOne": "جارٍ رفع عنصر واحد",
+		"uploadingOne": "جارٍ رفع {{count}} عنصر",
 		"uploadingMany": "جارٍ رفع {{count}} عناصر",
-		"canceledOne": "تم إلغاء عملية رفع واحدة",
+		"canceledOne": "تم إلغاء {{count}} عملية رفع",
 		"canceledMany": "تم إلغاء {{count}} عمليات رفع",
-		"failedOne": "فشلت عملية رفع واحدة",
+		"failedOne": "فشلت {{count}} عملية رفع",
 		"failedMany": "فشلت {{count}} عمليات رفع",
-		"completeOne": "اكتملت عملية رفع واحدة",
+		"completeOne": "اكتملت {{count}} عملية رفع",
 		"completeMany": "اكتملت {{count}} عمليات رفع",
 		"diskFull": "قرص الخادم ممتلئ — أفرغ مساحة داخل WORK_DIR ثم أعد المحاولة.",
 		"expand": "توسيع",
@@ -437,5 +437,156 @@
 		"thirtyDays": "30 يوماً",
 		"uploadedCount": "تم الرفع: {{count}}",
 		"userEmailLabel": "بريد المستخدم الإلكتروني"
+	},
+	"auth": {
+		"login": {
+			"tagline": "سجل الدخول إلى مساحة التخزين السحابي الخاصة بك",
+			"email": "البريد الإلكتروني",
+			"password": "كلمة المرور",
+			"signIn": "تسجيل الدخول"
+		},
+		"notFound": {
+			"message": "هذه الصفحة غير موجودة في مساحة التخزين الخاصة بك",
+			"backToStorages": "العودة إلى مساحات التخزين"
+		},
+		"lock": {
+			"ariaLabel": "قفل التطبيق",
+			"title": "التطبيق مقفل",
+			"prompt": "أدخل رمز PIN للمتابعة.",
+			"pinLabel": "رمز PIN",
+			"unlock": "فتح القفل",
+			"incorrectPin": "رمز PIN غير صحيح"
+		}
+	},
+	"folderDialogs": {
+		"picker": {
+			"titleCopy": "نسخ إلى…",
+			"titleMove": "نقل إلى…",
+			"copyItem": "نسخ «{{name}}»",
+			"moveItem": "نقل «{{name}}»",
+			"destination": "الوجهة: {{path}}",
+			"parentFolder": "المجلد الأصلي",
+			"noSubfoldersCopy": "لا توجد مجلدات فرعية هنا، يمكنك النسخ إلى هذا المجلد مباشرة.",
+			"noSubfoldersMove": "لا توجد مجلدات فرعية هنا، يمكنك النقل إلى هذا المجلد مباشرة.",
+			"confirmCopy": "نسخ هنا",
+			"confirmMove": "نقل هنا",
+			"cancel": "إلغاء",
+			"loadError": "تعذر تحميل المجلدات"
+		},
+		"create": {
+			"title": "مجلد جديد",
+			"nameLabel": "اسم المجلد الجديد",
+			"nameError": "لا يمكن أن يحتوي اسم المجلد على رمز \"/\"",
+			"submit": "إنشاء",
+			"cancel": "إلغاء"
+		},
+		"conflict": {
+			"title": "المسار موجود بالفعل",
+			"message": "يوجد بالفعل ملف أو مجلد في «{{path}}». هل تريد الاستبدال أو المتابعة باسم جديد أو الإلغاء؟",
+			"replace": "استبدال",
+			"rename": "إعادة تسمية",
+			"cancel": "إلغاء"
+		}
+	},
+	"misc": {
+		"sharedLinks": {
+			"neverExpires": "لا تنتهي أبدا",
+			"expires": "تنتهي في {{date}}",
+			"linkCopied": "تم نسخ الرابط",
+			"copyFailed": "فشل نسخ الرابط",
+			"linkRevoked": "تم إلغاء رابط المشاركة",
+			"empty": "لا توجد روابط مشاركة بعد، افتح قائمة ملف أو مجلد لإنشاء رابط.",
+			"password": "كلمة المرور",
+			"copyLink": "نسخ الرابط",
+			"revokeLink": "إلغاء الرابط"
+		},
+		"accessType": {
+			"admin": "مدير",
+			"edit": "تحرير",
+			"view": "عرض"
+		},
+		"search": {
+			"placeholder": "بحث.."
+		},
+		"alerts": {
+			"close": "إغلاق"
+		}
+	},
+	"publicShare": {
+		"sharedWithYou": "تمت مشاركته معك",
+		"linkUnavailable": "الرابط غير متاح",
+		"linkUnavailableDetail": "قد تكون هذه المشاركة منتهية الصلاحية أو ملغاة أو غير موجودة أصلاً.",
+		"passwordRequired": "كلمة المرور مطلوبة",
+		"passwordPrompt": "أدخل كلمة المرور لفتح هذه المشاركة.",
+		"passwordLabel": "كلمة المرور",
+		"unlocking": "جارٍ فتح القفل…",
+		"unlock": "فتح القفل",
+		"incorrectPassword": "كلمة المرور غير صحيحة",
+		"unlockFailed": "فشل فتح القفل",
+		"shareUnavailable": "رابط المشاركة هذا غير متاح",
+		"failedToOpenShare": "فشل فتح المشاركة",
+		"failedToListFolder": "فشل عرض محتويات المجلد",
+		"sharedItem": "عنصر مشترك",
+		"preview": "معاينة",
+		"download": "تنزيل",
+		"previewHint": "استخدم المعاينة لفتح الصور والفيديو وملفات PDF والنصوص في المتصفح.",
+		"shareRoot": "جذر المشاركة",
+		"preparingZip": "جارٍ تجهيز ملف ZIP…",
+		"downloadZip": "تنزيل ZIP",
+		"folderEmpty": "هذا المجلد فارغ",
+		"downloadStarted": "بدأ التنزيل",
+		"downloadFailed": "فشل التنزيل",
+		"zipReady": "ملف ZIP جاهز — بدأ التنزيل",
+		"zipDownloadFailed": "فشل تنزيل ملف ZIP",
+		"preparingZipArchive": "جارٍ تجهيز أرشيف ZIP",
+		"zipHint": "قد يستغرق هذا بعض الوقت للمجلدات الكبيرة"
+	},
+	"setup": {
+		"title": "الإعداد",
+		"newStorage": "تخزين جديد",
+		"newStorageDesc": "أنشئ بوت تيليجرام وقناة خاصة، ثم تحقق من إضافة البوت كمشرف.",
+		"storageName": "اسم التخزين",
+		"continue": "متابعة",
+		"botStep1Click": "1. انقر على",
+		"botStep2": "2. أرسل الأمر",
+		"botStep3": "3. أنشئ البوت الجديد وانسخ الرمز.",
+		"botToken": "رمز البوت",
+		"back": "رجوع",
+		"validateBot": "التحقق من البوت",
+		"botTokenInvalid": "رمز البوت يبدو غير صالح — انسخه مجددًا من @BotFather",
+		"notAddedMsg": "لم تتم إضافة البوت إلى قناة، أو لم يُمنح صلاحيات المشرف. أعد إضافة البوت كمشرف أثناء التحقق، أو الصق معرف القناة أدناه.",
+		"botLabel": "البوت:",
+		"channelStep1Prefix": "1. أنشئ",
+		"channelStep1Bold": "قناة خاصة",
+		"channelStep1Suffix": "في تيليجرام.",
+		"channelStep2Prefix": "2. أضف",
+		"yourBot": "بوتك",
+		"channelStep2Admin": "كمشرف",
+		"channelStep2WhileChecking": "أثناء تشغيل التحقق",
+		"or": "أو",
+		"channelStep2Forward": "أعد توجيه أي منشور من القناة إلى البوت في محادثة خاصة،",
+		"channelStep2PasteLink": "الصق",
+		"channelStep2LinkSuffix": "رابط / معرف المحادثة أدناه.",
+		"listeningForChannels": "جارٍ الانتظار لرصد قنوات المشرف",
+		"chatIdLabel": "معرف المحادثة أو رابط t.me/c/…",
+		"chatIdHelper": "قناة خاصة: أعد توجيه منشور إلى البوت، أو الصق t.me/c/… / -100…",
+		"checking": "جارٍ التحقق…",
+		"addById": "إضافة بالمعرف",
+		"checkChannel": "التحقق من القناة",
+		"stop": "إيقاف",
+		"detectAnotherChannel": "رصد قناة أخرى",
+		"creating": "جارٍ الإنشاء…",
+		"finish": "إنهاء",
+		"enterChatIdHint": "أدخل معرف محادثة مثل -100… أو رابط t.me/c/…",
+		"channelAlreadyAdded": "تمت إضافة هذه القناة مسبقًا",
+		"verifyingChatId": "جارٍ التحقق من معرف المحادثة…",
+		"foundChannelOne": "تم العثور على قناة: {{labels}}",
+		"foundChannelMany": "تم العثور على {{n}} قنوات: {{labels}}",
+		"chatIdVerifyFailed": "تعذر التحقق من معرف المحادثة هذا. تأكد من أن البوت مشرف هناك.",
+		"channelVerifyFailed": "فشل التحقق من القناة",
+		"addAtLeastOneChannel": "أضف قناة واحدة على الأقل",
+		"storageReady": "التخزين «{{name}}» جاهز",
+		"loadStatusFailed": "فشل تحميل حالة الإعداد",
+		"channelDetectFailed": "فشل رصد القناة"
 	}
 }
