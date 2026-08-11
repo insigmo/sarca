@@ -406,36 +406,48 @@ class ClientApp:
         # wrapper, and the form's own submit handler is what does the work.
         # Both fields are re-read right before submitting, so a value the form
         # dropped on a re-render is refilled instead of sent empty.
-        submitted = ""
-        for _ in range(5):
-            self.fill("input[name=email]", email, timeout_s=30)
-            self.fill("input[name=password]", password, timeout_s=30)
-            submitted = self.eval_js(
-                """
-                (() => {
-                  const form = document.querySelector('form');
-                  const email = document.querySelector('input[name=email]');
-                  const password = document.querySelector('input[name=password]');
-                  if (!form || !email || !password) return 'missing';
-                  if (!email.value || !password.value) return 'empty';
-                  form.requestSubmit();
-                  return 'ok';
-                })()
-                """
-            )
-            if submitted == "ok":
-                break
-            time.sleep(0.5)
-        else:
-            raise PilotError(f"login form was not ready to submit: {submitted!r}")
+        #
+        # The whole submit-and-wait cycle is retried, not just the submit: a
+        # slow CI runner can drop the in-flight request/response around the
+        # submit (WebKit torn down mid-render, a server blip), leaving the
+        # form sitting there with nothing left to poll for. Re-submitting is
+        # cheap and the form tolerates being asked twice.
+        last_page = ""
+        for attempt in range(3):
+            submitted = ""
+            for _ in range(5):
+                self.fill("input[name=email]", email, timeout_s=30)
+                self.fill("input[name=password]", password, timeout_s=30)
+                submitted = self.eval_js(
+                    """
+                    (() => {
+                      const form = document.querySelector('form');
+                      const email = document.querySelector('input[name=email]');
+                      const password = document.querySelector('input[name=password]');
+                      if (!form || !email || !password) return 'missing';
+                      if (!email.value || !password.value) return 'empty';
+                      form.requestSubmit();
+                      return 'ok';
+                    })()
+                    """
+                )
+                if submitted == "ok":
+                    break
+                time.sleep(0.5)
+            else:
+                raise PilotError(f"login form was not ready to submit: {submitted!r}")
 
-        deadline = time.monotonic() + 30
-        while time.monotonic() < deadline:
-            if self.eval_js("localStorage.getItem('access_token') ? '1' : ''") == "1":
-                break
-            time.sleep(0.25)
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                if self.eval_js("localStorage.getItem('access_token') ? '1' : ''") == "1":
+                    break
+                time.sleep(0.25)
+            else:
+                last_page = self.page_text()[:200]
+                continue
+            break
         else:
-            raise PilotError(f"sign-in never stored a token; page says: {self.page_text()[:200]!r}")
+            raise PilotError(f"sign-in never stored a token; page says: {last_page!r}")
 
         self.pin_locale()
 
