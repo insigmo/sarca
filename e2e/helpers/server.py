@@ -132,7 +132,6 @@ class SarcaServer:
                 # requests/min/bot, u16 — the fake Bot API has no flood control
                 "TELEGRAM_RATE_LIMIT": "10000",
                 "TELEGRAM_CHUNK_SIZE_MB": "20",
-                "TELEGRAM_VIDEO_CHUNK_SIZE_MB": "20",
                 "WORK_DIR": str(self.work_dir),
                 "SQLITE_PATH": str(self.work_dir / "sarca.sqlite"),
                 "CERTS_DIR": str(self.work_dir / "certs"),
