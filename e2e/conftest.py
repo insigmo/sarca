@@ -12,7 +12,7 @@ Run against real Telegram instead:
 
 Run against an already-running server (no process management):
 
-    SARCA_BASE_URL=http://127.0.0.1:8001 SUPERUSER_EMAIL=... SUPERUSER_PASS=... pytest e2e
+    SARCA_BASE_URL=https://127.0.0.1:8443 SUPERUSER_EMAIL=... SUPERUSER_PASS=... pytest e2e
 """
 
 from __future__ import annotations
@@ -220,7 +220,7 @@ def wait_for_api(base_url: str) -> None:
 
 @pytest.fixture(scope="session")
 def client(base_url: str, wait_for_api: None) -> httpx.Client:
-    with httpx.Client(base_url=base_url, timeout=60.0) as c:
+    with httpx.Client(base_url=base_url, timeout=60.0, verify=False) as c:
         yield c
 
 

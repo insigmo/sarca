@@ -569,7 +569,6 @@ mod tests {
         static ENV_LOCK: Mutex<()> = Mutex::new(());
 
         let _g = ENV_LOCK.lock().unwrap();
-        std::env::set_var("PORT", "8001");
         std::env::set_var("WORKERS", "2");
         std::env::set_var("CHANNEL_CAPACITY", "8");
         std::env::set_var("SUPERUSER_EMAIL", "a@b.c");
