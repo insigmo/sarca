@@ -42,7 +42,18 @@
 	"storages": {
 		"newStorage": "New storage",
 		"empty": "No storages yet",
-		"title": "Storages"
+		"title": "Storages",
+		"openMenu": "Open menu",
+		"redirectingToSetup": "Redirecting to setup…",
+		"loading": "Loading storages…",
+		"cardMeta": "{{files}} · {{size}}",
+		"fileOne": "{{count}} file",
+		"fileMany": "{{count}} files",
+		"settingsFor": "Settings for {{name}}",
+		"settingsHint": "Bot, channels, rename…",
+		"openStorage": "Open storage {{name}}",
+		"deadChannel": "A channel was deleted — open settings to fix",
+		"deadChannelFor": "{{name}} has a deleted channel — open settings to fix"
 	},
 	"confirmDialog": {
 		"title": "{{action}} {{entity}}?",
