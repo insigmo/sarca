@@ -174,7 +174,6 @@ impl FilesRouter {
 
         let (mut filename_field, mut filename_from_file, mut parent_path, mut file_size) =
             (None::<String>, None::<String>, None::<String>, 0i64);
-        let mut file_content_type = None::<String>;
         let mut source_mtime = None::<chrono::DateTime<chrono::Utc>>;
         let mut source_created_at = None::<chrono::DateTime<chrono::Utc>>;
         let mut content_hash = None::<String>;
@@ -191,9 +190,6 @@ impl FilesRouter {
                     let raw_name = field.file_name().unwrap_or("").to_owned();
                     if !raw_name.trim().is_empty() {
                         filename_from_file = Some(raw_name);
-                    }
-                    if let Some(ct) = field.content_type() {
-                        file_content_type = Some(ct.to_string());
                     }
                     while let Some(chunk) = field.chunk().await.map_err(|_| {
                         cleanup_tmp(&tmp_path);
@@ -317,7 +313,7 @@ impl FilesRouter {
         let source_created_at = source_created_at.or(source_mtime);
 
         let chunk_size_bytes =
-            state.config.chunk_size_bytes_for_file(&path, file_content_type.as_deref());
+            i64::try_from(state.config.default_chunk_size_bytes()).unwrap_or(i64::MAX);
         let in_file = InFile::new(path, file_size, storage_id)
             .with_chunk_size(chunk_size_bytes)
             .with_source_times(source_created_at, source_mtime)
