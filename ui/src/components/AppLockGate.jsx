@@ -4,6 +4,7 @@ import TextField from '@suid/material/TextField'
 
 import { nativeClientStore } from '../common/nativeClient'
 import { nativeInvoke } from '../common/nativeBridge'
+import { t } from '../common/i18n'
 
 /**
  * Blocks the app UI until PIN unlock when app lock is enabled (native only).
@@ -50,7 +51,7 @@ const AppLockGate = (props) => {
 				setNeeded(false)
 				return
 			}
-			setError('Incorrect PIN')
+			setError(t('auth.lock.incorrectPin'))
 		} catch (e) {
 			setError(String(e))
 		}
@@ -60,12 +61,12 @@ const AppLockGate = (props) => {
 		<>
 			{props.children}
 			<Show when={needed()}>
-				<div class="app-lock-gate" role="dialog" aria-modal="true" aria-label="App lock">
+				<div class="app-lock-gate" role="dialog" aria-modal="true" aria-label={t('auth.lock.ariaLabel')}>
 					<div class="app-lock-gate__card">
-						<h2>App locked</h2>
-						<p>Enter your PIN to continue.</p>
+						<h2>{t('auth.lock.title')}</h2>
+						<p>{t('auth.lock.prompt')}</p>
 						<TextField
-							label="PIN"
+							label={t('auth.lock.pinLabel')}
 							type="password"
 							size="small"
 							fullWidth
@@ -83,7 +84,7 @@ const AppLockGate = (props) => {
 							fullWidth
 							onClick={unlock}
 						>
-							Unlock
+							{t('auth.lock.unlock')}
 						</Button>
 						<Show when={error()}>
 							<p class="app-lock-gate__error" role="status">

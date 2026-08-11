@@ -55,6 +55,31 @@ describe('locale dictionaries', () => {
 		expect(missing).toEqual([])
 	})
 
+	// A translator who drops or renames a {{placeholder}} produces a string
+	// that renders the literal braces to the user, or silently loses the
+	// value. Neither is visible from the key-coverage check above.
+	it.each(LOCALES.filter((l) => l.code !== DEFAULT_LOCALE).map((l) => l.code))(
+		'%s keeps the same placeholders as English',
+		(code) => {
+			const entry = LOCALES.find((l) => l.code === code)
+			const placeholders = (text) => [...text.matchAll(/\{\{(\w+)\}\}/g)].map((m) => m[1]).sort()
+			const read = (dict, key) => {
+				let node = dict
+				for (const part of key.split('.')) {
+					if (!node || typeof node !== 'object') return null
+					node = node[part]
+				}
+				return typeof node === 'string' ? node : null
+			}
+			const mismatched = flatKeys(en).filter((key) => {
+				const translated = read(entry.dict, key)
+				if (translated === null) return false
+				return String(placeholders(read(en, key))) !== String(placeholders(translated))
+			})
+			expect(mismatched).toEqual([])
+		},
+	)
+
 	it('marks Arabic, and only Arabic, as right to left', () => {
 		expect(LOCALES.filter((l) => l.dir === 'rtl').map((l) => l.code)).toEqual(['ar'])
 	})

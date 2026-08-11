@@ -2,6 +2,8 @@ import Alert from '@suid/material/Alert'
 import Stack from '@suid/material/Stack'
 import { For, createRoot, createSignal } from 'solid-js'
 
+import { t } from '../common/i18n'
+
 /**
  * @typedef {"error" | "warning" | "info" | "success"} AlertSeverity
  */
@@ -77,6 +79,7 @@ const AlertStack = () => {
 						class="alert-stack__item"
 						severity={alert.severity}
 						onClose={() => dismissAlert(alert.id)}
+						closeText={t('misc.alerts.close')}
 					>
 						{alert.msg}
 					</Alert>

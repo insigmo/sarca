@@ -437,5 +437,156 @@
 		"thirtyDays": "30 天",
 		"uploadedCount": "已上传：{{count}}",
 		"userEmailLabel": "用户邮箱"
+	},
+	"auth": {
+		"login": {
+			"tagline": "登录以访问您的云存储",
+			"email": "邮箱",
+			"password": "密码",
+			"signIn": "登录"
+		},
+		"notFound": {
+			"message": "您的存储中没有此页面",
+			"backToStorages": "返回存储列表"
+		},
+		"lock": {
+			"ariaLabel": "应用锁定",
+			"title": "应用已锁定",
+			"prompt": "请输入 PIN 码以继续。",
+			"pinLabel": "PIN 码",
+			"unlock": "解锁",
+			"incorrectPin": "PIN 码错误"
+		}
+	},
+	"folderDialogs": {
+		"picker": {
+			"titleCopy": "复制到…",
+			"titleMove": "移动到…",
+			"copyItem": "复制“{{name}}”",
+			"moveItem": "移动“{{name}}”",
+			"destination": "目标位置：{{path}}",
+			"parentFolder": "上级文件夹",
+			"noSubfoldersCopy": "这里没有子文件夹——你仍然可以复制到此文件夹。",
+			"noSubfoldersMove": "这里没有子文件夹——你仍然可以移动到此文件夹。",
+			"confirmCopy": "复制到此处",
+			"confirmMove": "移动到此处",
+			"cancel": "取消",
+			"loadError": "加载文件夹失败"
+		},
+		"create": {
+			"title": "新建文件夹",
+			"nameLabel": "新文件夹名称",
+			"nameError": "文件夹名称不能包含“/”符号",
+			"submit": "创建",
+			"cancel": "取消"
+		},
+		"conflict": {
+			"title": "路径已存在",
+			"message": "“{{path}}”处已存在文件或文件夹。是替换、使用新名称继续，还是取消？",
+			"replace": "替换",
+			"rename": "重命名",
+			"cancel": "取消"
+		}
+	},
+	"misc": {
+		"sharedLinks": {
+			"neverExpires": "永不过期",
+			"expires": "过期时间 {{date}}",
+			"linkCopied": "链接已复制",
+			"copyFailed": "复制链接失败",
+			"linkRevoked": "分享链接已撤销",
+			"empty": "暂无分享链接 — 打开文件或文件夹菜单以创建一个。",
+			"password": "密码",
+			"copyLink": "复制链接",
+			"revokeLink": "撤销链接"
+		},
+		"accessType": {
+			"admin": "管理员",
+			"edit": "编辑",
+			"view": "查看"
+		},
+		"search": {
+			"placeholder": "搜索.."
+		},
+		"alerts": {
+			"close": "关闭"
+		}
+	},
+	"publicShare": {
+		"sharedWithYou": "已与您共享",
+		"linkUnavailable": "链接不可用",
+		"linkUnavailableDetail": "此分享可能已过期、已被撤销，或从未存在过。",
+		"passwordRequired": "需要密码",
+		"passwordPrompt": "请输入密码以打开此分享。",
+		"passwordLabel": "密码",
+		"unlocking": "正在解锁…",
+		"unlock": "解锁",
+		"incorrectPassword": "密码错误",
+		"unlockFailed": "解锁失败",
+		"shareUnavailable": "此分享链接不可用",
+		"failedToOpenShare": "打开分享失败",
+		"failedToListFolder": "获取文件夹列表失败",
+		"sharedItem": "共享项目",
+		"preview": "预览",
+		"download": "下载",
+		"previewHint": "使用预览可在浏览器中查看图片、视频、PDF 和文本。",
+		"shareRoot": "分享根目录",
+		"preparingZip": "正在准备 ZIP…",
+		"downloadZip": "下载 ZIP",
+		"folderEmpty": "此文件夹为空",
+		"downloadStarted": "下载已开始",
+		"downloadFailed": "下载失败",
+		"zipReady": "ZIP 已就绪 — 下载已开始",
+		"zipDownloadFailed": "ZIP 下载失败",
+		"preparingZipArchive": "正在准备 ZIP 压缩包",
+		"zipHint": "较大的文件夹可能需要一些时间"
+	},
+	"setup": {
+		"title": "设置",
+		"newStorage": "新建存储",
+		"newStorageDesc": "创建一个 Telegram 机器人和一个私密频道，然后确认机器人已被添加为管理员。",
+		"storageName": "存储名称",
+		"continue": "继续",
+		"botStep1Click": "1. 点击",
+		"botStep2": "2. 发送命令",
+		"botStep3": "3. 创建新机器人并复制令牌。",
+		"botToken": "机器人令牌",
+		"back": "返回",
+		"validateBot": "验证机器人",
+		"botTokenInvalid": "机器人令牌似乎无效——请从 @BotFather 重新复制",
+		"notAddedMsg": "机器人未被添加到频道，或未获得管理员权限。请在检测运行期间重新将机器人添加为管理员，或在下方粘贴频道 id。",
+		"botLabel": "机器人：",
+		"channelStep1Prefix": "1. 创建一个",
+		"channelStep1Bold": "私密频道",
+		"channelStep1Suffix": "在 Telegram 中。",
+		"channelStep2Prefix": "2. 将",
+		"yourBot": "你的机器人",
+		"channelStep2Admin": "添加为管理员",
+		"channelStep2WhileChecking": "在检测运行期间",
+		"or": "或者",
+		"channelStep2Forward": "将频道中的任意消息转发给该机器人的私聊，",
+		"channelStep2PasteLink": "粘贴一个",
+		"channelStep2LinkSuffix": "链接／聊天 id 到下方。",
+		"listeningForChannels": "正在监听管理员频道",
+		"chatIdLabel": "聊天 id 或 t.me/c/… 链接",
+		"chatIdHelper": "私密频道：将消息转发给机器人，或粘贴 t.me/c/… / -100…",
+		"checking": "检查中…",
+		"addById": "按 id 添加",
+		"checkChannel": "检测频道",
+		"stop": "停止",
+		"detectAnotherChannel": "检测另一个频道",
+		"creating": "创建中…",
+		"finish": "完成",
+		"enterChatIdHint": "请输入类似 -100… 的聊天 id，或 t.me/c/… 链接",
+		"channelAlreadyAdded": "该频道已添加",
+		"verifyingChatId": "正在验证聊天 id…",
+		"foundChannelOne": "找到频道：{{labels}}",
+		"foundChannelMany": "找到 {{n}} 个频道：{{labels}}",
+		"chatIdVerifyFailed": "无法验证该聊天 id。请确认机器人在该频道具有管理员权限。",
+		"channelVerifyFailed": "频道验证失败",
+		"addAtLeastOneChannel": "请至少添加一个频道",
+		"storageReady": "存储“{{name}}”已就绪",
+		"loadStatusFailed": "加载设置状态失败",
+		"channelDetectFailed": "频道检测失败"
 	}
 }

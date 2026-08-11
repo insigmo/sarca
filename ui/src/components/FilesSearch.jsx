@@ -6,6 +6,7 @@ import { Show } from 'solid-js'
 
 import FluentIcon from './FluentIcon'
 import { filesChromeStore } from '../common/filesChrome'
+import { t } from '../common/i18n'
 
 /**
  * Search pill for the files toolbar.
@@ -25,7 +26,7 @@ const FilesSearch = () => {
 				<TextField
 					fullWidth
 					size="small"
-					placeholder="Search.."
+					placeholder={t('misc.search.placeholder')}
 					value={chrome.searchQuery()}
 					onChange={(e) => chrome.setSearchQuery(e.target.value)}
 					onKeyDown={(e) => {

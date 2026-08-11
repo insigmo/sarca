@@ -10,6 +10,7 @@ import { useNavigate } from '@solidjs/router'
 import API from '../api'
 import { safeRedirectPath } from '../common/auth'
 import logoUrl from '../assets/logo.svg'
+import { t } from '../common/i18n'
 
 const Login = () => {
 	const [store, setStore] = createLocalStore()
@@ -73,7 +74,7 @@ const Login = () => {
 					<div class="auth-brand">
 						<img src={logoUrl} alt="Sarca" />
 						<h1>Sarca</h1>
-						<p>Sign in to your cloud storage</p>
+						<p>{t('auth.login.tagline')}</p>
 					</div>
 
 					<Box
@@ -83,14 +84,14 @@ const Login = () => {
 					>
 						<TextField
 							name="email"
-							label="Email"
+							label={t('auth.login.email')}
 							type="email"
 							autoComplete="email"
 							required
 						/>
 						<TextField
 							name="password"
-							label="Password"
+							label={t('auth.login.password')}
 							type="password"
 							autoComplete="current-password"
 							required
@@ -98,7 +99,7 @@ const Login = () => {
 
 						<Stack spacing={1.5} sx={{ mt: 0.5 }}>
 							<Button type="submit" variant="contained" color="secondary" size="large">
-								Sign in
+								{t('auth.login.signIn')}
 							</Button>
 						</Stack>
 					</Box>

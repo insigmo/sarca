@@ -6,6 +6,8 @@ import DialogContent from '@suid/material/DialogContent'
 import DialogTitle from '@suid/material/DialogTitle'
 import { createEffect, createSignal } from 'solid-js'
 
+import { t } from '../common/i18n'
+
 /**
  * @typedef {Object} CreateFolderDialogProps
  * @property {boolean} isOpened
@@ -44,7 +46,7 @@ const CreateFolderDialog = (props) => {
 		const value = event.currentTarget.value
 
 		setErrFolderName(
-			value.includes('/') ? 'Folder name cannot have a "/" symbol' : null
+			value.includes('/') ? t('folderDialogs.create.nameError') : null
 		)
 
 		setFolderName(value)
@@ -80,7 +82,7 @@ const CreateFolderDialog = (props) => {
 		<>
 			<Dialog open={props.isOpened} onClose={onClose}>
 				<form onSubmit={onCreate}>
-					<DialogTitle>Create folder</DialogTitle>
+					<DialogTitle>{t('folderDialogs.create.title')}</DialogTitle>
 					<DialogContent>
 						<TextField
 							ref={folderNameElement}
@@ -88,7 +90,7 @@ const CreateFolderDialog = (props) => {
 							required
 							margin="dense"
 							id="folder-name"
-							label="New folder name"
+							label={t('folderDialogs.create.nameLabel')}
 							onChange={validateFolderName}
 							helperText={errFolderName}
 							error={errFolderName() !== null}
@@ -102,10 +104,10 @@ const CreateFolderDialog = (props) => {
 							color="success"
 							disabled={!folderName().length || errFolderName() || creating()}
 						>
-							Create
+							{t('folderDialogs.create.submit')}
 						</Button>
 						<Button onClick={onClose} color="error" disabled={creating()}>
-							Cancel
+							{t('folderDialogs.create.cancel')}
 						</Button>
 					</DialogActions>
 				</form>

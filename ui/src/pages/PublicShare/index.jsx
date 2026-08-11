@@ -21,6 +21,7 @@ import FolderZipIcon from '@suid/icons-material/FolderZip'
 import LockOutlinedIcon from '@suid/icons-material/LockOutlined'
 import VisibilityIcon from '@suid/icons-material/Visibility'
 
+import { t } from '../../common/i18n'
 import API from '../../api'
 import { convertSize } from '../../common/size_converter'
 import { loadThumb } from '../../common/previewLoader'
@@ -86,7 +87,7 @@ const PublicShare = () => {
 			if (needsPassword(err)) {
 				setMeta({
 					path: '',
-					name: 'Shared item',
+					name: t('publicShare.sharedItem'),
 					is_file: true,
 					has_password: true,
 				})
@@ -97,8 +98,8 @@ const PublicShare = () => {
 			setPhase('missing')
 			addAlert(
 				err.status === 404
-					? 'This share link is unavailable'
-					: err.message || 'Failed to open share',
+					? t('publicShare.shareUnavailable')
+					: err.message || t('publicShare.failedToOpenShare'),
 				'error',
 			)
 		}
@@ -119,7 +120,7 @@ const PublicShare = () => {
 			}
 			console.error(err)
 			setChildren([])
-			addAlert(err.message || 'Failed to list folder', 'error')
+			addAlert(err.message || t('publicShare.failedToListFolder'), 'error')
 		} finally {
 			setTreeLoading(false)
 		}
@@ -181,8 +182,8 @@ const PublicShare = () => {
 			console.error(err)
 			setUnlockError(
 				err.status === 401
-					? 'Incorrect password'
-					: err.message || 'Unlock failed',
+					? t('publicShare.incorrectPassword')
+					: err.message || t('publicShare.unlockFailed'),
 			)
 		} finally {
 			setUnlocking(false)
@@ -236,10 +237,10 @@ const PublicShare = () => {
 			a.click()
 			URL.revokeObjectURL(href)
 			a.remove()
-			addAlert('Download started', 'success')
+			addAlert(t('publicShare.downloadStarted'), 'success')
 		} catch (err) {
 			console.error(err)
-			addAlert(err.message || 'Download failed', 'error')
+			addAlert(err.message || t('publicShare.downloadFailed'), 'error')
 		}
 	}
 
@@ -259,10 +260,10 @@ const PublicShare = () => {
 			a.click()
 			URL.revokeObjectURL(href)
 			a.remove()
-			addAlert('ZIP ready — download started', 'success')
+			addAlert(t('publicShare.zipReady'), 'success')
 		} catch (err) {
 			console.error(err)
-			addAlert(err.message || 'ZIP download failed', 'error')
+			addAlert(err.message || t('publicShare.zipDownloadFailed'), 'error')
 		} finally {
 			setZipDownloading(false)
 		}
@@ -281,10 +282,10 @@ const PublicShare = () => {
 			a.click()
 			URL.revokeObjectURL(href)
 			a.remove()
-			addAlert('Download started', 'success')
+			addAlert(t('publicShare.downloadStarted'), 'success')
 		} catch (err) {
 			console.error(err)
-			addAlert(err.message || 'Download failed', 'error')
+			addAlert(err.message || t('publicShare.downloadFailed'), 'error')
 		}
 	}
 
@@ -325,7 +326,7 @@ const PublicShare = () => {
 								Sarca
 							</Typography>
 							<Typography variant="caption" color="text.secondary">
-								Shared with you
+								{t('publicShare.sharedWithYou')}
 							</Typography>
 						</div>
 					</Stack>
@@ -341,10 +342,10 @@ const PublicShare = () => {
 					<Show when={phase() === 'missing'}>
 						<div class="public-share__center glass-panel public-share__card">
 							<Typography variant="h5" gutterBottom>
-								Link unavailable
+								{t('publicShare.linkUnavailable')}
 							</Typography>
 							<Typography color="text.secondary">
-								This share may have expired, been revoked, or never existed.
+								{t('publicShare.linkUnavailableDetail')}
 							</Typography>
 						</div>
 					</Show>
@@ -357,14 +358,14 @@ const PublicShare = () => {
 							>
 								<Stack alignItems="center" gap={1} sx={{ mb: 2 }}>
 									<LockOutlinedIcon color="secondary" fontSize="large" />
-									<Typography variant="h5">Password required</Typography>
+									<Typography variant="h5">{t('publicShare.passwordRequired')}</Typography>
 									<Typography variant="body2" color="text.secondary">
-										Enter the password to open this share.
+										{t('publicShare.passwordPrompt')}
 									</Typography>
 								</Stack>
 								<TextField
 									type="password"
-									label="Password"
+									label={t('publicShare.passwordLabel')}
 									value={password()}
 									onChange={(e) => setPassword(e.currentTarget.value)}
 									autoFocus
@@ -379,7 +380,7 @@ const PublicShare = () => {
 									fullWidth
 									disabled={unlocking() || !password().trim()}
 								>
-									{unlocking() ? 'Unlocking…' : 'Unlock'}
+									{unlocking() ? t('publicShare.unlocking') : t('publicShare.unlock')}
 								</Button>
 							</form>
 						</div>
@@ -409,7 +410,7 @@ const PublicShare = () => {
 										startIcon={<VisibilityIcon />}
 										onClick={() => setViewerFile(fileAsElement())}
 									>
-										Preview
+										{t('publicShare.preview')}
 									</Button>
 									<Button
 										variant="contained"
@@ -417,12 +418,12 @@ const PublicShare = () => {
 										startIcon={<DownloadIcon />}
 										onClick={downloadSharedFile}
 									>
-										Download
+										{t('publicShare.download')}
 									</Button>
 								</Stack>
 							</Stack>
 							<Typography variant="body2" color="text.secondary">
-								Use Preview to open images, video, PDF, and text in the browser.
+								{t('publicShare.previewHint')}
 							</Typography>
 						</div>
 					</Show>
@@ -445,7 +446,7 @@ const PublicShare = () => {
 											color="inherit"
 											onClick={() => goToRel('')}
 										>
-											Share root
+											{t('publicShare.shareRoot')}
 										</Link>
 										<For each={crumbs()}>
 											{(c) => (
@@ -468,7 +469,7 @@ const PublicShare = () => {
 									disabled={zipDownloading()}
 									onClick={downloadZip}
 								>
-									{zipDownloading() ? 'Preparing ZIP…' : 'Download ZIP'}
+									{zipDownloading() ? t('publicShare.preparingZip') : t('publicShare.downloadZip')}
 								</Button>
 							</Stack>
 
@@ -487,7 +488,7 @@ const PublicShare = () => {
 												class="files-canvas__empty"
 												onMouseDown={(e) => e.preventDefault()}
 											>
-												This folder is empty
+												{t('publicShare.folderEmpty')}
 											</div>
 										}
 									>
@@ -509,7 +510,7 @@ const PublicShare = () => {
 														<div class="fs-grid-item__more">
 															<Button
 																size="small"
-																aria-label="Download"
+																aria-label={t('publicShare.download')}
 																onClick={(e) => {
 																	e.stopPropagation()
 																	downloadChild(el)
@@ -565,11 +566,11 @@ const PublicShare = () => {
 				<Portal mount={document.body}>
 					<div class="download-preparing" role="status" aria-live="polite">
 						<div class="download-preparing__text">
-							Preparing ZIP archive
+							{t('publicShare.preparingZipArchive')}
 							<LoadingDots />
 						</div>
 						<div class="download-preparing__hint">
-							This may take a while for large folders
+							{t('publicShare.zipHint')}
 						</div>
 					</div>
 				</Portal>
