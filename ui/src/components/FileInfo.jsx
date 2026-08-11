@@ -9,6 +9,7 @@ import API from '../api'
 import { fileExtensionLabel } from '../common/fileLabel'
 import { fileKind } from '../common/fileKind'
 import { convertSize } from '../common/size_converter'
+import { t } from '../common/i18n'
 import FileTypeIcon from './FileTypeIcon'
 import FluentIcon from './FluentIcon'
 import LoadingDots from './LoadingDots'
@@ -21,22 +22,22 @@ import LoadingDots from './LoadingDots'
  * @property {() => void} onClose
  */
 
-const KIND_LABELS = {
-	folder: 'Folder',
-	image: 'Image',
-	video: 'Video',
-	audio: 'Audio',
-	pdf: 'PDF',
-	archive: 'Archive',
-	spreadsheet: 'Spreadsheet',
-	document: 'Document',
-	presentation: 'Presentation',
-	link: 'Link',
-	markdown: 'Markdown',
-	html: 'HTML',
-	text: 'Text',
-	generic: 'File',
-}
+const KIND_LABELS = () => ({
+	folder: t('viewer.kindFolder'),
+	image: t('viewer.kindImage'),
+	video: t('viewer.kindVideo'),
+	audio: t('viewer.kindAudio'),
+	pdf: t('viewer.kindPdf'),
+	archive: t('viewer.kindArchive'),
+	spreadsheet: t('viewer.kindSpreadsheet'),
+	document: t('viewer.kindDocument'),
+	presentation: t('viewer.kindPresentation'),
+	link: t('viewer.kindLink'),
+	markdown: t('viewer.kindMarkdown'),
+	html: t('viewer.kindHtml'),
+	text: t('viewer.kindText'),
+	generic: t('viewer.kindGeneric'),
+})
 
 /**
  * @param {number|null|undefined} n
@@ -44,7 +45,7 @@ const KIND_LABELS = {
 const formatBytesExact = (n) => {
 	const v = Number(n)
 	if (!Number.isFinite(v)) return '—'
-	return `${Math.max(0, Math.round(v)).toLocaleString()} bytes`
+	return t('viewer.bytesExact', { count: Math.max(0, Math.round(v)).toLocaleString() })
 }
 
 /**
@@ -129,17 +130,17 @@ const FileInfoDialog = (props) => {
 		/** @type {{ label: string, value: import('solid-js').JSX.Element, title?: string }[]} */
 		const out = []
 		out.push({
-			label: 'Type',
-			value: KIND_LABELS[kind()] || (m.is_file ? 'File' : 'Folder'),
+			label: t('viewer.labelType'),
+			value: KIND_LABELS()[kind()] || (m.is_file ? t('viewer.kindGeneric') : t('viewer.kindFolder')),
 		})
 		if (m.is_file) {
 			out.push({
-				label: 'Extension',
+				label: t('viewer.labelExtension'),
 				value: fileExtensionLabel(m.name, true),
 			})
 		}
 		out.push({
-			label: 'Size',
+			label: t('viewer.labelSize'),
 			value: (
 				<>
 					{convertSize(m.size)}
@@ -151,30 +152,30 @@ const FileInfoDialog = (props) => {
 			title: `${convertSize(m.size)} (${formatBytesExact(m.size)})`,
 		})
 		out.push({
-			label: 'Path',
+			label: t('viewer.labelPath'),
 			value: pathFromRoot(m.path),
 		})
 		out.push({
-			label: 'Created',
+			label: t('viewer.labelCreated'),
 			value: formatTimestamp(m.created_at) || '—',
 		})
 		out.push({
-			label: 'Modified',
+			label: t('viewer.labelModified'),
 			value: formatTimestamp(m.modified_at) || '—',
 		})
 		out.push({
-			label: 'Added',
+			label: t('viewer.labelAdded'),
 			value: formatTimestamp(m.added_at) || '—',
 		})
 		if (m.is_favorite != null) {
 			out.push({
-				label: 'Favorite',
-				value: m.is_favorite ? 'Yes' : 'No',
+				label: t('viewer.labelFavorite'),
+				value: m.is_favorite ? t('viewer.yes') : t('viewer.no'),
 			})
 		}
 		if (m.deleted_at) {
 			out.push({
-				label: 'In trash since',
+				label: t('viewer.labelTrashSince'),
 				value: new Date(m.deleted_at).toLocaleString(),
 			})
 		}
@@ -199,7 +200,7 @@ const FileInfoDialog = (props) => {
 					<div class="file-info-dialog__titles">
 						<h2 class="file-info-dialog__title">{merged()?.name || '—'}</h2>
 						<p class="file-info-dialog__subtitle">
-							{KIND_LABELS[kind()] || 'Item'}
+							{KIND_LABELS()[kind()] || t('viewer.kindItem')}
 							{merged()?.is_file
 								? ` · ${fileExtensionLabel(merged()?.name || '', true)}`
 								: ''}
@@ -208,7 +209,7 @@ const FileInfoDialog = (props) => {
 				</div>
 				<IconButton
 					size="small"
-					aria-label="Close"
+					aria-label={t('common.close')}
 					onClick={props.onClose}
 					class="file-info-dialog__close"
 				>
@@ -220,7 +221,7 @@ const FileInfoDialog = (props) => {
 				<Show when={loading()}>
 					<div class="file-info-dialog__loading">
 						<span>
-							Loading details
+							{t('viewer.loadingDetails')}
 							<LoadingDots />
 						</span>
 					</div>
@@ -248,7 +249,7 @@ const FileInfoDialog = (props) => {
 
 			<DialogActions class="file-info-dialog__actions">
 				<Button onClick={props.onClose} color="secondary" variant="contained">
-					Close
+					{t('common.close')}
 				</Button>
 			</DialogActions>
 		</Dialog>

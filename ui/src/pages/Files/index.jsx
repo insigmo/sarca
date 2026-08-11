@@ -19,6 +19,7 @@ import Divider from '@suid/material/Divider'
 import ListItemIcon from '@suid/material/ListItemIcon'
 import ListItemText from '@suid/material/ListItemText'
 
+import { t } from '../../common/i18n'
 import API from '../../api'
 import FSListItem from '../../components/FSListItem'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
@@ -626,7 +627,7 @@ const Files = () => {
 			.replace(/^\/+/, '')
 			.replace(/\/+$/, '')
 		/** @type {{ label: string, path: string }[]} */
-		const crumbs = [{ label: 'All files', path: '' }]
+		const crumbs = [{ label: t('files.allFiles'), path: '' }]
 		if (!raw) return crumbs
 		let acc = ''
 		for (const part of raw.split('/').filter(Boolean)) {
@@ -841,14 +842,20 @@ const Files = () => {
 					delete next[el.path]
 					return next
 				})
-				addAlert(`Removed "${el.name}" from favorites`, 'success')
+				addAlert(
+					t('files.removedFromFavorites', { name: el.name }),
+					'success',
+				)
 				if (listMode() === 'favorites') {
 					setFsLayer((prev) => prev.filter((f) => f.path !== el.path))
 				}
 			} else {
 				await API.files.addFavorite(params.id, el.path)
 				setFavoritePaths((prev) => ({ ...prev, [el.path]: true }))
-				addAlert(`Added "${el.name}" to favorites`, 'success')
+				addAlert(
+					t('files.addedToFavorites', { name: el.name }),
+					'success',
+				)
 			}
 		} catch {
 			/* alerted by API */
@@ -883,9 +890,9 @@ const Files = () => {
 		setRestoreRemaining([])
 		clearSelection()
 		if (done.length === 1) {
-			addAlert(`Restored "${done[0]}"`, 'success')
+			addAlert(t('files.restoredOne', { name: done[0] }), 'success')
 		} else if (done.length > 1) {
-			addAlert(`Restored ${done.length} items`, 'success')
+			addAlert(t('files.restoredMany', { count: done.length }), 'success')
 		}
 		await fetchTrashLayer()
 	}
@@ -899,7 +906,7 @@ const Files = () => {
 
 	const deleteForeverItem = async (el) => {
 		await API.files.deleteForever(params.id, trashItemPath(el))
-		addAlert(`Permanently deleted "${el.name}"`, 'success')
+		addAlert(t('files.deletedForeverOne', { name: el.name }), 'success')
 		await fetchTrashLayer()
 	}
 
@@ -920,7 +927,7 @@ const Files = () => {
 		clearSelection()
 		try {
 			await API.files.emptyTrash(params.id)
-			addAlert('Trash emptied', 'success')
+			addAlert(t('files.trashEmptied'), 'success')
 		} catch {
 			/* apiRequest already alerted */
 			await fetchTrashLayer('')
@@ -976,11 +983,11 @@ const Files = () => {
 		addAlert(
 			mode === 'copy'
 				? items.length === 1
-					? `Copied "${items[0].name}"`
-					: `Copied ${items.length} items`
+					? t('files.copiedOne', { name: items[0].name })
+					: t('files.copiedMany', { count: items.length })
 				: items.length === 1
-					? `Cut "${items[0].name}"`
-					: `Cut ${items.length} items`,
+					? t('files.cutOne', { name: items[0].name })
+					: t('files.cutMany', { count: items.length }),
 			'info',
 		)
 	}
@@ -1007,11 +1014,11 @@ const Files = () => {
 				? el.name.split('/').pop()
 				: el.name
 			: el.name.replace(/\/$/, '').split('/').pop() || el.name
-		const newName = window.prompt('New name', currentName)
+		const newName = window.prompt(t('files.newNamePrompt'), currentName)
 		if (!newName || newName === currentName) return
 		try {
 			await API.files.rename(params.id, path, newName)
-			addAlert(`Renamed to "${newName}"`, 'success')
+			addAlert(t('files.renamedTo', { name: newName }), 'success')
 			clearSelection()
 			await refreshCurrent()
 		} catch {

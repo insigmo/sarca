@@ -42,7 +42,18 @@
 	"storages": {
 		"newStorage": "Nuevo almacenamiento",
 		"empty": "Aún no hay almacenamientos",
-		"title": "Almacenamientos"
+		"title": "Almacenamientos",
+		"openMenu": "Abrir menú",
+		"redirectingToSetup": "Redirigiendo a la configuración…",
+		"loading": "Cargando almacenamientos…",
+		"cardMeta": "{{files}} · {{size}}",
+		"fileOne": "{{count}} archivo",
+		"fileMany": "{{count}} archivos",
+		"settingsFor": "Ajustes de {{name}}",
+		"settingsHint": "Bot, canales, renombrar…",
+		"openStorage": "Abrir almacenamiento {{name}}",
+		"deadChannel": "Se eliminó un canal — abre los ajustes para corregirlo",
+		"deadChannelFor": "{{name}} tiene un canal eliminado — abre los ajustes para corregirlo"
 	},
 	"confirmDialog": {
 		"title": "¿{{action}} {{entity}}?",

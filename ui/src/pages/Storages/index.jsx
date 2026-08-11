@@ -8,6 +8,7 @@ import { convertSize } from '../../common/size_converter'
 import { storageSettingsStore } from '../../common/storageSettings'
 import { storagesStore } from '../../common/storagesStore'
 import { startAutoRefresh } from '../../common/autoRefresh'
+import { t } from '../../common/i18n'
 import FileTypeIcon from '../../components/FileTypeIcon'
 import FilesSidebar from '../../components/FilesSidebar'
 import FluentIcon from '../../components/FluentIcon'
@@ -69,7 +70,7 @@ const Storages = () => {
 					<div class="page-header" style={{ 'justify-content': 'flex-end' }}>
 						<IconButton
 							class="files-page__nav-toggle"
-							aria-label="Open menu"
+							aria-label={t('storages.openMenu')}
 							onClick={() => setMobileNavOpen(true)}
 							sx={{ mr: 'auto' }}
 						>
@@ -81,7 +82,7 @@ const Storages = () => {
 							color="secondary"
 							startIcon={<FluentIcon name="add" size={18} />}
 						>
-							New storage
+							{t('storages.newStorage')}
 						</Button>
 					</div>
 
@@ -91,7 +92,7 @@ const Storages = () => {
 						when={storages().length}
 						fallback={
 							<div class="storages-empty">
-								{loaded() ? 'Redirecting to setup…' : 'Loading storages…'}
+								{loaded() ? t('storages.redirectingToSetup') : t('storages.loading')}
 							</div>
 						}
 					>
@@ -110,7 +111,7 @@ const Storages = () => {
 										}}
 										tabIndex={0}
 										role="button"
-										aria-label={`Open storage ${storage.name}`}
+										aria-label={t('storages.openStorage', { name: storage.name })}
 									>
 										<div class="storage-card__top">
 											<FileTypeIcon name="storage" isFile={false} storage size={56} />
@@ -121,25 +122,32 @@ const Storages = () => {
 														<span
 															class="storage-card__warning"
 															role="img"
-															aria-label={`${storage.name} has a deleted channel — open settings to fix`}
-															title="A channel was deleted — open settings to fix"
+															aria-label={t('storages.deadChannelFor', {
+																name: storage.name,
+															})}
+															title={t('storages.deadChannel')}
 														>
 															<FluentIcon name="warning" size={18} />
 														</span>
 													</Show>
 												</h2>
 												<p class="storage-card__meta">
-													{storage.files_amount}{' '}
-													{storage.files_amount === 1 ? 'file' : 'files'}
-													{' · '}
-													{convertSize(storage.size)}
+													{t('storages.cardMeta', {
+														files: t(
+															storage.files_amount === 1
+																? 'storages.fileOne'
+																: 'storages.fileMany',
+															{ count: storage.files_amount },
+														),
+														size: convertSize(storage.size),
+													})}
 												</p>
 											</div>
 											<IconButton
 												class="storage-card__settings"
 												size="small"
-												aria-label={`Settings for ${storage.name}`}
-												title="Bot, channels, rename…"
+												aria-label={t('storages.settingsFor', { name: storage.name })}
+												title={t('storages.settingsHint')}
 												onClick={(e) => openSettings(e, storage)}
 												onMouseDown={(e) => e.stopPropagation()}
 												onKeyDown={(e) => e.stopPropagation()}
