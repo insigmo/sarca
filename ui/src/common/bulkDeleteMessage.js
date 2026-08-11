@@ -1,3 +1,5 @@
+import { t } from './i18n'
+
 /**
  * Success-toast text for a bulk delete/delete-forever operation.
  * @param {number} count number of items that actually succeeded
@@ -7,9 +9,9 @@
  */
 export const formatBulkDeleteMessage = (count, singleName, permanent) => {
 	if (count === 1) {
-		return permanent
-			? `Permanently deleted "${singleName}"`
-			: `Deleted "${singleName}"`
+		return t(permanent ? 'files.deletedForeverOne' : 'files.deletedOne', {
+			name: singleName,
+		})
 	}
-	return permanent ? `Permanently deleted ${count} items` : `Deleted ${count} items`
+	return t(permanent ? 'files.deletedForeverMany' : 'files.deletedMany', { count })
 }

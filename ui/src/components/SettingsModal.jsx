@@ -162,7 +162,7 @@ const SettingsModal = () => {
 		const email = newUserEmail().trim()
 		const password = newUserPassword()
 		if (!email || !password) {
-			addAlert('Email and password are required', 'error')
+			addAlert(i18n.t('settings.emailPasswordRequired'), 'error')
 			return
 		}
 		setUsersBusy(true)
@@ -170,7 +170,7 @@ const SettingsModal = () => {
 			await API.users.createUser(email, password)
 			setNewUserEmail('')
 			setNewUserPassword('')
-			addAlert('User created', 'success')
+			addAlert(i18n.t('settings.userCreated'), 'success')
 			await fetchAdminUsers()
 		} catch (err) {
 			console.error(err)
@@ -183,7 +183,7 @@ const SettingsModal = () => {
 		event.preventDefault()
 		const next = rowNewPassword()
 		if (!next) {
-			addAlert('New password is required', 'error')
+			addAlert(i18n.t('settings.newPasswordRequired'), 'error')
 			return
 		}
 		setRowPasswordBusy(true)
@@ -191,7 +191,7 @@ const SettingsModal = () => {
 			await API.users.setUserPassword(userId, next)
 			setRowNewPassword('')
 			setOpenPasswordRowId('')
-			addAlert('Password changed', 'success')
+			addAlert(i18n.t('settings.passwordChanged'), 'success')
 		} catch (err) {
 			console.error(err)
 		} finally {
@@ -202,7 +202,12 @@ const SettingsModal = () => {
 	const toggleUserDisabled = async (u) => {
 		try {
 			await API.users.setUserDisabled(u.id, !u.disabled)
-			addAlert(u.disabled ? 'User enabled' : 'User disabled', 'success')
+			addAlert(
+				u.disabled
+					? i18n.t('settings.userEnabled')
+					: i18n.t('settings.userDisabled'),
+				'success',
+			)
 			await fetchAdminUsers()
 		} catch (err) {
 			console.error(err)
@@ -220,11 +225,11 @@ const SettingsModal = () => {
 		const next = ownNewPassword()
 		const confirm = ownConfirmPassword()
 		if (!current || !next) {
-			addAlert('Current and new password are required', 'error')
+			addAlert(i18n.t('settings.currentNewPasswordRequired'), 'error')
 			return
 		}
 		if (next !== confirm) {
-			addAlert('New password confirmation does not match', 'error')
+			addAlert(i18n.t('settings.newPasswordConfirmMismatch'), 'error')
 			return
 		}
 		setOwnPasswordBusy(true)
@@ -239,7 +244,7 @@ const SettingsModal = () => {
 			setOwnCurrentPassword('')
 			setOwnNewPassword('')
 			setOwnConfirmPassword('')
-			addAlert('Password changed', 'success')
+			addAlert(i18n.t('settings.passwordChanged'), 'success')
 		} catch (err) {
 			console.error(err)
 		} finally {
@@ -334,7 +339,7 @@ const SettingsModal = () => {
 		try {
 			await nativeInvoke('clear_local_cache')
 			setCacheBytes(0)
-			addAlert('Cache cleared', 'success')
+			addAlert(i18n.t('settings.cacheCleared'), 'success')
 		} catch (e) {
 			addAlert(String(e), 'error')
 		}
@@ -359,7 +364,7 @@ const SettingsModal = () => {
 		try {
 			const result = await nativeInvoke('export_logs')
 			if (result?.shared) {
-				addAlert('Share sheet opened', 'success')
+				addAlert(i18n.t('settings.shareSheetOpened'), 'success')
 				return
 			}
 			const content = String(result?.content || '')
@@ -376,7 +381,12 @@ const SettingsModal = () => {
 				a.remove()
 				URL.revokeObjectURL(url)
 			}
-			addAlert(path ? `Logs exported (${path})` : 'Logs exported', 'success')
+			addAlert(
+				path
+					? i18n.t('settings.logsExportedWithPath', { path })
+					: i18n.t('settings.logsExported'),
+				'success',
+			)
 			setLogsEnabled(true)
 		} catch (e) {
 			addAlert(String(e), 'error')
@@ -400,18 +410,18 @@ const SettingsModal = () => {
 			const prefs = (await nativeInvoke('get_client_prefs')) || {}
 			const current = pinCurrent().trim()
 			if (pinSet() && !current) {
-				setSecurityMsg('Enter your current PIN')
+				setSecurityMsg(i18n.t('settings.enterCurrentPin'))
 				return
 			}
 			if (enabled) {
 				const pin = pinDraft().trim()
 				const confirm = pinConfirm().trim()
 				if (!/^\d{4,8}$/.test(pin)) {
-					setSecurityMsg('PIN must be 4–8 digits')
+					setSecurityMsg(i18n.t('settings.pinLengthError'))
 					return
 				}
 				if (pin !== confirm) {
-					setSecurityMsg('PIN confirmation does not match')
+					setSecurityMsg(i18n.t('settings.pinConfirmMismatch'))
 					return
 				}
 				await nativeInvoke('set_client_prefs', {
@@ -426,7 +436,7 @@ const SettingsModal = () => {
 				setPinSet(true)
 				setEnablingLock(false)
 				clearPinFields()
-				addAlert('App lock enabled', 'success')
+				addAlert(i18n.t('settings.appLockEnabled'), 'success')
 			} else {
 				await nativeInvoke('set_client_prefs', {
 					prefs: {
@@ -440,7 +450,7 @@ const SettingsModal = () => {
 				setPinSet(false)
 				setEnablingLock(false)
 				clearPinFields()
-				addAlert('App lock disabled', 'success')
+				addAlert(i18n.t('settings.appLockDisabled'), 'success')
 			}
 		} catch (e) {
 			setSecurityMsg(String(e))
@@ -450,14 +460,14 @@ const SettingsModal = () => {
 	const saveTrashSettings = async () => {
 		const days = Number(trashRetentionDays())
 		if (!Number.isFinite(days) || days < 1 || days > 30) {
-			addAlert('Retention must be between 1 and 30 days', 'error')
+			addAlert(i18n.t('settings.retentionRangeError'), 'error')
 			return
 		}
 		setTrashSettingsSaving(true)
 		try {
 			const s = await API.settings.setTrashSettings(days)
 			setTrashRetentionDays(s.retention_days)
-			addAlert('Trash settings saved', 'success')
+			addAlert(i18n.t('settings.trashSettingsSaved'), 'success')
 		} finally {
 			setTrashSettingsSaving(false)
 		}
@@ -482,15 +492,15 @@ const SettingsModal = () => {
 					>
 						<div class="settings-modal__header">
 							<div>
-								<h2 id="settings-modal-title">Settings</h2>
+								<h2 id="settings-modal-title">{i18n.t('settings.modalTitle')}</h2>
 								<p class="settings-modal__sub">
 									{isNative()
-										? 'General, sync, and access'
-										: 'General and access'}
+										? i18n.t('settings.subtitleNative')
+										: i18n.t('settings.subtitleWeb')}
 								</p>
 							</div>
 							<IconButton
-								aria-label="Close settings"
+								aria-label={i18n.t('settings.closeSettings')}
 								onClick={closeSettings}
 								class="sarca-header-icon"
 								size="small"
@@ -500,8 +510,8 @@ const SettingsModal = () => {
 						</div>
 
 						<div class="settings-modal__layout">
-							<nav class="settings-nav" aria-label="Settings sections">
-								<p class="settings-nav__label">Menu</p>
+							<nav class="settings-nav" aria-label={i18n.t('settings.sectionsAriaLabel')}>
+								<p class="settings-nav__label">{i18n.t('settings.menu')}</p>
 								<button
 									type="button"
 									class="settings-nav__item"
@@ -515,8 +525,8 @@ const SettingsModal = () => {
 										/>
 									</span>
 									<span class="settings-nav__text">
-										<span class="settings-nav__title">General</span>
-										<span class="settings-nav__desc">Theme &amp; session</span>
+										<span class="settings-nav__title">{i18n.t('settings.generalTab')}</span>
+										<span class="settings-nav__desc">{i18n.t('settings.generalTabDesc')}</span>
 									</span>
 								</button>
 								<Show when={showSyncTab()}>
@@ -533,9 +543,9 @@ const SettingsModal = () => {
 											/>
 										</span>
 										<span class="settings-nav__text">
-											<span class="settings-nav__title">Sync</span>
+											<span class="settings-nav__title">{i18n.t('settings.syncTab')}</span>
 											<span class="settings-nav__desc">
-												Auto-upload &amp; folders
+												{i18n.t('settings.syncTabDesc')}
 											</span>
 										</span>
 									</button>
@@ -555,8 +565,8 @@ const SettingsModal = () => {
 										/>
 									</span>
 									<span class="settings-nav__text">
-										<span class="settings-nav__title">Access</span>
-										<span class="settings-nav__desc">Who can open</span>
+										<span class="settings-nav__title">{i18n.t('settings.accessTab')}</span>
+										<span class="settings-nav__desc">{i18n.t('settings.accessTabDesc')}</span>
 									</span>
 								</button>
 							</nav>
@@ -564,16 +574,15 @@ const SettingsModal = () => {
 							<div class="settings-modal__body">
 								<Show when={tab() === 'access'}>
 									<p class="settings-bot-hint">
-										Telegram bot and channels are in{' '}
-										<strong>Storage settings</strong> — use the gear on a storage
-										card, or (on desktop) the tune icon in the header while
-										browsing files.
+										{i18n.t('settings.botHintPrefix')}{' '}
+										<strong>{i18n.t('settings.storageSettingsLabel')}</strong>{' '}
+										{i18n.t('settings.botHintSuffix')}
 									</p>
 
 									<div class="settings-access">
 										<div class="settings-access__toolbar">
 											<label class="settings-select-field">
-												<span class="settings-select-field__label">Storage</span>
+												<span class="settings-select-field__label">{i18n.t('settings.storageLabel')}</span>
 												<select
 													class="settings-select"
 													value={accessStorageId()}
@@ -583,7 +592,7 @@ const SettingsModal = () => {
 												>
 													<Show when={!storages().length}>
 														<option value="" disabled>
-															No storages
+															{i18n.t('settings.noStorages')}
 														</option>
 													</Show>
 													<For each={storages()}>
@@ -600,7 +609,7 @@ const SettingsModal = () => {
 													startIcon={<FluentIcon name="add" size={18} />}
 													onClick={() => setIsGrantVisible(true)}
 												>
-													Grant access
+													{i18n.t('settings.grantAccess')}
 												</Button>
 											</Show>
 										</div>
@@ -612,7 +621,7 @@ const SettingsModal = () => {
 													color="text.secondary"
 													sx={{ py: 4, textAlign: 'center' }}
 												>
-													Select a storage to manage access.
+													{i18n.t('settings.selectStorageHint')}
 												</Typography>
 											}
 										>
@@ -623,8 +632,7 @@ const SettingsModal = () => {
 														color="text.secondary"
 														sx={{ py: 4, textAlign: 'center' }}
 													>
-														You do not have permissions to manage access for this
-														storage.
+														{i18n.t('settings.noAccessPermission')}
 													</Typography>
 												}
 											>
@@ -648,7 +656,7 @@ const SettingsModal = () => {
 
 									<div class="settings-users">
 										<Typography variant="h6" sx={{ mt: 4, mb: 1 }}>
-											Accounts
+											{i18n.t('settings.accounts')}
 										</Typography>
 										<Show
 											when={isSuperuser()}
@@ -659,7 +667,7 @@ const SettingsModal = () => {
 														color="text.secondary"
 														sx={{ mb: 2 }}
 													>
-														Change the password for your own account.
+														{i18n.t('settings.changeOwnPasswordHint')}
 													</Typography>
 													<Box
 														component="form"
@@ -671,7 +679,7 @@ const SettingsModal = () => {
 														}}
 													>
 														<TextField
-															label="Current password"
+															label={i18n.t('settings.currentPasswordLabel')}
 															type="password"
 															required
 															autoComplete="current-password"
@@ -681,7 +689,7 @@ const SettingsModal = () => {
 															}
 														/>
 														<TextField
-															label="New password"
+															label={i18n.t('settings.newPasswordLabel')}
 															type="password"
 															required
 															autoComplete="new-password"
@@ -689,7 +697,7 @@ const SettingsModal = () => {
 															onChange={(e) => setOwnNewPassword(e.target.value)}
 														/>
 														<TextField
-															label="Confirm new password"
+															label={i18n.t('settings.confirmNewPasswordLabel')}
 															type="password"
 															required
 															autoComplete="new-password"
@@ -704,7 +712,7 @@ const SettingsModal = () => {
 															color="secondary"
 															disabled={ownPasswordBusy()}
 														>
-															Change my password
+															{i18n.t('settings.changeMyPassword')}
 														</Button>
 													</Box>
 												</>
@@ -715,8 +723,7 @@ const SettingsModal = () => {
 												color="text.secondary"
 												sx={{ mb: 2 }}
 											>
-												Only the superuser can create accounts. New users can sign
-												in with email and password.
+												{i18n.t('settings.superuserCreateHint')}
 											</Typography>
 											<Box
 												component="form"
@@ -729,14 +736,14 @@ const SettingsModal = () => {
 												}}
 											>
 												<TextField
-													label="Email"
+													label={i18n.t('settings.emailLabel')}
 													type="email"
 													required
 													value={newUserEmail()}
 													onChange={(e) => setNewUserEmail(e.target.value)}
 												/>
 												<TextField
-													label="Password"
+													label={i18n.t('settings.passwordLabel')}
 													type="password"
 													required
 													autoComplete="new-password"
@@ -749,7 +756,7 @@ const SettingsModal = () => {
 													color="secondary"
 													disabled={usersBusy()}
 												>
-													Create user
+													{i18n.t('settings.createUser')}
 												</Button>
 											</Box>
 											<div class="settings-users__list">
@@ -757,7 +764,7 @@ const SettingsModal = () => {
 													each={adminUsers()}
 													fallback={
 														<Typography color="text.secondary">
-															No users yet.
+															{i18n.t('settings.noUsersYet')}
 														</Typography>
 													}
 												>
@@ -773,18 +780,20 @@ const SettingsModal = () => {
 																	<strong>{u.email}</strong>
 																	<Show when={u.is_superuser}>
 																		<span class="settings-users__badge">
-																			superuser
+																			{i18n.t('settings.superuserBadge')}
 																		</span>
 																	</Show>
 																	<Show when={u.disabled}>
 																		<span class="settings-users__badge">
-																			disabled
+																			{i18n.t('settings.disabledBadge')}
 																		</span>
 																	</Show>
 																</div>
 																<div class="settings-users__row-controls">
 																	<span class="settings-users__meta">
-																		{u.email_verified ? 'verified' : 'unverified'}
+																		{u.email_verified
+																			? i18n.t('settings.verified')
+																			: i18n.t('settings.unverified')}
 																	</span>
 																	<Button
 																		size="small"
@@ -794,11 +803,13 @@ const SettingsModal = () => {
 																			)
 																		}
 																	>
-																		Change password
+																		{i18n.t('settings.changePassword')}
 																	</Button>
 																	<SettingsSwitch
 																		id={`settings-users-disabled-${u.id}`}
-																		ariaLabel={`Enabled: ${u.email}`}
+																		ariaLabel={i18n.t('settings.enabledUserAriaLabel', {
+																			email: u.email,
+																		})}
 																		checked={!u.disabled}
 																		disabled={store.user?.email === u.email}
 																		onChange={() => toggleUserDisabled(u)}
@@ -812,7 +823,7 @@ const SettingsModal = () => {
 																>
 																	<TextField
 																		size="small"
-																		label="New password"
+																		label={i18n.t('settings.newPasswordLabel')}
 																		type="password"
 																		required
 																		autoComplete="new-password"
@@ -828,7 +839,7 @@ const SettingsModal = () => {
 																		color="secondary"
 																		disabled={rowPasswordBusy()}
 																	>
-																		Save
+																		{i18n.t('common.save')}
 																	</Button>
 																</form>
 															</Show>
@@ -844,18 +855,18 @@ const SettingsModal = () => {
 									<div class="settings-account">
 										<div class="settings-account__row">
 											<div>
-												<p class="settings-account__label">Account</p>
+												<p class="settings-account__label">{i18n.t('settings.account')}</p>
 												<p class="settings-account__hint">
 													{store.user?.email ||
 														sessionInfo().email ||
-														'Signed in'}
+														i18n.t('settings.signedIn')}
 												</p>
 											</div>
 										</div>
 										<Show when={isNative() && sessionInfo().base_url}>
 											<div class="settings-account__row">
 												<div>
-													<p class="settings-account__label">Server</p>
+													<p class="settings-account__label">{i18n.t('settings.server')}</p>
 													<p class="settings-account__hint">
 														{sessionInfo().base_url}
 													</p>
@@ -865,16 +876,16 @@ const SettingsModal = () => {
 										<Show when={chrome.storageId()}>
 											<div class="settings-account__row">
 												<div>
-													<p class="settings-account__label">Occupied space</p>
+													<p class="settings-account__label">{i18n.t('settings.occupiedSpace')}</p>
 													<p class="settings-account__hint">
-														{occupiedGb()} GB used
+														{i18n.t('settings.gbUsed', { gb: occupiedGb() })}
 													</p>
 												</div>
 											</div>
 										</Show>
 										<div class="settings-account__row settings-account__row--theme">
 											<div>
-												<p class="settings-account__label">Theme</p>
+												<p class="settings-account__label">{i18n.t('settings.theme')}</p>
 												<p class="settings-account__hint">
 													{themeHints[mode()] ?? themeHints.light}
 												</p>
@@ -882,7 +893,7 @@ const SettingsModal = () => {
 											<div
 												class="theme-picker"
 												role="radiogroup"
-												aria-label="Theme"
+												aria-label={i18n.t('settings.theme')}
 											>
 												<For each={[...THEMES]}>
 													{(t) => (
@@ -938,19 +949,17 @@ const SettingsModal = () => {
 										</div>
 										<Show when={isSuperuser()}>
 											<div class="settings-trash">
-												<p class="settings-account__label">Trash retention</p>
+												<p class="settings-account__label">{i18n.t('settings.trashRetention')}</p>
 												<Typography
 													variant="body2"
 													color="text.secondary"
 													sx={{ mb: 2 }}
 												>
-													Deleted files stay in the trash for this many days
-													(1–30), then are permanently removed from Sarca and
-													Telegram.
+													{i18n.t('settings.trashRetentionHint')}
 												</Typography>
 												<TextField
 													type="number"
-													label="Days in trash"
+													label={i18n.t('settings.daysInTrash')}
 													fullWidth
 													inputProps={{ min: 1, max: 30, step: 1 }}
 													value={trashRetentionDays()}
@@ -965,19 +974,19 @@ const SettingsModal = () => {
 														disabled={trashSettingsSaving()}
 														onClick={saveTrashSettings}
 													>
-														Save
+														{i18n.t('common.save')}
 													</Button>
 												</div>
 											</div>
 										</Show>
 										<p class="settings-bot-hint">
-											Require a PIN when opening the native app on this device.
+											{i18n.t('settings.appLockHint')}
 										</p>
 										<Show
 											when={isNative()}
 											fallback={
 												<p class="settings-account__hint">
-													App lock is available in the Sarca native client.
+													{i18n.t('settings.appLockNativeOnly')}
 												</p>
 											}
 										>
@@ -986,7 +995,7 @@ const SettingsModal = () => {
 												onChange={(on) => {
 													if (on) {
 														setEnablingLock(true)
-														setSecurityMsg('Enter a new PIN below, then save')
+														setSecurityMsg(i18n.t('settings.enterNewPinBelow'))
 													} else if (lockEnabled()) {
 														saveAppLock(false)
 													} else {
@@ -1000,7 +1009,7 @@ const SettingsModal = () => {
 											/>
 											<Show when={pinSet()}>
 												<TextField
-													label="Current PIN"
+													label={i18n.t('settings.currentPinLabel')}
 													type="password"
 													size="small"
 													fullWidth
@@ -1012,7 +1021,9 @@ const SettingsModal = () => {
 											</Show>
 											<TextField
 												label={
-													pinSet() ? 'New PIN (4–8 digits)' : 'PIN (4–8 digits)'
+													pinSet()
+														? i18n.t('settings.newPinLabel')
+														: i18n.t('settings.pinLabel')
 												}
 												type="password"
 												size="small"
@@ -1023,7 +1034,7 @@ const SettingsModal = () => {
 												inputProps={{ inputMode: 'numeric', maxLength: 8 }}
 											/>
 											<TextField
-												label="Confirm new PIN"
+												label={i18n.t('settings.confirmNewPinLabel')}
 												type="password"
 												size="small"
 												fullWidth
@@ -1041,7 +1052,9 @@ const SettingsModal = () => {
 													color="secondary"
 													onClick={() => saveAppLock(true)}
 												>
-													{lockEnabled() ? 'Save PIN' : 'Enable lock'}
+													{lockEnabled()
+														? i18n.t('settings.savePin')
+														: i18n.t('settings.enableLock')}
 												</Button>
 												<Show when={lockEnabled()}>
 													<Button
@@ -1049,7 +1062,7 @@ const SettingsModal = () => {
 														color="error"
 														onClick={() => saveAppLock(false)}
 													>
-														Disable
+														{i18n.t('settings.disable')}
 													</Button>
 												</Show>
 											</div>
@@ -1062,27 +1075,29 @@ const SettingsModal = () => {
 										<Show when={isNative()}>
 											<div class="settings-account__row">
 												<div>
-													<p class="settings-account__label">Cache</p>
+													<p class="settings-account__label">{i18n.t('settings.cache')}</p>
 													<p class="settings-account__hint">
 														{formatBytes(cacheBytes())} /{' '}
 														{formatBytes(cacheLimitBytes())}
 													</p>
 												</div>
 												<Button variant="outlined" onClick={clearCache}>
-													Clear cache
+													{i18n.t('settings.clearCache')}
 												</Button>
 											</div>
 											<div class="settings-account__row">
 												<div>
-													<p class="settings-account__label">About</p>
+													<p class="settings-account__label">{i18n.t('settings.about')}</p>
 													<p class="settings-account__hint">
-														Sarca client {about().version || '—'} ·{' '}
-														{about().platform || 'native'}
+														{i18n.t('settings.clientVersion', {
+															version: about().version || '—',
+															platform: about().platform || i18n.t('settings.nativePlatform'),
+														})}
 													</p>
 												</div>
 											</div>
 											<div class="settings-toggle">
-												<span>Enable logs</span>
+												<span>{i18n.t('settings.enableLogs')}</span>
 												<SettingsSwitch
 													id="settings-enable-logs-switch"
 													checked={logsEnabled()}
@@ -1092,9 +1107,9 @@ const SettingsModal = () => {
 											</div>
 											<div class="settings-account__row">
 												<div>
-													<p class="settings-account__label">Export logs</p>
+													<p class="settings-account__label">{i18n.t('settings.exportLogs')}</p>
 													<p class="settings-account__hint">
-														Share a log file for debugging auto-upload
+														{i18n.t('settings.exportLogsHint')}
 													</p>
 												</div>
 												<Button
@@ -1102,15 +1117,15 @@ const SettingsModal = () => {
 													disabled={logsBusy()}
 													onClick={exportLogs}
 												>
-													Export logs
+													{i18n.t('settings.exportLogs')}
 												</Button>
 											</div>
 										</Show>
 										<div class="settings-account__row">
 											<div>
-												<p class="settings-account__label">Session</p>
+												<p class="settings-account__label">{i18n.t('settings.session')}</p>
 												<p class="settings-account__hint">
-													Sign out of Sarca on this device
+													{i18n.t('settings.signOutHint')}
 												</p>
 											</div>
 											<Button
@@ -1119,7 +1134,7 @@ const SettingsModal = () => {
 												startIcon={<FluentIcon name="signOut" size={18} />}
 												onClick={logout}
 											>
-												Log out
+												{i18n.t('sidebar.logOut')}
 											</Button>
 										</div>
 									</div>
