@@ -16,6 +16,7 @@ import API from '../api'
 import { copyToClipboard } from '../utils/clipboard'
 import { alertStore } from './AlertStack'
 import FluentIcon from './FluentIcon'
+import { t } from '../common/i18n'
 
 /** @typedef {'1d' | '7d' | '30d' | 'never' | 'custom'} ExpiryPreset */
 
@@ -53,9 +54,11 @@ const resolveExpiresAt = (preset, customLocal) => {
  * @param {string|null|undefined} iso
  */
 const formatExpiry = (iso) => {
-	if (!iso) return 'Never expires'
+	if (!iso) return t('storageDialogs.neverExpires')
 	try {
-		return `Expires ${new Date(iso).toLocaleString()}`
+		return t('storageDialogs.expiresAt', {
+			date: new Date(iso).toLocaleString(),
+		})
 	} catch {
 		return String(iso)
 	}
@@ -120,8 +123,8 @@ const ShareLinkDialog = (props) => {
 
 	const copyText = async (text) => {
 		const ok = await copyToClipboard(text)
-		if (ok) addAlert('Link copied', 'success')
-		else addAlert('Could not copy — select the URL manually', 'error')
+		if (ok) addAlert(t('storageDialogs.linkCopied'), 'success')
+		else addAlert(t('storageDialogs.copyFailed'), 'error')
 	}
 
 	const onCreate = async (event) => {
@@ -129,7 +132,7 @@ const ShareLinkDialog = (props) => {
 		if (creating()) return
 		const expires_at = resolveExpiresAt(preset(), customLocal())
 		if (expires_at === undefined) {
-			addAlert('Choose a valid expiry date', 'error')
+			addAlert(t('storageDialogs.chooseValidExpiryDate'), 'error')
 			return
 		}
 		setCreating(true)
@@ -142,7 +145,7 @@ const ShareLinkDialog = (props) => {
 			const url = API.shares.shareAbsoluteUrl(created.token, created.url_path)
 			setCreatedUrl(url)
 			setPassword('')
-			addAlert('Share link created', 'success')
+			addAlert(t('storageDialogs.shareLinkCreated'), 'success')
 			// Fire-and-forget: never block Create/Close on clipboard (WebKitGTK hang).
 			void copyText(url)
 			await loadLinks()
@@ -158,7 +161,7 @@ const ShareLinkDialog = (props) => {
 		setRevokingId(id)
 		try {
 			await API.shares.revokeShare(props.storageId, id)
-			addAlert('Share link revoked', 'success')
+			addAlert(t('storageDialogs.shareLinkRevoked'), 'success')
 			if (createdUrl() && links().some((l) => l.id === id)) {
 				const gone = links().find((l) => l.id === id)
 				if (
@@ -179,11 +182,11 @@ const ShareLinkDialog = (props) => {
 	}
 
 	const presets = /** @type {{ id: ExpiryPreset, label: string }[]} */ ([
-		{ id: '1d', label: '1 day' },
-		{ id: '7d', label: '7 days' },
-		{ id: '30d', label: '30 days' },
-		{ id: 'never', label: 'Never' },
-		{ id: 'custom', label: 'Custom' },
+		{ id: '1d', label: t('storageDialogs.oneDay') },
+		{ id: '7d', label: t('storageDialogs.sevenDays') },
+		{ id: '30d', label: t('storageDialogs.thirtyDays') },
+		{ id: 'never', label: t('storageDialogs.never') },
+		{ id: 'custom', label: t('storageDialogs.custom') },
 	])
 
 	return (
@@ -191,17 +194,20 @@ const ShareLinkDialog = (props) => {
 			<form onSubmit={onCreate}>
 				<DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
 					<FluentIcon name="link" size={20} />
-					Share link
+					{t('storageDialogs.shareLinkTitle')}
 				</DialogTitle>
 				<DialogContent>
 					<Show when={props.itemName}>
 						<Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-							{props.isFile ? 'File' : 'Folder'}: {props.itemName}
+							{props.isFile
+								? t('storageDialogs.itemKindFile')
+								: t('storageDialogs.itemKindFolder')}
+							: {props.itemName}
 						</Typography>
 					</Show>
 
 					<Typography variant="subtitle2" sx={{ mb: 1 }}>
-						Expires
+						{t('storageDialogs.expires')}
 					</Typography>
 					<Stack direction="row" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
 						<For each={presets}>
@@ -220,7 +226,7 @@ const ShareLinkDialog = (props) => {
 					<Show when={preset() === 'custom'}>
 						<TextField
 							type="datetime-local"
-							label="Expiry"
+							label={t('storageDialogs.expiryFieldLabel')}
 							margin="dense"
 							value={customLocal()}
 							onChange={(e) => setCustomLocal(e.currentTarget.value)}
@@ -231,12 +237,12 @@ const ShareLinkDialog = (props) => {
 
 					<TextField
 						type="password"
-						label="Password (optional)"
+						label={t('storageDialogs.passwordOptionalLabel')}
 						margin="dense"
 						value={password()}
 						onChange={(e) => setPassword(e.currentTarget.value)}
 						autoComplete="new-password"
-						helperText="Leave blank for an open link"
+						helperText={t('storageDialogs.passwordHelper')}
 						sx={{ mb: 2 }}
 					/>
 
@@ -264,7 +270,7 @@ const ShareLinkDialog = (props) => {
 							</Typography>
 							<IconButton
 								size="small"
-								aria-label="Copy link"
+								aria-label={t('storageDialogs.copyLinkAria')}
 								onClick={() => copyText(createdUrl())}
 							>
 								<FluentIcon name="copy" size={18} />
@@ -275,7 +281,7 @@ const ShareLinkDialog = (props) => {
 					<Divider sx={{ my: 2 }} />
 
 					<Typography variant="subtitle2" sx={{ mb: 1 }}>
-						Existing links for this path
+						{t('storageDialogs.existingLinksTitle')}
 					</Typography>
 
 					<Show when={loading()}>
@@ -292,7 +298,7 @@ const ShareLinkDialog = (props) => {
 
 					<Show when={!loading() && !links().length}>
 						<Typography variant="body2" color="text.secondary">
-							No active links yet.
+							{t('storageDialogs.noActiveLinksYet')}
 						</Typography>
 					</Show>
 
@@ -326,12 +332,14 @@ const ShareLinkDialog = (props) => {
 											</Typography>
 											<Typography variant="caption" color="text.secondary">
 												{formatExpiry(link.expires_at)}
-												{link.has_password ? ' · Password protected' : ''}
+												{link.has_password
+													? t('storageDialogs.passwordProtectedSuffix')
+													: ''}
 											</Typography>
 										</Stack>
 										<IconButton
 											size="small"
-											aria-label="Copy link"
+											aria-label={t('storageDialogs.copyLinkAria')}
 											onClick={() =>
 												copyText(
 													API.shares.shareAbsoluteUrl(
@@ -345,7 +353,7 @@ const ShareLinkDialog = (props) => {
 										</IconButton>
 										<IconButton
 											size="small"
-											aria-label="Revoke link"
+											aria-label={t('storageDialogs.revokeLinkAria')}
 											color="error"
 											disabled={revokingId() === link.id}
 											onClick={() => onRevoke(link.id)}
@@ -364,10 +372,10 @@ const ShareLinkDialog = (props) => {
 						color="secondary"
 						disabled={creating() || loading()}
 					>
-						{creating() ? 'Creating…' : 'Create'}
+						{creating() ? t('storageDialogs.creating') : t('storageDialogs.create')}
 					</Button>
 					<Button onClick={onClose} color="info">
-						Close
+						{t('common.close')}
 					</Button>
 				</DialogActions>
 			</form>
