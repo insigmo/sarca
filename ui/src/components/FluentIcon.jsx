@@ -33,8 +33,8 @@ import list24Regular from '@fluentui/svg-icons/icons/list_24_regular.svg?raw'
 import list24Filled from '@fluentui/svg-icons/icons/list_24_filled.svg?raw'
 import lockClosed24Regular from '@fluentui/svg-icons/icons/lock_closed_24_regular.svg?raw'
 import lockClosed24Filled from '@fluentui/svg-icons/icons/lock_closed_24_filled.svg?raw'
+import moreHorizontal24Regular from '@fluentui/svg-icons/icons/more_horizontal_24_regular.svg?raw'
 import navigation24Regular from '@fluentui/svg-icons/icons/navigation_24_regular.svg?raw'
-import options24Regular from '@fluentui/svg-icons/icons/options_24_regular.svg?raw'
 import person24Regular from '@fluentui/svg-icons/icons/person_24_regular.svg?raw'
 import person24Filled from '@fluentui/svg-icons/icons/person_24_filled.svg?raw'
 import plugDisconnected24Regular from '@fluentui/svg-icons/icons/plug_disconnected_24_regular.svg?raw'
@@ -90,8 +90,8 @@ export const fluentIcons = {
 	listFilled: list24Filled,
 	lockClosed: lockClosed24Regular,
 	lockClosedFilled: lockClosed24Filled,
+	moreHorizontal: moreHorizontal24Regular,
 	navigation: navigation24Regular,
-	options: options24Regular,
 	person: person24Regular,
 	personFilled: person24Filled,
 	plugDisconnected: plugDisconnected24Regular,

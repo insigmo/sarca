@@ -172,17 +172,18 @@ const SidebarNav = (props) => {
 					<FluentIcon name="settings" size={20} />
 					<span class="files-sidebar__label">{t('sidebar.settings')}</span>
 				</button>
-				<IconButton
-					size="small"
+				<button
+					type="button"
+					class="files-sidebar__item"
 					aria-label={t('sidebar.moreOptions')}
 					title={t('sidebar.moreOptions')}
 					aria-haspopup="menu"
 					aria-expanded={props.actionsMenuOpen()}
 					onClick={(e) => props.onOpenActionsMenu(e.currentTarget)}
-					class="files-sidebar__item"
 				>
-					<FluentIcon name="options" size={20} />
-				</IconButton>
+					<FluentIcon name="moreHorizontal" size={20} />
+					<span class="files-sidebar__label">{t('sidebar.moreOptions')}</span>
+				</button>
 				<MenuMUI
 					anchorEl={props.actionsMenuAnchor()}
 					open={props.actionsMenuOpen()}
