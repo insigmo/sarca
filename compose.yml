@@ -12,32 +12,22 @@ services:
     environment:
       WORK_DIR: /work
     ports:
-      - "${PORT:-8000}:${PORT:-8000}"
-      - "443:443"
-      - "443:443/udp"
-      - "80:80"
+      - "8443:443"
+      - "8443:443/udp"
+      # Optional. If you don't have caddy or nginx
+      # - "80:80"
     env_file:
       - sarca.conf
     restart: unless-stopped
-    # Thumbnail/preview generation shells out to ffmpeg, and MEDIA_CONCURRENCY
-    # lets several of those run at once. Unbounded, a burst of large media took
-    # the whole VPS down: the kernel OOM killer reaped ffmpeg, then dockerd,
-    # caddy, ntpd and systemd. A container limit keeps the blast radius inside
-    # Sarca, which `restart: unless-stopped` then brings back.
-    #
-    # Tune with SARCA_MEM_LIMIT / SARCA_MEM_RESERVATION in the shell or a .env
-    # file. Give it at least ~512m; below that ffmpeg fails on ordinary videos.
-    mem_limit: ${SARCA_MEM_LIMIT:-1g}
-    mem_reservation: ${SARCA_MEM_RESERVATION:-256m}
-    # Equal to mem_limit: no swap, so a runaway is killed instead of thrashing
-    # the host's disk.
-    memswap_limit: ${SARCA_MEM_LIMIT:-1g}
+    mem_limit: 512m
+    mem_reservation: 512m
+    memswap_limit: 2g
     deploy:
       resources:
         limits:
-          memory: ${SARCA_MEM_LIMIT:-1g}
+          memory: 2g
         reservations:
-          memory: ${SARCA_MEM_RESERVATION:-256m}
+          memory: 512m
 
 volumes:
   sarca-work-volume:

@@ -127,7 +127,6 @@ def server(e2e_tmp: Path, telegram: TelegramBackend) -> SarcaServer:
         env_extra.update(
             {
                 "TELEGRAM_CHUNK_SIZE_MB": "1",
-                "TELEGRAM_VIDEO_CHUNK_SIZE_MB": "1",
                 "SARCA_TELEGRAM_PACING_MS": "20",
             }
         )

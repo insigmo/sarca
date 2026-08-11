@@ -52,9 +52,6 @@ pub struct Config {
     /// Max size of a single Telegram document chunk (official Bot API ≤20 MB).
     pub telegram_chunk_size_mb: u32,
 
-    /// Chunk size for video uploads (≤20 MB; smaller chunks → progressive Range playback sooner).
-    pub telegram_video_chunk_size_mb: u32,
-
     /// Verbose (debug-level) tracing for requests and background jobs. `RUST_LOG` still wins.
     pub debug_log: bool,
 
@@ -131,8 +128,6 @@ impl Config {
             Self::get_env_var_with_default("MEDIA_CONCURRENCY", 16u16)?.clamp(1, 128);
         let telegram_chunk_size_mb =
             Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", 20u32)?;
-        let telegram_video_chunk_size_mb =
-            Self::get_env_var_with_default("TELEGRAM_VIDEO_CHUNK_SIZE_MB", 20u32)?;
 
         let debug_log = Self::get_optional_env_var("DEBUG_LOG")
             .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
@@ -171,7 +166,6 @@ impl Config {
             media_concurrency,
             work_dir,
             telegram_chunk_size_mb,
-            telegram_video_chunk_size_mb,
             debug_log,
             prefetch_enabled,
             prefetch_depth,
@@ -181,17 +175,7 @@ impl Config {
         })
     }
 
-    /// Bytes per Telegram chunk for this file (video → smaller chunks).
-    pub fn chunk_size_bytes_for_file(&self, path: &str, content_type: Option<&str>) -> i64 {
-        let mb = if crate::models::files::is_video(path, content_type) {
-            self.telegram_video_chunk_size_mb
-        } else {
-            self.telegram_chunk_size_mb
-        };
-        i64::from(mb).saturating_mul(1024 * 1024).max(1)
-    }
-
-    /// Default (non-video) chunk size in bytes — used when a file row has no `chunk_size_bytes`.
+    /// Default chunk size in bytes — used when a file row has no `chunk_size_bytes`.
     pub fn default_chunk_size_bytes(&self) -> u64 {
         u64::from(self.telegram_chunk_size_mb).saturating_mul(1024 * 1024).max(1)
     }
@@ -247,7 +231,6 @@ mod tests {
             "TELEGRAM_API_BASE_URL",
             "TELEGRAM_RATE_LIMIT",
             "TELEGRAM_CHUNK_SIZE_MB",
-            "TELEGRAM_VIDEO_CHUNK_SIZE_MB",
             "WORK_DIR",
             "HTTPS_ADDR",
             "ACME_HTTP_ADDR",
@@ -310,12 +293,11 @@ mod tests {
     }
 
     #[test]
-    fn video_chunk_default_capped_at_20() {
+    fn chunk_size_default_capped_at_20() {
         let _g = ENV_LOCK.lock().unwrap();
         clear_required();
         set_required();
         let cfg = Config::new().unwrap();
-        assert!(cfg.telegram_video_chunk_size_mb <= 20);
         assert!(cfg.telegram_chunk_size_mb <= 20);
         clear_required();
     }
