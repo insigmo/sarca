@@ -9,7 +9,6 @@ use super::{
 pub struct Config {
     /// Path to the `SQLite` metadata database file.
     pub sqlite_path: String,
-    pub port: u16,
     /// HTTPS listen address (HTTP/3 UDP + TLS TCP); dev default high port.
     pub https_addr: SocketAddr,
     /// ACME http-01 + redirect listener; dev default high port.
@@ -91,7 +90,6 @@ impl Config {
         let work_dir: String = Self::get_env_var_with_default("WORK_DIR", "work".to_owned())?;
         let sqlite_path = Self::get_optional_env_var("SQLITE_PATH")
             .unwrap_or_else(|| Self::default_sqlite_path(&work_dir));
-        let port = Self::get_env_var("PORT")?;
         let https_addr = Self::get_env_var_with_default(
             "HTTPS_ADDR",
             "0.0.0.0:8443".parse().expect("valid addr"),
@@ -146,7 +144,6 @@ impl Config {
 
         Ok(Self {
             sqlite_path,
-            port,
             https_addr,
             acme_http_addr,
             tls_hostname,
@@ -220,7 +217,6 @@ mod tests {
     fn clear_required() {
         for k in [
             "SQLITE_PATH",
-            "PORT",
             "WORKERS",
             "CHANNEL_CAPACITY",
             "SUPERUSER_EMAIL",
@@ -238,7 +234,6 @@ mod tests {
             "ACME_DIRECTORY",
             "ACME_ROOT_CA",
             "CERTS_DIR",
-            "SARCA_PLAIN_HTTP",
             "SARCA_ACME",
         ] {
             env::remove_var(k);
@@ -246,7 +241,6 @@ mod tests {
     }
 
     fn set_required() {
-        env::set_var("PORT", "8001");
         env::set_var("WORKERS", "2");
         env::set_var("CHANNEL_CAPACITY", "8");
         env::set_var("SUPERUSER_EMAIL", "a@b.c");
@@ -270,17 +264,6 @@ mod tests {
         env::set_var("SQLITE_PATH", "/tmp/custom.sqlite");
         let cfg = Config::new().unwrap();
         assert_eq!(cfg.sqlite_path, "/tmp/custom.sqlite");
-        clear_required();
-    }
-
-    #[test]
-    fn loads_port_from_env() {
-        let _g = ENV_LOCK.lock().unwrap();
-        clear_required();
-        set_required();
-        let cfg = Config::new().unwrap();
-        assert_eq!(cfg.port, 8001);
-        assert_eq!(cfg.sqlite_path, "work/sarca.sqlite");
         clear_required();
     }
 

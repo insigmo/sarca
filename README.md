@@ -74,8 +74,6 @@ set -a && . ../sarca.conf && set +a
 ./sarca
 ```
 
-For local dev without TLS, set `SARCA_PLAIN_HTTP=1` in `sarca.conf`.
-
 </details>
 
 ## Clients
@@ -110,7 +108,6 @@ Full list: [`sarca.conf.example`](sarca.conf.example).
 
 | Variable | Purpose |
 | --- | --- |
-| `PORT` | Plain HTTP port (default `8000`; dev/e2e when `SARCA_PLAIN_HTTP=1`) |
 | `SUPERUSER_EMAIL` / `SUPERUSER_PASS` | Bootstrap admin |
 | `SECRET_KEY` | JWT + encryption (installer generates this) |
 | `SQLITE_PATH` | SQLite metadata database (default `{WORK_DIR}/sarca.sqlite`) |

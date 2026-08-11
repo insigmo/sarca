@@ -1,8 +1,7 @@
 """Scenario 4 — is the API really reachable over HTTP/3?
 
-A second server instance runs in TLS mode (self-signed, ACME disabled) so the suite
-can talk to it over QUIC with aioquic, next to the plain-HTTP instance the other
-tests use.
+A dedicated server instance (self-signed, ACME disabled) so the suite can talk to
+it over QUIC with aioquic, next to the instance the other tests use.
 """
 
 from __future__ import annotations
@@ -24,7 +23,6 @@ def tls_server(e2e_tmp, telegram) -> SarcaServer:
     server = SarcaServer(
         root=e2e_tmp / f"tls-{uuid.uuid4().hex[:6]}",
         telegram_base_url=telegram.base_url,
-        tls=True,
         env_extra={"SARCA_TELEGRAM_PACING_MS": "20"},
     )
     server.start()
