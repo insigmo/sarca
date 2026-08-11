@@ -70,10 +70,8 @@ def test_startup_banner_mentions_port(
         return
     log = open(server_log_path, encoding="utf-8", errors="replace").read()
     assert "Sarca is running" in log, log[-2000:]
-    # SarcaServer.start() always launches with a fresh free_port(), ignoring
-    # any PORT the test process inherited — os.environ["PORT"] here reflects
-    # the *pytest* process, not the child server, so it never matches the
-    # banner except by coincidence. Read the actual port off the fixture.
-    port = str(server.port) if server else os.environ.get("PORT", "8000")
-    assert port in log or f":{port}" in log, log[-2000:]
+    # SarcaServer.start() always launches with a fresh free_port(), so the
+    # actual port has to come off the fixture rather than the environment.
+    port = str(server.https_port) if server else None
+    assert port is None or port in log or f":{port}" in log, log[-2000:]
     assert "database ok" in log or "listening on" in log, log[-2000:]

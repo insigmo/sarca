@@ -228,7 +228,6 @@ pub mod tests {
     pub fn test_config(superuser_email: &str, superuser_pass: &str) -> Config {
         Config {
             sqlite_path: String::new(),
-            port: 8001,
             https_addr: "127.0.0.1:8443".parse().expect("valid addr"),
             acme_http_addr: "127.0.0.1:8080".parse().expect("valid addr"),
             tls_hostname: None,

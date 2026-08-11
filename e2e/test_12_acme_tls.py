@@ -24,7 +24,7 @@ pytestmark = pytest.mark.slow
 @pytest.fixture(scope="module")
 def acme_server(tmp_path_factory, telegram):
     root = tmp_path_factory.mktemp("acme")
-    server = SarcaServer(root=root / "sarca", telegram_base_url=telegram.base_url, tls=True)
+    server = SarcaServer(root=root / "sarca", telegram_base_url=telegram.base_url)
     server.https_port = free_port()
     server.acme_port = free_port()
 

@@ -73,10 +73,8 @@ class SarcaServer:
     telegram_base_url: str
     email: str = "e2e@sarca.test"
     password: str = "e2e-password-123"
-    tls: bool = False
     env_extra: dict[str, str] = field(default_factory=dict)
 
-    port: int = 0
     https_port: int = 0
     acme_port: int = 0
     process: subprocess.Popen | None = None
@@ -95,7 +93,7 @@ class SarcaServer:
     # ------------------------------------------------------------------ launch
     @property
     def base_url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        return self.https_base_url
 
     @property
     def https_base_url(self) -> str:
@@ -105,22 +103,19 @@ class SarcaServer:
         env = {
             k: v
             for k, v in os.environ.items()
-            # e2e shells often export SUPERUSER_* / PORT for the dev instance
+            # e2e shells often export SUPERUSER_* for the dev instance
             if k
             not in {
-                "PORT",
                 "SUPERUSER_EMAIL",
                 "SUPERUSER_PASS",
                 "WORK_DIR",
                 "SQLITE_PATH",
                 "TLS_HOSTNAME",
-                "SARCA_PLAIN_HTTP",
                 "TELEGRAM_API_BASE_URL",
             }
         }
         env.update(
             {
-                "PORT": str(self.port),
                 "WORKERS": "4",
                 "CHANNEL_CAPACITY": "32",
                 "SUPERUSER_EMAIL": self.email,
@@ -137,25 +132,18 @@ class SarcaServer:
                 "CERTS_DIR": str(self.work_dir / "certs"),
                 "RUST_LOG": os.environ.get("SARCA_E2E_RUST_LOG", "sarca=debug,info"),
                 "RUST_BACKTRACE": "1",
+                "TLS_HOSTNAME": "127.0.0.1",
+                "HTTPS_ADDR": f"127.0.0.1:{self.https_port}",
+                "ACME_HTTP_ADDR": f"127.0.0.1:{self.acme_port}",
+                "SARCA_ACME": "0",
             }
         )
-        if self.tls:
-            env["TLS_HOSTNAME"] = "127.0.0.1"
-            env["HTTPS_ADDR"] = f"127.0.0.1:{self.https_port}"
-            env["ACME_HTTP_ADDR"] = f"127.0.0.1:{self.acme_port}"
-            env["SARCA_ACME"] = "0"
-        else:
-            env["SARCA_PLAIN_HTTP"] = "1"
-            env["HTTPS_ADDR"] = "127.0.0.1:0"
-            env["ACME_HTTP_ADDR"] = "127.0.0.1:0"
         env.update(self.env_extra)
         return env
 
     def start(self, binary: Path | None = None, wait: bool = True) -> SarcaServer:
         binary = binary or build_binary()
-        if self.port == 0:
-            self.port = free_port()
-        if self.tls and self.https_port == 0:
+        if self.https_port == 0:
             self.https_port = free_port()
             self.acme_port = free_port()
 
@@ -184,7 +172,7 @@ class SarcaServer:
 
     def wait_ready(self, timeout: float = 90.0) -> None:
         deadline = time.time() + timeout
-        url = f"{self.base_url}/api/auth/login" if not self.tls else f"{self.https_base_url}/health"
+        url = f"{self.https_base_url}/api/auth/login"
         last: Exception | None = None
         while time.time() < deadline:
             if self.process and self.process.poll() is not None:
@@ -192,16 +180,14 @@ class SarcaServer:
                     f"sarca exited with code {self.process.returncode}\n{self.tail(60)}"
                 )
             try:
-                if self.tls:
-                    r = httpx.get(url, timeout=2.0, verify=False)
-                    if r.status_code < 500:
-                        return
-                else:
-                    r = httpx.post(
-                        url, json={"email": "probe@example.com", "password": "x"}, timeout=2.0
-                    )
-                    if r.status_code in (200, 401, 403, 422):
-                        return
+                r = httpx.post(
+                    url,
+                    json={"email": "probe@example.com", "password": "x"},
+                    timeout=2.0,
+                    verify=False,
+                )
+                if r.status_code in (200, 401, 403, 422):
+                    return
             except Exception as e:  # noqa: BLE001
                 last = e
             time.sleep(0.2)

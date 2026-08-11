@@ -12,13 +12,36 @@
 //! Prints one JSON object on stdout: bindings, per-binding statuses and the
 //! transfer queue after the last tick.
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use anyhow::{bail, Result};
 use sarca_sync::{
-    Binding, BindingMode, FsMediaSource, KeepBothPrompt, SarcaApi, SyncEngine, SyncEngineConfig,
+    set_pin_store, Binding, BindingMode, FsMediaSource, KeepBothPrompt, PinStore, SarcaApi,
+    SyncEngine, SyncEngineConfig,
 };
 use uuid::Uuid;
+
+/// Trust-on-first-use pin store, kept only for this process's lifetime — the
+/// driver is a one-shot CLI, not a long-lived client with a persisted pin
+/// file, so there is nothing to reuse across invocations.
+#[derive(Default)]
+struct MemoryPinStore {
+    pins: RwLock<HashMap<String, [u8; 32]>>,
+}
+
+impl PinStore for MemoryPinStore {
+    fn get(&self, host: &str) -> Option<[u8; 32]> {
+        self.pins.read().unwrap().get(host).copied()
+    }
+
+    fn put(&self, host: &str, pin: [u8; 32]) {
+        self.pins.write().unwrap().insert(host.to_owned(), pin);
+    }
+}
 
 fn parse_args() -> HashMap<String, String> {
     let mut args = HashMap::new();
@@ -67,6 +90,8 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "e2e-binding".to_owned());
 
     std::fs::create_dir_all(&data_dir)?;
+
+    set_pin_store(Arc::new(MemoryPinStore::default()));
 
     let login = SarcaApi::login(&server, &email, &password).await?;
     let api = SarcaApi::new(server.clone(), login.access_token.clone());
