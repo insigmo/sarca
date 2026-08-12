@@ -1,4 +1,5 @@
 import { createRoot, createSignal } from 'solid-js'
+import { reconcile } from 'solid-js/store'
 
 import API from '../api'
 
@@ -21,7 +22,10 @@ function createStoragesStore() {
 	const refreshStorages = async () => {
 		const storagesSchema = await API.storages.listStorages()
 		const list = storagesSchema.storages || []
-		setStorages(list)
+		// `reconcile` keeps unchanged storage cards' object identity, so the
+		// silent background poll (see startAutoRefresh in Storages/index.jsx)
+		// does not remount every card and flash the grid.
+		setStorages(reconcile(list, { key: 'id' }))
 		setLoaded(true)
 		return list
 	}

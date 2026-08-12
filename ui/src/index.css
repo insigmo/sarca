@@ -697,6 +697,27 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	flex-shrink: 0;
 }
 
+.files-sidebar__utility-row {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+}
+
+.files-sidebar__item--icon-only {
+	flex: 0 0 auto;
+	width: 36px;
+	justify-content: center;
+	padding-inline: 0;
+}
+
+.files-sidebar--collapsed .files-sidebar__utility-row {
+	flex-direction: column;
+}
+
+.files-sidebar--collapsed .files-sidebar__item--icon-only {
+	width: 100%;
+}
+
 .files-sidebar__divider {
 	height: 1px;
 	margin: 8px 6px 6px;
@@ -812,9 +833,13 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	color: var(--sarca-ink);
 }
 
+/* A ring outline around a wide, short pill reads as a stray oval rather than a
+   focus state — match the hover highlight instead so keyboard focus looks
+   like the button is simply highlighted, not boxed. */
 .files-sidebar__item:focus-visible {
-	outline: 2px solid var(--sarca-teal);
-	outline-offset: 2px;
+	outline: none;
+	background: color-mix(in srgb, var(--sarca-teal) 14%, transparent);
+	color: var(--sarca-ink);
 }
 
 .files-sidebar__item--active {
