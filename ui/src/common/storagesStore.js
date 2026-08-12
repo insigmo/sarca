@@ -1,7 +1,7 @@
 import { createRoot, createSignal } from 'solid-js'
-import { reconcile } from 'solid-js/store'
 
 import API from '../api'
+import { reconcileSignal } from './reconcileSignal'
 
 /**
  * Shared storages list so the Storages page and the delete flow in
@@ -25,7 +25,7 @@ function createStoragesStore() {
 		// `reconcile` keeps unchanged storage cards' object identity, so the
 		// silent background poll (see startAutoRefresh in Storages/index.jsx)
 		// does not remount every card and flash the grid.
-		setStorages(reconcile(list, { key: 'id' }))
+		setStorages(reconcileSignal(list, { key: 'id' }))
 		setLoaded(true)
 		return list
 	}

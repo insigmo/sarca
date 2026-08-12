@@ -626,9 +626,20 @@ pub fn default_gallery_path() -> String {
     }
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
-        std::env::var("HOME")
-            .map(|h| format!("{h}/Pictures"))
-            .unwrap_or_else(|_| "Pictures".into())
+        // Windows has no HOME: without USERPROFILE this returned a bare
+        // "Pictures", which validate_local_dir rejects as not absolute.
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .or_else(|| {
+                let drive = std::env::var_os("HOMEDRIVE")?;
+                let path = std::env::var_os("HOMEPATH")?;
+                let mut base = PathBuf::from(drive);
+                base.push(PathBuf::from(path));
+                Some(base)
+            });
+        home.map(|h| h.join("Pictures").to_string_lossy().into_owned())
+            .unwrap_or_default()
     }
 }
 
@@ -1262,9 +1273,11 @@ mod tests {
         {
             let p = default_gallery_path();
             assert!(!p.is_empty());
+            assert!(p.contains("Pictures"), "unexpected gallery path {p}");
+            // validate_local_dir refuses anything relative.
             assert!(
-                p.contains("Pictures") || p == "Pictures",
-                "unexpected gallery path {p}"
+                Path::new(&p).is_absolute(),
+                "gallery path must be absolute: {p}"
             );
         }
     }
