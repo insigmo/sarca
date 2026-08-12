@@ -1,8 +1,6 @@
 # These are supported funding model platforms
 
-github: [insigmo]
+github: insigmo
 
-# Uncomment and fill in once handles exist for these platforms.
-# ko_fi: your-kofi-handle
-# buy_me_a_coffee: your-bmac-handle
-# liberapay: your-liberapay-handle
+patreon: Insigmo
+buy_me_a_coffee: insigmo
