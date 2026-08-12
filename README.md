@@ -1,16 +1,12 @@
+
+<p align="center">
+  Self-hosted cloud storage that keeps files in Telegram — no paid object storage required.
+</p>
 <p align="center">
   <a href="https://github.com/insigmo/sarca/actions/workflows/release.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/insigmo/sarca/release.yml?style=flat-square&logo=github"></a>
   <a href="https://github.com/insigmo/sarca/pkgs/container/sarca"><img alt="GHCR" src="https://img.shields.io/badge/ghcr.io-sarca-14635C?style=flat-square&logo=docker"></a>
 </p>
 
-<p align="center">
-  <img src="logo.svg" alt="Sarca logo" width="120" />
-</p>
-<h1 align="center">Sarca</h1>
-
-<p align="center">
-  Self-hosted cloud storage that keeps files in Telegram channels — no paid object storage required.
-</p>
 
 Personal / multi-user file cloud with zero storage bill: file bytes are chunked and pushed into Telegram channels via bots, metadata stays in SQLite on your own server.
 
