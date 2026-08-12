@@ -1,16 +1,15 @@
 <p align="center">
-  <img src="logo.svg" alt="Sarca logo" width="120" />
+  <a href="https://github.com/insigmo/sarca/actions/workflows/release.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/insigmo/sarca/release.yml?style=flat-square&logo=github"></a>
+  <a href="https://github.com/insigmo/sarca/pkgs/container/sarca"><img alt="GHCR" src="https://img.shields.io/badge/ghcr.io-sarca-14635C?style=flat-square&logo=docker"></a>
 </p>
 
+<p align="center">
+  <img src="logo.svg" alt="Sarca logo" width="120" />
+</p>
 <h1 align="center">Sarca</h1>
 
 <p align="center">
   Self-hosted cloud storage that keeps files in Telegram channels — no paid object storage required.
-</p>
-
-<p align="center">
-  <a href="https://github.com/insigmo/sarca/actions/workflows/release.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/insigmo/sarca/release.yml?style=flat-square&logo=github"></a>
-  <a href="https://github.com/insigmo/sarca/pkgs/container/sarca"><img alt="GHCR" src="https://img.shields.io/badge/ghcr.io-sarca-14635C?style=flat-square&logo=docker"></a>
 </p>
 
 Personal / multi-user file cloud with zero storage bill: file bytes are chunked and pushed into Telegram channels via bots, metadata stays in SQLite on your own server.
@@ -30,16 +29,16 @@ Personal / multi-user file cloud with zero storage bill: file bytes are chunked 
 
 The repo has two parts:
 
-| Part | Path | Role |
-| --- | --- | --- |
-| **Server** | `sarca/`, `ui/` | HTTP API + web UI (binary or Docker) |
-| **Clients** | `client/` | Native apps (desktop / mobile) that connect to your server |
+| Part        | Path            | Role                                                       |
+|-------------|-----------------|------------------------------------------------------------|
+| **Server**  | `sarca/`, `ui/` | HTTP API + web UI (binary or Docker)                       |
+| **Clients** | `client/`       | Native apps (desktop / mobile) that connect to your server |
 
 Needs: Telegram bots + a channel/group where the bots are admins. For production TLS, open firewall ports **80/tcp** (ACME), **443/tcp** (HTTPS), and **443/udp** (HTTP/3).
 
 ## Server
 
-Installers ask for admin email/password, generate `SECRET_KEY` with `openssl rand -hex 512`, prompt for a public domain (or detect your IP for ACME), write `sarca.conf`, then start the server.
+Installers ask for admin email/password, generate `SECRET_KEY` with `openssl rand -hex 256`, prompt for a public domain (or detect your IP for ACME), write `sarca.conf`, then start the server.
 
 ### Linux / macOS (Apple Silicon)
 
@@ -93,14 +92,14 @@ set -a && . ../sarca.conf && set +a
 
 Latest release assets ([releases/latest](https://github.com/insigmo/sarca/releases/latest)):
 
-| Platform | Download |
-| --- | --- |
-| Linux x86_64 | [`.deb`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_linux_amd64.deb) |
-| Linux aarch64 | [`.deb`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_linux_arm64.deb) |
-| macOS Apple Silicon | [`.dmg`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_macos_arm64.dmg) |
-| Windows x86_64 | [installer](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_windows_amd64-setup.exe) |
-| Windows ARM64 | [installer](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_windows_arm64-setup.exe) |
-| Android arm64 | [`.apk`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_android_arm64.apk) |
+| Platform            | Download                                                                                                    |
+|---------------------|-------------------------------------------------------------------------------------------------------------|
+| Linux x86_64        | [`.deb`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_linux_amd64.deb)            |
+| Linux aarch64       | [`.deb`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_linux_arm64.deb)            |
+| macOS Apple Silicon | [`.dmg`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_macos_arm64.dmg)            |
+| Windows x86_64      | [installer](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_windows_amd64-setup.exe) |
+| Windows ARM64       | [installer](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_windows_arm64-setup.exe) |
+| Android arm64       | [`.apk`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_android_arm64.apk)          |
 
 Open the app, enter your server URL, sign in. See [`client/`](client/) for building from source.
 
@@ -119,32 +118,32 @@ Official Bot API supports up to ~20 MB per document chunk. Files larger than the
 
 Full list: [`sarca.conf.example`](sarca.conf.example).
 
-| Variable | Purpose |
-| --- | --- |
-| `SUPERUSER_EMAIL` / `SUPERUSER_PASS` | Bootstrap admin |
-| `SECRET_KEY` | JWT + encryption (installer generates this) |
-| `SQLITE_PATH` | SQLite metadata database (default `{WORK_DIR}/sarca.sqlite`) |
-| `TLS_HOSTNAME` | Public domain or IP for ACME certificate (default: detected public IP) |
-| `HTTPS_ADDR` / `ACME_HTTP_ADDR` | HTTPS (443) and ACME (80) listen addresses |
-| `CERTS_DIR` | PEM store for issued certificates |
-| `TELEGRAM_*` | Bot API URL, rate limit, chunk size (≤20 MB) |
-| `WORK_DIR` | Upload spool + SQLite + certs directory |
+| Variable                             | Purpose                                                                |
+|--------------------------------------|------------------------------------------------------------------------|
+| `SUPERUSER_EMAIL` / `SUPERUSER_PASS` | Bootstrap admin                                                        |
+| `SECRET_KEY`                         | JWT + encryption (installer generates this)                            |
+| `SQLITE_PATH`                        | SQLite metadata database (default `{WORK_DIR}/sarca.sqlite`)           |
+| `TLS_HOSTNAME`                       | Public domain or IP for ACME certificate (default: detected public IP) |
+| `HTTPS_ADDR` / `ACME_HTTP_ADDR`      | HTTPS (443) and ACME (80) listen addresses                             |
+| `CERTS_DIR`                          | PEM store for issued certificates                                      |
+| `TELEGRAM_*`                         | Bot API URL, rate limit, chunk size (≤20 MB)                           |
+| `WORK_DIR`                           | Upload spool + SQLite + certs directory                                |
 
 ## How Sarca compares
 
 Sarca's actual trade-off: no storage bill, because Telegram is the storage backend — at the cost of trusting Telegram with your bytes and living inside the Bot API's limits.
 
-| | Sarca | Nextcloud | Seafile | Syncthing | rclone | Telegram-drive clones (TgDrive etc.) |
-| --- | --- | --- | --- | --- | --- | --- |
-| Storage backend | Telegram channels (chunked, replicated) | Your disk/object storage | Your disk/object storage | Peer devices, no server | Whatever remote you point it at (S3, Drive, Telegram-style community remotes, …) | Telegram channels |
-| Storage cost | Free (Telegram's), but subject to their ToS/rate limits | You pay for disks/S3 | You pay for disks/S3 | You pay for your own disks | Depends on chosen remote | Free (Telegram's) |
-| Self-hosting burden | One Rust binary + SQLite, built-in ACME TLS | Full LAMP-ish stack, PHP, DB, more moving parts | App server + DB (MySQL/SQLite) + optional search | None — no server at all | None — it's a CLI/mount tool, not a service | Varies, usually similarly light |
-| Sync model | Client uploads/downloads via server API (`sarca-sync` engine) | Client-server sync (official desktop/mobile apps) | Client-server sync, block-level dedup | True P2P, no central point | One-shot/scheduled copy, not continuous sync | Client-server, similar to Sarca |
-| Mobile support | Android APK (Tauri); iOS build exists in CI but is disabled | Official iOS + Android apps | Official iOS + Android apps | Official Android app; no iOS | None (CLI only) | Varies by project, often Telegram itself as the "client" |
-| Encryption | TLS in transit (server↔client, server↔Telegram); file bytes are **not** end-to-end encrypted before they reach Telegram | Optional server-side encryption; E2E encryption app available | Optional per-library client-side encryption | Encrypted in transit by default (TLS); untrusted-device "sending only" mode | Encryption is opt-in via the `crypt` remote overlay | Varies; several add their own AES layer, which Sarca currently does not |
-| File size limits | No hard cap — files are split into ≤20 MB chunks per the Bot API, so very large files mean many chunks | Limited by your disk/storage backend only | Limited by your disk/storage backend only | Limited by your disk only | Limited by chosen remote | Same Bot API chunking as Sarca |
-| Redundancy | Built-in: `ReplicationService` copies chunks across multiple channels/bots | Whatever your storage/backup layer provides | Optional external replication | Each device is itself a replica | None built-in | Varies |
-| Maturity / ecosystem | Young, small project | Very mature, large ecosystem, plugins/marketplace | Mature, established | Mature, established | Mature, huge backend list | Mostly young hobby projects, similar risk profile to Sarca |
+|                      | Sarca                                                                                                                   | Nextcloud                                                     | Seafile                                          | Syncthing                                                                   | rclone                                                                           | Telegram-drive clones (TgDrive etc.)                                    |
+|----------------------|-------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------------|--------------------------------------------------|-----------------------------------------------------------------------------|----------------------------------------------------------------------------------|-------------------------------------------------------------------------|
+| Storage backend      | Telegram channels (chunked, replicated)                                                                                 | Your disk/object storage                                      | Your disk/object storage                         | Peer devices, no server                                                     | Whatever remote you point it at (S3, Drive, Telegram-style community remotes, …) | Telegram channels                                                       |
+| Storage cost         | Free (Telegram's), but subject to their ToS/rate limits                                                                 | You pay for disks/S3                                          | You pay for disks/S3                             | You pay for your own disks                                                  | Depends on chosen remote                                                         | Free (Telegram's)                                                       |
+| Self-hosting burden  | One Rust binary + SQLite, built-in ACME TLS                                                                             | Full LAMP-ish stack, PHP, DB, more moving parts               | App server + DB (MySQL/SQLite) + optional search | None — no server at all                                                     | None — it's a CLI/mount tool, not a service                                      | Varies, usually similarly light                                         |
+| Sync model           | Client uploads/downloads via server API (`sarca-sync` engine)                                                           | Client-server sync (official desktop/mobile apps)             | Client-server sync, block-level dedup            | True P2P, no central point                                                  | One-shot/scheduled copy, not continuous sync                                     | Client-server, similar to Sarca                                         |
+| Mobile support       | Android APK (Tauri); iOS build exists in CI but is disabled                                                             | Official iOS + Android apps                                   | Official iOS + Android apps                      | Official Android app; no iOS                                                | None (CLI only)                                                                  | Varies by project, often Telegram itself as the "client"                |
+| Encryption           | TLS in transit (server↔client, server↔Telegram); file bytes are **not** end-to-end encrypted before they reach Telegram | Optional server-side encryption; E2E encryption app available | Optional per-library client-side encryption      | Encrypted in transit by default (TLS); untrusted-device "sending only" mode | Encryption is opt-in via the `crypt` remote overlay                              | Varies; several add their own AES layer, which Sarca currently does not |
+| File size limits     | No hard cap — files are split into ≤20 MB chunks per the Bot API, so very large files mean many chunks                  | Limited by your disk/storage backend only                     | Limited by your disk/storage backend only        | Limited by your disk only                                                   | Limited by chosen remote                                                         | Same Bot API chunking as Sarca                                          |
+| Redundancy           | Built-in: `ReplicationService` copies chunks across multiple channels/bots                                              | Whatever your storage/backup layer provides                   | Optional external replication                    | Each device is itself a replica                                             | None built-in                                                                    | Varies                                                                  |
+| Maturity / ecosystem | Young, small project                                                                                                    | Very mature, large ecosystem, plugins/marketplace             | Mature, established                              | Mature, established                                                         | Mature, huge backend list                                                        | Mostly young hobby projects, similar risk profile to Sarca              |
 
 Where Sarca is genuinely worse:
 
@@ -158,11 +157,8 @@ Where Sarca is genuinely worse:
 ## Donations
 
 **GitHub Sponsors**: [github.com/sponsors/insigmo](https://github.com/sponsors/insigmo)
-
 **BTC**: `bc1qyd28yapuutcmfxmrpxtd835z3ds2q260jzh4v7`
-
 **TON**: `UQDw5-4nyIrb1K1waDFH4oGYBIfZYfEoqmS26ix0kKAi6e-Q`
-
 **USDT**: `0x1D3dD608804E1992a37c9b2CA673522c1e17f543`
 
 ## License
