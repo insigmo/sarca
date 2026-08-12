@@ -15,6 +15,7 @@
 	"sidebar": {
 		"settings": "Ajustes",
 		"moreOptions": "Más opciones",
+		"language": "Idioma",
 		"disconnect": "Desconectar",
 		"logOut": "Cerrar sesión",
 		"creatingStorage": "Creando un almacenamiento…",
@@ -543,6 +544,7 @@
 	},
 	"setup": {
 		"title": "Configuración",
+		"cancel": "Cancelar",
 		"newStorage": "Nuevo almacenamiento",
 		"newStorageDesc": "Crea un bot de Telegram y un canal privado, luego comprueba que el bot se añadió como administrador.",
 		"storageName": "Nombre del almacenamiento",

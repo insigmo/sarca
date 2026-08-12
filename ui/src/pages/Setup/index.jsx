@@ -13,6 +13,7 @@ import API from '../../api'
 import { alertStore } from '../../components/AlertStack'
 import LoadingDots from '../../components/LoadingDots'
 import { busyStore } from '../../common/busyStore'
+import { storagesStore } from '../../common/storagesStore'
 import { t } from '../../common/i18n'
 
 const POLL_MS = 0
@@ -59,6 +60,7 @@ export const parseTelegramChatId = (input) => {
 const SetupWizard = () => {
 	const navigate = useNavigate()
 	const { addAlert } = alertStore
+	const { storages: existingStorages } = storagesStore
 
 	const [loading, setLoading] = createSignal(true)
 
@@ -80,6 +82,7 @@ const SetupWizard = () => {
 	let pendingProbeIds = []
 
 	onMount(async () => {
+		storagesStore.refreshStorages().catch(() => {})
 		try {
 			await API.setup.getSetupStatus()
 		} catch {
@@ -248,6 +251,16 @@ const SetupWizard = () => {
 		}
 	}
 
+	// First-time setup has nowhere to cancel back to (no storage exists yet);
+	// only offer the way out once there is at least one already.
+	const canCancel = () => existingStorages().length > 0
+
+	const handleCancel = () => {
+		if (finishing() || busyStore.isStorageCreating()) return
+		stopPolling()
+		navigate('/storages')
+	}
+
 	const handleFinish = async () => {
 		if (!channels().length) {
 			addAlert(t('setup.addAtLeastOneChannel'), 'error')
@@ -264,6 +277,13 @@ const SetupWizard = () => {
 				token().trim(),
 				channels().map((c) => c.chat_id),
 			)
+			// Sync the shared store before leaving: the Storages page redirects
+			// back here whenever it reads `loaded() && !storages().length`, and
+			// without this the stale pre-creation list (still empty on a first
+			// storage) sent the user straight back into "add a storage" the next
+			// time they opened Storages, until a hard page reload happened to
+			// refetch it.
+			await storagesStore.refreshStorages().catch(() => {})
 			addAlert(t('setup.storageReady', { name: created.name }), 'success')
 			navigate(`/storages/${created.id}/files`)
 		} catch {
@@ -286,6 +306,14 @@ const SetupWizard = () => {
 			<Stack class="setup-wizard" spacing={2.5}>
 				<div class="page-header">
 					<h1>{t('setup.title')}</h1>
+					<Show when={canCancel()}>
+						<Button
+							onClick={handleCancel}
+							disabled={finishing() || busyStore.isStorageCreating()}
+						>
+							{t('setup.cancel')}
+						</Button>
+					</Show>
 				</div>
 
 				<Box class="setup-wizard__card">
