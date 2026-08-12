@@ -21,7 +21,7 @@ use tauri::{plugin::Builder as PluginBuilder, webview::PageLoadEvent, Manager};
 use state::{navigate_to_shell, ServerConfig};
 #[cfg(desktop)]
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 
@@ -196,17 +196,6 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
-                // Separate menu items for window vs tray (items cannot belong to two menus).
-                // Same ids so one on_menu_event handler covers both.
-                let show = MenuItem::with_id(app, "show", "Show Sarca", true, None::<&str>)?;
-                let sync_now = MenuItem::with_id(app, "sync_now", "Sync now", true, None::<&str>)?;
-                let sync_settings =
-                    MenuItem::with_id(app, "sync_settings", "Sync settings", true, None::<&str>)?;
-                let disconnect =
-                    MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
-                let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-                let sep = PredefinedMenuItem::separator(app)?;
-
                 let tray_show = MenuItem::with_id(app, "show", "Show Sarca", true, None::<&str>)?;
                 let tray_disconnect =
                     MenuItem::with_id(app, "disconnect", "Disconnect", true, None::<&str>)?;
@@ -241,16 +230,6 @@ pub fn run() {
                     }
                     _ => {}
                 });
-
-                // Window menu bar — Sync reachable when the system tray is hidden (Linux/GNOME).
-                let app_submenu = Submenu::with_items(
-                    app,
-                    "Sarca",
-                    true,
-                    &[&show, &sync_settings, &sync_now, &sep, &disconnect, &quit],
-                )?;
-                let app_menu = Menu::with_items(app, &[&app_submenu])?;
-                let _ = app.set_menu(app_menu);
 
                 let tray_menu = Menu::with_items(app, &[&tray_show, &tray_disconnect, &tray_quit])?;
 

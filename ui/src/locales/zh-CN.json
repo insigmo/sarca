@@ -15,6 +15,7 @@
 	"sidebar": {
 		"settings": "设置",
 		"moreOptions": "更多选项",
+		"language": "语言",
 		"disconnect": "断开连接",
 		"logOut": "退出登录",
 		"creatingStorage": "正在创建存储…",
@@ -543,6 +544,7 @@
 	},
 	"setup": {
 		"title": "设置",
+		"cancel": "取消",
 		"newStorage": "新建存储",
 		"newStorageDesc": "创建一个 Telegram 机器人和一个私密频道，然后确认机器人已被添加为管理员。",
 		"storageName": "存储名称",

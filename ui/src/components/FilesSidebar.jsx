@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal, onCleanup } from 'solid-js'
+import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import { A, useNavigate } from '@solidjs/router'
 import IconButton from '@suid/material/IconButton'
@@ -14,7 +14,7 @@ import { settingsStore } from '../common/settings'
 import { isNativeClient } from '../common/nativeClient'
 import { nativeInvoke } from '../common/nativeBridge'
 import { busyStore } from '../common/busyStore'
-import { t } from '../common/i18n'
+import { i18n, LOCALES, t } from '../common/i18n'
 import { alertStore } from './AlertStack'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FluentIcon from './FluentIcon'
@@ -85,6 +85,46 @@ const SidebarNewButton = (props) => {
 					</ListItemIcon>
 					<ListItemText>{t('files.uploadFolder')}</ListItemText>
 				</MenuItem>
+			</MenuMUI>
+		</>
+	)
+}
+
+/** Compact language picker sitting next to the icon-only Settings button. */
+const SidebarLanguageSwitcher = () => {
+	const [anchorEl, setAnchorEl] = createSignal(null)
+	const open = () => Boolean(anchorEl())
+	const closeMenu = () => setAnchorEl(null)
+	const current = () => LOCALES.find((l) => l.code === i18n.locale()) || LOCALES[0]
+
+	return (
+		<>
+			<button
+				type="button"
+				class="files-sidebar__item files-sidebar__item--icon-only"
+				aria-label={t('sidebar.language')}
+				title={current().label}
+				aria-haspopup="menu"
+				aria-expanded={open()}
+				onClick={(e) => setAnchorEl(e.currentTarget)}
+			>
+				<FluentIcon name="localLanguage" size={20} />
+			</button>
+			<MenuMUI anchorEl={anchorEl()} open={open()} onClose={closeMenu}>
+				<For each={LOCALES}>
+					{(entry) => (
+						<MenuItem
+							selected={entry.code === i18n.locale()}
+							lang={entry.code}
+							onClick={() => {
+								i18n.setLocale(entry.code)
+								closeMenu()
+							}}
+						>
+							<ListItemText>{entry.label}</ListItemText>
+						</MenuItem>
+					)}
+				</For>
 			</MenuMUI>
 		</>
 	)
@@ -162,16 +202,18 @@ const SidebarNav = (props) => {
 			</div>
 			<div class="files-sidebar__bottom">
 				<div class="files-sidebar__divider" aria-hidden="true" />
-				<button
-					type="button"
-					class="files-sidebar__item"
-					aria-label={t('sidebar.settings')}
-					title={t('sidebar.settings')}
-					onClick={props.onOpenSettings}
-				>
-					<FluentIcon name="settings" size={20} />
-					<span class="files-sidebar__label">{t('sidebar.settings')}</span>
-				</button>
+				<div class="files-sidebar__utility-row">
+					<button
+						type="button"
+						class="files-sidebar__item files-sidebar__item--icon-only"
+						aria-label={t('sidebar.settings')}
+						title={t('sidebar.settings')}
+						onClick={props.onOpenSettings}
+					>
+						<FluentIcon name="settings" size={20} />
+					</button>
+					<SidebarLanguageSwitcher />
+				</div>
 				<button
 					type="button"
 					class="files-sidebar__item"
@@ -181,7 +223,7 @@ const SidebarNav = (props) => {
 					aria-expanded={props.actionsMenuOpen()}
 					onClick={(e) => props.onOpenActionsMenu(e.currentTarget)}
 				>
-					<FluentIcon name="moreHorizontal" size={20} />
+					<FluentIcon name="signOut" size={20} />
 					<span class="files-sidebar__label">{t('sidebar.moreOptions')}</span>
 				</button>
 				<MenuMUI
