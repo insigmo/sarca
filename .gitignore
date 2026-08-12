@@ -54,3 +54,18 @@ CLAUDE.md
 docs/
 project_dump.txt
 project_dumper.py
+
+# AI tooling / agent configs, skills, memory
+AGENTS.md
+GEMINI.md
+.cursorrules
+.cursor/
+.windsurf/
+.windsurfrules
+.aider*
+.clinerules/
+.continue/
+.codeium/
+.github/copilot-instructions.md
+skills/
+.skills/

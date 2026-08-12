@@ -16,17 +16,24 @@
 export const LINE_HEIGHT_PX = 40
 /** Pixels per wheel "page" event, resolved against the viewport at call time. */
 export const PAGE_FRACTION = 0.9
+/** Below this gap (ms) between wheel ticks, the user is spinning the wheel fast. */
+export const ACCEL_WINDOW_MS = 120
+/** Extra multiplier added per fast tick in a row. */
+export const ACCEL_STEP = 0.35
+/** Multiplier ceiling so a long flick doesn't fling scrollTop across the whole list. */
+export const ACCEL_MAX = 3.5
 
 /**
  * Convert a wheel event's delta to pixels.
  * @param {{ deltaY: number, deltaMode: number }} event
  * @param {number} viewportHeight
+ * @param {number} [accel] Extra speed multiplier for a fast run of ticks.
  * @returns {number}
  */
-export function deltaToPixels(event, viewportHeight) {
+export function deltaToPixels(event, viewportHeight, accel = 1) {
 	switch (event.deltaMode) {
 		case 1: // DOM_DELTA_LINE
-			return event.deltaY * LINE_HEIGHT_PX
+			return event.deltaY * LINE_HEIGHT_PX * accel
 		case 2: // DOM_DELTA_PAGE
 			return event.deltaY * viewportHeight * PAGE_FRACTION
 		default:
@@ -70,6 +77,9 @@ export function installWheelScrollFix(root) {
 	const target = root || (typeof document === 'undefined' ? null : document.documentElement)
 	if (!target || !isLinuxWebKit()) return () => {}
 
+	let lastTickAt = 0
+	let accel = 1
+
 	/** @param {WheelEvent} event */
 	const onWheel = (event) => {
 		// Pixel deltas already behave; touchpads on Linux report pixels too and
@@ -82,7 +92,14 @@ export function installWheelScrollFix(root) {
 		)
 		if (!scroller) return
 
-		const pixels = deltaToPixels(event, scroller.clientHeight)
+		// Spinning the wheel fast (in either direction) ramps the speed up so
+		// flicking back and forth through a long list doesn't feel glued down;
+		// a pause resets it back to the normal per-notch step.
+		const now = Date.now()
+		accel = now - lastTickAt < ACCEL_WINDOW_MS ? Math.min(ACCEL_MAX, accel + ACCEL_STEP) : 1
+		lastTickAt = now
+
+		const pixels = deltaToPixels(event, scroller.clientHeight, accel)
 		const before = scroller.scrollTop
 		const max = scroller.scrollHeight - scroller.clientHeight
 		const next = Math.max(0, Math.min(max, before + pixels))

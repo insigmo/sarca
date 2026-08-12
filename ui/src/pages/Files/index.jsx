@@ -9,7 +9,7 @@ import {
 	onCleanup,
 	onMount,
 } from 'solid-js'
-import { reconcile } from 'solid-js/store'
+import { reconcileSignal } from '../../common/reconcileSignal'
 import MenuItem from '@suid/material/MenuItem'
 import Button from '@suid/material/Button'
 import IconButton from '@suid/material/IconButton'
@@ -696,7 +696,7 @@ const Files = () => {
 			// `reconcile` keeps object identity for rows that did not change, so a
 			// silent background refresh (same folder, new fetch) does not tear
 			// down and remount every list row `mapArray` already rendered.
-			setFsLayer(reconcile(items, { key: 'path' }))
+			setFsLayer(reconcileSignal(items, { key: 'path' }))
 			writeFsLayerCache(cacheKey, items)
 			chrome.setIsSearching(false)
 			chrome.setSearchQuery('')
@@ -718,7 +718,7 @@ const Files = () => {
 	const fetchTrashLayer = async (path = trashPath()) => {
 		const fsLayerRes = await API.files.listTrash(params.id, path)
 		setFsLayer(
-			reconcile((fsLayerRes || []).filter((el) => el.name !== '..'), { key: 'path' }),
+			reconcileSignal((fsLayerRes || []).filter((el) => el.name !== '..'), { key: 'path' }),
 		)
 		chrome.setIsSearching(false)
 		chrome.setSearchQuery('')
@@ -726,7 +726,7 @@ const Files = () => {
 
 	const fetchFavorites = async () => {
 		const items = await API.files.listFavorites(params.id)
-		setFsLayer(reconcile(items || [], { key: 'path' }))
+		setFsLayer(reconcileSignal(items || [], { key: 'path' }))
 		syncFavoritePaths(items)
 		chrome.setIsSearching(false)
 		chrome.setSearchQuery('')
@@ -734,7 +734,7 @@ const Files = () => {
 
 	const fetchRecent = async () => {
 		const items = await API.files.listRecent(params.id)
-		setFsLayer(reconcile(items || [], { key: 'path' }))
+		setFsLayer(reconcileSignal(items || [], { key: 'path' }))
 		chrome.setIsSearching(false)
 		chrome.setSearchQuery('')
 	}

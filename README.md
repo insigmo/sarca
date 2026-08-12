@@ -13,9 +13,22 @@
   <a href="https://github.com/insigmo/sarca/pkgs/container/sarca"><img alt="GHCR" src="https://img.shields.io/badge/ghcr.io-sarca-14635C?style=flat-square&logo=docker"></a>
 </p>
 
+Personal / multi-user file cloud with zero storage bill: file bytes are chunked and pushed into Telegram channels via bots, metadata stays in SQLite on your own server.
+
+## Contents
+
+- [What this is](#what-this-is)
+- [Server](#server)
+- [Clients](#clients)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [How Sarca compares](#how-sarca-compares)
+- [Donations](#donations)
+- [License](#license)
+
 ## What this is
 
-Sarca is a personal / multi-user file cloud. Metadata lives in SQLite; file bytes are chunked and stored in Telegram via bots. The repo has two parts:
+The repo has two parts:
 
 | Part | Path | Role |
 | --- | --- | --- |
