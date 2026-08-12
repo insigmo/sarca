@@ -31,6 +31,7 @@ import link24Regular from '@fluentui/svg-icons/icons/link_24_regular.svg?raw'
 import link24Filled from '@fluentui/svg-icons/icons/link_24_filled.svg?raw'
 import list24Regular from '@fluentui/svg-icons/icons/list_24_regular.svg?raw'
 import list24Filled from '@fluentui/svg-icons/icons/list_24_filled.svg?raw'
+import localLanguage24Regular from '@fluentui/svg-icons/icons/local_language_24_regular.svg?raw'
 import lockClosed24Regular from '@fluentui/svg-icons/icons/lock_closed_24_regular.svg?raw'
 import lockClosed24Filled from '@fluentui/svg-icons/icons/lock_closed_24_filled.svg?raw'
 import moreHorizontal24Regular from '@fluentui/svg-icons/icons/more_horizontal_24_regular.svg?raw'
@@ -88,6 +89,7 @@ export const fluentIcons = {
 	linkFilled: link24Filled,
 	list: list24Regular,
 	listFilled: list24Filled,
+	localLanguage: localLanguage24Regular,
 	lockClosed: lockClosed24Regular,
 	lockClosedFilled: lockClosed24Filled,
 	moreHorizontal: moreHorizontal24Regular,
