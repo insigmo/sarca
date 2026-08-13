@@ -14,7 +14,7 @@
 	},
 	"sidebar": {
 		"settings": "Ajustes",
-		"moreOptions": "Más opciones",
+		"session": "Sesión",
 		"language": "Idioma",
 		"disconnect": "Desconectar",
 		"logOut": "Cerrar sesión",
@@ -377,6 +377,7 @@
 		"editAccessAria": "Editar acceso de {{email}}",
 		"editChannelAria": "Editar canal {{name}}",
 		"existingLinksTitle": "Enlaces existentes para esta ruta",
+		"linkAlreadyGenerated": "El enlace ya está generado",
 		"expires": "Caduca",
 		"expiresAt": "Caduca {{date}}",
 		"expiryFieldLabel": "Caducidad",

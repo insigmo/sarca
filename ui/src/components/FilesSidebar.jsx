@@ -203,6 +203,21 @@ const SidebarNav = (props) => {
 			<div class="files-sidebar__bottom">
 				<div class="files-sidebar__divider" aria-hidden="true" />
 				<div class="files-sidebar__utility-row">
+					<SidebarLanguageSwitcher />
+				</div>
+				<div class="files-sidebar__utility-row">
+					<button
+						type="button"
+						class="files-sidebar__item"
+						aria-label={t('sidebar.session')}
+						title={t('sidebar.session')}
+						aria-haspopup="menu"
+						aria-expanded={props.actionsMenuOpen()}
+						onClick={(e) => props.onOpenActionsMenu(e.currentTarget)}
+					>
+						<FluentIcon name="signOut" size={20} />
+						<span class="files-sidebar__label">{t('sidebar.session')}</span>
+					</button>
 					<button
 						type="button"
 						class="files-sidebar__item files-sidebar__item--icon-only"
@@ -212,20 +227,7 @@ const SidebarNav = (props) => {
 					>
 						<FluentIcon name="settings" size={20} />
 					</button>
-					<SidebarLanguageSwitcher />
 				</div>
-				<button
-					type="button"
-					class="files-sidebar__item"
-					aria-label={t('sidebar.moreOptions')}
-					title={t('sidebar.moreOptions')}
-					aria-haspopup="menu"
-					aria-expanded={props.actionsMenuOpen()}
-					onClick={(e) => props.onOpenActionsMenu(e.currentTarget)}
-				>
-					<FluentIcon name="signOut" size={20} />
-					<span class="files-sidebar__label">{t('sidebar.moreOptions')}</span>
-				</button>
 				<MenuMUI
 					anchorEl={props.actionsMenuAnchor()}
 					open={props.actionsMenuOpen()}

@@ -6,6 +6,7 @@ import {
 	isLinuxWebKit,
 	installWheelScrollFix,
 	LINE_HEIGHT_PX,
+	TWEEN_MS,
 } from './wheelScroll'
 
 describe('deltaToPixels', () => {
@@ -43,6 +44,7 @@ describe('scrollableAncestor / installWheelScrollFix', () => {
 	}
 
 	beforeEach(() => {
+		vi.useFakeTimers()
 		vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (X11; Linux x86_64)')
 		root = document.createElement('div')
 		scroller = document.createElement('div')
@@ -55,6 +57,7 @@ describe('scrollableAncestor / installWheelScrollFix', () => {
 
 	afterEach(() => {
 		root.remove()
+		vi.useRealTimers()
 		vi.restoreAllMocks()
 	})
 
@@ -69,14 +72,23 @@ describe('scrollableAncestor / installWheelScrollFix', () => {
 		expect(scrollableAncestor(plain, root)).toBe(null)
 	})
 
-	it('converts a line-mode wheel into a pixel scroll', () => {
+	it('tweens a line-mode wheel to a pixel scroll instead of snapping', () => {
 		const stop = installWheelScrollFix(root)
 		const event = new WheelEvent('wheel', { deltaY: 3, bubbles: true, cancelable: true })
 		Object.defineProperty(event, 'deltaMode', { value: 1 })
 		scroller.firstChild.dispatchEvent(event)
 
-		expect(scroller.scrollTop).toBe(3 * LINE_HEIGHT_PX)
+		// Jumping straight to the target on the same tick is the jerky
+		// behaviour this replaces — the tween should still be in flight.
+		expect(scroller.scrollTop).toBe(0)
 		expect(event.defaultPrevented).toBe(true)
+
+		vi.advanceTimersByTime(TWEEN_MS / 2)
+		expect(scroller.scrollTop).toBeGreaterThan(0)
+		expect(scroller.scrollTop).toBeLessThan(3 * LINE_HEIGHT_PX)
+
+		vi.advanceTimersByTime(TWEEN_MS)
+		expect(scroller.scrollTop).toBe(3 * LINE_HEIGHT_PX)
 		stop()
 	})
 

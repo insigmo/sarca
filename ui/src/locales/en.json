@@ -14,7 +14,7 @@
 	},
 	"sidebar": {
 		"settings": "Settings",
-		"moreOptions": "More options",
+		"session": "Session",
 		"language": "Language",
 		"disconnect": "Disconnect",
 		"logOut": "Log out",
@@ -378,6 +378,7 @@
 		"editChannelAria": "Edit channel {{name}}",
 		"existingLinksTitle": "Existing links for this path",
 		"expires": "Expires",
+		"linkAlreadyGenerated": "Link already generated",
 		"expiresAt": "Expires {{date}}",
 		"expiryFieldLabel": "Expiry",
 		"failedCount": "Failed: {{count}}",
