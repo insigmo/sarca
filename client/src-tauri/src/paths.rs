@@ -86,7 +86,7 @@ pub fn validate_local_dir(
 
     let requested = PathBuf::from(trimmed);
     if !requested.is_absolute() {
-        return Err("Local folder must be an absolute path".into());
+        return Err(format!("Local folder must be an absolute path: {trimmed}"));
     }
 
     // Resolve `..` and symlinks before comparing. A textual prefix check is

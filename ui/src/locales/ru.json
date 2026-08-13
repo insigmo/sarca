@@ -14,7 +14,7 @@
 	},
 	"sidebar": {
 		"settings": "Настройки",
-		"moreOptions": "Ещё",
+		"session": "Сессия",
 		"language": "Язык",
 		"disconnect": "Отключиться",
 		"logOut": "Выйти",
@@ -377,6 +377,7 @@
 		"editAccessAria": "Изменить доступ для {{email}}",
 		"editChannelAria": "Изменить канал {{name}}",
 		"existingLinksTitle": "Существующие ссылки для этого пути",
+		"linkAlreadyGenerated": "Ссылка уже сгенерирована",
 		"expires": "Истекает",
 		"expiresAt": "Истекает {{date}}",
 		"expiryFieldLabel": "Срок действия",

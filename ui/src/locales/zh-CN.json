@@ -14,7 +14,7 @@
 	},
 	"sidebar": {
 		"settings": "设置",
-		"moreOptions": "更多选项",
+		"session": "会话",
 		"language": "语言",
 		"disconnect": "断开连接",
 		"logOut": "退出登录",
@@ -377,6 +377,7 @@
 		"editAccessAria": "编辑 {{email}} 的权限",
 		"editChannelAria": "编辑频道 {{name}}",
 		"existingLinksTitle": "此路径下的现有链接",
+		"linkAlreadyGenerated": "链接已生成",
 		"expires": "过期时间",
 		"expiresAt": "{{date}} 过期",
 		"expiryFieldLabel": "过期时间",

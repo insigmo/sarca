@@ -14,7 +14,7 @@
 	},
 	"sidebar": {
 		"settings": "الإعدادات",
-		"moreOptions": "خيارات أخرى",
+		"session": "الجلسة",
 		"language": "اللغة",
 		"disconnect": "قطع الاتصال",
 		"logOut": "تسجيل الخروج",
@@ -377,6 +377,7 @@
 		"editAccessAria": "تعديل صلاحية {{email}}",
 		"editChannelAria": "تعديل القناة {{name}}",
 		"existingLinksTitle": "الروابط الحالية لهذا المسار",
+		"linkAlreadyGenerated": "تم إنشاء الرابط بالفعل",
 		"expires": "تنتهي الصلاحية",
 		"expiresAt": "تنتهي في {{date}}",
 		"expiryFieldLabel": "تاريخ الانتهاء",

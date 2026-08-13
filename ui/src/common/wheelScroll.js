@@ -22,6 +22,26 @@ export const ACCEL_WINDOW_MS = 120
 export const ACCEL_STEP = 0.35
 /** Multiplier ceiling so a long flick doesn't fling scrollTop across the whole list. */
 export const ACCEL_MAX = 3.5
+/**
+ * How long (ms) each wheel tick's jump is spread over. Snapping `scrollTop`
+ * straight to the target on every notch is what reads as "рывками" (jerky) —
+ * GTK apps tween each notch instead of teleporting to it. New ticks arriving
+ * mid-tween just push the target further, so a fast flick still reads as one
+ * continuous motion rather than a queue of jumps.
+ */
+export const TWEEN_MS = 160
+
+/** @param {number} t 0..1 */
+const easeOutCubic = (t) => 1 - (1 - t) ** 3
+
+const raf =
+	typeof requestAnimationFrame === 'function'
+		? (cb) => requestAnimationFrame(cb)
+		: (cb) => setTimeout(() => cb(Date.now()), 16)
+const cancelRaf =
+	typeof cancelAnimationFrame === 'function'
+		? (id) => cancelAnimationFrame(id)
+		: (id) => clearTimeout(id)
 
 /**
  * Convert a wheel event's delta to pixels.
@@ -79,6 +99,24 @@ export function installWheelScrollFix(root) {
 
 	let lastTickAt = 0
 	let accel = 1
+	/** @type {WeakMap<Element, { from: number, to: number, start: number, frame: any }>} */
+	const tweens = new WeakMap()
+
+	/** Value the scroller is tweening towards, or its live scrollTop if idle. */
+	const currentTarget = (scroller) => tweens.get(scroller)?.to ?? scroller.scrollTop
+
+	const step = (scroller) => {
+		const tween = tweens.get(scroller)
+		if (!tween) return
+		const elapsed = Date.now() - tween.start
+		const t = Math.min(1, elapsed / TWEEN_MS)
+		scroller.scrollTop = tween.from + (tween.to - tween.from) * easeOutCubic(t)
+		if (t >= 1) {
+			tweens.delete(scroller)
+			return
+		}
+		tween.frame = raf(() => step(scroller))
+	}
 
 	/** @param {WheelEvent} event */
 	const onWheel = (event) => {
@@ -100,12 +138,17 @@ export function installWheelScrollFix(root) {
 		lastTickAt = now
 
 		const pixels = deltaToPixels(event, scroller.clientHeight, accel)
-		const before = scroller.scrollTop
+		const before = currentTarget(scroller)
 		const max = scroller.scrollHeight - scroller.clientHeight
 		const next = Math.max(0, Math.min(max, before + pixels))
 		if (next === before) return // at an edge: let the event chain as usual
 
-		scroller.scrollTop = next
+		const existing = tweens.get(scroller)
+		if (existing) cancelRaf(existing.frame)
+		const tween = { from: scroller.scrollTop, to: next, start: now, frame: null }
+		tweens.set(scroller, tween)
+		tween.frame = raf(() => step(scroller))
+
 		event.preventDefault()
 	}
 

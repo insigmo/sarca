@@ -129,7 +129,7 @@ const ShareLinkDialog = (props) => {
 
 	const onCreate = async (event) => {
 		event?.preventDefault?.()
-		if (creating()) return
+		if (creating() || links().length > 0) return
 		const expires_at = resolveExpiresAt(preset(), customLocal())
 		if (expires_at === undefined) {
 			addAlert(t('storageDialogs.chooseValidExpiryDate'), 'error')
@@ -370,9 +370,13 @@ const ShareLinkDialog = (props) => {
 					<Button
 						type="submit"
 						color="secondary"
-						disabled={creating() || loading()}
+						disabled={creating() || loading() || links().length > 0}
 					>
-						{creating() ? t('storageDialogs.creating') : t('storageDialogs.create')}
+						{creating()
+							? t('storageDialogs.creating')
+							: links().length > 0
+								? t('storageDialogs.linkAlreadyGenerated')
+								: t('storageDialogs.create')}
 					</Button>
 					<Button onClick={onClose} color="info">
 						{t('common.close')}
