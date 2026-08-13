@@ -282,10 +282,14 @@ async fn transcode_image_to_jpeg(file_path: &Path) -> Result<Vec<u8>, String> {
         .args(["-y", "-loglevel", "error", "-i"])
         .arg(file_path)
         // One frame, high quality: the size-reducing pass happens afterwards.
-        .args(["-frames:v", "1", "-q:v", "2"])
+        // Cap the *decoded* frame so ffmpeg never has to hold a full-resolution
+        // 50MP+ phone photo in memory — only the final thumbnail/preview crop
+        // still happens downstream, in the single place that owns final sizes.
+        .args(["-frames:v", "1", "-q:v", "2", "-vf"])
+        .arg(format!(
+            "scale='min({MAX_TRANSCODE_DIMENSION},iw)':'min({MAX_TRANSCODE_DIMENSION},ih)':force_original_aspect_ratio=decrease"
+        ))
         .arg(&out)
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
         .status()
         .await
         .map_err(|e| format!("spawn ffmpeg: {e}"))?;
@@ -424,6 +428,11 @@ async fn generate_pdf(file_path: &Path) -> Result<Vec<u8>, String> {
 /// huge dimensions in a tiny compressed payload (decompression bomb) and blow
 /// up memory during `image::load_from_memory`.
 const MAX_DECODE_PIXELS: u64 = 40_000_000; // ~40MP, well above any real photo/scan
+
+/// Longest side ffmpeg is allowed to decode a still frame to before Sarca's
+/// own resize/encode pass takes over. Keeps peak RSS bounded regardless of
+/// the source photo's native resolution (e.g. 50MP phone cameras).
+const MAX_TRANSCODE_DIMENSION: u32 = 4096;
 
 fn decode_guarded(raw: &[u8]) -> Result<image::DynamicImage, String> {
     if let Ok(reader) = image::ImageReader::new(std::io::Cursor::new(raw)).with_guessed_format() {
