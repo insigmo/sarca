@@ -20,6 +20,18 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 /// open connection`.
 pub const BACKGROUND_CONNECTIONS: u32 = 6;
 
+/// Total `SQLite` page-cache budget (KiB) shared across the whole pool.
+///
+/// `cache_size` is per-connection, so scaling it with `WORKERS` blew RSS up
+/// linearly with pool size (32MB/connection * 10 connections = 320MB baseline
+/// for a metadata-only DB). Splitting a fixed total across `max_connection`
+/// instead keeps the budget flat regardless of how the pool is sized.
+const TOTAL_CACHE_KIB: i64 = 100_000;
+
+/// Floor so a very large pool doesn't shrink any one connection's cache to
+/// the point queries start missing it entirely.
+const MIN_CACHE_KIB_PER_CONNECTION: i64 = 2_000;
+
 /// Open (creating if needed) the `SQLite` metadata database at `path`.
 ///
 /// Every pooled connection gets `foreign_keys=ON`, `journal_mode=WAL` and a
@@ -32,6 +44,9 @@ pub async fn get_pool(
 ) -> Result<SqlitePool, String> {
     create_parent_dir(path).await?;
 
+    let cache_kib_per_connection =
+        (TOTAL_CACHE_KIB / i64::from(max_connection.max(1))).max(MIN_CACHE_KIB_PER_CONNECTION);
+
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
@@ -42,7 +57,8 @@ pub async fn get_pool(
         // Keep the WAL from growing unbounded between checkpoints on a busy
         // VPS, and keep sorting/temp tables off the disk.
         .pragma("wal_autocheckpoint", "1000")
-        .pragma("cache_size", "-32000")
+        // Negative value = KiB (SQLite's own unit for this pragma).
+        .pragma("cache_size", format!("-{cache_kib_per_connection}"))
         .pragma("temp_store", "MEMORY");
 
     let connect = SqlitePoolOptions::new()
