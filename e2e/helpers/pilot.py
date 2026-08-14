@@ -824,14 +824,14 @@ class ClientApp:
         raise PilotError(f"the sidebar never offered {label!r}")
 
     def sidebar_overflow_click(self, label: str, timeout_s: float = 25.0) -> None:
-        """Click a sidebar action that lives behind the overflow ("More options") menu.
+        """Click a sidebar action that lives behind the overflow ("Session") menu.
 
         Log out and Disconnect were moved out of the always-visible footer so a
         stray click cannot end the session; reaching them now takes two steps.
         """
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            self.sidebar_click("More options", timeout_s=max(1.0, deadline - time.monotonic()))
+            self.sidebar_click("Session", timeout_s=max(1.0, deadline - time.monotonic()))
             # The menu mounts asynchronously. Clicking the label before it is
             # there fails, and re-clicking the trigger then lands on the menu's
             # backdrop and closes it again — the loop fought itself and never
