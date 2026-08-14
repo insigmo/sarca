@@ -388,6 +388,35 @@ a.default-link:hover {
 	text-align: center;
 }
 
+.auth-language-switch {
+	position: absolute;
+	top: 20px;
+	right: 20px;
+	z-index: 2;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 12px;
+	border: 1px solid var(--sarca-border);
+	border-radius: 999px;
+	background: var(--sarca-glass-strong, var(--sarca-surface, #fff));
+	color: var(--sarca-ink-soft);
+	font: inherit;
+	font-size: 0.8rem;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background 0.18s ease, color 0.18s ease;
+}
+
+.auth-language-switch:hover {
+	background: color-mix(in srgb, var(--sarca-teal) 8%, transparent);
+	color: var(--sarca-ink);
+}
+
+.auth-language-switch .fluent-icon {
+	font-size: 1.05rem;
+}
+
 /* —— Page chrome —— */
 .page-header {
 	display: flex;

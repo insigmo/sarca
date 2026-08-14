@@ -101,7 +101,7 @@ const SidebarLanguageSwitcher = () => {
 		<>
 			<button
 				type="button"
-				class="files-sidebar__item files-sidebar__item--icon-only"
+				class="files-sidebar__item"
 				aria-label={t('sidebar.language')}
 				title={current().label}
 				aria-haspopup="menu"
@@ -109,6 +109,7 @@ const SidebarLanguageSwitcher = () => {
 				onClick={(e) => setAnchorEl(e.currentTarget)}
 			>
 				<FluentIcon name="localLanguage" size={20} />
+				<span class="files-sidebar__label">{current().label}</span>
 			</button>
 			<MenuMUI anchorEl={anchorEl()} open={open()} onClose={closeMenu}>
 				<For each={LOCALES}>
@@ -220,12 +221,13 @@ const SidebarNav = (props) => {
 					</button>
 					<button
 						type="button"
-						class="files-sidebar__item files-sidebar__item--icon-only"
+						class="files-sidebar__item"
 						aria-label={t('sidebar.settings')}
 						title={t('sidebar.settings')}
 						onClick={props.onOpenSettings}
 					>
 						<FluentIcon name="settings" size={20} />
+						<span class="files-sidebar__label">{t('sidebar.settings')}</span>
 					</button>
 				</div>
 				<MenuMUI
