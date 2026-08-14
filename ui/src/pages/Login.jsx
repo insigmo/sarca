@@ -1,16 +1,61 @@
-import { onMount } from 'solid-js'
+import { For, createSignal, onMount } from 'solid-js'
 import Box from '@suid/material/Box'
 import TextField from '@suid/material/TextField'
 import Button from '@suid/material/Button'
 import Paper from '@suid/material/Paper'
 import Stack from '@suid/material/Stack'
+import MenuMUI from '@suid/material/Menu'
+import MenuItem from '@suid/material/MenuItem'
+import ListItemText from '@suid/material/ListItemText'
 import createLocalStore from '../../libs'
 import { useNavigate } from '@solidjs/router'
 
 import API from '../api'
 import { safeRedirectPath } from '../common/auth'
 import logoUrl from '../assets/logo.svg'
-import { t } from '../common/i18n'
+import { i18n, LOCALES, t } from '../common/i18n'
+import FluentIcon from '../components/FluentIcon'
+
+/** Language picker shown on the login screen, mirrors the sidebar's switcher. */
+const LoginLanguageSwitcher = () => {
+	const [anchorEl, setAnchorEl] = createSignal(null)
+	const open = () => Boolean(anchorEl())
+	const closeMenu = () => setAnchorEl(null)
+	const current = () => LOCALES.find((l) => l.code === i18n.locale()) || LOCALES[0]
+
+	return (
+		<>
+			<button
+				type="button"
+				class="auth-language-switch"
+				aria-label={t('sidebar.language')}
+				title={current().label}
+				aria-haspopup="menu"
+				aria-expanded={open()}
+				onClick={(e) => setAnchorEl(e.currentTarget)}
+			>
+				<FluentIcon name="localLanguage" size={18} />
+				<span>{current().label}</span>
+			</button>
+			<MenuMUI anchorEl={anchorEl()} open={open()} onClose={closeMenu}>
+				<For each={LOCALES}>
+					{(entry) => (
+						<MenuItem
+							selected={entry.code === i18n.locale()}
+							lang={entry.code}
+							onClick={() => {
+								i18n.setLocale(entry.code)
+								closeMenu()
+							}}
+						>
+							<ListItemText>{entry.label}</ListItemText>
+						</MenuItem>
+					)}
+				</For>
+			</MenuMUI>
+		</>
+	)
+}
 
 const Login = () => {
 	const [store, setStore] = createLocalStore()
@@ -61,6 +106,7 @@ const Login = () => {
 
 	return (
 		<div class="auth-page">
+			<LoginLanguageSwitcher />
 			<Paper class="auth-card" elevation={0}>
 				<Box
 					sx={{

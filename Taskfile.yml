@@ -158,6 +158,18 @@ tasks:
           xvfb-run -a -s "-screen 0 1280x900x24" sh -c "$CMD"
         fi
 
+  ico:update:
+    desc: Regenerate ui/client logo.svg copies and all Tauri client icons from root logo.svg
+    deps: [client:install]
+    cmds:
+      - cp "{{.ROOT_DIR}}/logo.svg" "{{.ROOT_DIR}}/ui/src/assets/logo.svg"
+      - cp "{{.ROOT_DIR}}/logo.svg" "{{.ROOT_DIR}}/client/public/logo.svg"
+      - |
+        {{.ENSURE_PNPM}}
+        cd "{{.ROOT_DIR}}/client"
+        $PNPM exec tauri icon "{{.ROOT_DIR}}/logo.svg"
+      - echo "icons regenerated from {{.ROOT_DIR}}/logo.svg"
+
   client:install:
     desc: Install client frontend deps (pnpm)
     dir: client
