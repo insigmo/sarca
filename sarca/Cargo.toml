@@ -1,6 +1,6 @@
 [package]
 name = "sarca"
-version = "0.0.150"
+version = "0.0.151"
 edition = "2021"
 description = "Self-hosted cloud storage that keeps files in Telegram channels"
 license = "MIT"
