@@ -600,9 +600,7 @@ jobs:
           retention-days: 1
 
   # iOS: signed IPA when Apple secrets are configured; otherwise simulator .app zip.
-  # Temporarily disabled — keep the job definition; re-enable by removing `if: false`.
   build-client-ios:
-    if: false
     needs: [version]
     runs-on: macos-14
     continue-on-error: true
@@ -734,7 +732,7 @@ jobs:
           retention-days: 1
 
   release:
-    # build-client-ios omitted from needs while iOS builds are disabled (`if: false` above).
+    # build-client-ios not in needs: continue-on-error, must not block release if it fails.
     # Waits on `package` (not `build`) so release archives include the UI bundle.
     needs: [version, package, build-client, build-client-android]
     runs-on: ubuntu-latest
