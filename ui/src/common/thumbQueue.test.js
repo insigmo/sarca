@@ -113,12 +113,19 @@ describe('thumbQueue', () => {
 			})
 			promise.catch(() => {})
 
+			// Delays sum to ~64s — the retry budget spans the server's 1-minute
+			// rate-limit window so a tile only gives up once that window can no
+			// longer explain the failure.
 			await vi.advanceTimersByTimeAsync(1000)
 			await vi.advanceTimersByTimeAsync(2000)
 			await vi.advanceTimersByTimeAsync(4000)
+			await vi.advanceTimersByTimeAsync(8000)
+			await vi.advanceTimersByTimeAsync(15000)
+			await vi.advanceTimersByTimeAsync(15000)
+			await vi.advanceTimersByTimeAsync(19000)
 
 			await expect(promise).rejects.toBe(err)
-			expect(calls).toBe(4)
+			expect(calls).toBe(8)
 		} finally {
 			vi.useRealTimers()
 		}

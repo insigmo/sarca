@@ -11,7 +11,7 @@ sync in the background via [`sarca-sync`](../crates/sarca-sync).
 | --- | --- |
 | Windows amd64 / arm64 | `cargo tauri build --target …` |
 | Linux amd64 / arm64 | Needs WebKitGTK 4.1 + GTK 3 dev packages |
-| macOS aarch64 | Apple Silicon only (per product plan) |
+| macOS aarch64 / amd64 | Apple Silicon and Intel |
 | Android / iOS | Tauri mobile; run `pnpm tauri android init` / `ios init` once tooling is installed |
 
 ## Dev (desktop)
