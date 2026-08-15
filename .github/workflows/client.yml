@@ -316,6 +316,9 @@ jobs:
         working-directory: client
         run: pnpm install --frozen-lockfile
 
+      - name: Disable pnpm interactive prompts (no TTY in Xcode script phases)
+        run: pnpm config set confirm-modules-purge false
+
       - name: Init + build iOS (simulator)
         working-directory: client
         env:
