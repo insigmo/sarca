@@ -9,9 +9,18 @@
 const MAX_CONCURRENT = 6
 
 // A 503 means the storage's Telegram token bucket is temporarily empty, not
-// that the thumb is missing. Back off and retry a few times before giving up,
-// so a saturated storage doesn't poison the tile with a permanent failure.
-const RETRY_503_DELAYS_MS = [1000, 2000, 4000]
+// that the thumb is missing. Back off and retry before giving up, so a
+// saturated storage doesn't poison the tile with a permanent failure.
+//
+// The server's rate limiter is a rolling 1-minute window (60 requests/min by
+// default — see `StorageWorkersRepository::get_token`), so a burst big enough
+// to exhaust it does not clear for up to a minute. The old 3-try/~7s budget
+// gave up long before that window rolled over, which is why opening a large
+// folder used to draw thumbnails for only the first couple dozen files: every
+// tile queued after the budget was blown lost its retries and stayed blank
+// forever. These delays sum to ~64s so a tile queued right as the bucket ran
+// dry still gets a token before it gives up.
+const RETRY_503_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 15000, 19000]
 
 /** @type {Array<{ run: (signal: AbortSignal) => Promise<any>, resolve: (v: any) => void, reject: (e: any) => void, ac: AbortController }>} */
 const waiters = []

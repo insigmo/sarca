@@ -93,6 +93,10 @@ jobs:
             os: macos-14
             rust_target: aarch64-apple-darwin
             bundles: dmg
+          - name: macos-amd64
+            os: macos-14
+            rust_target: x86_64-apple-darwin
+            bundles: dmg
 
     steps:
       - uses: actions/checkout@v4

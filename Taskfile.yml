@@ -255,6 +255,15 @@ tasks:
         {{.ENSURE_PNPM}}
         $PNPM tauri build --target aarch64-apple-darwin
 
+  client:build:macos-amd64:
+    desc: Build macOS Intel client (run on macOS)
+    deps: [client:install]
+    dir: client
+    cmds:
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri build --target x86_64-apple-darwin
+
   client:android:
     desc: Build Android APK (requires Android SDK + tauri android init)
     deps: [client:install]

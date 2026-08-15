@@ -57,10 +57,7 @@ detect_asset() {
     darwin)
       case "$arch" in
         arm64) echo "sarca_macos_arm64.tar.gz" ;;
-        x86_64)
-          echo "macOS Intel (amd64) builds are not published. Use Docker, or an Apple Silicon Mac." >&2
-          exit 1
-          ;;
+        x86_64) echo "sarca_macos_amd64.tar.gz" ;;
         *) echo "Unsupported macOS arch: $arch" >&2; exit 1 ;;
       esac
       ;;
