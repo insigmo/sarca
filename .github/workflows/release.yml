@@ -693,20 +693,14 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          shopt -s nullglob globstar
+          shopt -s nullglob
 
-          ipas=(client/src-tauri/gen/apple/**/*.ipa target/**/*.ipa)
-          if ((${#ipas[@]})) && [[ -f "${ipas[0]}" ]]; then
-            cp -a "${ipas[0]}" "dist/${ASSET}.ipa"
-            echo "Packed IPA from ${ipas[0]}"
+          ipa="$(find client/src-tauri/gen/apple target -name '*.ipa' -type f 2>/dev/null | head -1)"
+          if [[ -n "$ipa" ]]; then
+            cp -a "$ipa" "dist/${ASSET}.ipa"
+            echo "Packed IPA from ${ipa}"
           else
-            apps=(client/src-tauri/gen/apple/**/*.app target/**/*.app)
-            app=""
-            for f in "${apps[@]}"; do
-              [[ -d "$f" ]] || continue
-              app="$f"
-              break
-            done
+            app="$(find client/src-tauri/gen/apple target -name '*.app' -type d 2>/dev/null | head -1)"
             if [[ -z "$app" ]]; then
               echo "No IPA or .app produced" >&2
               find client/src-tauri/gen/apple -maxdepth 6 \( -name '*.ipa' -o -name '*.app' \) 2>/dev/null | head -50 || true
