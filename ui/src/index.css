@@ -377,8 +377,6 @@ a.default-link:hover {
 .auth-brand img {
 	width: 64px;
 	height: 64px;
-	border-radius: 20px;
-	box-shadow: 0 12px 32px rgba(0, 120, 212, 0.22);
 }
 
 .auth-brand p {

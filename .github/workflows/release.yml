@@ -186,6 +186,9 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-14
             asset: sarca_macos_arm64
+          - target: x86_64-apple-darwin
+            os: macos-14
+            asset: sarca_macos_amd64
 
     runs-on: ${{ matrix.os }}
     defaults:
@@ -240,6 +243,8 @@ jobs:
             archive: zip
             binary: sarca.exe
           - asset: sarca_macos_arm64
+            archive: tar.gz
+          - asset: sarca_macos_amd64
             archive: tar.gz
 
     runs-on: ubuntu-latest
@@ -317,6 +322,11 @@ jobs:
             rust_target: aarch64-apple-darwin
             bundles: dmg
             asset: sarca_client_macos_arm64
+          - name: macos-amd64
+            os: macos-14
+            rust_target: x86_64-apple-darwin
+            bundles: dmg
+            asset: sarca_client_macos_amd64
 
     runs-on: ${{ matrix.os }}
     defaults:
@@ -755,7 +765,7 @@ jobs:
             base="$(basename "$f")"
             case "$base" in
               *.sha256|*.idsig|*.AppImage) continue ;;
-              sarca_client_linux_amd64|sarca_client_linux_arm64|sarca_client_macos_arm64) continue ;;
+              sarca_client_linux_amd64|sarca_client_linux_arm64|sarca_client_macos_arm64|sarca_client_macos_amd64) continue ;;
               # Drop portable Windows client exes; keep *-setup.exe installers only.
               sarca_client_windows_*.exe)
                 case "$base" in
@@ -782,11 +792,12 @@ jobs:
           done
           echo "server_archives=${server}"
           echo "client_files=${clients}"
-          test "${server}" -ge 4
+          test "${server}" -ge 5
           test -f release-assets/sarca_client_android_arm64.apk
           test -f release-assets/sarca_client_linux_amd64.deb
           test -f release-assets/sarca_client_linux_arm64.deb
           test -f release-assets/sarca_client_macos_arm64.dmg
+          test -f release-assets/sarca_client_macos_amd64.dmg
           test -f release-assets/sarca_client_windows_amd64-setup.exe
           test -f release-assets/sarca_client_windows_arm64-setup.exe
 
@@ -797,11 +808,13 @@ jobs:
               sarca_linux_amd64.tar.gz) echo "Server — Linux x86_64" ;;
               sarca_linux_arm64.tar.gz) echo "Server — Linux aarch64" ;;
               sarca_macos_arm64.tar.gz) echo "Server — macOS Apple Silicon" ;;
+              sarca_macos_amd64.tar.gz) echo "Server — macOS x86_64" ;;
               sarca_windows_amd64.zip) echo "Server — Windows x86_64" ;;
               sarca_client_android_arm64.apk) echo "Client — Android arm64 (sideload APK)" ;;
               sarca_client_linux_amd64.deb) echo "Client — Linux x86_64 (.deb)" ;;
               sarca_client_linux_arm64.deb) echo "Client — Linux aarch64 (.deb)" ;;
               sarca_client_macos_arm64.dmg) echo "Client — macOS Apple Silicon (.dmg)" ;;
+              sarca_client_macos_amd64.dmg) echo "Client — macOS x86_64 (.dmg)" ;;
               sarca_client_windows_amd64-setup.exe) echo "Client — Windows x86_64 (installer)" ;;
               sarca_client_windows_arm64-setup.exe) echo "Client — Windows ARM64 (installer)" ;;
               *) echo "$1" ;;
