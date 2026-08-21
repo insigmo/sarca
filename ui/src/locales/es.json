@@ -247,6 +247,7 @@
 		"downloadAndOpen": "Descargar y abrir",
 		"preparingDownload": "Preparando descarga",
 		"preparingDownloadHint": "Espera mientras se prepara el archivo",
+		"downloadingProgress": "Descargando… {{percent}}%",
 		"downloadStarted": "Descarga iniciada",
 		"downloadFailed": "Error al descargar",
 		"emptyDocument": "Documento vacío",
@@ -541,7 +542,9 @@
 		"zipReady": "ZIP listo — descarga iniciada",
 		"zipDownloadFailed": "Error al descargar el ZIP",
 		"preparingZipArchive": "Preparando archivo ZIP",
-		"zipHint": "Esto puede tardar un poco en carpetas grandes"
+		"zipHint": "Esto puede tardar un poco en carpetas grandes",
+		"preparingDownload": "Preparando descarga",
+		"downloadingProgress": "Descargando… {{percent}}%"
 	},
 	"setup": {
 		"title": "Configuración",

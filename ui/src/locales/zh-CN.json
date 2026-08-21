@@ -247,6 +247,7 @@
 		"downloadAndOpen": "下载并打开",
 		"preparingDownload": "正在准备下载",
 		"preparingDownloadHint": "请稍候，文件正在准备中",
+		"downloadingProgress": "正在下载… {{percent}}%",
 		"downloadStarted": "已开始下载",
 		"downloadFailed": "下载失败",
 		"emptyDocument": "空文档",
@@ -541,7 +542,9 @@
 		"zipReady": "ZIP 已就绪 — 下载已开始",
 		"zipDownloadFailed": "ZIP 下载失败",
 		"preparingZipArchive": "正在准备 ZIP 压缩包",
-		"zipHint": "较大的文件夹可能需要一些时间"
+		"zipHint": "较大的文件夹可能需要一些时间",
+		"preparingDownload": "正在准备下载",
+		"downloadingProgress": "正在下载… {{percent}}%"
 	},
 	"setup": {
 		"title": "设置",

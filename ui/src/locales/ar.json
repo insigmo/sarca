@@ -247,6 +247,7 @@
 		"downloadAndOpen": "تنزيل وفتح",
 		"preparingDownload": "جارٍ تحضير التنزيل",
 		"preparingDownloadHint": "يرجى الانتظار أثناء تحضير الملف",
+		"downloadingProgress": "جارٍ التنزيل… {{percent}}%",
 		"downloadStarted": "بدأ التنزيل",
 		"downloadFailed": "فشل التنزيل",
 		"emptyDocument": "مستند فارغ",
@@ -541,7 +542,9 @@
 		"zipReady": "ملف ZIP جاهز — بدأ التنزيل",
 		"zipDownloadFailed": "فشل تنزيل ملف ZIP",
 		"preparingZipArchive": "جارٍ تجهيز أرشيف ZIP",
-		"zipHint": "قد يستغرق هذا بعض الوقت للمجلدات الكبيرة"
+		"zipHint": "قد يستغرق هذا بعض الوقت للمجلدات الكبيرة",
+		"preparingDownload": "جارٍ تحضير التنزيل",
+		"downloadingProgress": "جارٍ التنزيل… {{percent}}%"
 	},
 	"setup": {
 		"title": "الإعداد",

@@ -1356,7 +1356,11 @@ const Files = () => {
 				clipboardCapture('cut')
 				return
 			case 'KeyV':
-				if (!browseMode()) return
+				// Only claim Ctrl+V when we actually have something to paste —
+				// an empty in-app clipboard must let the keydown through so the
+				// browser's native `paste` event still fires (that is how files
+				// copied in the OS file manager reach us).
+				if (!browseMode() || !fileClipboard()) return
 				e.preventDefault()
 				clipboardPaste()
 				return
@@ -1365,8 +1369,34 @@ const Files = () => {
 		}
 	}
 
+	/**
+	 * OS-clipboard paste: files copied in the desktop file manager, not
+	 * anything routed through our own copy/cut/paste above (that path never
+	 * reaches here — the keydown handler already consumes Ctrl+V whenever the
+	 * in-app clipboard has something in it).
+	 * @param {ClipboardEvent} event
+	 */
+	const onWindowPaste = (event) => {
+		const dt = event.clipboardData
+		if (!browseMode() || !dt) return
+		const target = /** @type {HTMLElement | null} */ (event.target)
+		if (target?.closest?.('input, textarea, [contenteditable="true"]')) return
+		// Decide and cancel synchronously. `filesFromDataTransfer` awaits the
+		// directory walk, and by the time it resolves the event is no longer
+		// cancelable — a preventDefault in that callback silently does nothing.
+		const hasFiles =
+			(dt.files?.length ?? 0) > 0 ||
+			Array.from(dt.items || []).some((item) => item.kind === 'file')
+		if (!hasFiles) return
+		event.preventDefault()
+		filesFromDataTransfer(dt).then((entries) => {
+			if (entries.length) uploadEntries(entries, routerFolderPath())
+		})
+	}
+
 	onMount(() => {
 		window.addEventListener('keydown', onFilesKeyDown, true)
+		window.addEventListener('paste', onWindowPaste)
 
 		/** Debounced so rapid consecutive completes share one list refetch. */
 		let refreshTimer = 0
@@ -1440,6 +1470,7 @@ const Files = () => {
 	})
 	onCleanup(() => {
 		window.removeEventListener('keydown', onFilesKeyDown, true)
+		window.removeEventListener('paste', onWindowPaste)
 	})
 
 	onCleanup(() => {
@@ -1656,6 +1687,17 @@ const Files = () => {
 		}
 	}
 
+	// Some engines (notably the Linux WebKitGTK webview Tauri embeds) only
+	// arm the drop target once `dragenter`'s default has been prevented —
+	// without this, `dragover`'s preventDefault alone is not enough and
+	// `drop` never fires at all.
+	const onCanvasDragEnter = (event) => {
+		if (!browseMode()) return
+		const dt = event.dataTransfer
+		if (!dt || hasSarcaDrag(dt) || !hasFileDrag(dt)) return
+		event.preventDefault()
+	}
+
 	const onCanvasDragOver = (event) => {
 		if (!browseMode()) return
 		const dt = event.dataTransfer
@@ -1682,6 +1724,35 @@ const Files = () => {
 		const entries = await filesFromDataTransfer(dt)
 		await uploadEntries(entries, routerFolderPath())
 	}
+
+	/**
+	 * A drop our own handlers don't own (sidebar, header, a dialog backdrop)
+	 * must still not be allowed to fall through to the browser's default
+	 * action, which for a dropped file is to navigate the webview to it —
+	 * replacing the whole app with a blob: URL. `dragover` and `drop` both
+	 * need the guard: preventing only one leaves the other free to navigate.
+	 * @param {Event} event
+	 */
+	const isOutsideDropTarget = (event) => {
+		const target = /** @type {HTMLElement | null} */ (event.target)
+		return !target?.closest?.('.files-canvas, .files-breadcrumb__crumb')
+	}
+
+	onMount(() => {
+		const onDocumentDragOver = (event) => {
+			if (isOutsideDropTarget(event)) event.preventDefault()
+		}
+		const onDocumentDrop = (event) => {
+			if (isOutsideDropTarget(event)) event.preventDefault()
+		}
+		document.addEventListener('dragover', onDocumentDragOver)
+		document.addEventListener('drop', onDocumentDrop)
+
+		onCleanup(() => {
+			document.removeEventListener('dragover', onDocumentDragOver)
+			document.removeEventListener('drop', onDocumentDrop)
+		})
+	})
 
 	/**
 	 * @param {string} destPath
@@ -2062,6 +2133,7 @@ const Files = () => {
 							'files-canvas--marquee': Boolean(marqueeBox()),
 						}}
 						onMouseDown={onCanvasMouseDown}
+						onDragEnter={onCanvasDragEnter}
 						onDragOver={onCanvasDragOver}
 						onDragLeave={onCanvasDragLeave}
 						onDrop={onCanvasDrop}

@@ -73,7 +73,7 @@ const isLetterboxClick = (el, clientX, clientY) => {
  * @property {(file: import("../api").FSElement) => void} [onNavigate]
  * @property {(path: string) => string} [resolveInlineUrl] Override authenticated inline URL (public shares)
  * @property {(path: string) => string} [resolvePreviewUrl] Override authenticated preview URL (public shares)
- * @property {(path: string) => Promise<Blob>} [resolveDownload] Override authenticated download (public shares)
+ * @property {(path: string, onProgress?: (progress: import("../api").DownloadProgress) => void) => Promise<Blob>} [resolveDownload] Override authenticated download (public shares)
  */
 
 /**
@@ -86,6 +86,8 @@ const FileViewer = (props) => {
 	const [loading, setLoading] = createSignal(false)
 	const [firstChunkLoading, setFirstChunkLoading] = createSignal(false)
 	const [isDownloading, setIsDownloading] = createSignal(false)
+	/** @type {[import('solid-js').Accessor<import('../api').DownloadProgress | null>, any]} */
+	const [downloadProgress, setDownloadProgress] = createSignal(null)
 	const [error, setError] = createSignal(null)
 	const [textContent, setTextContent] = createSignal('')
 	const [docxHtml, setDocxHtml] = createSignal('')
@@ -282,10 +284,16 @@ const FileViewer = (props) => {
 		}
 	}
 
-	const downloadBlobFor = (path) =>
+	/**
+	 * `onProgress` is optional on purpose: the document/text loaders below want
+	 * the bytes and nothing else, while the download button wants a bar.
+	 * @param {string} path
+	 * @param {(progress: import('../api').DownloadProgress) => void} [onProgress]
+	 */
+	const downloadBlobFor = (path, onProgress) =>
 		props.resolveDownload
-			? props.resolveDownload(path)
-			: API.files.download(props.storageId, path)
+			? props.resolveDownload(path, onProgress)
+			: API.files.downloadWithProgress(props.storageId, path, onProgress)
 
 	createEffect(() => {
 		if (!props.open || !props.file?.is_file || !props.storageId) return
@@ -664,8 +672,16 @@ const FileViewer = (props) => {
 	const downloadFile = async () => {
 		if (!props.file || isDownloading()) return
 		try {
+			// The "preparing download" overlay covers the player and eats
+			// input, so a still-playing video/audio track would keep running
+			// behind a modal the user can no longer reach to pause.
+			if (mediaEl && !mediaEl.paused) {
+				silentBufferKick = false
+				mediaEl.pause()
+				setPlaying(false)
+			}
 			setIsDownloading(true)
-			const blob = await downloadBlobFor(props.file.path)
+			const blob = await downloadBlobFor(props.file.path, setDownloadProgress)
 			const href = URL.createObjectURL(blob)
 			const a = Object.assign(document.createElement('a'), {
 				href,
@@ -682,6 +698,7 @@ const FileViewer = (props) => {
 			addAlert(t('viewer.downloadFailed'), 'error')
 		} finally {
 			setIsDownloading(false)
+			setDownloadProgress(null)
 		}
 	}
 
@@ -1247,13 +1264,32 @@ const FileViewer = (props) => {
 
 					<Show when={isDownloading()}>
 						<div class="download-preparing" role="status" aria-live="polite">
-							<div class="download-preparing__text">
-								{t('viewer.preparingDownload')}
-								<LoadingDots />
-							</div>
-							<div class="download-preparing__hint">
-								{t('viewer.preparingDownloadHint')}
-							</div>
+							<Show
+								when={downloadProgress()?.total}
+								fallback={
+									<>
+										<div class="download-preparing__text">
+											{t('viewer.preparingDownload')}
+											<LoadingDots />
+										</div>
+										<div class="download-preparing__hint">
+											{t('viewer.preparingDownloadHint')}
+										</div>
+									</>
+								}
+							>
+								<div class="download-preparing__text">
+									{t('viewer.downloadingProgress', {
+										percent: Math.round(downloadProgress().percent),
+									})}
+								</div>
+								<div class="download-preparing__bar">
+									<div
+										class="download-preparing__bar-fill"
+										style={{ transform: `scaleX(${downloadProgress().percent / 100})` }}
+									/>
+								</div>
+							</Show>
 						</div>
 					</Show>
 				</div>

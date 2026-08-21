@@ -377,8 +377,7 @@ a.default-link:hover {
 .auth-brand img {
 	width: 64px;
 	height: 64px;
-	border-radius: 20px;
-	box-shadow: 0 12px 32px rgba(0, 120, 212, 0.22);
+	object-fit: contain;
 }
 
 .auth-brand p {
@@ -735,6 +734,7 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 .files-sidebar__item--icon-only {
 	flex: 0 0 auto;
 	width: 36px;
+	height: 36px;
 	justify-content: center;
 	padding-inline: 0;
 }
@@ -1255,7 +1255,7 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 }
 
 .settings-nav {
-	width: 168px;
+	width: 200px;
 	flex-shrink: 0;
 	display: flex;
 	flex-direction: column;
@@ -1329,6 +1329,7 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	font-weight: 700;
 	line-height: 1.15;
 	color: inherit;
+	overflow-wrap: anywhere;
 }
 
 .settings-nav__desc {
@@ -1339,6 +1340,7 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
+	overflow-wrap: anywhere;
 }
 
 .settings-nav__item:hover {
@@ -1489,6 +1491,7 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	flex-direction: column;
 	align-items: flex-start;
 	gap: 2px;
+	min-width: 0;
 	padding: 10px 12px;
 	border-radius: 12px;
 	border: 1px solid var(--sarca-border);
@@ -1503,12 +1506,14 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 .access-type-option__label {
 	font-size: 0.95rem;
 	font-weight: 700;
+	overflow-wrap: anywhere;
 }
 
 .access-type-option__hint {
 	font-size: 0.72rem;
 	color: var(--sarca-ink-soft);
 	font-weight: 500;
+	overflow-wrap: anywhere;
 }
 
 .access-type-option--r.access-type-option--active {
@@ -2918,6 +2923,37 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	font-size: 0.85rem;
 	opacity: 0.72;
 	max-width: 280px;
+}
+
+.download-preparing__bar {
+	width: 220px;
+	max-width: 60vw;
+	height: 6px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.2);
+	overflow: hidden;
+}
+
+/*
+ * Scaled, not resized: the overlay above it carries a `backdrop-filter`, and a
+ * layout invalidation inside a blurred subtree makes the compositor redo the
+ * blur on every progress tick. `transform` stays off the layout path entirely.
+ * No `border-radius` here — the track already clips the ends with its own
+ * radius plus `overflow: hidden`, and a scaled radius would smear anyway.
+ */
+.download-preparing__bar-fill {
+	width: 100%;
+	height: 100%;
+	background: #fff;
+	transform: scaleX(0);
+	transform-origin: left center;
+	transition: transform 0.15s ease;
+}
+
+/* Arabic sets `dir="rtl"` on <html>; the bar has to grow from the same edge
+   the text starts at, and `transform-origin` does not follow direction. */
+[dir='rtl'] .download-preparing__bar-fill {
+	transform-origin: right center;
 }
 
 /* —— File viewer / media player (true fullscreen via Portal → body) —— */

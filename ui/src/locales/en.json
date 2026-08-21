@@ -247,6 +247,7 @@
 		"downloadAndOpen": "Download & open",
 		"preparingDownload": "Preparing download",
 		"preparingDownloadHint": "Please wait while the file is prepared",
+		"downloadingProgress": "Downloading… {{percent}}%",
 		"downloadStarted": "Download started",
 		"downloadFailed": "Download failed",
 		"emptyDocument": "Empty document",
@@ -541,7 +542,9 @@
 		"zipReady": "ZIP ready — download started",
 		"zipDownloadFailed": "ZIP download failed",
 		"preparingZipArchive": "Preparing ZIP archive",
-		"zipHint": "This may take a while for large folders"
+		"zipHint": "This may take a while for large folders",
+		"preparingDownload": "Preparing download",
+		"downloadingProgress": "Downloading… {{percent}}%"
 	},
 	"setup": {
 		"title": "Setup",

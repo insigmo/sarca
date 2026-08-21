@@ -221,13 +221,12 @@ const SidebarNav = (props) => {
 					</button>
 					<button
 						type="button"
-						class="files-sidebar__item"
+						class="files-sidebar__item files-sidebar__item--icon-only"
 						aria-label={t('sidebar.settings')}
 						title={t('sidebar.settings')}
 						onClick={props.onOpenSettings}
 					>
 						<FluentIcon name="settings" size={20} />
-						<span class="files-sidebar__label">{t('sidebar.settings')}</span>
 					</button>
 				</div>
 				<MenuMUI
