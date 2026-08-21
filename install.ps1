@@ -211,6 +211,7 @@ function Write-OrMergeEnv {
         TELEGRAM_API_BASE_URL = "https://api.telegram.org"
         TELEGRAM_RATE_LIMIT = "60"
         TELEGRAM_CHUNK_SIZE_MB = "20"
+        TELEGRAM_PROXY_URL = ""
         WORK_DIR = $workUnix
         SQLITE_PATH = "$workUnix/sarca.sqlite"
         TLS_HOSTNAME = ""
