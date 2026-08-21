@@ -11,10 +11,12 @@ VERSION="${SARCA_VERSION:-}" # e.g. v0.0.8; empty = latest
 
 usage() {
   cat <<EOF
-Usage: install.sh [--docker] [--version vX.Y.Z] [--prefix DIR]
+Usage: install.sh [--docker] [--version vX.Y.Z] [--prefix DIR] [--proxy]
 
   (default)  Download the matching release archive and install binary + UI
   --docker   Download compose.yml + sarca.conf into ./sarca (or \$PREFIX)
+  --proxy    Offer to configure a Telegram API proxy even outside Russia
+             (auto-offered there; elsewhere only with this flag)
 
 Env:
   SARCA_REPO     GitHub repo (default: ${REPO})
@@ -25,11 +27,13 @@ EOF
 }
 
 MODE=binary
+FORCE_PROXY_PROMPT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --docker) MODE=docker; shift ;;
     --version) VERSION="$2"; shift 2 ;;
     --prefix) PREFIX="$2"; shift 2 ;;
+    --proxy) FORCE_PROXY_PROMPT=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown arg: $1" >&2; usage; exit 1 ;;
   esac
@@ -57,10 +61,7 @@ detect_asset() {
     darwin)
       case "$arch" in
         arm64) echo "sarca_macos_arm64.tar.gz" ;;
-        x86_64)
-          echo "macOS Intel (amd64) builds are not published. Use Docker, or an Apple Silicon Mac." >&2
-          exit 1
-          ;;
+        x86_64) echo "sarca_macos_amd64.tar.gz" ;;
         *) echo "Unsupported macOS arch: $arch" >&2; exit 1 ;;
       esac
       ;;
@@ -175,6 +176,23 @@ detect_external_ip() {
       echo "${ip}"
       return 0
     fi
+  done
+  echo ""
+}
+
+# Best-effort 2-letter ISO country code for this host's public IP (empty if
+# undetectable). Used only to decide whether to offer the Telegram proxy
+# prompt automatically; a failure here never blocks install.
+detect_country() {
+  local cc url
+  for url in "https://ipapi.co/country/" "https://ifconfig.co/country-iso" "https://ipinfo.io/country"; do
+    cc="$(curl -fsSL --max-time 3 "${url}" 2>/dev/null | tr -d '[:space:]' || true)"
+    case "${cc}" in
+      [A-Za-z][A-Za-z])
+        echo "${cc}" | tr '[:lower:]' '[:upper:]'
+        return 0
+        ;;
+    esac
   done
   echo ""
 }
@@ -343,6 +361,56 @@ configure_tls() {
   echo "Set TLS_HOSTNAME=${hostname}"
 }
 
+# Prompt for a Telegram API proxy URL when it looks like it might be needed
+# (detected country RU) or when explicitly requested via --proxy. Skipped
+# quietly otherwise — most installs have no reason to route Telegram traffic
+# anywhere special, and this must never block a normal install on a prompt
+# nobody asked for.
+configure_proxy() {
+  local env_file="$1"
+  local existing country proxy_url
+
+  existing="$(env_get_value "${env_file}" TELEGRAM_PROXY_URL)"
+  if [ -n "${existing}" ]; then
+    echo "TELEGRAM_PROXY_URL already set — skipping prompt"
+    return 0
+  fi
+
+  country="$(detect_country)"
+  if [ "${country}" != "RU" ] && [ "${FORCE_PROXY_PROMPT:-0}" != "1" ]; then
+    echo "Skipping Telegram proxy setup (re-run with --proxy to configure one)"
+    return 0
+  fi
+
+  echo
+  echo "Telegram proxy"
+  if [ "${country}" = "RU" ]; then
+    echo "Direct access to api.telegram.org is frequently throttled in Russia,"
+    echo "which can make uploads and downloads slow to start or stall."
+  fi
+  echo "You can route Telegram API traffic through a proxy. The TLS session to"
+  echo "api.telegram.org stays end to end: the proxy sees only the destination"
+  echo "host and the traffic volume, never bot tokens or file contents."
+  echo "Accepted: http://, https://, socks5://, socks5h:// (optionally"
+  echo "user:pass@host:port). socks5h is preferred over socks5 since it"
+  echo "resolves DNS at the proxy instead of locally."
+
+  while :; do
+    proxy_url="$(read_tty "TELEGRAM_PROXY_URL (blank to skip): ")"
+    if [ -z "${proxy_url}" ]; then
+      echo "Skipping Telegram proxy"
+      return 0
+    fi
+    case "${proxy_url}" in
+      http://*|https://*|socks5://*|socks5h://*) break ;;
+      *) echo "Must start with http://, https://, socks5://, or socks5h://" >&2 ;;
+    esac
+  done
+
+  env_set_key "${env_file}" TELEGRAM_PROXY_URL "${proxy_url}"
+  echo "Set TELEGRAM_PROXY_URL"
+}
+
 conf_https_port() {
   local env_file="$1"
   local addr port
@@ -378,6 +446,7 @@ write_or_merge_conf() {
     "TELEGRAM_API_BASE_URL=https://api.telegram.org" \
     "TELEGRAM_RATE_LIMIT=60" \
     "TELEGRAM_CHUNK_SIZE_MB=20" \
+    "TELEGRAM_PROXY_URL=" \
     "WORK_DIR=${dest}/work" \
     "SQLITE_PATH=${dest}/work/sarca.sqlite" \
     "HTTPS_ADDR=0.0.0.0:443" \
@@ -497,6 +566,7 @@ install_binary() {
   write_or_merge_conf "${PREFIX}"
   configure_interactive "${PREFIX}/sarca.conf"
   configure_tls "${PREFIX}/sarca.conf"
+  configure_proxy "${PREFIX}/sarca.conf"
 
   wrapper="${BIN_DIR}/sarca"
   cat >"${wrapper}" <<EOF
@@ -571,6 +641,7 @@ install_docker() {
 
   configure_interactive "${dest}/sarca.conf"
   configure_tls "${dest}/sarca.conf"
+  configure_proxy "${dest}/sarca.conf"
 
   # Legacy: older compose.yml mounted sarca-entrypoint from the host.
   rm -f "${dest}/docker/sarca-entrypoint.sh"

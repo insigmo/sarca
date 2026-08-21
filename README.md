@@ -41,6 +41,7 @@ Latest release assets ([releases/latest](https://github.com/insigmo/sarca/releas
 | Linux x86_64        | [`.deb`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_linux_amd64.deb)            |
 | Linux aarch64       | [`.deb`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_linux_arm64.deb)            |
 | macOS Apple Silicon | [`.dmg`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_macos_arm64.dmg)            |
+| macOS Intel         | [`.dmg`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_macos_amd64.dmg)            |
 | Windows x86_64      | [installer](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_windows_amd64-setup.exe) |
 | Windows ARM64       | [installer](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_windows_arm64-setup.exe) |
 | Android arm64       | [`.apk`](https://github.com/insigmo/sarca/releases/latest/download/sarca_client_android_arm64.apk)          |
@@ -52,7 +53,7 @@ The iOS job in CI is disabled (`if: false` in `client.yml`).
 
 ## Grab rock, install servers
 
-**Linux / macOS (Apple Silicon)**
+**Linux / macOS**
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash
