@@ -70,6 +70,8 @@ const FSListItem = (props) => {
 	const [isShareDialogOpened, setIsShareDialogOpened] = createSignal(false)
 	const [thumbUrl, setThumbUrl] = createSignal(null)
 	const [isDownloading, setIsDownloading] = createSignal(false)
+	/** @type {[import('solid-js').Accessor<import('../api').DownloadProgress | null>, any]} */
+	const [downloadProgress, setDownloadProgress] = createSignal(null)
 	const { addAlert } = alertStore
 	const navigate = useNavigate()
 	const params = useParams()
@@ -285,7 +287,11 @@ const FSListItem = (props) => {
 
 		setIsDownloading(true)
 		try {
-			const blob = await API.files.download(params.id, path)
+			const blob = await API.files.downloadWithProgress(
+				params.id,
+				path,
+				setDownloadProgress,
+			)
 			const href = URL.createObjectURL(blob)
 			const filename = isFile
 				? props.fsElement.name
@@ -307,6 +313,7 @@ const FSListItem = (props) => {
 			console.error(err)
 		} finally {
 			setIsDownloading(false)
+			setDownloadProgress(null)
 		}
 	}
 
@@ -841,13 +848,32 @@ const FSListItem = (props) => {
 			<Show when={isDownloading()}>
 				<Portal mount={document.body}>
 					<div class="download-preparing" role="status" aria-live="polite">
-						<div class="download-preparing__text">
-							{props.fsElement.is_file ? t('viewer.preparingDownload') : t('viewer.preparingZip')}
-							<LoadingDots />
-						</div>
-						<div class="download-preparing__hint">
-							{t('viewer.preparingLargeFolderHint')}
-						</div>
+						<Show
+							when={downloadProgress()?.total}
+							fallback={
+								<>
+									<div class="download-preparing__text">
+										{props.fsElement.is_file ? t('viewer.preparingDownload') : t('viewer.preparingZip')}
+										<LoadingDots />
+									</div>
+									<div class="download-preparing__hint">
+										{t('viewer.preparingLargeFolderHint')}
+									</div>
+								</>
+							}
+						>
+							<div class="download-preparing__text">
+								{t('viewer.downloadingProgress', {
+									percent: Math.round(downloadProgress().percent),
+								})}
+							</div>
+							<div class="download-preparing__bar">
+								<div
+									class="download-preparing__bar-fill"
+									style={{ transform: `scaleX(${downloadProgress().percent / 100})` }}
+								/>
+							</div>
+						</Show>
 					</div>
 				</Portal>
 			</Show>

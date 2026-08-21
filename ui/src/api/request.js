@@ -182,6 +182,10 @@ const apiRequest = async (
 			const text = await response.text()
 			const err = new Error(text)
 			err.status = response.status
+			// Telegram rate-limit budget exhausted (e.g. thumb fetches, `files.rs`
+			// `Retry-After: 5`) — callers that back off need the server's own
+			// number instead of guessing.
+			err.retryAfter = Number(response.headers.get('Retry-After')) || undefined
 			throw err
 		}
 

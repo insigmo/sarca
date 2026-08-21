@@ -11,6 +11,7 @@ import { Portal } from 'solid-js/web'
 import Button from '@suid/material/Button'
 import CircularProgress from '@suid/material/CircularProgress'
 import CssBaseline from '@suid/material/CssBaseline'
+import IconButton from '@suid/material/IconButton'
 import Stack from '@suid/material/Stack'
 import TextField from '@suid/material/TextField'
 import Typography from '@suid/material/Typography'
@@ -27,9 +28,23 @@ import { convertSize } from '../../common/size_converter'
 import { loadThumb } from '../../common/previewLoader'
 import FileTypeIcon from '../../components/FileTypeIcon'
 import FileViewer from '../../components/FileViewer'
+import FluentIcon from '../../components/FluentIcon'
 import { alertStore } from '../../components/AlertStack'
 import AppIcon from '../../components/AppIcon'
 import LoadingDots from '../../components/LoadingDots'
+
+const SHARE_VIEW_MODE_KEY = 'sarca.shareViewMode'
+
+/** @returns {'list' | 'tiles'} */
+const readStoredShareViewMode = () => {
+	try {
+		const v = localStorage.getItem(SHARE_VIEW_MODE_KEY)
+		if (v === 'list' || v === 'tiles') return v
+	} catch {
+		/* ignore */
+	}
+	return 'list'
+}
 
 /**
  * Guest-facing public share page at `/s/:token`.
@@ -53,7 +68,17 @@ const PublicShare = () => {
 	/** @type {[import('solid-js').Accessor<import('../../api').FSElement[]>, any]} */
 	const [children, setChildren] = createSignal([])
 	const [treeLoading, setTreeLoading] = createSignal(false)
-	const [zipDownloading, setZipDownloading] = createSignal(false)
+	/** Shared busy state for all three download paths below — only one guest
+	 *  download realistically runs at a time, so one overlay covers all of them. */
+	const [downloading, setDownloading] = createSignal(false)
+	/** Whether the in-flight download is a folder ZIP — picks the right
+	 *  indeterminate copy (a ZIP has no `Content-Length` until the server
+	 *  finishes building it, so it never gets the determinate bar). */
+	const [downloadIsZip, setDownloadIsZip] = createSignal(false)
+	/** @type {[import('solid-js').Accessor<import('../../api').DownloadProgress | null>, any]} */
+	const [downloadProgress, setDownloadProgress] = createSignal(null)
+	/** @type {[import('solid-js').Accessor<'list' | 'tiles'>, any]} */
+	const [viewMode, setViewMode] = createSignal(readStoredShareViewMode())
 	/** @type {[import('solid-js').Accessor<import('../../api').FSElement | null>, any]} */
 	const [viewerFile, setViewerFile] = createSignal(null)
 	/** Thumb object URLs by path */
@@ -209,6 +234,36 @@ const PublicShare = () => {
 		loadTree(rel)
 	}
 
+	const setAndPersistViewMode = (mode) => {
+		setViewMode(mode)
+		try {
+			localStorage.setItem(SHARE_VIEW_MODE_KEY, mode)
+		} catch {
+			/* ignore */
+		}
+	}
+
+	const sizeLabel = (el) => {
+		if (!el.is_file) return t('viewer.kindFolder')
+		const size = Number(el.size)
+		if (!Number.isFinite(size) || size < 0) return '—'
+		return convertSize(size)
+	}
+
+	const mtimeLabel = (el) => {
+		const raw = el.mtime
+		if (raw == null || raw === '') return ''
+		const d = new Date(typeof raw === 'number' && raw < 1e12 ? raw * 1000 : raw)
+		if (Number.isNaN(d.getTime())) return ''
+		return d.toLocaleString(undefined, {
+			year: 'numeric',
+			month: 'short',
+			day: 'numeric',
+			hour: '2-digit',
+			minute: '2-digit',
+		})
+	}
+
 	const openChild = (el) => {
 		if (!el.is_file) {
 			const next = String(el.path || '').replace(/\/$/, '')
@@ -219,14 +274,21 @@ const PublicShare = () => {
 	}
 
 	const downloadChild = async (el) => {
+		if (downloading()) return
+		const isFile = el.is_file
+		setDownloading(true)
+		setDownloadIsZip(!isFile)
 		try {
-			const isFile = el.is_file
 			const path = isFile
 				? el.path
 				: el.path.endsWith('/')
 					? el.path
 					: `${el.path}/`
-			const blob = await API.publicShares.downloadPublicShare(token(), path)
+			const blob = await API.publicShares.downloadPublicShareWithProgress(
+				token(),
+				path,
+				setDownloadProgress,
+			)
 			const href = URL.createObjectURL(blob)
 			const a = Object.assign(document.createElement('a'), {
 				href,
@@ -241,14 +303,21 @@ const PublicShare = () => {
 		} catch (err) {
 			console.error(err)
 			addAlert(err.message || t('publicShare.downloadFailed'), 'error')
+		} finally {
+			setDownloading(false)
+			setDownloadProgress(null)
 		}
 	}
 
 	const downloadZip = async () => {
-		if (zipDownloading()) return
-		setZipDownloading(true)
+		if (downloading()) return
+		setDownloading(true)
+		setDownloadIsZip(true)
 		try {
-			const blob = await API.publicShares.downloadPublicShareZip(token())
+			const blob = await API.publicShares.downloadPublicShareZipWithProgress(
+				token(),
+				setDownloadProgress,
+			)
 			const href = URL.createObjectURL(blob)
 			const name = meta()?.name || 'shared'
 			const a = Object.assign(document.createElement('a'), {
@@ -265,13 +334,21 @@ const PublicShare = () => {
 			console.error(err)
 			addAlert(err.message || t('publicShare.zipDownloadFailed'), 'error')
 		} finally {
-			setZipDownloading(false)
+			setDownloading(false)
+			setDownloadProgress(null)
 		}
 	}
 
 	const downloadSharedFile = async () => {
+		if (downloading()) return
+		setDownloading(true)
+		setDownloadIsZip(false)
 		try {
-			const blob = await API.publicShares.downloadPublicShare(token(), '')
+			const blob = await API.publicShares.downloadPublicShareWithProgress(
+				token(),
+				'',
+				setDownloadProgress,
+			)
 			const href = URL.createObjectURL(blob)
 			const a = Object.assign(document.createElement('a'), {
 				href,
@@ -286,6 +363,9 @@ const PublicShare = () => {
 		} catch (err) {
 			console.error(err)
 			addAlert(err.message || t('publicShare.downloadFailed'), 'error')
+		} finally {
+			setDownloading(false)
+			setDownloadProgress(null)
 		}
 	}
 
@@ -308,8 +388,12 @@ const PublicShare = () => {
 	const resolvePreviewUrl = (path) =>
 		API.publicShares.getPublicPreviewUrl(token(), path || '')
 
-	const resolveDownload = (path) =>
-		API.publicShares.downloadPublicShare(token(), path || '')
+	const resolveDownload = (path, onProgress) =>
+		API.publicShares.downloadPublicShareWithProgress(
+			token(),
+			path || '',
+			onProgress,
+		)
 
 	return (
 		<>
@@ -416,6 +500,7 @@ const PublicShare = () => {
 										variant="contained"
 										color="secondary"
 										startIcon={<DownloadIcon />}
+										disabled={downloading()}
 										onClick={downloadSharedFile}
 									>
 										{t('publicShare.download')}
@@ -462,15 +547,57 @@ const PublicShare = () => {
 										</For>
 									</Breadcrumbs>
 								</div>
-								<Button
-									variant="contained"
-									color="secondary"
-									startIcon={<FolderZipIcon />}
-									disabled={zipDownloading()}
-									onClick={downloadZip}
-								>
-									{zipDownloading() ? t('publicShare.preparingZip') : t('publicShare.downloadZip')}
-								</Button>
+								<Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+									<div
+										class="files-view-toggle"
+										role="group"
+										aria-label={t('files.viewModeGroup')}
+									>
+										<IconButton
+											size="small"
+											class="files-view-toggle__btn"
+											classList={{
+												'files-view-toggle__btn--active':
+													viewMode() === 'list',
+											}}
+											aria-label={t('files.listView')}
+											aria-pressed={viewMode() === 'list'}
+											onClick={() => setAndPersistViewMode('list')}
+										>
+											<FluentIcon
+												name={viewMode() === 'list' ? 'listFilled' : 'list'}
+												size={18}
+											/>
+										</IconButton>
+										<IconButton
+											size="small"
+											class="files-view-toggle__btn"
+											classList={{
+												'files-view-toggle__btn--active':
+													viewMode() === 'tiles',
+											}}
+											aria-label={t('files.tilesView')}
+											aria-pressed={viewMode() === 'tiles'}
+											onClick={() => setAndPersistViewMode('tiles')}
+										>
+											<FluentIcon
+												name={viewMode() === 'tiles' ? 'gridFilled' : 'grid'}
+												size={18}
+											/>
+										</IconButton>
+									</div>
+									<Button
+										variant="contained"
+										color="secondary"
+										startIcon={<FolderZipIcon />}
+										disabled={downloading()}
+										onClick={downloadZip}
+									>
+										{downloading() && downloadIsZip()
+											? t('publicShare.preparingZip')
+											: t('publicShare.downloadZip')}
+									</Button>
+								</Stack>
 							</Stack>
 
 							<Show when={treeLoading()}>
@@ -480,7 +607,11 @@ const PublicShare = () => {
 							</Show>
 
 							<Show when={!treeLoading()}>
-								<div class="files-canvas" style={{ 'min-height': '200px' }}>
+								<div
+									class="files-canvas"
+									classList={{ 'files-canvas--list': viewMode() === 'list' }}
+									style={{ 'min-height': '200px' }}
+								>
 									<Show
 										when={children().length}
 										fallback={
@@ -492,50 +623,106 @@ const PublicShare = () => {
 											</div>
 										}
 									>
-										<div class="files-grid">
-											<For each={children()}>
-												{(el) => (
-													<div
-														class="fs-grid-item"
-														role="button"
-														tabIndex={0}
-														onClick={() => openChild(el)}
-														onKeyDown={(e) => {
-															if (e.key === 'Enter' || e.key === ' ') {
-																e.preventDefault()
-																openChild(el)
-															}
-														}}
-													>
-														<div class="fs-grid-item__more">
-															<Button
-																size="small"
-																aria-label={t('publicShare.download')}
-																onClick={(e) => {
-																	e.stopPropagation()
-																	downloadChild(el)
+										<Show
+											when={viewMode() === 'list'}
+											fallback={
+												<div class="files-grid">
+													<For each={children()}>
+														{(el) => (
+															<div
+																class="fs-grid-item"
+																role="button"
+																tabIndex={0}
+																onClick={() => openChild(el)}
+																onKeyDown={(e) => {
+																	if (e.key === 'Enter' || e.key === ' ') {
+																		e.preventDefault()
+																		openChild(el)
+																	}
 																}}
-																sx={{ minWidth: 0, p: 0.5 }}
 															>
-																<DownloadIcon fontSize="small" />
-															</Button>
-														</div>
-														<FileTypeIcon
-															name={el.name}
-															isFile={el.is_file}
-															thumbUrl={thumbs()[el.path]}
-															size={64}
-														/>
+																<div class="fs-grid-item__more">
+																	<Button
+																		size="small"
+																		aria-label={t('publicShare.download')}
+																		onClick={(e) => {
+																			e.stopPropagation()
+																			downloadChild(el)
+																		}}
+																		sx={{ minWidth: 0, p: 0.5 }}
+																	>
+																		<DownloadIcon fontSize="small" />
+																	</Button>
+																</div>
+																<FileTypeIcon
+																	name={el.name}
+																	isFile={el.is_file}
+																	thumbUrl={thumbs()[el.path]}
+																	size={64}
+																/>
+																<div
+																	class="fs-grid-item__name"
+																	title={el.name}
+																>
+																	{el.name}
+																</div>
+															</div>
+														)}
+													</For>
+												</div>
+											}
+										>
+											<div class="files-list">
+												<For each={children()}>
+													{(el) => (
 														<div
-															class="fs-grid-item__name"
-															title={el.name}
+															class="fs-list-item"
+															role="button"
+															tabIndex={0}
+															onClick={() => openChild(el)}
+															onKeyDown={(e) => {
+																if (e.key === 'Enter' || e.key === ' ') {
+																	e.preventDefault()
+																	openChild(el)
+																}
+															}}
 														>
-															{el.name}
+															<FileTypeIcon
+																name={el.name}
+																isFile={el.is_file}
+																thumbUrl={thumbs()[el.path]}
+																size={40}
+															/>
+															<div class="fs-list-item__body">
+																<div class="fs-list-item__name" title={el.name}>
+																	{el.name}
+																</div>
+																<div class="fs-list-item__meta">
+																	<span>{sizeLabel(el)}</span>
+																	<Show when={mtimeLabel(el)}>
+																		<span class="fs-list-item__dot">·</span>
+																		<span>{mtimeLabel(el)}</span>
+																	</Show>
+																</div>
+															</div>
+															<div class="fs-list-item__actions">
+																<IconButton
+																	size="small"
+																	aria-label={t('publicShare.download')}
+																	title={t('publicShare.download')}
+																	onClick={(e) => {
+																		e.stopPropagation()
+																		downloadChild(el)
+																	}}
+																>
+																	<FluentIcon name="arrowDownload" size={18} />
+																</IconButton>
+															</div>
 														</div>
-													</div>
-												)}
-											</For>
-										</div>
+													)}
+												</For>
+											</div>
+										</Show>
 									</Show>
 								</div>
 							</Show>
@@ -562,16 +749,39 @@ const PublicShare = () => {
 				onNavigate={(file) => setViewerFile(file)}
 			/>
 
-			<Show when={zipDownloading()}>
+			<Show when={downloading()}>
 				<Portal mount={document.body}>
 					<div class="download-preparing" role="status" aria-live="polite">
-						<div class="download-preparing__text">
-							{t('publicShare.preparingZipArchive')}
-							<LoadingDots />
-						</div>
-						<div class="download-preparing__hint">
-							{t('publicShare.zipHint')}
-						</div>
+						<Show
+							when={downloadProgress()?.total}
+							fallback={
+								<>
+									<div class="download-preparing__text">
+										{downloadIsZip()
+											? t('publicShare.preparingZipArchive')
+											: t('publicShare.preparingDownload')}
+										<LoadingDots />
+									</div>
+									<Show when={downloadIsZip()}>
+										<div class="download-preparing__hint">
+											{t('publicShare.zipHint')}
+										</div>
+									</Show>
+								</>
+							}
+						>
+							<div class="download-preparing__text">
+								{t('publicShare.downloadingProgress', {
+									percent: Math.round(downloadProgress().percent),
+								})}
+							</div>
+							<div class="download-preparing__bar">
+								<div
+									class="download-preparing__bar-fill"
+									style={{ transform: `scaleX(${downloadProgress().percent / 100})` }}
+								/>
+							</div>
+						</Show>
 					</div>
 				</Portal>
 			</Show>

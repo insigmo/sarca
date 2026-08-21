@@ -247,6 +247,7 @@
 		"downloadAndOpen": "Скачать и открыть",
 		"preparingDownload": "Подготовка к скачиванию",
 		"preparingDownloadHint": "Подождите, пока файл подготавливается",
+		"downloadingProgress": "Скачивание… {{percent}}%",
 		"downloadStarted": "Скачивание началось",
 		"downloadFailed": "Не удалось скачать файл",
 		"emptyDocument": "Пустой документ",
@@ -541,7 +542,9 @@
 		"zipReady": "ZIP готов — скачивание начато",
 		"zipDownloadFailed": "Не удалось скачать ZIP",
 		"preparingZipArchive": "Подготовка ZIP-архива",
-		"zipHint": "Это может занять некоторое время для больших папок"
+		"zipHint": "Это может занять некоторое время для больших папок",
+		"preparingDownload": "Подготовка к скачиванию",
+		"downloadingProgress": "Скачивание… {{percent}}%"
 	},
 	"setup": {
 		"title": "Настройка",
