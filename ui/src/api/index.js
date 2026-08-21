@@ -9,6 +9,7 @@ import apiRequest, {
 import { alertStore } from '../components/AlertStack'
 import { makeThumbBlob } from '../common/thumbMaker'
 import { putCachedThumb } from '../common/previewCache'
+import { createRafBatcher } from '../common/rafBatch'
 
 /////////////////////////////////////////////////////////////
 ////  USERS
@@ -612,6 +613,88 @@ const download = async (storage_id, path) => {
 }
 
 /**
+ * @typedef {Object} DownloadProgress
+ * @property {number} received Bytes received so far.
+ * @property {number | null} total Bytes total, or `null` when the response
+ *   never revealed one — a folder ZIP has no `Content-Length` until the
+ *   server finishes building it.
+ * @property {number | null} percent 0-100, or `null` when `total` is `null`.
+ */
+
+/**
+ * Pump a streamed `Response` body, reporting progress as bytes arrive, and
+ * resolve with the assembled Blob. Falls back to a plain `response.blob()`
+ * when the runtime has no streaming body reader (no progress, same result).
+ * @param {Response} response
+ * @param {(progress: DownloadProgress) => void} [onProgress] Throttled to
+ *   at most once per animation frame — a raw per-chunk callback would
+ *   otherwise fire far faster than the UI can usefully redraw.
+ * @returns {Promise<Blob>}
+ */
+const consumeResponseWithProgress = async (response, onProgress) => {
+	const reader = response.body?.getReader?.()
+	if (!reader) {
+		return await response.blob()
+	}
+
+	const contentLength = Number(response.headers.get('Content-Length'))
+	const total =
+		Number.isFinite(contentLength) && contentLength > 0 ? contentLength : null
+	const contentType = response.headers.get('Content-Type') || undefined
+
+	const batcher = onProgress ? createRafBatcher(onProgress) : null
+	/** @type {Uint8Array[]} */
+	const chunks = []
+	let received = 0
+
+	try {
+		while (true) {
+			const { done, value } = await reader.read()
+			if (done) break
+			if (!value) continue
+			chunks.push(value)
+			received += value.byteLength
+			batcher?.schedule({
+				received,
+				total,
+				percent: total ? Math.min(100, (received / total) * 100) : null,
+			})
+		}
+	} finally {
+		// Drop any frame still pending — a stale event after the blob is
+		// already handed back would report progress for a download that,
+		// as far as the caller is concerned, no longer exists.
+		batcher?.cancel()
+	}
+
+	return new Blob(chunks, contentType ? { type: contentType } : undefined)
+}
+
+/**
+ * Same download as `download`, but reports progress as bytes arrive instead
+ * of buffering silently behind `response.blob()` — the difference between an
+ * indeterminate spinner and a real bar on a multi-GB file.
+ * @param {string} storage_id
+ * @param {string} path
+ * @param {(progress: DownloadProgress) => void} [onProgress]
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<Blob>}
+ */
+const downloadWithProgress = async (storage_id, path, onProgress, signal) => {
+	const response = await apiRequest(
+		`/storages/${storage_id}/files/download/${encodeFilePath(path)}`,
+		'get',
+		getAuthToken(),
+		undefined,
+		true,
+		false,
+		false,
+		signal,
+	)
+	return await consumeResponseWithProgress(response, onProgress)
+}
+
+/**
  * Encode each path segment for use in a files API URL.
  * Preserves a trailing slash so folder downloads hit the ZIP path.
  * @param {string} path
@@ -1126,6 +1209,30 @@ const downloadPublicShare = async (token, relPath = '') => {
 
 /**
  * @param {string} token
+ * @param {string} [relPath]
+ * @param {(progress: DownloadProgress) => void} [onProgress]
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<Blob>}
+ */
+const downloadPublicShareWithProgress = async (
+	token,
+	relPath = '',
+	onProgress,
+	signal,
+) => {
+	const response = await publicApiRequest(
+		publicShareFilePath(token, 'download', relPath),
+		'get',
+		undefined,
+		true,
+		true,
+		signal,
+	)
+	return await consumeResponseWithProgress(response, onProgress)
+}
+
+/**
+ * @param {string} token
  * @returns {Promise<Blob>}
  */
 const downloadPublicShareZip = async (token) => {
@@ -1137,6 +1244,27 @@ const downloadPublicShareZip = async (token) => {
 		true,
 	)
 	return await response.blob()
+}
+
+/**
+ * A folder ZIP has no `Content-Length` until the server finishes building
+ * it — `onProgress` keeps reporting `total: null` (stay on the indeterminate
+ * "preparing" copy) until bytes actually start arriving.
+ * @param {string} token
+ * @param {(progress: DownloadProgress) => void} [onProgress]
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<Blob>}
+ */
+const downloadPublicShareZipWithProgress = async (token, onProgress, signal) => {
+	const response = await publicApiRequest(
+		`/public/shares/${encodeURIComponent(token)}/download_zip`,
+		'get',
+		undefined,
+		true,
+		true,
+		signal,
+	)
+	return await consumeResponseWithProgress(response, onProgress)
 }
 
 /**
@@ -1415,6 +1543,7 @@ const API = {
 		getFSLayer,
 		getFileInfo,
 		download,
+		downloadWithProgress,
 		getInlineMediaUrl,
 		getPreviewUrl,
 		thumb,
@@ -1448,7 +1577,9 @@ const API = {
 		unlockPublicShare,
 		getPublicShareTree,
 		downloadPublicShare,
+		downloadPublicShareWithProgress,
 		downloadPublicShareZip,
+		downloadPublicShareZipWithProgress,
 		thumbPublicShare,
 		getPublicInlineMediaUrl,
 		getPublicPreviewUrl,
