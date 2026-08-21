@@ -377,7 +377,6 @@ a.default-link:hover {
 .auth-brand img {
 	width: 64px;
 	height: 64px;
-	object-fit: contain;
 }
 
 .auth-brand p {

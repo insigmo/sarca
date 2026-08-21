@@ -93,9 +93,6 @@ jobs:
             os: macos-14
             rust_target: aarch64-apple-darwin
             bundles: dmg
-          # Cross-compiled on the arm64 macos-14 runner (the Intel-hosted
-          # macos-13 runner is retired; the Apple Silicon SDK builds the
-          # x86_64 slice fine).
           - name: macos-amd64
             os: macos-14
             rust_target: x86_64-apple-darwin
