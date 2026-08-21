@@ -26,6 +26,7 @@ import { t } from '../../common/i18n'
 import API from '../../api'
 import { convertSize } from '../../common/size_converter'
 import { loadThumb } from '../../common/previewLoader'
+import { clearThumbQueue } from '../../common/thumbQueue'
 import FileTypeIcon from '../../components/FileTypeIcon'
 import FileViewer from '../../components/FileViewer'
 import FluentIcon from '../../components/FluentIcon'
@@ -230,6 +231,10 @@ const PublicShare = () => {
 	})
 
 	const goToRel = (rel) => {
+		// Same reason the Files page does this on navigation: the thumbs of the
+		// folder being left would otherwise sit on the browser's per-origin
+		// connections while the new folder's listing waits behind them.
+		clearThumbQueue()
 		setBrowsePath(rel)
 		loadTree(rel)
 	}

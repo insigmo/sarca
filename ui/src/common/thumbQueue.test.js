@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest'
 import {
 	enqueueThumbFetch,
 	clearThumbQueue,
+	pauseThumbQueue,
+	resumeThumbQueue,
 	thumbQueueStats,
 	THUMB_MAX_CONCURRENT,
 } from './thumbQueue'
@@ -206,5 +208,64 @@ describe('thumbQueue', () => {
 		clearThumbQueue()
 		for (const release of releases) release()
 		await Promise.allSettled([flaky, ...hanging])
+	})
+
+	it('hands out no new slots while paused, and catches up on resume', async () => {
+		let started = 0
+		/** @type {Array<() => void>} */
+		const releases = []
+		const task = () =>
+			enqueueThumbFetch(
+				() =>
+					new Promise((resolve) => {
+						started += 1
+						releases.push(() => resolve('ok'))
+					}),
+			)
+
+		pauseThumbQueue()
+		const tasks = Array.from({ length: 3 }, task)
+		await new Promise((resolve) => setTimeout(resolve, 0))
+
+		// Queued, not running: a video is holding the connections.
+		expect(started).toBe(0)
+		expect(thumbQueueStats().active).toBe(0)
+		expect(thumbQueueStats().waiting).toBe(3)
+
+		resumeThumbQueue()
+		await new Promise((resolve) => setTimeout(resolve, 0))
+		expect(started).toBe(3)
+		expect(thumbQueueStats().waiting).toBe(0)
+
+		for (const release of releases) release()
+		await Promise.allSettled(tasks)
+	})
+
+	it('needs every hold released before it resumes', async () => {
+		let started = 0
+		/** @type {Array<() => void>} */
+		const releases = []
+
+		pauseThumbQueue()
+		pauseThumbQueue()
+		const task = enqueueThumbFetch(
+			() =>
+				new Promise((resolve) => {
+					started += 1
+					releases.push(() => resolve('ok'))
+				}),
+		)
+
+		resumeThumbQueue()
+		await new Promise((resolve) => setTimeout(resolve, 0))
+		// One holder let go, the other did not — still held.
+		expect(started).toBe(0)
+
+		resumeThumbQueue()
+		await new Promise((resolve) => setTimeout(resolve, 0))
+		expect(started).toBe(1)
+
+		for (const release of releases) release()
+		await task
 	})
 })

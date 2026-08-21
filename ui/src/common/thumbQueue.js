@@ -84,8 +84,36 @@ function settle(entry, fn, value) {
 	fn(value)
 }
 
+/**
+ * How many callers currently want the queue held. Counted rather than a
+ * boolean so two overlapping holders (a viewer opening while another is still
+ * tearing down) cannot have the first release re-open the tap for both.
+ */
+let pauseHolds = 0
+
+/**
+ * Stop handing out new slots until the matching {@link resumeThumbQueue}.
+ *
+ * A browser allows about six connections per origin, and a folder of photos
+ * keeps all six busy with thumb fetches that each cost a Telegram round trip.
+ * A video opened over that has to queue its Range requests behind them, which
+ * is felt as playback taking seconds to start. Pausing (rather than aborting)
+ * frees the connections as the in-flight fetches land, without blanking the
+ * tiles behind the viewer or throwing away work already paid for.
+ */
+export function pauseThumbQueue() {
+	pauseHolds += 1
+}
+
+/** Release one hold, and fill any free slots once the last one is gone. */
+export function resumeThumbQueue() {
+	if (pauseHolds === 0) return
+	pauseHolds -= 1
+	if (pauseHolds === 0) pump()
+}
+
 function pump() {
-	while (active < MAX_CONCURRENT && waiters.length) {
+	while (pauseHolds === 0 && active < MAX_CONCURRENT && waiters.length) {
 		const entry = waiters.shift()
 		if (!entry) break
 		if (entry.ac.signal.aborted) {

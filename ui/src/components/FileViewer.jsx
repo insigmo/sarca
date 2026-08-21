@@ -26,6 +26,7 @@ import {
 import { convertSize } from '../common/size_converter'
 import { nativeClientStore } from '../common/nativeClient'
 import { loadPreview } from '../common/previewLoader'
+import { pauseThumbQueue, resumeThumbQueue } from '../common/thumbQueue'
 import { acquireObjectUrl, releaseObjectUrl } from '../common/objectUrlPool'
 import { sanitizeHtml } from '../common/sanitizeHtml'
 import { t } from '../common/i18n'
@@ -645,6 +646,18 @@ const FileViewer = (props) => {
 		for (const f of candidates) {
 			if (fileKind(f.name, f.is_file) === 'image') prefetchPreview(f.path)
 		}
+	})
+
+	// A grid of photos keeps the browser's ~6 connections per origin busy with
+	// thumb fetches, each costing a Telegram round trip, and a video opened over
+	// that has to queue its Range requests behind them — which the user
+	// experiences as playback taking seconds to start. Hold the thumb queue for
+	// as long as a video is open; the tiles behind the player are covered
+	// anyway, and pausing (rather than aborting) keeps their pending work.
+	createEffect(() => {
+		if (!props.open || kind() !== 'video') return
+		pauseThumbQueue()
+		onCleanup(resumeThumbQueue)
 	})
 
 	// Start first-chunk buffering as soon as the video element has a URL —
