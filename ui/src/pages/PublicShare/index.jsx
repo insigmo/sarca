@@ -204,6 +204,13 @@ const PublicShare = () => {
 			await API.publicShares.unlockPublicShare(token(), password().trim())
 			setPassword('')
 			await loadMeta()
+			// The unlock succeeded, so the share is still asking for a password
+			// only because the cookie it just handed out never came back — a
+			// blocked or dropped cookie, not a wrong password. Saying so beats
+			// bouncing the guest around the same form with no explanation.
+			if (phase() === 'password') {
+				setUnlockError(t('publicShare.unlockFailed'))
+			}
 		} catch (err) {
 			console.error(err)
 			setUnlockError(
