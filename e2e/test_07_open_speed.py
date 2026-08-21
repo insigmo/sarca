@@ -106,6 +106,40 @@ def test_video_first_bytes_arrive_within_one_second(
     )
 
 
+def test_public_share_video_first_bytes_arrive_within_one_second(
+    sarca: SarcaClient, storage: str, slow_telegram
+) -> None:
+    """Twin of the authenticated video-start test, for a public share link.
+
+    `PublicSharesRouter::download_inner` funnels into the exact same
+    `FilesRouter::download_file` the authenticated path above uses, so this
+    is expected to pass — it exists as a regression guard and to rule the
+    server *out* as the cause of the reported slow-start bug on share links.
+    Unauthenticated on purpose: `sarca.http` carries no Authorization header,
+    matching what an actual visitor's browser sends.
+    """
+    data = media.blob(3 * 1024 * 1024, seed=22)
+    assert sarca.upload(storage, "share-clip.mp4", data, content_type="video/mp4").ok
+    sarca.wait_for_file(storage, "share-clip.mp4")
+
+    r = sarca.post(f"/api/storages/{storage}/shares", json={"path": "share-clip.mp4"})
+    assert r.status_code == 201, r.text
+    token = r.json()["token"]
+
+    slow_telegram.reset_calls()
+    response, elapsed = timed(
+        sarca.http.get,
+        f"/api/public/shares/{token}/inline",
+        headers={"Range": "bytes=0-65535"},
+    )
+    assert response.status_code == 206
+    assert len(response.content) == 65536
+    assert elapsed < OPEN_BUDGET_SECONDS, (
+        f"public-share first video range took {elapsed:.2f}s (>{OPEN_BUDGET_SECONDS}s); "
+        f"calls: {slow_telegram.stats()['calls']}"
+    )
+
+
 def test_document_download_starts_within_one_second(
     sarca: SarcaClient, storage: str, slow_telegram
 ) -> None:
