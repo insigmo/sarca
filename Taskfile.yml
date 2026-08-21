@@ -168,6 +168,20 @@ tasks:
         {{.ENSURE_PNPM}}
         cd "{{.ROOT_DIR}}/client"
         $PNPM exec tauri icon "{{.ROOT_DIR}}/logo.svg"
+      # Must run after `tauri icon`, which writes Android's foreground layer
+      # edge to edge. The adaptive-icon mask only shows the central ~66% of
+      # that layer, so a full-bleed goose loses its head and feet; this
+      # rewrites just the ic_launcher* PNGs with the padding the mask needs.
+      # Without this step every icon regeneration silently reintroduces the crop.
+      - |
+        cd "{{.ROOT_DIR}}"
+        if python3 -c 'import PIL' 2>/dev/null; then
+          python3 scripts/gen-android-icons.py
+        else
+          [ -d .venv ] || python3 -m venv .venv
+          .venv/bin/pip install -q pillow
+          .venv/bin/python scripts/gen-android-icons.py
+        fi
       - echo "icons regenerated from {{.ROOT_DIR}}/logo.svg"
 
   client:install:
@@ -254,6 +268,15 @@ tasks:
       - |
         {{.ENSURE_PNPM}}
         $PNPM tauri build --target aarch64-apple-darwin
+
+  client:build:macos-amd64:
+    desc: Build macOS Intel client (cross-compiled from an Apple Silicon Mac)
+    deps: [client:install]
+    dir: client
+    cmds:
+      - |
+        {{.ENSURE_PNPM}}
+        $PNPM tauri build --target x86_64-apple-darwin
 
   client:android:
     desc: Build Android APK (requires Android SDK + tauri android init)
