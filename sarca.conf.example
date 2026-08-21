@@ -31,5 +31,20 @@ TELEGRAM_API_BASE_URL=https://api.telegram.org
 TELEGRAM_RATE_LIMIT=60
 TELEGRAM_CHUNK_SIZE_MB=20
 
+# Route all Telegram Bot API traffic (uploads, downloads, setup calls) through
+# a proxy. Useful when api.telegram.org is blocked or slow to reach directly.
+# Accepted schemes: http://, https://, socks5://, socks5h://. Leave blank to
+# connect directly (default).
+# Prefer socks5h over socks5: socks5h resolves the destination hostname at the
+# proxy, so your local resolver never sees api.telegram.org; socks5 resolves
+# it locally first and only tunnels the connection afterwards.
+# Sarca's TLS session to api.telegram.org is always negotiated end to end —
+# certificate verification is never disabled — so the proxy cannot read bot
+# tokens or file contents either way. An http:// proxy sees only a
+# "CONNECT api.telegram.org:443"; a socks5/socks5h proxy sees only an opaque
+# byte stream. Either way it learns the destination host and traffic volume,
+# nothing more.
+# TELEGRAM_PROXY_URL=socks5h://127.0.0.1:1080
+
 WORK_DIR=/work
 SQLITE_PATH=/work/sarca.sqlite

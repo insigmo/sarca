@@ -106,7 +106,8 @@ thiserror = "1.0.50"
 uuid = { version = "1.5.0", features = ["serde", "v4"] }
 
 # HTTP client (без native-tls — ок для musl)
-reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "stream", "rustls-tls"] }
+# "socks" enables routing Telegram API calls through TELEGRAM_PROXY_URL (socks5/socks5h).
+reqwest = { version = "0.12", default-features = false, features = ["multipart", "json", "stream", "rustls-tls", "socks"] }
 percent-encoding = "2.3"
 
 # thumbnails

@@ -396,6 +396,7 @@ mod tests {
             secret_key: "test-secret".into(),
             telegram_api_base_url: "https://api.telegram.org".into(),
             telegram_rate_limit: 60,
+            telegram_proxy_url: None,
             upload_concurrency: 4,
             media_concurrency: 16,
             work_dir: String::new(),
