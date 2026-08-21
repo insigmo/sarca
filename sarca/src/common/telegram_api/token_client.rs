@@ -2,15 +2,18 @@
 
 use serde_json::json;
 
-use super::schemas::{
-    BotMe,
-    ChatInfo,
-    DetectedChat,
-    GetChatBodySchema,
-    GetChatMemberBodySchema,
-    GetMeBodySchema,
-    GetUpdatesBodySchema,
-    chats_from_updates,
+use super::{
+    http_client,
+    schemas::{
+        BotMe,
+        ChatInfo,
+        DetectedChat,
+        GetChatBodySchema,
+        GetChatMemberBodySchema,
+        GetMeBodySchema,
+        GetUpdatesBodySchema,
+        chats_from_updates,
+    },
 };
 use crate::{
     common::types::ChatId,
@@ -28,19 +31,18 @@ impl TelegramTokenClient {
     /// a sticky restrictive list silently drops `my_chat_member`.
     const ALLOWED_UPDATES: &'static str = r#"["message","edited_message","channel_post","edited_channel_post","my_chat_member","chat_member"]"#;
     /// Non-long-poll calls (getMe, deleteWebhook, getChat, getChatMember) must never
-    /// hang forever: if the host can't reach Telegram (blocked/unroutable), a plain
-    /// `reqwest::Client::new()` request with no timeout waits indefinitely — the
-    /// setup wizard's "Validate bot" then stays stuck disabled with no error.
+    /// hang forever: if the host can't reach Telegram (blocked/unroutable), a client
+    /// with no total-request timeout waits indefinitely — the setup wizard's
+    /// "Validate bot" then stays stuck disabled with no error.
     const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
     pub fn new(base_url: impl Into<String>, token: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             token: token.into().trim().to_owned(),
-            client: reqwest::Client::builder()
-                .timeout(Self::DEFAULT_TIMEOUT)
-                .build()
-                .unwrap_or_default(),
+            // Shared pooled client (also honors TELEGRAM_PROXY_URL); keeps this
+            // client's own bounded timeout rather than the unbounded default.
+            client: http_client::client_with_timeout(Self::DEFAULT_TIMEOUT),
         }
     }
 

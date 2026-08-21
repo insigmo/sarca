@@ -33,6 +33,10 @@ pub struct Config {
 
     pub telegram_api_base_url: String,
     pub telegram_rate_limit: u16,
+    /// Route Telegram Bot API traffic through this proxy (`http`, `https`,
+    /// `socks5`, or `socks5h`). `None` connects directly. See
+    /// `common::telegram_api::http_client` for how this is applied.
+    pub telegram_proxy_url: Option<String>,
 
     /// How many files the storage manager relays to Telegram at once. Chunks of a
     /// single file always stay sequential, and the per-token send gate still paces
@@ -118,6 +122,9 @@ impl Config {
             "https://api.telegram.org".to_owned(),
         )?;
         let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 60u16)?;
+        let telegram_proxy_url = Self::get_optional_env_var("TELEGRAM_PROXY_URL")
+            .map(Self::validate_telegram_proxy_url)
+            .transpose()?;
         // 4 is the useful ceiling: beyond that the per-token send gate, not the
         // manager, is what everyone queues behind. 0 would wedge the manager.
         let upload_concurrency =
@@ -159,6 +166,7 @@ impl Config {
             secret_key,
             telegram_api_base_url,
             telegram_rate_limit,
+            telegram_proxy_url,
             upload_concurrency,
             media_concurrency,
             work_dir,
@@ -204,6 +212,17 @@ impl Config {
             _ => None,
         }
     }
+
+    /// Reject `TELEGRAM_PROXY_URL` schemes the shared HTTP client can't act
+    /// on, at startup, instead of silently connecting directly the first time
+    /// a Telegram call is made.
+    fn validate_telegram_proxy_url(value: String) -> SarcaResult<String> {
+        if crate::common::telegram_api::http_client::has_allowed_scheme(&value) {
+            Ok(value)
+        } else {
+            Err(SarcaError::EnvVarParsingError("TELEGRAM_PROXY_URL".to_owned()))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +245,7 @@ mod tests {
             "SECRET_KEY",
             "TELEGRAM_API_BASE_URL",
             "TELEGRAM_RATE_LIMIT",
+            "TELEGRAM_PROXY_URL",
             "TELEGRAM_CHUNK_SIZE_MB",
             "WORK_DIR",
             "HTTPS_ADDR",
@@ -308,6 +328,52 @@ mod tests {
         let cfg = Config::new().unwrap();
         let id = cfg.tls_identity().unwrap().unwrap();
         assert!(matches!(id, TlsIdentity::Ip(_)));
+        clear_required();
+    }
+
+    #[test]
+    fn telegram_proxy_url_unset_is_none() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        let cfg = Config::new().unwrap();
+        assert!(cfg.telegram_proxy_url.is_none());
+        clear_required();
+    }
+
+    #[test]
+    fn telegram_proxy_url_blank_is_none() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        env::set_var("TELEGRAM_PROXY_URL", "  ");
+        let cfg = Config::new().unwrap();
+        assert!(cfg.telegram_proxy_url.is_none());
+        clear_required();
+    }
+
+    #[test]
+    fn telegram_proxy_url_accepts_every_documented_scheme() {
+        let _g = ENV_LOCK.lock().unwrap();
+        for scheme in ["http", "https", "socks5", "socks5h"] {
+            clear_required();
+            set_required();
+            let url = format!("{scheme}://proxy.example:1080");
+            env::set_var("TELEGRAM_PROXY_URL", &url);
+            let cfg = Config::new().unwrap();
+            assert_eq!(cfg.telegram_proxy_url.as_deref(), Some(url.as_str()));
+        }
+        clear_required();
+    }
+
+    #[test]
+    fn telegram_proxy_url_rejects_unknown_scheme() {
+        let _g = ENV_LOCK.lock().unwrap();
+        clear_required();
+        set_required();
+        env::set_var("TELEGRAM_PROXY_URL", "ftp://proxy.example:21");
+        let err = Config::new().unwrap_err();
+        assert!(matches!(err, SarcaError::EnvVarParsingError(v) if v == "TELEGRAM_PROXY_URL"));
         clear_required();
     }
 }
