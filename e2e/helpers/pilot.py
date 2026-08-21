@@ -310,6 +310,14 @@ class ClientApp:
             return payload["result"]
         return payload
 
+    #: One `wait` never asks the webview for more than this. tauri-pilot caps a
+    #: single eval at ~2s past the timeout it was given, and a webview busy with
+    #: a cold start (GTK, WebKit, the sync engine's first scan) can miss that
+    #: deadline even though the element is on its way — which turned a slow
+    #: start into "Eval error: eval timed out". Slicing the wait keeps every
+    #: individual eval short, and the loop below owns the real deadline.
+    WAIT_SLICE_MS = 4000
+
     def wait_for(self, selector: str, timeout_ms: int = 15000) -> None:
         # Right after a (re)launch the window exists but the webview can still
         # be on about:blank, with no `document.body` yet. tauri-pilot's own
@@ -319,13 +327,16 @@ class ClientApp:
         deadline = time.monotonic() + timeout_ms / 1000
         while True:
             remaining_ms = max(int((deadline - time.monotonic()) * 1000), 1)
+            slice_ms = min(remaining_ms, self.WAIT_SLICE_MS)
             try:
                 self.run(
-                    "wait", selector, "--timeout", str(remaining_ms), timeout=remaining_ms / 1000 + 10
+                    "wait", selector, "--timeout", str(slice_ms), timeout=slice_ms / 1000 + 10
                 )
                 return
             except PilotError as err:
-                if "MutationObserver" not in str(err) or time.monotonic() >= deadline:
+                text = str(err)
+                transient = "MutationObserver" in text or "timed out" in text
+                if not transient or time.monotonic() >= deadline:
                     raise
                 time.sleep(0.1)
 

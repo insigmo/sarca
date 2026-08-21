@@ -20,7 +20,7 @@ use futures::TryStreamExt;
 use http_body_util::{BodyExt, BodyStream, StreamBody};
 use hyper::{
     body::{Frame, Incoming},
-    header::{HeaderName, HeaderValue, HOST, LOCATION},
+    header::{HeaderName, HeaderValue, HOST, LOCATION, SET_COOKIE},
     service::service_fn,
     Method, Request, Response, StatusCode,
 };
@@ -276,6 +276,12 @@ async fn proxy_request(
                 continue;
             }
         }
+        if name == SET_COOKIE {
+            if let Some(rewritten) = downgrade_cookie_to_loopback(value) {
+                builder = builder.header(name, rewritten);
+                continue;
+            }
+        }
         builder = builder.header(name, value);
     }
 
@@ -284,6 +290,45 @@ async fn proxy_request(
         .map_err(std::io::Error::other)
         .map_ok(Frame::data);
     Ok(builder.body(StreamBody::new(body).boxed())?)
+}
+
+/// Drop `Secure` from a cookie the upstream set over TLS.
+///
+/// The proxy terminates the webview leg on `http://127.0.0.1`, so a cookie
+/// marked `Secure` is thrown away by the webview and every request after the
+/// one that set it looks unauthenticated. That is exactly how a
+/// password-protected share link behaved in the desktop client: `unlock`
+/// answered 204, the cookie never landed, and the page asked for the password
+/// again with nothing to show for it.
+///
+/// Dropping the flag costs nothing here — the only hop that loses it is
+/// loopback, which browsers already treat as a trustworthy origin, and the
+/// upstream leg is still the pinned TLS connection.
+///
+/// `SameSite=None` is only honoured on a `Secure` cookie, so such a cookie is
+/// relaxed to `Lax` rather than being left in a combination the webview would
+/// reject outright. Sarca itself only sets `SameSite=Lax`.
+fn downgrade_cookie_to_loopback(value: &HeaderValue) -> Option<HeaderValue> {
+    let cookie = value.to_str().ok()?;
+    let mut changed = false;
+    let mut attributes = Vec::new();
+    for part in cookie.split(';') {
+        let trimmed = part.trim();
+        if trimmed.eq_ignore_ascii_case("secure") {
+            changed = true;
+            continue;
+        }
+        if trimmed.eq_ignore_ascii_case("samesite=none") {
+            changed = true;
+            attributes.push("SameSite=Lax".to_owned());
+            continue;
+        }
+        attributes.push(trimmed.to_owned());
+    }
+    if !changed {
+        return None;
+    }
+    HeaderValue::from_str(&attributes.join("; ")).ok()
 }
 
 /// Point a redirect at the proxy when it targets the upstream origin.
@@ -384,6 +429,37 @@ mod tests {
     use std::net::TcpListener as StdListener;
 
     use super::*;
+
+    #[test]
+    fn a_secure_cookie_loses_the_flag_on_the_loopback_leg() {
+        let rewritten = downgrade_cookie_to_loopback(&HeaderValue::from_static(
+            "share_unlock_abc=token; Path=/api/public/shares/abc; HttpOnly; SameSite=Lax; \
+             Secure; Max-Age=86400",
+        ))
+        .expect("a Secure cookie has to be rewritten");
+        let cookie = rewritten.to_str().unwrap();
+        assert!(!cookie.to_ascii_lowercase().contains("secure"), "{cookie}");
+        assert!(cookie.contains("HttpOnly"), "{cookie}");
+        assert!(cookie.contains("SameSite=Lax"), "{cookie}");
+        assert!(cookie.contains("Path=/api/public/shares/abc"), "{cookie}");
+        assert!(cookie.starts_with("share_unlock_abc=token"), "{cookie}");
+    }
+
+    #[test]
+    fn a_samesite_none_cookie_is_relaxed_so_it_survives_without_secure() {
+        let rewritten =
+            downgrade_cookie_to_loopback(&HeaderValue::from_static("a=b; SameSite=None; Secure"))
+                .expect("SameSite=None + Secure has to be rewritten");
+        assert_eq!(rewritten.to_str().unwrap(), "a=b; SameSite=Lax");
+    }
+
+    #[test]
+    fn a_plain_cookie_is_forwarded_untouched() {
+        assert!(
+            downgrade_cookie_to_loopback(&HeaderValue::from_static("a=b; Path=/; HttpOnly"))
+                .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn a_restart_reuses_the_recorded_port() {
