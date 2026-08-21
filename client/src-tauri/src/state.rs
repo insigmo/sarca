@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex as StdMutex,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Result;
@@ -154,6 +154,52 @@ pub fn merge_session_tokens(
         cfg.email_verified = v;
     }
     Ok(())
+}
+
+/// Refresh when the access token has under this long left, not only once it
+/// has fully expired — the background loop's poll gap (and the time an
+/// in-flight request takes) would otherwise still leave a window for a
+/// technically-not-yet-expired token to 401 mid-request.
+const ACCESS_TOKEN_REFRESH_SKEW_SECS: u64 = 120;
+
+/// Decode the `exp` (Unix seconds) claim out of a JWT's payload segment
+/// without checking its signature. Safe only because this is always our own
+/// stored access token, never one from an untrusted source: a forged `exp`
+/// could at worst make the client refresh a little early or late.
+fn jwt_exp_unix_secs(token: &str) -> Option<u64> {
+    let payload = token.split('.').nth(1)?;
+    let bytes =
+        base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, payload).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value.get("exp").and_then(serde_json::Value::as_u64)
+}
+
+/// True when `access_token` is empty, unparsable, or expires within
+/// `ACCESS_TOKEN_REFRESH_SKEW_SECS`. An unparsable token (any JWT decode
+/// failure) is treated the same as expired: there is nothing useful to lose
+/// by attempting a refresh, and it self-heals a token that was corrupted on
+/// disk some other way.
+fn access_token_needs_refresh(access_token: &str) -> bool {
+    let token = access_token.trim();
+    if token.is_empty() {
+        return true;
+    }
+    let Some(exp) = jwt_exp_unix_secs(token) else {
+        return true;
+    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    exp <= now.saturating_add(ACCESS_TOKEN_REFRESH_SKEW_SECS)
+}
+
+/// True when an error message names an HTTP 401. Stringly-typed because both
+/// call sites (`create_folder_with_auth_retry`'s API error and
+/// `SarcaApi::refresh`'s own failure text) only ever surface the status this
+/// way, not as a typed error.
+pub fn is_unauthorized(msg: &str) -> bool {
+    msg.contains("401") || msg.to_ascii_lowercase().contains("unauthorized")
 }
 
 /// JS snippet: return `{access_token, refresh_token?, email?, email_verified?}` from
@@ -1075,6 +1121,9 @@ impl AppSyncState {
     pub fn start_background_loop(&self) {
         let engine = self.engine.clone();
         let data_dir = self.data_dir.clone();
+        let server_cfg = self.server.clone();
+        let proxy = self.proxy.clone();
+        let trusted_origin = self.trusted_origin.clone();
         let mut rx = self.shutdown_tx.subscribe();
         let mut wake_rx = self.wake_tx.subscribe();
         let foreground = self.foreground.clone();
@@ -1092,8 +1141,20 @@ impl AppSyncState {
 
             loop {
                 // Pick up tokens written by the webview / sync_now without waiting
-                // for another invoke.
-                let server = load_server_config(&data_dir);
+                // for another invoke, and refresh the access token before it can
+                // 401 a request: the webview's own refresh poll
+                // (`__sarcaWatchSession`) is frozen while the app is
+                // backgrounded, so this is what keeps a long-backgrounded
+                // session's auto-upload alive past ACCESS_TOKEN_EXPIRE_IN_SECS
+                // instead of silently 401ing until the app is reopened.
+                let server = ensure_fresh_session_with(
+                    &data_dir,
+                    &server_cfg,
+                    &proxy,
+                    &trusted_origin,
+                    &engine,
+                )
+                .await;
                 let connected = server.is_connected();
                 if connected {
                     engine
@@ -1161,23 +1222,57 @@ impl AppSyncState {
     }
 
     pub fn server_config_path(&self) -> PathBuf {
-        self.data_dir.join("server.json")
+        server_config_file(&self.data_dir)
     }
 
     pub async fn save_server(&self, cfg: &ServerConfig) -> Result<()> {
-        let json = serde_json::to_string_pretty(cfg)?;
-        write_private(&self.server_config_path(), json.as_bytes())?;
-        // While the UI is served over loopback that origin, not the server's,
-        // is the one the webview speaks from.
-        let origin = self
-            .proxy_origin()
-            .or_else(|| origin_of_base_url(&cfg.base_url));
-        self.set_trusted_origin(origin);
-        *self.server.lock().await = cfg.clone();
-        self.engine
-            .set_credentials(cfg.base_url.clone(), cfg.access_token.clone())
-            .await;
-        Ok(())
+        save_server_with(
+            &self.server_config_path(),
+            &self.server,
+            &self.proxy,
+            &self.trusted_origin,
+            &self.engine,
+            cfg,
+        )
+        .await
+    }
+
+    /// Reload the stored session and refresh the access token when it is
+    /// missing, unparsable, or close to expiring (see
+    /// `ensure_fresh_session_with`). Called proactively — background-loop
+    /// ticks, before injecting a session into the webview at startup,
+    /// `ensure_sync_session` — so a request is never the first thing to
+    /// discover the token went stale. The access token lives
+    /// `ACCESS_TOKEN_EXPIRE_IN_SECS` (30 minutes by default) and the
+    /// webview's own refresh poll (`__sarcaWatchSession`) is frozen while the
+    /// app is backgrounded, so this is what keeps a long-backgrounded
+    /// session's auto-upload alive.
+    pub async fn ensure_fresh_session(&self) -> ServerConfig {
+        ensure_fresh_session_with(
+            &self.data_dir,
+            &self.server,
+            &self.proxy,
+            &self.trusted_origin,
+            &self.engine,
+        )
+        .await
+    }
+
+    /// Force a refresh-token exchange regardless of what the access token's
+    /// `exp` claim says. For a caller that already has stronger evidence than
+    /// `exp` — `create_folder_with_auth_retry`, after an actual 401 —
+    /// `ensure_fresh_session`'s pre-check could wrongly say "still fresh" and
+    /// skip the one thing that would fix it.
+    pub async fn force_refresh_session(&self, cfg: ServerConfig) -> ServerConfig {
+        force_refresh_session_with(
+            &self.data_dir,
+            &self.server,
+            &self.proxy,
+            &self.trusted_origin,
+            &self.engine,
+            cfg,
+        )
+        .await
     }
 
     /// Apply tokens from the remote webview (localStorage) into native sync state.
@@ -1259,6 +1354,127 @@ impl AppSyncState {
     pub fn record_url_history(&self, base_url: &str) -> Vec<String> {
         record_url_history(&self.data_dir, base_url)
     }
+}
+
+/// The guts of [`AppSyncState::save_server`], pulled out to a free function so
+/// `start_background_loop`'s spawned task — which holds clones of individual
+/// `Arc`s rather than `&AppSyncState`, see [`is_foreground_signal`] — can
+/// persist a refreshed session the same way every other caller does.
+async fn save_server_with(
+    server_config_path: &Path,
+    server: &Mutex<ServerConfig>,
+    proxy: &StdMutex<Option<LocalProxy>>,
+    trusted_origin: &StdMutex<Option<String>>,
+    engine: &SyncEngine,
+    cfg: &ServerConfig,
+) -> Result<()> {
+    let json = serde_json::to_string_pretty(cfg)?;
+    write_private(server_config_path, json.as_bytes())?;
+    // While the UI is served over loopback that origin, not the server's, is
+    // the one the webview speaks from.
+    let origin = proxy
+        .lock()
+        .ok()
+        .and_then(|guard| guard.as_ref().map(LocalProxy::origin))
+        .or_else(|| origin_of_base_url(&cfg.base_url));
+    if let Ok(mut guard) = trusted_origin.lock() {
+        *guard = origin;
+    }
+    *server.lock().await = cfg.clone();
+    engine
+        .set_credentials(cfg.base_url.clone(), cfg.access_token.clone())
+        .await;
+    Ok(())
+}
+
+/// Unconditionally exchange the stored refresh token for a new pair,
+/// regardless of what the access token's `exp` claim says. Shared by
+/// [`AppSyncState::force_refresh_session`] (used by
+/// `create_folder_with_auth_retry`, which already has stronger evidence than
+/// `exp` — an actual 401 from the API — that the token is no good) and
+/// `ensure_fresh_session_with`, once its expiry pre-check trips.
+///
+/// A network error returns `cfg` unchanged (logged, not surfaced): a flaky
+/// connection must not look like a dead session. Only an explicit 401 from
+/// `/api/auth/refresh` means the session is genuinely over — and even then
+/// `base_url` (and `email`) are kept, so the caller can prompt to sign back
+/// into the same server instead of losing the connection outright.
+async fn force_refresh_session_with(
+    data_dir: &Path,
+    server: &Mutex<ServerConfig>,
+    proxy: &StdMutex<Option<LocalProxy>>,
+    trusted_origin: &StdMutex<Option<String>>,
+    engine: &SyncEngine,
+    cfg: ServerConfig,
+) -> ServerConfig {
+    if cfg.refresh_token.trim().is_empty() {
+        return cfg;
+    }
+    match SarcaApi::refresh(&cfg.base_url, &cfg.refresh_token).await {
+        Ok(tokens) => {
+            let mut updated = cfg.clone();
+            updated.access_token = tokens.access_token;
+            updated.refresh_token = tokens.refresh_token;
+            updated.email_verified = tokens.email_verified;
+            if let Err(e) = save_server_with(
+                &server_config_file(data_dir),
+                server,
+                proxy,
+                trusted_origin,
+                engine,
+                &updated,
+            )
+            .await
+            {
+                tracing::warn!(error = %e, "could not persist refreshed session");
+                return cfg;
+            }
+            updated
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            if is_unauthorized(&msg) {
+                tracing::warn!("refresh token rejected by server — session is over");
+                let mut expired = cfg.clone();
+                expired.access_token.clear();
+                expired.refresh_token.clear();
+                let _ = save_server_with(
+                    &server_config_file(data_dir),
+                    server,
+                    proxy,
+                    trusted_origin,
+                    engine,
+                    &expired,
+                )
+                .await;
+                expired
+            } else {
+                tracing::debug!(
+                    error = %msg,
+                    "session refresh failed (network) — keeping existing tokens"
+                );
+                cfg
+            }
+        }
+    }
+}
+
+/// Reload the stored session and refresh it when the access token is
+/// missing, unparsable, or close to expiring. See
+/// [`AppSyncState::ensure_fresh_session`] for the `&self` wrapper every
+/// caller but `start_background_loop`'s spawned task uses.
+async fn ensure_fresh_session_with(
+    data_dir: &Path,
+    server: &Mutex<ServerConfig>,
+    proxy: &StdMutex<Option<LocalProxy>>,
+    trusted_origin: &StdMutex<Option<String>>,
+    engine: &SyncEngine,
+) -> ServerConfig {
+    let cfg = load_server_config(data_dir);
+    if cfg.refresh_token.trim().is_empty() || !access_token_needs_refresh(&cfg.access_token) {
+        return cfg;
+    }
+    force_refresh_session_with(data_dir, server, proxy, trusted_origin, engine, cfg).await
 }
 
 /// Origins of the Tauri-bundled shell, as the WebView serializes them in an
@@ -1378,8 +1594,15 @@ pub fn write_proxy_port(data_dir: &Path, port: u16) {
     }
 }
 
+/// Where `ServerConfig` is persisted under a client data dir. Shared by
+/// [`AppSyncState::server_config_path`], `save_server_with` and
+/// `load_server_config` so the filename lives in exactly one place.
+fn server_config_file(data_dir: &Path) -> PathBuf {
+    data_dir.join("server.json")
+}
+
 pub fn load_server_config(data_dir: &Path) -> ServerConfig {
-    let path = data_dir.join("server.json");
+    let path = server_config_file(data_dir);
     fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
@@ -1566,6 +1789,7 @@ pub fn navigate_to_sync_settings(app: &AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// Builds an `AppSyncState` without a real `AppHandle` — every field is
     /// constructible without one except `engine`, which follows the same
@@ -2091,5 +2315,212 @@ mod tests {
         let mut cfg = ServerConfig::default();
         let err = merge_session_tokens(&mut cfg, "tok", None, None, None).unwrap_err();
         assert!(err.to_lowercase().contains("not connected"));
+    }
+
+    /// Builds `header.payload.signature` with a JSON payload of just `{"exp":exp}`
+    /// — enough for `jwt_exp_unix_secs` / `access_token_needs_refresh`, which
+    /// never look at the header or signature segments.
+    fn fake_jwt(exp: u64) -> String {
+        let payload = format!(r#"{{"exp":{exp}}}"#);
+        let encoded = base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            payload.as_bytes(),
+        );
+        format!("header.{encoded}.signature")
+    }
+
+    fn unix_now() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    #[test]
+    fn jwt_exp_unix_secs_reads_the_exp_claim_and_ignores_garbage() {
+        assert_eq!(
+            jwt_exp_unix_secs(&fake_jwt(1_800_000_000)),
+            Some(1_800_000_000)
+        );
+        assert_eq!(jwt_exp_unix_secs("not.a.jwt"), None);
+        assert_eq!(jwt_exp_unix_secs(""), None);
+        assert_eq!(jwt_exp_unix_secs("onlyonepart"), None);
+    }
+
+    #[test]
+    fn access_token_needs_refresh_flags_missing_unparsable_and_soon_expiring() {
+        assert!(access_token_needs_refresh(""));
+        assert!(access_token_needs_refresh("   "));
+        assert!(access_token_needs_refresh("not-a-jwt-at-all"));
+        let now = unix_now();
+        assert!(
+            access_token_needs_refresh(&fake_jwt(now + 10)),
+            "inside the refresh skew window"
+        );
+        assert!(
+            !access_token_needs_refresh(&fake_jwt(now + 3600)),
+            "comfortably fresh"
+        );
+    }
+
+    /// Minimal HTTP/1.1 server that answers exactly one request and reports
+    /// whether it was ever hit, mirroring the hand-rolled listeners
+    /// `sarca-sync`'s own `api.rs` tests use for `SarcaApi`.
+    async fn spawn_refresh_server(
+        status_line: &'static str,
+        body: &'static str,
+    ) -> (std::net::SocketAddr, Arc<std::sync::atomic::AtomicUsize>) {
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let hits_task = hits.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                hits_task.fetch_add(1, Ordering::SeqCst);
+                let mut buf = vec![0u8; 8192];
+                let _ = sock.read(&mut buf).await;
+                let resp = format!(
+                    "HTTP/1.1 {status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+            }
+        });
+        (addr, hits)
+    }
+
+    #[tokio::test]
+    async fn ensure_fresh_session_refreshes_an_expired_token_and_persists_the_new_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let (addr, hits) = spawn_refresh_server(
+            "200 OK",
+            r#"{"access_token":"new-access","refresh_token":"new-refresh","email_verified":true}"#,
+        )
+        .await;
+
+        let state = bare_state(dir.path());
+        let cfg = ServerConfig {
+            base_url: format!("http://{addr}"),
+            access_token: "not-a-jwt".into(), // unparsable ⇒ treated as expired
+            refresh_token: "old-refresh".into(),
+            email: "e@example.com".into(),
+            email_verified: false,
+        };
+        fs::write(
+            state.server_config_path(),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+
+        let updated = state.ensure_fresh_session().await;
+        assert_eq!(updated.access_token, "new-access");
+        assert_eq!(updated.refresh_token, "new-refresh");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "must call /api/auth/refresh exactly once"
+        );
+
+        let persisted: ServerConfig =
+            serde_json::from_str(&fs::read_to_string(state.server_config_path()).unwrap()).unwrap();
+        assert_eq!(persisted.access_token, "new-access");
+        assert_eq!(persisted.refresh_token, "new-refresh");
+    }
+
+    #[tokio::test]
+    async fn ensure_fresh_session_does_not_touch_the_network_for_a_token_that_is_not_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let (addr, hits) = spawn_refresh_server(
+            "200 OK",
+            r#"{"access_token":"should-not-be-used","refresh_token":"r","email_verified":false}"#,
+        )
+        .await;
+
+        let state = bare_state(dir.path());
+        let fresh_token = fake_jwt(unix_now() + 3600);
+        let cfg = ServerConfig {
+            base_url: format!("http://{addr}"),
+            access_token: fresh_token.clone(),
+            refresh_token: "old-refresh".into(),
+            email: "e@example.com".into(),
+            email_verified: false,
+        };
+        fs::write(
+            state.server_config_path(),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+
+        let result = tokio::time::timeout(Duration::from_secs(2), state.ensure_fresh_session())
+            .await
+            .expect("must return promptly with no network call pending");
+        assert_eq!(result.access_token, fresh_token, "token must be untouched");
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "must not call /api/auth/refresh for a token that is not stale"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_fresh_session_on_explicit_401_clears_tokens_but_keeps_base_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let (addr, hits) = spawn_refresh_server("401 Unauthorized", "").await;
+
+        let state = bare_state(dir.path());
+        let cfg = ServerConfig {
+            base_url: format!("http://{addr}"),
+            access_token: "expired".into(),
+            refresh_token: "dead-refresh".into(),
+            email: "e@example.com".into(),
+            email_verified: true,
+        };
+        fs::write(
+            state.server_config_path(),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+
+        let updated = state.ensure_fresh_session().await;
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert!(updated.access_token.is_empty());
+        assert!(updated.refresh_token.is_empty());
+        assert_eq!(
+            updated.base_url, cfg.base_url,
+            "base_url must survive an expired session"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_fresh_session_keeps_the_old_config_on_a_network_error() {
+        let dir = tempfile::tempdir().unwrap();
+        // Bind then drop: the port is very likely still free, so a connect to
+        // it fails fast with "connection refused" instead of hanging — a
+        // stand-in for "server unreachable" that does not need a live socket.
+        let addr = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap()
+        };
+
+        let state = bare_state(dir.path());
+        let cfg = ServerConfig {
+            base_url: format!("http://{addr}"),
+            access_token: "expired".into(),
+            refresh_token: "still-good-refresh".into(),
+            email: "e@example.com".into(),
+            email_verified: true,
+        };
+        fs::write(
+            state.server_config_path(),
+            serde_json::to_string(&cfg).unwrap(),
+        )
+        .unwrap();
+
+        let updated = state.ensure_fresh_session().await;
+        assert_eq!(
+            updated.access_token, "expired",
+            "a network error must keep the old token, not clear it"
+        );
+        assert_eq!(updated.refresh_token, "still-good-refresh");
     }
 }

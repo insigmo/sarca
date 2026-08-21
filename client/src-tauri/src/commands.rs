@@ -21,7 +21,7 @@ use crate::startup::{
     write_device_label_cache,
 };
 use crate::state::{
-    navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding,
+    is_unauthorized, navigate_to_server, navigate_to_shell, navigate_to_sync_settings, new_binding,
     read_webview_session, session_ready_for_sync, write_private, AppSyncState, ClientPrefs,
     ClientPrefsDto, ServerConfig,
 };
@@ -532,7 +532,7 @@ pub async fn disconnect(app: AppHandle, state: State<'_, AppSyncState>) -> Resul
         Err(_) => {
             tracing::warn!("disconnect: sync state busy, forcing teardown");
             client_log::write_line(state.data_dir(), "disconnect: forced (sync state busy)");
-        },
+        }
     }
 
     if let Ok(mut guard) = state.pending_inject.lock() {
@@ -650,7 +650,9 @@ async fn ensure_sync_session(
     state: &AppSyncState,
 ) -> Result<ServerConfig, String> {
     let _ = state.sync_session_from_webview(app).await;
-    let cfg = state.server.lock().await.clone();
+    // Proactively refresh a near-expiry token so the API call this session is
+    // about to back does not have to discover it via a 401 first.
+    let cfg = state.ensure_fresh_session().await;
     if cfg.is_connected() {
         return Ok(cfg);
     }
@@ -679,10 +681,6 @@ async fn ensure_sync_session(
 
 const SESSION_EXPIRED_MSG: &str =
     "Session expired — sign in again so Sync can create remote folders";
-
-fn is_unauthorized(msg: &str) -> bool {
-    msg.contains("401") || msg.to_ascii_lowercase().contains("unauthorized")
-}
 
 /// On 401: re-pull webview tokens silently, retry; then refresh+retry.
 /// Only surface SESSION_EXPIRED_MSG when the webview also has no usable tokens.
@@ -716,20 +714,20 @@ async fn create_folder_with_auth_retry(
     }
 
     if !cfg.refresh_token.trim().is_empty() {
-        match SarcaApi::refresh(&cfg.base_url, &cfg.refresh_token).await {
-            Ok(tokens) => {
-                cfg.access_token = tokens.access_token;
-                cfg.refresh_token = tokens.refresh_token;
-                cfg.email_verified = tokens.email_verified;
-                state.save_server(&cfg).await.map_err(|e| e.to_string())?;
-                return try_create_folder(&cfg, sid, parent, name)
-                    .await
-                    .map_err(|e| e.to_string());
-            }
-            Err(_) => {
-                // Fall through — only expire if webview is also empty.
-            }
+        // Already 401'd once above, so force the exchange through the shared
+        // helper rather than going via ensure_fresh_session's exp pre-check —
+        // a token that still looks fresh by `exp` but was rejected anyway
+        // (clock skew, a rotated secret) must still retry.
+        let previous_access_token = cfg.access_token.clone();
+        cfg = state.force_refresh_session(cfg).await;
+        let refreshed =
+            !cfg.access_token.trim().is_empty() && cfg.access_token != previous_access_token;
+        if refreshed {
+            return try_create_folder(&cfg, sid, parent, name)
+                .await
+                .map_err(|e| e.to_string());
         }
+        // Fall through — only expire if webview is also empty.
     }
 
     let webview_has = read_webview_session(app)
