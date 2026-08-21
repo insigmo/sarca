@@ -16,13 +16,16 @@ use tokio::{
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
-use super::schemas::{
-    ChatInfo,
-    CopyMessageBodySchema,
-    DownloadBodySchema,
-    GetChatBodySchema,
-    UploadBodySchema,
-    UploadOutcome,
+use super::{
+    http_client,
+    schemas::{
+        ChatInfo,
+        CopyMessageBodySchema,
+        DownloadBodySchema,
+        GetChatBodySchema,
+        UploadBodySchema,
+        UploadOutcome,
+    },
 };
 use crate::{
     common::{
@@ -410,7 +413,7 @@ impl<'t> TelegramBotApi<'t> {
             let form = multipart::Form::new()
                 .text("chat_id", chat_id.to_string())
                 .part("document", file_part);
-            reqwest::Client::new().post(&url).multipart(form).send()
+            http_client::client().post(&url).multipart(form).send()
         })
         .await?;
         permit.mark_ok().await;
@@ -533,12 +536,10 @@ impl<'t> TelegramBotApi<'t> {
                 return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
             }
             let form = Self::build_upload_part_form(file_path, req).await?;
-            // Bound connect time; cancel via progress.closed() when the NDJSON client disconnects.
-            let client = reqwest::Client::builder()
-                .connect_timeout(Duration::from_secs(30))
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new());
-            let send_fut = client.post(url).multipart(form).send();
+            // Shared pooled client: connect time is bounded (see http_client),
+            // and cancel is still via progress.closed() when the NDJSON client
+            // disconnects, below.
+            let send_fut = http_client::client().post(url).multipart(form).send();
             let result = if let Some(tx) = req.progress.as_ref() {
                 tokio::select! {
                     r = send_fut => r,
@@ -733,7 +734,7 @@ impl<'t> TelegramBotApi<'t> {
 
         let start = Instant::now();
         let response = Self::send_with_retries("download/getFile", None, || {
-            reqwest::Client::new().get(&url).query(&[("file_id", telegram_file_id)]).send()
+            http_client::client().get(&url).query(&[("file_id", telegram_file_id)]).send()
         })
         .await?;
         let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -779,7 +780,7 @@ impl<'t> TelegramBotApi<'t> {
 
         let start = Instant::now();
         let response = Self::send_with_retries("download/file", None, || {
-            reqwest::Client::new().get(&url).send()
+            http_client::client().get(&url).send()
         })
         .await?;
         let elapsed_ms = start.elapsed().as_millis() as u64;
@@ -833,7 +834,7 @@ impl<'t> TelegramBotApi<'t> {
         let token = self.scheduler.get_token(storage_id).await?;
         let url = self.build_url("", "getFile", &token);
 
-        let body: DownloadBodySchema = reqwest::Client::new()
+        let body: DownloadBodySchema = http_client::client()
             .get(url)
             .query(&[("file_id", telegram_file_id)])
             .send()
@@ -844,7 +845,7 @@ impl<'t> TelegramBotApi<'t> {
 
         let url = self.build_url("file/", &body.result.file_path, &token);
 
-        let response = reqwest::Client::new().get(url).send().await?.error_for_status()?;
+        let response = http_client::client().get(url).send().await?.error_for_status()?;
 
         let stream = response.bytes_stream().map(|res| res.map_err(SarcaError::from));
 
@@ -858,7 +859,7 @@ impl<'t> TelegramBotApi<'t> {
         let masked_url = Self::mask_url(&url);
 
         let response = Self::send_with_retries("getChat", None, || {
-            reqwest::Client::new().get(&url).query(&[("chat_id", chat_id.to_string())]).send()
+            http_client::client().get(&url).query(&[("chat_id", chat_id.to_string())]).send()
         })
         .await?;
 
@@ -914,7 +915,7 @@ impl<'t> TelegramBotApi<'t> {
 
         let permit = SendPermit::acquire(&token).await;
         let response = Self::send_with_retries("copyMessage", Some(&permit), || {
-            reqwest::Client::new()
+            http_client::client()
                 .post(&url)
                 .form(&[
                     ("chat_id", to_chat_id.to_string()),
@@ -980,7 +981,7 @@ impl<'t> TelegramBotApi<'t> {
 
         let permit = SendPermit::acquire(token).await;
         let result = Self::send_with_retries("deleteMessage", Some(&permit), || {
-            reqwest::Client::new()
+            http_client::client()
                 .post(&url)
                 .form(&[("chat_id", chat_id.to_string()), ("message_id", message_id.to_string())])
                 .send()
