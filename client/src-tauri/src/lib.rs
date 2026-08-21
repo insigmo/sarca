@@ -190,7 +190,7 @@ pub fn run() {
             let sync_state = AppSyncState::new(app.handle())?;
             let reconnect = {
                 let cfg = tauri::async_runtime::block_on(sync_state.server.lock()).clone();
-                cfg.is_connected().then_some(cfg)
+                cfg.is_connected()
             };
             app.manage(sync_state);
 
@@ -307,10 +307,17 @@ pub fn run() {
                 });
             }
 
-            if let Some(cfg) = reconnect {
+            if reconnect {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     tokio::time::sleep(Duration::from_millis(250)).await;
+                    let state = handle.state::<AppSyncState>();
+                    // The access token may be long stale by the time the app is
+                    // reopened (it lives ACCESS_TOKEN_EXPIRE_IN_SECS, and the
+                    // webview's own refresh poll cannot run before this point) —
+                    // refresh before injecting it so the webview does not start
+                    // from a dead pair and fall back to a forced re-login.
+                    let cfg = state.ensure_fresh_session().await;
                     let _ = navigate_to_server(&handle, &cfg).await;
                 });
             }
