@@ -104,6 +104,104 @@ tasks:
       - task: down
       - task: up
 
+  docker:buildx:
+    desc: Create/bootstrap the local buildx builder (docker-container driver + QEMU)
+    cmds:
+      - |
+        # Task runs this through its own shell interpreter, so everything here
+        # sticks to builtins — sed/tr/head are not on PATH under plain PowerShell.
+        BUILDER="${SARCA_BUILDER:-sarca-multiarch}"
+        PLATFORMS="{{.PLATFORMS}}"; PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
+        if ! docker buildx inspect "$BUILDER" >/dev/null 2>&1; then
+          docker buildx create --name "$BUILDER" --driver docker-container >/dev/null
+          echo "created buildx builder $BUILDER"
+        fi
+        INSPECT="$(docker buildx inspect "$BUILDER" --bootstrap)"
+        MISSING=""
+        OLD_IFS="$IFS"; IFS=','
+        for p in $PLATFORMS; do
+          case "$INSPECT" in
+            *"$p"*) ;;
+            *) MISSING="$MISSING $p" ;;
+          esac
+        done
+        IFS="$OLD_IFS"
+        if [ -n "$MISSING" ]; then
+          # Docker Desktop ships the emulators; a plain Linux dockerd needs the
+          # binfmt_misc handlers registered first — the same image CI gets from
+          # docker/setup-qemu-action.
+          echo "registering QEMU emulators for:$MISSING"
+          docker run --privileged --rm tonistiigi/binfmt:latest --install all
+          docker buildx inspect "$BUILDER" --bootstrap >/dev/null
+        fi
+        echo "builder $BUILDER ready for $PLATFORMS"
+
+  docker:image:
+    desc: "Build the GHCR image for amd64+arm64 like docker-image.yml (VERSION=v0.0.6 PLATFORMS=linux/arm64 PUSH=true)"
+    deps: [docker:buildx]
+    cmds:
+      - |
+        cd "{{.ROOT_DIR}}"
+        BUILDER="${SARCA_BUILDER:-sarca-multiarch}"
+        # The Dockerfile curls sarca_linux_${arch}.tar.gz off the GitHub release,
+        # so VERSION has to be a published tag (or `latest`) — nothing is compiled
+        # here, this only reproduces the packaging CI does.
+        VERSION="{{.VERSION}}"; VERSION="${VERSION:-latest}"
+        REPO="{{.REPO}}"; REPO="${REPO:-insigmo/sarca}"
+        # GHCR requires lowercase image names
+        IMAGE="{{.IMAGE}}"; IMAGE="${IMAGE:-ghcr.io/${REPO,,}}"
+        PLATFORMS="{{.PLATFORMS}}"; PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
+        PUSH="{{.PUSH}}"; PUSH="${PUSH:-false}"
+        set -- --builder "$BUILDER" --platform "$PLATFORMS" --file docker/Dockerfile
+        set -- "$@" --build-arg "VERSION=$VERSION" --build-arg "GITHUB_REPO=$REPO"
+        set -- "$@" --label "org.opencontainers.image.source=https://github.com/$REPO"
+        set -- "$@" --label "org.opencontainers.image.version=$VERSION"
+        set -- "$@" --label org.opencontainers.image.title=sarca
+        set -- "$@" --tag "$IMAGE:$VERSION" --provenance=false
+        # A multi-arch result cannot enter the local image store, so it stays in
+        # the build cache unless pushed; a single platform is --load'ed so the
+        # image is there to `docker run`.
+        if [ "$PUSH" = "true" ]; then
+          set -- "$@" --push
+        elif [ "$PLATFORMS" = "${PLATFORMS%,*}" ]; then
+          set -- "$@" --load
+        else
+          echo "note: multi-arch build stays in the build cache — pass PUSH=true (docker login ghcr.io first) or a single PLATFORMS to keep the image"
+        fi
+        docker buildx build "$@" .
+        echo "built $IMAGE:$VERSION for $PLATFORMS"
+
+
+  docker:deploy:
+    desc: "Build the image, scp it to the server and restart the stack there (HOST=beta@sarca.qwantone.com VERSION=v0.0.6)"
+    cmds:
+      # A multi-arch build never lands in the local image store, so `docker save`
+      # would have nothing to write — the deploy always builds a single platform,
+      # the server's.
+      - task: docker:image
+        vars:
+          PLATFORMS: '{{.PLATFORMS | default "linux/amd64"}}'
+          VERSION: "{{.VERSION}}"
+          REPO: "{{.REPO}}"
+          IMAGE: "{{.IMAGE}}"
+      - |
+        cd "{{.ROOT_DIR}}"
+        VERSION="{{.VERSION}}"; VERSION="${VERSION:-latest}"
+        REPO="{{.REPO}}"; REPO="${REPO:-insigmo/sarca}"
+        IMAGE="{{.IMAGE}}"; IMAGE="${IMAGE:-ghcr.io/${REPO,,}}"
+        HOST="{{.HOST}}"; HOST="${HOST:-beta@sarca.qwantone.com}"
+        REMOTE_DIR="{{.REMOTE_DIR}}"; REMOTE_DIR="${REMOTE_DIR:-~/git/sarca}"
+        TAR="sarca-image.tar"
+        echo "saving $IMAGE:$VERSION → {{.ROOT_DIR}}/$TAR"
+        docker save "$IMAGE:$VERSION" -o "$TAR"
+        echo "copying $TAR → $HOST:/tmp/$TAR"
+        if ! scp "$TAR" "$HOST:/tmp/$TAR"; then rm -f "$TAR"; exit 1; fi
+        rm -f "$TAR"
+        ssh "$HOST" "docker load -i /tmp/$TAR && rm -f /tmp/$TAR"
+        # $3 is escaped so awk — not the local shell — gets it.
+        ssh "$HOST" "cd ~/git/sarca && git pull && docker compose down && docker compose up -d"
+        echo "deployed $IMAGE:$VERSION → $HOST:$REMOTE_DIR"
+
   db:reset:
     desc: Delete SQLite database file and restart Sarca to recreate schema+superuser
     prompt: Wipe ALL Sarca SQLite data? This cannot be undone.
