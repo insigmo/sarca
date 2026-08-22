@@ -38,6 +38,13 @@ fn focus_main_window(app: &impl Manager<tauri::Wry>) {
 /// debug builds carrying the `pilot` e2e driver: `tauri-pilot` steers the app
 /// through `webview.eval`, which the shipped `script-src 'self'` refuses. A
 /// release build never takes this branch, so the shipped CSP is unchanged.
+///
+/// The same branch gives a pilot build a per-run identifier when
+/// `SARCA_E2E_ID_SUFFIX` is set. The identifier names the single-instance
+/// mutex and the pilot control pipe, so parallel/relaunching GUI tests would
+/// otherwise collide with each other — and with a real Sarca the developer has
+/// running. A normal build never reads the variable, so the shipped
+/// `app.sarca.client` identity is untouched.
 #[allow(unused_mut)]
 fn pilot_context(mut context: tauri::Context) -> tauri::Context {
     #[cfg(all(desktop, debug_assertions, feature = "pilot"))]
@@ -48,6 +55,14 @@ fn pilot_context(mut context: tauri::Context) -> tauri::Context {
                 "script-src".to_owned(),
                 CspDirectiveSources::List(vec!["'self'".to_owned(), "'unsafe-eval'".to_owned()]),
             );
+        }
+        if let Ok(suffix) = std::env::var("SARCA_E2E_ID_SUFFIX") {
+            let suffix = suffix.trim().to_owned();
+            if !suffix.is_empty()
+                && suffix.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            {
+                context.config_mut().identifier = format!("{}.e2e-{suffix}", context.config().identifier);
+            }
         }
     }
     context

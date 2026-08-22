@@ -20,7 +20,8 @@ ROOT = repo_root()
 
 def build_driver() -> Path:
     """Build (once) and return the headless sync driver binary."""
-    binary = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "debug/examples/headless"
+    name = "headless.exe" if os.name == "nt" else "headless"
+    binary = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "debug/examples" / name
     if binary.is_file() and os.environ.get("SARCA_SKIP_BUILD") == "1":
         return binary
     subprocess.run(

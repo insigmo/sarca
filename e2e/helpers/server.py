@@ -10,7 +10,9 @@ import os
 import shutil
 import signal
 import socket
+import stat
 import subprocess
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,6 +20,15 @@ from pathlib import Path
 import httpx
 
 ROOT = Path(__file__).resolve().parents[2]
+
+IS_WINDOWS = os.name == "nt"
+BINARY_NAME = "sarca.exe" if IS_WINDOWS else "sarca"
+
+
+def _rm_readonly(func, path, _exc_info):
+    """shutil.rmtree helper: Windows keeps read-only bits on cargo artifacts."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
 
 
 def repo_root() -> Path:
@@ -46,7 +57,7 @@ def build_binary() -> Path:
         return path
 
     target_dir = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target"))
-    binary = target_dir / "release" / "sarca"
+    binary = target_dir / "release" / BINARY_NAME
     if os.environ.get("SARCA_SKIP_BUILD") == "1" and binary.is_file():
         return binary
 
@@ -148,23 +159,33 @@ class SarcaServer:
             self.acme_port = free_port()
 
         # The server resolves its UI dir next to the binary.
-        target_bin = self.runtime_dir / "sarca"
+        target_bin = self.runtime_dir / BINARY_NAME
         if not target_bin.exists():
             shutil.copy2(binary, target_bin)
             target_bin.chmod(0o755)
         dist = ui_dist()
         ui_link = self.runtime_dir / "ui"
         if dist and not ui_link.exists():
-            ui_link.symlink_to(dist)
+            # Windows has no directory symlinks without developer mode; a
+            # junction is transparent to every filesystem caller.
+            if IS_WINDOWS:
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(ui_link), str(dist)],
+                    check=True,
+                    capture_output=True,
+                )
+            else:
+                ui_link.symlink_to(dist)
 
         log = self.log_path.open("ab")
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
         self.process = subprocess.Popen(
             [str(target_bin)],
             cwd=self.runtime_dir,
             env=self._env(),
             stdout=log,
             stderr=subprocess.STDOUT,
-            start_new_session=True,
+            **({"creationflags": creationflags} if IS_WINDOWS else {"start_new_session": True}),
         )
         if wait:
             self.wait_ready()
@@ -197,11 +218,16 @@ class SarcaServer:
         if not self.process:
             return
         if self.process.poll() is None:
-            os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+            if IS_WINDOWS:
+                # CTRL_BREAK goes to the whole process group created with
+                # CREATE_NEW_PROCESS_GROUP; graceful exit lets SQLite flush.
+                self.process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
             try:
                 self.process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
-                os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                self.process.kill()
                 self.process.wait(timeout=timeout)
         self.process = None
 

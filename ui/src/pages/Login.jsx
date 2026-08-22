@@ -1,4 +1,4 @@
-import { For, createSignal, onMount } from 'solid-js'
+import { For, Show, createSignal, onMount } from 'solid-js'
 import Box from '@suid/material/Box'
 import TextField from '@suid/material/TextField'
 import Button from '@suid/material/Button'
@@ -60,12 +60,34 @@ const LoginLanguageSwitcher = () => {
 const Login = () => {
 	const [store, setStore] = createLocalStore()
 	const navigate = useNavigate()
+	// A native shell that reached the login screen with a remembered server is
+	// still connected at the transport level: offer a way out of that loop.
+	const [showDisconnect, setShowDisconnect] = createSignal(false)
+	const [disconnecting, setDisconnecting] = createSignal(false)
 
 	onMount(() => {
 		if (store.access_token) {
 			navigate('/')
+			return
 		}
+		import('../common/nativeClient').then(({ isNativeClient }) => {
+			setShowDisconnect(isNativeClient())
+		}).catch(() => {})
 	})
+
+	/** Tear the native session down and reload the connect shell. */
+	const handleDisconnect = async () => {
+		if (disconnecting()) return
+		setDisconnecting(true)
+		try {
+			const { nativeInvoke } = await import('../common/nativeBridge')
+			await nativeInvoke('disconnect')
+		} catch {
+			// The connect shell reload below still lands the user somewhere sane.
+		} finally {
+			setDisconnecting(false)
+		}
+	}
 
 	/**
 	 * @param {SubmitEvent} event
@@ -147,6 +169,19 @@ const Login = () => {
 							<Button type="submit" variant="contained" color="secondary" size="large">
 								{t('auth.login.signIn')}
 							</Button>
+							<Show when={showDisconnect()}>
+								<Button
+									type="button"
+									variant="outlined"
+									color="inherit"
+									size="large"
+									disabled={disconnecting()}
+									onClick={handleDisconnect}
+									startIcon={<FluentIcon name="plugDisconnected" size={18} />}
+								>
+									{t('sidebar.disconnect')}
+								</Button>
+							</Show>
 						</Stack>
 					</Box>
 				</Box>

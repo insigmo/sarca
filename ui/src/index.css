@@ -3420,6 +3420,17 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	box-shadow: 0 8px 22px rgba(124, 92, 191, 0.2);
 }
 
+/* Text button ("1.25×"): a pill instead of the icon circle, but same height. */
+.file-viewer__ctrl-btn--rate {
+	width: auto;
+	min-width: 40px;
+	padding: 0 10px;
+	border-radius: 20px;
+	font-size: 0.78rem;
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+
 .file-viewer__time {
 	font-size: 0.78rem;
 	font-weight: 600;
