@@ -439,7 +439,9 @@
 		"storageSettingsTitle": "Ajustes de almacenamiento",
 		"thirtyDays": "30 días",
 		"uploadedCount": "Subidos: {{count}}",
-		"userEmailLabel": "Correo del usuario"
+		"userEmailLabel": "Correo del usuario",
+		"replaceBotDescription": "eliminar los canales del bot \"{{name}}\" — los archivos almacenados en ellos quedarán inaccesibles",
+		"botEntity": "bot"
 	},
 	"auth": {
 		"login": {

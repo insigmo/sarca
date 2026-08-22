@@ -74,6 +74,12 @@ pub struct RefreshChannelsResultSchema {
 #[derive(Deserialize)]
 pub struct SetStorageBotSchema {
     pub token: String,
+    /// When replacing an existing bot, the client must confirm that the old
+    /// bot's channels are removed along with it. The files those channels hold
+    /// become unreachable (their Telegram copies stay until storage deletion,
+    /// but nothing can serve them), so this is never done silently.
+    #[serde(default)]
+    pub remove_channels: bool,
 }
 
 #[derive(Deserialize)]

@@ -439,7 +439,9 @@
 		"storageSettingsTitle": "إعدادات مساحة التخزين",
 		"thirtyDays": "30 يوماً",
 		"uploadedCount": "تم الرفع: {{count}}",
-		"userEmailLabel": "بريد المستخدم الإلكتروني"
+		"userEmailLabel": "بريد المستخدم الإلكتروني",
+		"replaceBotDescription": "حذف قنوات البوت \"{{name}}\" — ستصبح الملفات المخزنة فيها غير متاحة",
+		"botEntity": "البوت"
 	},
 	"auth": {
 		"login": {

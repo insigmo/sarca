@@ -53,6 +53,8 @@ pub enum SarcaError {
     TooManyChannels,
     #[error("Cannot remove the last active channel")]
     LastActiveChannel,
+    #[error("Replacing the bot removes its channels and their files — confirm to continue")]
+    BotReplacementRequiresChannelConfirmation,
     #[error("Storage has no active channel available")]
     NoActiveChannel,
     #[error("A file already exists at this path")]
@@ -82,6 +84,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::StorageDoesNotHaveWorkers
             | SarcaError::TooManyChannels
             | SarcaError::LastActiveChannel
+            | SarcaError::BotReplacementRequiresChannelConfirmation
             | SarcaError::CannotManageAccessOfYourself
             | SarcaError::TrashPathConflict => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),

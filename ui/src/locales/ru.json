@@ -439,7 +439,9 @@
 		"storageSettingsTitle": "Настройки хранилища",
 		"thirtyDays": "30 дней",
 		"uploadedCount": "Загружено: {{count}}",
-		"userEmailLabel": "Email пользователя"
+		"userEmailLabel": "Email пользователя",
+		"replaceBotDescription": "удалить каналы бота «{{name}}» — файлы, хранящиеся в них, станут недоступны",
+		"botEntity": "бот"
 	},
 	"auth": {
 		"login": {
