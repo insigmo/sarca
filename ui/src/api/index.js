@@ -296,14 +296,17 @@ const refreshChannels = async (storageId) => {
 }
 
 /**
- * Attach or replace the Telegram bot for this storage.
+ * Attach or replace the Telegram bot for this storage. When `removeChannels`
+ * is set the server also drops the old bot's channels (confirmed by the user).
  * @param {string} storageId
  * @param {string} token
+ * @param {boolean} [removeChannels]
  * @returns {Promise<StorageBot>}
  */
-const setStorageBot = async (storageId, token) => {
+const setStorageBot = async (storageId, token, removeChannels) => {
 	return await apiRequest(`/storages/${storageId}/bot`, 'put', getAuthToken(), {
 		token,
+		...(removeChannels ? { remove_channels: true } : {}),
 	})
 }
 

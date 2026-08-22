@@ -439,7 +439,9 @@
 		"storageSettingsTitle": "存储设置",
 		"thirtyDays": "30 天",
 		"uploadedCount": "已上传：{{count}}",
-		"userEmailLabel": "用户邮箱"
+		"userEmailLabel": "用户邮箱",
+		"replaceBotDescription": "删除机器人“{{name}}”的频道 — 其中存储的文件将无法访问",
+		"botEntity": "机器人"
 	},
 	"auth": {
 		"login": {

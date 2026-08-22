@@ -100,6 +100,10 @@ const FileViewer = (props) => {
 	const [playing, setPlaying] = createSignal(false)
 	const [muted, setMuted] = createSignal(false)
 	const [volume, setVolume] = createSignal(1)
+	/** Cycle order for the playback-rate button; index points into this list. */
+	const PLAYBACK_RATES = [1, 1.25, 1.5, 2, 0.5, 0.75]
+	const [playbackRateIndex, setPlaybackRateIndex] = createSignal(0)
+	const playbackRate = () => PLAYBACK_RATES[playbackRateIndex()]
 	const [currentTime, setCurrentTime] = createSignal(0)
 	const [duration, setDuration] = createSignal(0)
 	const [progress, setProgress] = createSignal(0)

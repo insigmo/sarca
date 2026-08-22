@@ -439,7 +439,9 @@
 		"storageSettingsTitle": "Storage settings",
 		"thirtyDays": "30 days",
 		"uploadedCount": "Uploaded: {{count}}",
-		"userEmailLabel": "User's email"
+		"userEmailLabel": "User's email",
+		"replaceBotDescription": "permanently remove the channels of bot \"{{name}}\" — files stored on them will become inaccessible",
+		"botEntity": "bot"
 	},
 	"auth": {
 		"login": {
