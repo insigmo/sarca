@@ -265,6 +265,25 @@ impl<'d> StoragesService<'d> {
         }
 
         let workers = StorageWorkersRepository::new(self.db);
+
+        // Replacing the bot invalidates its channels: chunk replicas and derived
+        // thumbs/previews all live in chats the *old* bot administers, and the new
+        // bot has no access there. Refuse until the client confirms, then drop the
+        // channels so uploads fail loudly ("no active channel") instead of writing
+        // into chats this bot cannot read back from. Telegram messages themselves
+        // are left in place — same policy as `remove_channel`.
+        if workers.get_by_storage_id(storage_id).await?.is_some() && !body.remove_channels {
+            return Err(SarcaError::BotReplacementRequiresChannelConfirmation);
+        }
+        if body.remove_channels {
+            for channel in self.channels_repo.list_by_storage(storage_id).await? {
+                if let Err(e) = self.channels_repo.delete(channel.id).await {
+                    tracing::warn!("[STORAGES SERVICE] failed to drop channel {} during bot replacement: {e}", channel.id);
+                }
+            }
+            let _ = self.repo.set_primary_position(storage_id, 1).await;
+        }
+
         let mut name = me.username;
         if name.trim().is_empty() {
             name = format!("bot_{}", me.id);

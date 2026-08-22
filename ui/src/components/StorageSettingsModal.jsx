@@ -81,6 +81,8 @@ const StorageSettingsModal = (props) => {
 	const [botToken, setBotToken] = createSignal('')
 	const [savingBot, setSavingBot] = createSignal(false)
 	const [botFormError, setBotFormError] = createSignal(null)
+	/** Bot token awaiting the "channels will be removed" confirmation. */
+	const [pendingBotReplace, setPendingBotReplace] = createSignal(null)
 
 	const refreshDetail = async () => {
 		const storage = props.storage
@@ -325,11 +327,11 @@ const StorageSettingsModal = (props) => {
 		setBotFormError(null)
 	}
 
-	const saveBot = async () => {
+	const saveBot = async (removeChannels = false, tokenOverride) => {
 		const storage = props.storage
 		if (!storage) return
 
-		const token = botToken().trim()
+		const token = (tokenOverride ?? botToken()).trim()
 		if (!token || !token.includes(':')) {
 			setBotFormError(t('storageDialogs.pasteValidBotToken'))
 			return
@@ -339,7 +341,7 @@ const StorageSettingsModal = (props) => {
 		setBotFormError(null)
 		try {
 			const hadBot = Boolean(bot())
-			const next = await API.storages.setStorageBot(storage.id, token)
+			const next = await API.storages.setStorageBot(storage.id, token, removeChannels)
 			setBot(next)
 			setEditingBot(false)
 			setBotToken('')
@@ -353,7 +355,14 @@ const StorageSettingsModal = (props) => {
 			setBot(next)
 		} catch (err) {
 			console.error(err)
-			setBotFormError(err?.message || t('storageDialogs.couldNotSaveBotToken'))
+			if (err?.status === 409) {
+				// The server refuses a silent bot replacement: its channels would go
+				// with it. Ask the user before retrying with the confirmation flag.
+				setPendingBotReplace({ token })
+				setEditingBot(false)
+			} else {
+				setBotFormError(err?.message || t('storageDialogs.couldNotSaveBotToken'))
+			}
 		} finally {
 			setSavingBot(false)
 		}
@@ -827,6 +836,21 @@ const StorageSettingsModal = (props) => {
 				})}
 				onConfirm={deleteStorage}
 				onCancel={() => setConfirmDelete(false)}
+			/>
+
+			<ActionConfirmDialog
+				isOpened={Boolean(pendingBotReplace())}
+				entity={t('storageDialogs.botEntity')}
+				action={t('storageDialogs.changeBot')}
+				actionDescription={t('storageDialogs.replaceBotDescription', {
+					name: bot()?.name || '',
+				})}
+				onConfirm={() => {
+					const pending = pendingBotReplace()
+					setPendingBotReplace(null)
+					if (pending) void saveBot(true, pending.token)
+				}}
+				onCancel={() => setPendingBotReplace(null)}
 			/>
 
 			<ActionConfirmDialog
