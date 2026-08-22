@@ -240,6 +240,7 @@
 		"unmute": "Включить звук",
 		"mute": "Выключить звук",
 		"volume": "Громкость",
+		"playbackSpeed": "Скорость воспроизведения",
 		"officePresentation": "Презентации лучше открывать в PowerPoint или LibreOffice.",
 		"officeSpreadsheet": "Таблицы лучше открывать в Excel или LibreOffice.",
 		"officeDocument": "Для этого формата документа нужно стороннее приложение.",

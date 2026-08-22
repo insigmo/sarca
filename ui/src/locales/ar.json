@@ -240,6 +240,7 @@
 		"unmute": "إلغاء كتم الصوت",
 		"mute": "كتم الصوت",
 		"volume": "مستوى الصوت",
+		"playbackSpeed": "سرعة التشغيل",
 		"officePresentation": "العروض التقديمية تُفتح بشكل أفضل في PowerPoint أو LibreOffice.",
 		"officeSpreadsheet": "جداول البيانات تُفتح بشكل أفضل في Excel أو LibreOffice.",
 		"officeDocument": "يتطلب هذا التنسيق تطبيقًا خارجيًا لعرضه بالكامل.",

@@ -240,6 +240,7 @@
 		"unmute": "Unmute",
 		"mute": "Mute",
 		"volume": "Volume",
+		"playbackSpeed": "Playback speed",
 		"officePresentation": "Presentations open best in PowerPoint or LibreOffice.",
 		"officeSpreadsheet": "Spreadsheets open best in Excel or LibreOffice.",
 		"officeDocument": "This document format needs an external app to view fully.",

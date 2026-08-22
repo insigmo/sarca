@@ -762,6 +762,29 @@ const FileViewer = (props) => {
 		changeVolume((e.clientX - rect.left) / rect.width)
 	}
 
+	/** Push the picked rate onto the element; call whenever a new element mounts. */
+	const applyRateToMedia = () => {
+		if (mediaEl) mediaEl.playbackRate = playbackRate()
+	}
+
+	/** Cycle 1x → 1.25x → 1.5x → 2x → 0.5x → 0.75x → 1x. */
+	const cyclePlaybackRate = () => {
+		setPlaybackRateIndex((playbackRateIndex() + 1) % PLAYBACK_RATES.length)
+		applyRateToMedia()
+	}
+
+	const playbackRateButton = () => (
+		<button
+			type="button"
+			class="file-viewer__ctrl-btn file-viewer__ctrl-btn--rate"
+			onClick={cyclePlaybackRate}
+			aria-label={t('viewer.playbackSpeed')}
+			title={t('viewer.playbackSpeed')}
+		>
+			{playbackRate()}×
+		</button>
+	)
+
 	const seek = (e) => {
 		if (!mediaEl || !duration()) return
 		const rect = e.currentTarget.getBoundingClientRect()
@@ -795,6 +818,9 @@ const FileViewer = (props) => {
 		if (!mediaEl) return
 		setDuration(mediaEl.duration || 0)
 		applyVolumeToMedia()
+		// A fresh element (new file, replay after navigation) starts at 1x;
+		// re-apply whatever rate the user had picked before it plays on.
+		applyRateToMedia()
 	}
 
 	const VolumeGlyph = () => (
@@ -1149,6 +1175,7 @@ const FileViewer = (props) => {
 												style={{ width: `${progress()}%` }}
 											/>
 										</div>
+										{playbackRateButton()}
 										{volumeControls()}
 										<button
 											type="button"
@@ -1211,9 +1238,10 @@ const FileViewer = (props) => {
 											<span class="file-viewer__time">
 												{formatTime(currentTime())} / {formatTime(duration())}
 											</span>
-										</div>
-										{volumeControls()}
-									</div>
+											</div>
+											{playbackRateButton()}
+											{volumeControls()}
+											</div>
 								</div>
 							</Show>
 
