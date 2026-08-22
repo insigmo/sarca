@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const login = vi.fn()
 const meSilent = vi.fn()
+const nativeInvoke = vi.fn()
 
 vi.mock('../api', () => ({
 	default: {
@@ -12,6 +13,15 @@ vi.mock('../api', () => ({
 			meSilent: (...args) => meSilent(...args),
 		},
 	},
+}))
+
+vi.mock('../common/nativeClient', () => ({
+	nativeClientStore: { isNative: () => true },
+	isNativeClient: () => true,
+}))
+
+vi.mock('../common/nativeBridge', () => ({
+	nativeInvoke: (...args) => nativeInvoke(...args),
 }))
 
 import Login from './Login'
@@ -77,5 +87,21 @@ describe('Login', () => {
 		await submitLogin(container)
 
 		expect(await findByTestId('home')).toBeInTheDocument()
+	})
+
+	// Regression: the native shell can land on the login screen while still
+	// holding a remembered server connection, with no way back to the connect
+	// screen. The Disconnect button must appear there and call the shell.
+	it('offers Disconnect on the login page and invokes the native command', async () => {
+		const { container, findByRole } = renderApp()
+
+		const button = await findByRole('button', { name: /disconnect|Отключиться/i })
+		fireEvent.click(button)
+		for (let i = 0; i < 10; i++) await Promise.resolve()
+
+		expect(nativeInvoke).toHaveBeenCalledWith('disconnect')
+		// The click must not submit the sign-in form.
+		expect(login).not.toHaveBeenCalled()
+		expect(container.querySelector('form')).toBeInTheDocument()
 	})
 })

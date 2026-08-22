@@ -23,6 +23,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +32,8 @@ APP_IDENTIFIER = "app.sarca.client"
 BUILD_TIMEOUT_S = 1800
 # Cold start pays for GTK + WebKit + the sync engine's first scan.
 START_TIMEOUT_S = 60.0
+
+IS_WINDOWS = os.name == "nt"
 
 # Writing through the prototype's value setter and firing `input` is what a
 # framework-controlled field listens for; assigning `.value` alone leaves Solid
@@ -91,7 +94,8 @@ def repo_root() -> Path:
 
 def build_client(*, skip: bool = False) -> Path:
     """Build (or locate) the debug client with the pilot plugin compiled in."""
-    binary = repo_root() / "target" / "debug" / "sarca-client"
+    name = "sarca-client.exe" if IS_WINDOWS else "sarca-client"
+    binary = repo_root() / "target" / "debug" / name
     if skip or os.environ.get("SARCA_SKIP_BUILD") == "1":
         if binary.exists():
             return binary
@@ -114,15 +118,27 @@ class ClientApp:
     root: Path
     log_path: Path = field(init=False)
     proc: subprocess.Popen | None = field(default=None, init=False)
+    # Per-instance identifier suffix. The pilot build of the client appends it
+    # to the Tauri identifier when SARCA_E2E_ID_SUFFIX is set, which makes the
+    # single-instance mutex and the control pipe unique per instance — that is
+    # what lets two clients run side by side (grant-access scenario) and lets a
+    # relaunched client rebind its pipe before the old one is fully gone.
+    id_suffix: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
 
     def __post_init__(self) -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         self.log_path = self.root / "client.log"
         # Unix socket paths cap at ~108 bytes, and pytest's tmp_path is already
-        # deep, so the runtime dir has to live somewhere short.
-        self._runtime_dir = Path(tempfile.mkdtemp(prefix="sarca-pilot-", dir="/tmp"))
+        # deep, so the runtime dir has to live somewhere short. Windows has no
+        # /tmp; %TEMP% is short enough for the named-pipe-free fallback path.
+        tmp = Path("/tmp") if not IS_WINDOWS else Path(os.environ.get("TEMP", os.getcwd()))
+        self._runtime_dir = Path(tempfile.mkdtemp(prefix="sarca-pilot-", dir=tmp))
 
     # ---------------------------------------------------------------- process
+
+    @property
+    def identifier(self) -> str:
+        return f"{APP_IDENTIFIER}.e2e-{self.id_suffix}"
 
     @property
     def home(self) -> Path:
@@ -134,13 +150,35 @@ class ClientApp:
 
     @property
     def socket(self) -> Path:
-        return self.runtime_dir / f"tauri-pilot-{APP_IDENTIFIER}.sock"
+        """Control endpoint for this app instance.
+
+        Unix: a filesystem socket under the private runtime dir. Windows:
+        the plugin serves a named pipe whose name has no directory part.
+        Both carry this instance's identifier, which carries the per-test
+        `e2e-<suffix>` segment, so two clients never share an endpoint.
+        """
+        if IS_WINDOWS:
+            return Path(rf"\\.\pipe\tauri-pilot-{self.identifier}")
+        return self.runtime_dir / f"tauri-pilot-{self.identifier}.sock"
 
     def _env(self) -> dict[str, str]:
         env = dict(os.environ)
         home = self.home
         for sub in ("", ".local/share", ".config", ".cache"):
             (home / sub).mkdir(parents=True, exist_ok=True)
+        if IS_WINDOWS:
+            # Tauri resolves app_data_dir() through SHGetKnownFolderPath, which
+            # follows %USERPROFILE% (verified with a probe binary) — but only
+            # when the redirected folders already exist. Pre-create them so the
+            # client under test gets its own profile instead of reading and
+            # rewriting the developer's real server.json / pinned_keys.json.
+            roaming = home / "AppData" / "Roaming"
+            local = home / "AppData" / "Local"
+            roaming.mkdir(parents=True, exist_ok=True)
+            local.mkdir(parents=True, exist_ok=True)
+            env["USERPROFILE"] = str(home)
+            env["APPDATA"] = str(roaming)
+            env["LOCALAPPDATA"] = str(local)
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         # 0700: the plugin refuses to bind a world-accessible runtime dir.
         self.runtime_dir.chmod(0o700)
@@ -151,6 +189,10 @@ class ClientApp:
                 "XDG_CONFIG_HOME": str(home / ".config"),
                 "XDG_CACHE_HOME": str(home / ".cache"),
                 "XDG_RUNTIME_DIR": str(self.runtime_dir),
+                # Pilot builds rename themselves to `<identifier>.e2e-<suffix>`
+                # so the single-instance mutex and the control pipe are unique
+                # per instance; see ClientApp.identifier.
+                "SARCA_E2E_ID_SUFFIX": self.id_suffix,
                 # WebKit's sandbox needs more setup than a test container has, and
                 # DMABUF rendering fails on virtual displays (Xvfb in CI).
                 "WEBKIT_DISABLE_COMPOSITING_MODE": "1",
@@ -175,21 +217,34 @@ class ClientApp:
             return [dbus, "--", str(self.binary)]
         return [str(self.binary)]
 
+    def _clear_stale_socket(self) -> None:
+        """Remove a leftover control endpoint from a killed instance.
+
+        Unix: the socket file survives a SIGKILL and must be unlinked before
+        rebinding. Windows: named pipes vanish with their owning process, and
+        unlinking a live pipe is an error — there is simply nothing to do.
+        """
+        if IS_WINDOWS:
+            return
+        if self.socket.exists():
+            self.socket.unlink()
+
     def start(self) -> ClientApp:
         if self.proc is not None:
             raise PilotError("client already running")
-        if self.socket.exists():
-            self.socket.unlink()
+        self._clear_stale_socket()
         log = self.log_path.open("ab")
+        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if IS_WINDOWS else 0
+        popen_kwargs = (
+            {"creationflags": creationflags} if IS_WINDOWS else {"start_new_session": True}
+        )
         self.proc = subprocess.Popen(
             self._argv(),
             cwd=str(repo_root()),
             env=self._env(),
             stdout=log,
             stderr=subprocess.STDOUT,
-            # Own process group so stop() can take the dbus wrapper and the app
-            # down together.
-            start_new_session=True,
+            **popen_kwargs,
         )
         self._wait_for_socket()
         self._wait_for_window()
@@ -210,7 +265,6 @@ class ClientApp:
                     pass
             time.sleep(0.2)
         raise PilotError(f"pilot socket never appeared at {self.socket}\n{self.tail_log()}")
-
     def _wait_for_window(self) -> None:
         """The plugin binds its socket during setup, before Tauri builds the
         window from the config, so `ping` succeeding does not mean there is a
@@ -228,6 +282,18 @@ class ClientApp:
 
     def stop(self) -> None:
         if self.proc is None:
+            return
+        if IS_WINDOWS:
+            try:
+                self.proc.send_signal(signal.CTRL_BREAK_EVENT)
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                self.proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+                self.proc.wait(timeout=10)
+            self.proc = None
             return
         try:
             pgid = os.getpgid(self.proc.pid)
@@ -250,9 +316,7 @@ class ClientApp:
     def restart(self) -> ClientApp:
         """Stop and start again, keeping HOME — i.e. a real app relaunch."""
         self.stop()
-        # The socket guard unlinks on drop, but a killed process leaves it behind.
-        if self.socket.exists():
-            self.socket.unlink()
+        self._clear_stale_socket()
         return self.start()
 
     def tail_log(self, lines: int = 40) -> str:

@@ -240,6 +240,7 @@
 		"unmute": "取消静音",
 		"mute": "静音",
 		"volume": "音量",
+		"playbackSpeed": "播放速度",
 		"officePresentation": "演示文稿在 PowerPoint 或 LibreOffice 中打开效果最佳。",
 		"officeSpreadsheet": "电子表格在 Excel 或 LibreOffice 中打开效果最佳。",
 		"officeDocument": "此文档格式需要外部应用程序才能完整查看。",

@@ -240,6 +240,7 @@
 		"unmute": "Activar sonido",
 		"mute": "Silenciar",
 		"volume": "Volumen",
+		"playbackSpeed": "Velocidad de reproducción",
 		"officePresentation": "Las presentaciones se abren mejor en PowerPoint o LibreOffice.",
 		"officeSpreadsheet": "Las hojas de cálculo se abren mejor en Excel o LibreOffice.",
 		"officeDocument": "Este formato de documento necesita una aplicación externa para verse por completo.",

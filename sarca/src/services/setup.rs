@@ -179,6 +179,9 @@ impl<'d> SetupService<'d> {
                     existing.id,
                     SetStorageBotSchema {
                         token,
+                        // Setup owns these chats outright, so a bot swap here can
+                        // only ever rebind the same bot; nothing to confirm.
+                        remove_channels: false,
                     },
                     user,
                 )
@@ -220,6 +223,7 @@ impl<'d> SetupService<'d> {
                             existing.id,
                             SetStorageBotSchema {
                                 token,
+                                remove_channels: false,
                             },
                             user,
                         )
@@ -237,8 +241,10 @@ impl<'d> SetupService<'d> {
         if let Err(e) = storages
             .set_bot(
                 storage.id,
+                // Fresh storage with no prior bot: nothing to confirm.
                 SetStorageBotSchema {
                     token,
+                    remove_channels: false,
                 },
                 user,
             )
