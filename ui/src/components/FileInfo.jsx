@@ -45,7 +45,7 @@ const KIND_LABELS = () => ({
 const formatBytesExact = (n) => {
 	const v = Number(n)
 	if (!Number.isFinite(v)) return '—'
-	return t('viewer.bytesExact', { count: Math.max(0, Math.round(v)).toLocaleString() })
+	return t('viewer.bytesExact', { count: Math.max(0, Math.round(v)).toLocaleString('en-US') })
 }
 
 /**
