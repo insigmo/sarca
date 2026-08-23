@@ -195,6 +195,26 @@ def test_first_bot_binding_does_not_ask_for_confirmation(sarca: SarcaClient) -> 
         sarca.delete_storage(sid)
 
 
+def test_resubmitting_the_same_bot_token_is_rejected_as_a_no_op(sarca: SarcaClient) -> None:
+    """«Если вставил токен того же самого бота — оповестить, что это тот же бот»."""
+    token = new_bot_token()
+    st = sarca.create_storage(chat_ids=[new_chat_id()], bot_token=token)
+    sid = st["id"]
+    try:
+        before = sarca.storage_detail(sid)
+
+        r = sarca.put(f"/api/storages/{sid}/bot", json={"token": token})
+        assert r.status_code == 400, r.text
+
+        # Rejected as unchanged, not silently accepted or treated as a
+        # replacement that would need channel-removal confirmation.
+        unchanged = sarca.storage_detail(sid)
+        assert unchanged["bot"]["id"] == before["bot"]["id"]
+        assert len(unchanged["channels"]) == len(before["channels"])
+    finally:
+        sarca.delete_storage(sid)
+
+
 # -------------------------------------------------------------------- proxy
 
 

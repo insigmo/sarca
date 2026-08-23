@@ -258,13 +258,24 @@ impl<'d> StoragesService<'d> {
             return Err(SarcaError::TelegramAPIError("Bot token looks invalid".into()));
         }
 
+        let workers = StorageWorkersRepository::new(self.db);
+
+        // Re-submitting the storage's own current token is not a replacement — the
+        // channels keep the same bot access they already had — so say so plainly
+        // instead of asking the client to confirm dropping channels that would in
+        // fact survive untouched (or silently no-op-ing, which would hide a typo'd
+        // "new" token that actually matched the old one by accident).
+        if let Some(existing) = workers.get_by_storage_id(storage_id).await? {
+            if existing.token == token {
+                return Err(SarcaError::BotTokenUnchanged);
+            }
+        }
+
         let client = TelegramTokenClient::new(self.telegram_baseurl, token);
         let me = client.get_me().await?;
         if let Err(e) = client.delete_webhook().await {
             tracing::warn!("deleteWebhook during set_bot: {e}");
         }
-
-        let workers = StorageWorkersRepository::new(self.db);
 
         // Replacing the bot invalidates its channels: chunk replicas and derived
         // thumbs/previews all live in chats the *old* bot administers, and the new
@@ -278,7 +289,10 @@ impl<'d> StoragesService<'d> {
         if body.remove_channels {
             for channel in self.channels_repo.list_by_storage(storage_id).await? {
                 if let Err(e) = self.channels_repo.delete(channel.id).await {
-                    tracing::warn!("[STORAGES SERVICE] failed to drop channel {} during bot replacement: {e}", channel.id);
+                    tracing::warn!(
+                        "[STORAGES SERVICE] failed to drop channel {} during bot replacement: {e}",
+                        channel.id
+                    );
                 }
             }
             let _ = self.repo.set_primary_position(storage_id, 1).await;

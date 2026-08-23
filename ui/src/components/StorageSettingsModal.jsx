@@ -346,9 +346,11 @@ const StorageSettingsModal = (props) => {
 			setEditingBot(false)
 			setBotToken('')
 			addAlert(
-				hadBot
-					? t('storageDialogs.botUpdated', { name: next.name })
-					: t('storageDialogs.botAttached', { name: next.name }),
+				removeChannels
+					? t('storageDialogs.botUpdatedChannelsRemoved', { name: next.name })
+					: hadBot
+						? t('storageDialogs.botUpdated', { name: next.name })
+						: t('storageDialogs.botAttached', { name: next.name }),
 				'success',
 			)
 			await refreshDetail()
@@ -617,7 +619,7 @@ const StorageSettingsModal = (props) => {
 															color="secondary"
 															size="small"
 															disabled={savingBot() || !botToken().trim()}
-															onClick={saveBot}
+															onClick={() => saveBot()}
 														>
 															{savingBot()
 																? t('storageDialogs.savingBot')

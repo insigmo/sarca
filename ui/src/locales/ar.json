@@ -347,6 +347,7 @@
 		"botTokenHelper": "من @BotFather → البوت الخاص بك → API Token",
 		"botTokenLabel": "رمز البوت",
 		"botUpdated": "تم تحديث البوت إلى \"{{name}}\"",
+		"botUpdatedChannelsRemoved": "تم تحديث البوت إلى \"{{name}}\" — تم حذف قنوات البوت القديم والملفات الموجودة فيها",
 		"cannotRemoveLastActiveChannel": "لا يمكن حذف آخر قناة نشطة",
 		"changeBot": "تغيير البوت",
 		"channelActive": "نشطة",

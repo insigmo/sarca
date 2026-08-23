@@ -52,13 +52,13 @@ describe('FileViewer video playback speed', () => {
 		await screen.findByAltText(/streaming|clip/i).catch(() => {})
 		const rate = await vi.waitFor(() => {
 			const el = document.querySelector('.file-viewer__ctrl-btn--rate')
-			if (!el) throw new Error('rate button not mounted yet')
+			if (!el) throw new Error('rate select not mounted yet')
 			return el
 		})
-		expect(rate.textContent.trim()).toBe('1×')
+		expect(rate.value).toBe('1')
 	})
 
-	it('cycles the rate on click and applies it to the media element', async () => {
+	it('selects a rate from the dropdown and applies it to the media element', async () => {
 		const files = [video('clip.mp4')]
 		render(() => (
 			<FileViewer
@@ -81,24 +81,17 @@ describe('FileViewer video playback speed', () => {
 		})
 		const rate = await vi.waitFor(() => {
 			const el = document.querySelector('.file-viewer__ctrl-btn--rate')
-			if (!el) throw new Error('rate button not mounted yet')
+			if (!el) throw new Error('rate select not mounted yet')
 			return el
 		})
 
 		expect(mediaEl.playbackRate).toBe(1)
-		fireEvent.click(rate)
-		expect(mediaEl.playbackRate).toBe(1.25)
-		expect(rate.textContent.trim()).toBe('1.25×')
-		fireEvent.click(rate)
+		fireEvent.change(rate, { target: { value: '1.5' } })
 		expect(mediaEl.playbackRate).toBe(1.5)
-		fireEvent.click(rate)
-		expect(mediaEl.playbackRate).toBe(2)
-		fireEvent.click(rate)
+		expect(rate.value).toBe('1.5')
+		fireEvent.change(rate, { target: { value: '0.5' } })
 		expect(mediaEl.playbackRate).toBe(0.5)
-		fireEvent.click(rate)
-		expect(mediaEl.playbackRate).toBe(0.75)
-		// …and back to 1x after the last step of the cycle.
-		fireEvent.click(rate)
+		fireEvent.change(rate, { target: { value: '1' } })
 		expect(mediaEl.playbackRate).toBe(1)
 	})
 })

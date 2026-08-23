@@ -1,8 +1,19 @@
 version: "3"
 
+# Cross-platform notes
+#
+# Task runs `cmds` through its own embedded shell, not through bash or
+# PowerShell. On Windows that shell ships only a few coreutils
+# (mkdir/cp/rm/mv/chmod/touch/cat/ls/tar/gzip) — sed, grep, head, cut, tr and
+# friends are simply not there, and `cp -a` is not accepted either. Every
+# command below therefore either sticks to what the embedded shell can do on
+# every host, or splits per platform: POSIX tools under
+# `platforms: [linux, darwin]`, a PowerShell script under `platforms: [windows]`.
+
 vars:
+  # POSIX: XDG-ish share dir. Windows: the prefix install.ps1 uses.
   NATIVE_PREFIX:
-    sh: 'echo "${HOME}/.local/share/sarca"'
+    sh: 'if [ "{{OS}}" = "windows" ]; then echo "${LOCALAPPDATA}\\Sarca"; else echo "${HOME}/.local/share/sarca"; fi'
   # Compose interpolates ${PORT} from sarca.conf (host publish + container listen).
   # Base compose.yml is pull-only; compose.dev.yml bind-mounts local runtime/sarca + ui/dist.
   COMPOSE: docker compose -f compose.yml -f compose.dev.yml --env-file sarca.conf
@@ -10,6 +21,8 @@ vars:
   ENSURE_PNPM: '. "{{.ROOT_DIR}}/scripts/ensure-pnpm-env.sh"'
   # Source before any venv invocation — sets VENV_PY (bin/ or Scripts/ per host).
   ENSURE_VENV: '. "{{.ROOT_DIR}}/scripts/ensure-venv.sh" "{{.ROOT_DIR}}/.venv"'
+  # Windows has no POSIX toolbox; whatever needs one runs as a .ps1.
+  PS: powershell -NoProfile -ExecutionPolicy Bypass -File
 
 tasks:
   default:
@@ -27,27 +40,34 @@ tasks:
         (cd "$UI_DIR" && VITE_API_BASE=/api $PNPM install && VITE_API_BASE=/api $PNPM run build)
 
   binary:
-    desc: Lint (fmt+clippy) then build release binary into runtime/sarca
+    desc: Lint (fmt+clippy) then build the Linux release binary into runtime/sarca
     deps: [lint]
     cmds:
       - mkdir -p "{{.ROOT_DIR}}/runtime"
-      - |
-        cd "{{.ROOT_DIR}}"
-        cargo build --release -p sarca
-        BIN="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
-        if [ -z "$BIN" ]; then BIN=target; fi
-        SRC="$BIN/release/sarca"
-        DEST="{{.ROOT_DIR}}/runtime/sarca"
-        if cp -f "$SRC" "$DEST" 2>/dev/null; then
-          chmod +x "$DEST"
-        else
-          # runtime/sarca may be root-owned from a prior Docker copy
-          docker run --rm \
-            -v "{{.ROOT_DIR}}/runtime:/runtime" \
-            -v "$SRC:/bin-src:ro" \
-            alpine sh -c 'cp /bin-src /runtime/sarca && chmod 755 /runtime/sarca'
-        fi
-        echo "binary → $DEST"
+      - cmd: |
+          cd "{{.ROOT_DIR}}"
+          cargo build --release -p sarca
+          BIN="$(cargo metadata --format-version 1 --no-deps 2>/dev/null | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+          if [ -z "$BIN" ]; then BIN=target; fi
+          SRC="$BIN/release/sarca"
+          DEST="{{.ROOT_DIR}}/runtime/sarca"
+          if cp -f "$SRC" "$DEST" 2>/dev/null; then
+            chmod +x "$DEST"
+          else
+            # runtime/sarca may be root-owned from a prior Docker copy
+            docker run --rm \
+              -v "{{.ROOT_DIR}}/runtime:/runtime" \
+              -v "$SRC:/bin-src:ro" \
+              alpine sh -c 'cp /bin-src /runtime/sarca && chmod 755 /runtime/sarca'
+          fi
+          echo "binary → $DEST"
+        platforms: [linux, darwin]
+      # `task up` bind-mounts runtime/sarca into the Linux container, so a
+      # native Windows .exe is unusable there — compile inside a Linux Rust
+      # image instead (Docker is required by `up` anyway). `task deploy-native`
+      # is the one that builds a real sarca.exe on Windows.
+      - cmd: '{{.PS}} "{{.ROOT_DIR}}/scripts/build-linux-binary.ps1" -RootDir "{{.ROOT_DIR}}"'
+        platforms: [windows]
 
   lint:
     desc: Strict rustfmt (nightly) + clippy (deny pedantic/nursery/cargo)
@@ -66,15 +86,24 @@ tasks:
     desc: Copy ui/dist into native install prefix
     deps: [ui]
     cmds:
+      # Neither `cp -a` nor a `dir/*` glob survives the Windows coreutils;
+      # replacing the directory outright behaves the same on every host.
       - |
         PREFIX="{{.NATIVE_PREFIX}}"
-        mkdir -p "$PREFIX/ui"
-        rm -rf "$PREFIX/ui"/*
-        cp -a "{{.ROOT_DIR}}/ui/dist/." "$PREFIX/ui/"
+        mkdir -p "$PREFIX"
+        rm -rf "$PREFIX/ui"
+        cp -r "{{.ROOT_DIR}}/ui/dist" "$PREFIX/ui"
         echo "native UI → $PREFIX/ui"
 
   deploy-native:
-    desc: Install local binary + UI into ~/.local/share/sarca
+    desc: Install local binary + UI into the native prefix (~/.local/share/sarca, %LOCALAPPDATA%\Sarca)
+    cmds:
+      - task: deploy-native:posix
+      - task: deploy-native:windows
+
+  deploy-native:posix:
+    internal: true
+    platforms: [linux, darwin]
     deps: [binary, deploy-ui-native]
     cmds:
       - |
@@ -84,12 +113,27 @@ tasks:
         chmod +x "$PREFIX/sarca"
         echo "native binary → $PREFIX/sarca"
 
+  deploy-native:windows:
+    internal: true
+    platforms: [windows]
+    # Not `binary`: that one produces the Linux ELF the Docker stack needs. A
+    # native install wants a real sarca.exe, which the script builds itself.
+    deps: [lint, deploy-ui-native]
+    cmds:
+      - '{{.PS}} "{{.ROOT_DIR}}/scripts/install-native.ps1" -RootDir "{{.ROOT_DIR}}" -Prefix "{{.NATIVE_PREFIX}}"'
+
   up:
     desc: Build binary+UI and start Docker stack (compose.yml + compose.dev.yml)
     deps: [ui, binary]
     cmds:
-      - chmod +x "{{.ROOT_DIR}}/docker/sarca-entrypoint.sh"
-      - test -x "{{.ROOT_DIR}}/runtime/sarca"
+      # Compose invokes the entrypoint as `/bin/sh /sarca-entrypoint.sh`, so
+      # the exec bit only matters where the host filesystem carries one.
+      - cmd: chmod +x "{{.ROOT_DIR}}/docker/sarca-entrypoint.sh"
+        platforms: [linux, darwin]
+      # Go's stat reports no exec bit for Windows files, so -x can never match
+      # there; the -f checks below hold on every host.
+      - cmd: test -x "{{.ROOT_DIR}}/runtime/sarca"
+        platforms: [linux, darwin]
       - test -f "{{.ROOT_DIR}}/runtime/sarca" -a ! -d "{{.ROOT_DIR}}/runtime/sarca"
       - test -f "{{.ROOT_DIR}}/ui/dist/index.html"
       - test -f "{{.ROOT_DIR}}/sarca.conf"
@@ -208,8 +252,13 @@ tasks:
     desc: Delete SQLite database file and restart Sarca to recreate schema+superuser
     prompt: Wipe ALL Sarca SQLite data? This cannot be undone.
     cmds:
-      - chmod +x "{{.ROOT_DIR}}/scripts/db-reset.sh"
-      - "{{.ROOT_DIR}}/scripts/db-reset.sh"
+      - cmd: chmod +x "{{.ROOT_DIR}}/scripts/db-reset.sh"
+        platforms: [linux, darwin]
+      - cmd: "{{.ROOT_DIR}}/scripts/db-reset.sh"
+        platforms: [linux, darwin]
+      # Same steps without sed/grep/curl, and Windows cannot exec a .sh anyway.
+      - cmd: '{{.PS}} "{{.ROOT_DIR}}/scripts/db-reset.ps1" -RootDir "{{.ROOT_DIR}}"'
+        platforms: [windows]
 
   smoke:
     desc: Upload sample image+video against running API (SARCA_BASE_URL); `task e2e` covers it on the mock
@@ -218,7 +267,16 @@ tasks:
         cd "{{.ROOT_DIR}}"
         {{.ENSURE_VENV}}
         "$VENV_PY" -m pip install -q -r e2e/requirements.txt
-        PORT="$(grep -E '^[[:space:]]*PORT=' sarca.conf 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"
+        # grep/head/cut/tr do not exist in Task's Windows shell — a read loop
+        # plus parameter expansion needs no external tool on any host.
+        PORT=""
+        while IFS= read -r line; do
+          case "$line" in
+            PORT=*) PORT="${line#PORT=}" ;;
+          esac
+        done < sarca.conf
+        # strip trailing CR / spaces without tr
+        PORT="${PORT%%[[:space:]]*}"
         PORT="${PORT:-8000}"
         unset SUPERUSER_EMAIL SUPERUSER_PASS
         SARCA_BASE_URL="${SARCA_BASE_URL:-http://127.0.0.1:${PORT}}" \
@@ -278,13 +336,12 @@ tasks:
         $PNPM exec tauri icon "{{.ROOT_DIR}}/logo.svg"
       - |
         cd "{{.ROOT_DIR}}"
-        if python3 -c 'import PIL' 2>/dev/null; then
-          python3 scripts/gen-android-icons.py
-        else
-          [ -d .venv ] || python3 -m venv .venv
-          .venv/bin/pip install -q pillow
-          .venv/bin/python scripts/gen-android-icons.py
-        fi
+        # The repo venv resolves on every host (bin/ or Scripts/), unlike the
+        # hardcoded .venv/bin path or a bare `python3` — on Windows the latter
+        # is usually the Store stub.
+        {{.ENSURE_VENV}}
+        "$VENV_PY" -m pip install -q pillow
+        "$VENV_PY" scripts/gen-android-icons.py
       - echo "icons regenerated from {{.ROOT_DIR}}/logo.svg"
 
   client:install:
@@ -320,6 +377,7 @@ tasks:
 
   install:
     desc: Build Linux .deb client and install locally (sudo apt-get; prompts for password)
+    platforms: [linux]
     deps: [client:install]
     dir: client
     cmds:
