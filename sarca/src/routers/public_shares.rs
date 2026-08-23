@@ -62,12 +62,13 @@ impl PublicSharesRouter {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|jar| find_cookie(jar, &cookie_name))
                 .is_some_and(|val| {
-                    JWTManager::validate_share_unlock(&val, token, &state.config.secret_key).is_ok()
+                    JWTManager::validate_share_unlock(&val, token, &state.config.secret_key)
+                        .is_ok()
                 });
 
             if !unlocked {
                 return Err(
-                    (StatusCode::UNAUTHORIZED, Json(NeedPasswordSchema::yes())).into_response()
+                    (StatusCode::UNAUTHORIZED, Json(NeedPasswordSchema::yes())).into_response(),
                 );
             }
         }
@@ -143,6 +144,7 @@ impl PublicSharesRouter {
         if let Ok(val) = HeaderValue::from_str(&cookie) {
             response.headers_mut().insert(header::SET_COOKIE, val);
         }
+
         Ok(response)
     }
 
