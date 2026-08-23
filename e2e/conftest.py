@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -277,7 +278,10 @@ def repo() -> Path:
 def gui_available() -> None:
     from helpers.pilot import pilot_binary
 
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+    # X11/Wayland is a Linux/BSD concern; on Windows and macOS the client draws
+    # through the native compositor and DISPLAY is never set.
+    needs_x11 = not sys.platform.startswith(("win32", "darwin", "cygwin"))
+    if needs_x11 and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
         pytest.skip("no display: run under Xvfb (task e2e:gui)")
     if pilot_binary() is None:
         pytest.skip("tauri-pilot not installed (cargo install tauri-pilot-cli)")

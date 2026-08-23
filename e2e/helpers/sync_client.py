@@ -111,6 +111,10 @@ def run_sync(
         cwd=ROOT,
         capture_output=True,
         text=True,
+        # The driver reports paths as UTF-8 JSON; decoding with the host ANSI
+        # codepage (Windows) throws on any non-Latin-1 filename.
+        encoding="utf-8",
+        errors="replace",
         timeout=timeout,
     )
     if result.returncode != 0:
