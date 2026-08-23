@@ -335,6 +335,10 @@ class ClientApp:
             [binary, "--socket", str(self.socket), "--window", "main", *args],
             capture_output=True,
             text=True,
+            # tauri-pilot speaks UTF-8; Python would otherwise decode with the
+            # ANSI codepage on Windows and blow up on any non-Latin-1 UI text.
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         if proc.returncode != 0:
@@ -363,6 +367,8 @@ class ClientApp:
             input=script,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
         if proc.returncode != 0:

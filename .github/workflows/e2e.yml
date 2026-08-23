@@ -111,8 +111,8 @@ jobs:
           retention-days: 1
 
   # The hermetic harness: conftest.py starts its own `sarca` process against a
-  # fake Telegram Bot API, exactly like `task e2e` does locally. Nothing is
-  # excluded here — the smoke suite runs on the mock too.
+  # fake Telegram Bot API, exactly like `task e2e` does locally. Only the GUI
+  # suite is excluded — the smoke suite runs on the mock too.
   e2e:
     needs: [checks, build-ui, build-server]
     runs-on: ubuntu-latest
@@ -154,9 +154,12 @@ jobs:
           chmod +x target/release/sarca target/debug/examples/headless
           pip install -r e2e/requirements.txt
 
+      # -m "not gui": the GUI suite has its own job below. It used to be
+      # deselected by this runner having no DISPLAY, which is not something
+      # the split should depend on.
       - name: Run e2e tests
         working-directory: e2e
-        run: python -m pytest -q
+        run: python -m pytest -q -m "not gui"
 
   # Drives the real desktop client through tauri-pilot. Kept apart from the API
   # suite: it needs GTK/WebKit, a display, and its own debug client build.

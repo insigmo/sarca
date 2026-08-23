@@ -11,6 +11,7 @@ the same way.
 task e2e                       # build + run everything (recommended)
 task e2e:gui                   # only the GUI suite, driving the real client
 cd e2e && ../.venv/bin/python -m pytest -q          # if the venv already exists
+cd e2e && ../.venv/Scripts/python -m pytest -q      # ... same, on Windows
 pytest -q test_02_upload_download.py -k hash        # one file / one test
 pytest -q -m "not slow"                             # skip the slow scenarios
 ```
@@ -71,10 +72,13 @@ helpers/pilot.py           builds and drives the desktop client (tauri-pilot):
 
 Markers: `slow` (multi-second), `mock_only` (needs the fake Bot API), `smoke`
 (media upload smoke), `gui` (drives the desktop client). Nothing is deselected by
-default; `gui` skips itself without a display or without `tauri-pilot` on PATH.
+default; `gui` skips itself without `tauri-pilot` on PATH, and on Linux/BSD also
+without a display.
 
 ### GUI tests
 
 `task e2e:gui` installs `tauri-pilot-cli` if missing, builds `client/dist` plus a
 debug client with `--features pilot` (the plugin is compiled in only there), and
-runs under Xvfb when there is no display.
+runs under Xvfb when there is no display. Windows and macOS need no Xvfb — the
+client draws through the native compositor — so the task runs pytest directly
+there.

@@ -8,6 +8,8 @@ vars:
   COMPOSE: docker compose -f compose.yml -f compose.dev.yml --env-file sarca.conf
   # Source before any pnpm invocation — Task often has a minimal non-login PATH.
   ENSURE_PNPM: '. "{{.ROOT_DIR}}/scripts/ensure-pnpm-env.sh"'
+  # Source before any venv invocation — sets VENV_PY (bin/ or Scripts/ per host).
+  ENSURE_VENV: '. "{{.ROOT_DIR}}/scripts/ensure-venv.sh" "{{.ROOT_DIR}}/.venv"'
 
 tasks:
   default:
@@ -214,25 +216,31 @@ tasks:
     cmds:
       - |
         cd "{{.ROOT_DIR}}"
-        if [ ! -d .venv ]; then python3 -m venv .venv; .venv/bin/pip install -r e2e/requirements.txt; fi
+        {{.ENSURE_VENV}}
+        "$VENV_PY" -m pip install -q -r e2e/requirements.txt
         PORT="$(grep -E '^[[:space:]]*PORT=' sarca.conf 2>/dev/null | head -1 | cut -d= -f2- | tr -d '[:space:]')"
         PORT="${PORT:-8000}"
-        env -u SUPERUSER_EMAIL -u SUPERUSER_PASS \
-          SARCA_BASE_URL="${SARCA_BASE_URL:-http://127.0.0.1:${PORT}}" \
-          .venv/bin/python -m pytest -q -m smoke e2e/test_upload_smoke.py -s
+        unset SUPERUSER_EMAIL SUPERUSER_PASS
+        SARCA_BASE_URL="${SARCA_BASE_URL:-http://127.0.0.1:${PORT}}" \
+          "$VENV_PY" -m pytest -q -m smoke e2e/test_upload_smoke.py -s
 
   e2e:
-    desc: Full e2e suite (own server + fake Telegram Bot API); see e2e/README.md
+    desc: API/server e2e suite, GUI excluded (own server + fake Telegram Bot API); see e2e/README.md
     cmds:
       - |
         cd "{{.ROOT_DIR}}"
-        if [ ! -d .venv ]; then python3 -m venv .venv; fi
-        .venv/bin/pip install -q -r e2e/requirements.txt
+        {{.ENSURE_VENV}}
+        "$VENV_PY" -m pip install -q -r e2e/requirements.txt
         cargo build --release -p sarca
         cargo build -p sarca-sync --example headless
         cd e2e
-        env -u SUPERUSER_EMAIL -u SUPERUSER_PASS -u PORT -u SARCA_BASE_URL \
-          SARCA_SKIP_BUILD=1 ../.venv/bin/python -m pytest {{.CLI_ARGS}}
+        # `env -u` is not on PATH on every host Task runs on; `unset` is a builtin.
+        unset SUPERUSER_EMAIL SUPERUSER_PASS PORT SARCA_BASE_URL
+        # `gui` belongs to e2e:gui, which builds the prerequisites this task
+        # does not (client/dist, the pilot client, tauri-pilot). It used to
+        # deselect itself by way of a missing DISPLAY, which only held on a
+        # headless Linux box. A later -m in CLI_ARGS overrides this one.
+        SARCA_SKIP_BUILD=1 "$VENV_PY" -m pytest -m "not gui" {{.CLI_ARGS}}
 
   e2e:gui:
     desc: GUI e2e — drives the real Tauri client through tauri-pilot (Xvfb when headless)
@@ -240,20 +248,22 @@ tasks:
     cmds:
       - |
         cd "{{.ROOT_DIR}}"
-        if [ ! -d .venv ]; then python3 -m venv .venv; fi
-        .venv/bin/pip install -q -r e2e/requirements.txt
+        {{.ENSURE_VENV}}
+        "$VENV_PY" -m pip install -q -r e2e/requirements.txt
         command -v tauri-pilot >/dev/null 2>&1 || cargo install tauri-pilot-cli --locked
         cargo build --release -p sarca
         # The pilot plugin is debug-only and feature-gated, so the client the
         # tests drive is a debug build with `--features pilot`.
         cargo build -p sarca-client --features pilot
         cd e2e
-        CMD="env -u SUPERUSER_EMAIL -u SUPERUSER_PASS -u PORT -u SARCA_BASE_URL \
-          SARCA_SKIP_BUILD=1 ../.venv/bin/python -m pytest -m gui {{.CLI_ARGS}}"
-        if [ -n "${DISPLAY}${WAYLAND_DISPLAY}" ]; then
-          sh -c "$CMD"
+        unset SUPERUSER_EMAIL SUPERUSER_PASS PORT SARCA_BASE_URL
+        export SARCA_SKIP_BUILD=1
+        # Only X11/Wayland hosts need a virtual display; Windows and macOS
+        # draw the client through the native compositor.
+        if [ "{{OS}}" = "windows" ] || [ "{{OS}}" = "darwin" ] || [ -n "${DISPLAY}${WAYLAND_DISPLAY}" ]; then
+          "$VENV_PY" -m pytest -m gui {{.CLI_ARGS}}
         else
-          xvfb-run -a -s "-screen 0 1280x900x24" sh -c "$CMD"
+          xvfb-run -a -s "-screen 0 1280x900x24" "$VENV_PY" -m pytest -m gui {{.CLI_ARGS}}
         fi
 
   ico:update:
