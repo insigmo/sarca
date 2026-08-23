@@ -1,3 +1,7 @@
+// Handlers return `Result<Response, Response>` (both variants already IntoResponse),
+// which clippy 1.98's result_large_err flags — boxing here would just add noise.
+#![allow(clippy::result_large_err)]
+
 use std::{sync::Arc, time::Duration};
 
 use axum::{
