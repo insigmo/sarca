@@ -347,6 +347,7 @@
 		"botTokenHelper": "在 @BotFather → 你的机器人 → API Token 获取",
 		"botTokenLabel": "机器人令牌",
 		"botUpdated": "机器人已更新为“{{name}}”",
+		"botUpdatedChannelsRemoved": "机器人已更新为“{{name}}” — 旧机器人的频道及其中的文件已被删除",
 		"cannotRemoveLastActiveChannel": "无法移除最后一个活跃频道",
 		"changeBot": "更换机器人",
 		"channelActive": "活跃",

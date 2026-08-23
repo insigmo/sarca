@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js'
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js'
 import { Portal } from 'solid-js/web'
 import Button from '@suid/material/Button'
 import CircularProgress from '@suid/material/CircularProgress'
@@ -100,10 +100,9 @@ const FileViewer = (props) => {
 	const [playing, setPlaying] = createSignal(false)
 	const [muted, setMuted] = createSignal(false)
 	const [volume, setVolume] = createSignal(1)
-	/** Cycle order for the playback-rate button; index points into this list. */
-	const PLAYBACK_RATES = [1, 1.25, 1.5, 2, 0.5, 0.75]
-	const [playbackRateIndex, setPlaybackRateIndex] = createSignal(0)
-	const playbackRate = () => PLAYBACK_RATES[playbackRateIndex()]
+	/** Selectable playback speeds, ascending, shown in the rate dropdown. */
+	const PLAYBACK_RATES = [0.5, 0.75, 1, 1.25, 1.5, 2]
+	const [playbackRate, setPlaybackRate] = createSignal(1)
 	const [currentTime, setCurrentTime] = createSignal(0)
 	const [duration, setDuration] = createSignal(0)
 	const [progress, setProgress] = createSignal(0)
@@ -767,22 +766,23 @@ const FileViewer = (props) => {
 		if (mediaEl) mediaEl.playbackRate = playbackRate()
 	}
 
-	/** Cycle 1x → 1.25x → 1.5x → 2x → 0.5x → 0.75x → 1x. */
-	const cyclePlaybackRate = () => {
-		setPlaybackRateIndex((playbackRateIndex() + 1) % PLAYBACK_RATES.length)
+	const onPlaybackRateChange = (e) => {
+		setPlaybackRate(Number(e.currentTarget.value))
 		applyRateToMedia()
 	}
 
 	const playbackRateButton = () => (
-		<button
-			type="button"
+		<select
 			class="file-viewer__ctrl-btn file-viewer__ctrl-btn--rate"
-			onClick={cyclePlaybackRate}
+			value={playbackRate()}
+			onChange={onPlaybackRateChange}
 			aria-label={t('viewer.playbackSpeed')}
 			title={t('viewer.playbackSpeed')}
 		>
-			{playbackRate()}×
-		</button>
+			<For each={PLAYBACK_RATES}>
+				{(rate) => <option value={rate}>{rate}×</option>}
+			</For>
+		</select>
 	)
 
 	const seek = (e) => {

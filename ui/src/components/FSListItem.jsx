@@ -23,6 +23,11 @@ import { alertStore } from './AlertStack'
 
 const LONG_PRESS_MS = 520
 
+/** Extra component-level attempts after the thumb queue's own retries give up. */
+const THUMB_RETRY_ATTEMPTS = 3
+/** Gap between those attempts — long enough to ride out a rate-limit storm. */
+const THUMB_RETRY_DELAY_MS = 30_000
+
 /**
  * @typedef {Object} FSListItemProps
  * @property {import("../api").FSElement} fsElement
@@ -230,6 +235,7 @@ const FSListItem = (props) => {
 
 		let revoked = false
 		let acquired = false
+		let retryTimer = null
 		const ac = new AbortController()
 
 		setThumbUrl(null)
@@ -240,7 +246,15 @@ const FSListItem = (props) => {
 		// only the network fetch waits for the server to admit it has one.
 		const localOnly = !hasThumb && fileKind(name, isFile) === 'image'
 
-		if (isFile && (hasThumb || localOnly)) {
+		// A folder with hundreds of files fires every tile's fetch at once (the
+		// list has no virtualization), which can outlast the shared thumb
+		// queue's own per-tile retry budget under sustained Telegram rate
+		// limiting. Nothing else ever re-triggers this effect for a tile whose
+		// `has_thumb` was already true, so without a retry here that tile would
+		// stay permanently blank even after the storm clears. Cache-only misses
+		// are excluded: retrying those without a `has_thumb` change would just
+		// hit the same empty cache again.
+		const attempt = (retriesLeft) => {
 			loadThumb({
 				scope: storageId,
 				path,
@@ -258,11 +272,22 @@ const FSListItem = (props) => {
 				.catch((err) => {
 					if (revoked || err?.name === 'AbortError') return
 					setThumbUrl(null)
+					if (!localOnly && retriesLeft > 0) {
+						retryTimer = setTimeout(
+							() => attempt(retriesLeft - 1),
+							THUMB_RETRY_DELAY_MS,
+						)
+					}
 				})
+		}
+
+		if (isFile && (hasThumb || localOnly)) {
+			attempt(THUMB_RETRY_ATTEMPTS)
 		}
 
 		onCleanup(() => {
 			revoked = true
+			if (retryTimer) clearTimeout(retryTimer)
 			ac.abort()
 			if (acquired) releaseObjectUrl(key)
 		})

@@ -347,6 +347,7 @@
 		"botTokenHelper": "En @BotFather → tu bot → API Token",
 		"botTokenLabel": "Token del bot",
 		"botUpdated": "Bot actualizado a \"{{name}}\"",
+		"botUpdatedChannelsRemoved": "Bot actualizado a \"{{name}}\" — los canales del bot anterior y sus archivos fueron eliminados",
 		"cannotRemoveLastActiveChannel": "No se puede eliminar el último canal activo",
 		"changeBot": "Cambiar bot",
 		"channelActive": "Activo",

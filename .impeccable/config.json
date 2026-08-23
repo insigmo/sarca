@@ -1,0 +1,35 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "border-left: 3px solid var(--sarca-accent);",
+        "files": [
+          "ui/src/index.css"
+        ],
+        "createdAt": "2026-08-23T10:13:36.408Z",
+        "reason": "blockquote left-border is the standard markdown-rendering convention, not a decorative card side-tab"
+      },
+      {
+        "rule": "layout-transition",
+        "value": "transition: height 0.15s ease;",
+        "files": [
+          "ui/src/index.css"
+        ],
+        "createdAt": "2026-08-23T10:13:36.627Z",
+        "reason": "pull-to-refresh indicator height is driven incrementally by drag distance in JS; isolated element, no sibling reflow"
+      },
+      {
+        "rule": "layout-transition",
+        "value": "transition: width 0.08s linear;",
+        "files": [
+          "ui/src/index.css"
+        ],
+        "createdAt": "2026-08-23T10:13:36.741Z",
+        "reason": "video seek-bar fill, same pattern as the adjacent volume fill; single small element inside a fixed-size track, not page layout thrash"
+      }
+    ]
+  }
+}

@@ -55,6 +55,8 @@ pub enum SarcaError {
     LastActiveChannel,
     #[error("Replacing the bot removes its channels and their files — confirm to continue")]
     BotReplacementRequiresChannelConfirmation,
+    #[error("This is already this storage's current bot — nothing to change")]
+    BotTokenUnchanged,
     #[error("Storage has no active channel available")]
     NoActiveChannel,
     #[error("A file already exists at this path")]
@@ -106,6 +108,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::WorkerRequiresStorage
             | SarcaError::InvalidTrashRetention
             | SarcaError::InvalidShareExpiry
+            | SarcaError::BotTokenUnchanged
             | SarcaError::TelegramAPIError(_) => (StatusCode::BAD_REQUEST, e.to_string()),
             _ => {
                 tracing::error!("{e}");
