@@ -149,6 +149,15 @@ jobs:
           cache: pip
           cache-dependency-path: e2e/requirements.txt
 
+      # The release image ships a static ffmpeg, and the media pipeline leans on
+      # it: HEIC/AVIF previews, video keyframes, and the fallback decode for a
+      # photo too large for the `image` crate (a full-resolution phone capture).
+      # Without it here the suite silently skipped every one of those paths.
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Install e2e deps
         run: |
           chmod +x target/release/sarca target/debug/examples/headless

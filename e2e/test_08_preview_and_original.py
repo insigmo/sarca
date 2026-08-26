@@ -21,6 +21,7 @@ from helpers.server import SarcaServer
 pytestmark = pytest.mark.mock_only
 
 PREVIEW_MAX_EDGE = 2048
+THUMB_MAX_EDGE = 512
 
 
 def upload_photo(sarca: SarcaClient, storage: str, name: str = "photo.jpg") -> bytes:
@@ -218,8 +219,8 @@ def test_thumbnail_and_preview_are_separate_documents(
     preview = sarca.preview(storage, "both.jpg")
     assert thumb.status_code == 200 and preview.status_code == 200
     assert media.is_jpeg(thumb.content) and media.is_jpeg(preview.content)
-    assert len(thumb.content) < len(preview.content), "thumb (512px) < preview (2048px)"
-    assert max(media.image_size(thumb.content)) <= 512
+    assert len(thumb.content) < len(preview.content), "thumb < preview"
+    assert max(media.image_size(thumb.content)) <= THUMB_MAX_EDGE
 
 
 def test_thumb_is_cached_on_disk_after_first_read(
@@ -262,9 +263,56 @@ def test_junk_client_thumb_falls_back_to_server_generation(
     r = sarca.thumb(storage, "junk.jpg")
     assert r.status_code == 200
     assert media.is_jpeg(r.content)
-    assert max(media.image_size(r.content)) <= 512
+    assert max(media.image_size(r.content)) <= THUMB_MAX_EDGE
 
 
+def test_thumb_is_derived_and_backfilled_for_a_file_that_never_got_one(
+    sarca: SarcaClient, storage: str, workdir
+) -> None:
+    """A photo whose thumbnail step failed at upload has none stored at all.
+
+    Nothing used to re-derive one — the endpoint 404'd, the warmer skipped the
+    file and the grid never even asked — so its tile stayed blank forever. It is
+    now built from the preview and backfilled, which is what repairs a library
+    that already has such files in it.
+    """
+    import sqlite3  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    upload_photo(sarca, storage, "no-thumb.jpg")
+
+    db = sqlite3.connect(workdir / "sarca.sqlite")
+    db.execute(
+        "UPDATE files SET thumb_telegram_file_id = NULL, "
+        "thumb_telegram_message_id = NULL WHERE path = 'no-thumb.jpg'"
+    )
+    db.commit()
+    db.close()
+    shutil.rmtree(workdir / "thumb_cache", ignore_errors=True)
+
+    assert sarca.info(storage, "no-thumb.jpg")["has_thumb"] is False
+
+    r = sarca.thumb(storage, "no-thumb.jpg")
+    assert r.status_code == 200, r.text
+    assert media.is_jpeg(r.content)
+    assert max(media.image_size(r.content)) <= THUMB_MAX_EDGE
+
+    # The derive is detached from the response, so give the backfill a moment:
+    # once it lands the file reports a thumbnail again and every later read is
+    # an ordinary stored-thumb download instead of another derive.
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        if sarca.info(storage, "no-thumb.jpg")["has_thumb"]:
+            break
+        time.sleep(0.2)
+    else:
+        pytest.fail("the derived thumbnail was never backfilled")
+
+
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None,
+    reason="needs ffmpeg, which the release image ships and the CI runner does not",
+)
 def test_full_resolution_photo_still_gets_a_thumbnail(
     sarca: SarcaClient, storage: str
 ) -> None:
@@ -272,8 +320,7 @@ def test_full_resolution_photo_still_gets_a_thumbnail(
 
     The direct decode refuses it, so the thumbnail has to come from the ffmpeg
     fallback. Without that fallback such a photo was stored with a preview and
-    no thumbnail at all, and nothing ever re-derived one, so its grid tile
-    stayed blank forever.
+    no thumbnail at all — the exact state a Pixel-shot library ends up in.
     """
     data = media.big_photo(7000, 6000)  # 42MP, over the 40MP decode guard
     assert sarca.upload(storage, "huge.jpg", data, content_type="image/jpeg").ok
@@ -282,7 +329,7 @@ def test_full_resolution_photo_still_gets_a_thumbnail(
     r = sarca.thumb(storage, "huge.jpg")
     assert r.status_code == 200, "a full-resolution photo must still get a tile"
     assert media.is_jpeg(r.content)
-    assert max(media.image_size(r.content)) <= 512
+    assert max(media.image_size(r.content)) <= THUMB_MAX_EDGE
 
 
 def test_small_image_preview_is_not_upscaled(sarca: SarcaClient, storage: str) -> None:
