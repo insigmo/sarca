@@ -386,6 +386,46 @@ impl<'d> StorageManagerService<'d> {
         Ok(())
     }
 
+    /// Backfill a stored thumbnail for a file that came out of upload without
+    /// one, after `thumb_for_path` has already derived the tile to answer the
+    /// current request.
+    ///
+    /// Photos too big for the direct decode used to lose their thumbnail at
+    /// upload and had no way back: nothing re-derives a thumbnail, so the grid
+    /// tile stayed blank forever. This is that way back — the derive happens
+    /// once, and every later read is an ordinary stored-thumb download.
+    ///
+    /// Best-effort and silent, exactly like [`Self::backfill_preview`]: the
+    /// caller has already served the bytes it built.
+    pub async fn backfill_thumb(&self, file_id: Uuid, jpeg: Vec<u8>) {
+        if let Err(e) = self.backfill_thumb_inner(file_id, jpeg).await {
+            tracing::warn!("thumb backfill failed for {file_id}: {e}");
+        }
+    }
+
+    async fn backfill_thumb_inner(&self, file_id: Uuid, jpeg: Vec<u8>) -> SarcaResult<()> {
+        let storage = self.storages_repo.get_by_file_id(file_id).await?;
+        let (primary, _) =
+            self.resolve_primary_channel(storage.id, storage.primary_position).await?;
+
+        // No "is it worth storing?" guard here, unlike a preview: a tile is tens
+        // of KB against an original measured in megabytes, so it always is.
+        let scheduler = StorageWorkersScheduler::new(self.db, self.rate_limit);
+        let outcome = TelegramBotApi::new(self.telegram_baseurl, scheduler)
+            .upload(&jpeg, primary.chat_id, storage.id)
+            .await?;
+
+        self.files_repo.set_thumb(file_id, &outcome.file_id, outcome.message_id).await?;
+
+        tracing::debug!(
+            "backfilled thumbnail for file {file_id} ({} bytes) as telegram_file_id {}",
+            jpeg.len(),
+            outcome.file_id
+        );
+
+        Ok(())
+    }
+
     /// Backfill a stored preview for a file that predates them, after the
     /// slow path in `preview_for_path` has already re-encoded one from the
     /// original bytes to answer the current request. Paid once per file

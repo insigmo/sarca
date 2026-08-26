@@ -147,8 +147,35 @@ pub async fn generate(
     // (or the ffmpeg keyframe) the thumbnail already paid for. PDFs have no
     // preview document, so stop at the thumbnail.
     let include_preview = matches!(kind, ThumbKind::Image | ThumbKind::Video);
-    let result =
+    let raw = std::sync::Arc::new(raw);
+    let direct = {
+        let raw = raw.clone();
         tokio::task::spawn_blocking(move || build_thumb_and_preview(&raw, include_preview))
+            .await
+            .map_err(|e| e.to_string())?
+    };
+
+    let decode_error = match direct {
+        Ok(result) => return Ok(Some(result)),
+        // Video and PDF `raw` is already a JPEG frame ffmpeg/pdftoppm just
+        // produced, so there is nothing a second transcode could rescue.
+        Err(e) if kind != ThumbKind::Image => return Err(e),
+        Err(e) => e,
+    };
+
+    // The `image` crate refused these bytes: a 50MP phone capture past
+    // `MAX_DECODE_PIXELS`, or a variant it has no decoder for. ffmpeg decodes
+    // it and caps the frame at `MAX_TRANSCODE_DIMENSION`.
+    //
+    // `generate_preview` has always had this fallback and the thumbnail path
+    // never did, so a photo too big for the direct decode came out of upload
+    // with a preview and no thumbnail at all — a permanently blank grid tile,
+    // because nothing downstream retries a thumbnail that was never stored.
+    let transcoded = transcode_image_to_jpeg(file_path)
+        .await
+        .map_err(|e| format!("{decode_error}; ffmpeg fallback: {e}"))?;
+    let result =
+        tokio::task::spawn_blocking(move || build_thumb_and_preview(&transcoded, include_preview))
             .await
             .map_err(|e| e.to_string())??;
 
@@ -261,11 +288,7 @@ pub async fn fit_thumb(raw: Vec<u8>) -> Vec<u8> {
     }
 
     let source = raw.clone();
-    let fitted = tokio::task::spawn_blocking(move || {
-        let img = decode_guarded(&source)?;
-        encode_jpeg(&resize_within_ref(&img, THUMB_MAX_EDGE), THUMB_JPEG_QUALITY)
-    })
-    .await;
+    let fitted = tokio::task::spawn_blocking(move || fit_thumb_bytes(&source)).await;
 
     match fitted {
         Ok(Ok(bytes)) => bytes,
@@ -278,6 +301,37 @@ pub async fn fit_thumb(raw: Vec<u8>) -> Vec<u8> {
             raw
         },
     }
+}
+
+/// Build a grid tile from arbitrary image bytes, falling back to ffmpeg for
+/// anything the `image` crate will not decode — the same two-step the preview
+/// path uses.
+///
+/// This is what lets a thumbnail be derived after the fact, from a file's
+/// stored preview, for the photos that came out of upload without one.
+pub async fn thumb_from_image(raw: Vec<u8>) -> Result<Vec<u8>, String> {
+    let raw = std::sync::Arc::new(raw);
+    let direct = {
+        let raw = raw.clone();
+        tokio::task::spawn_blocking(move || fit_thumb_bytes(&raw))
+            .await
+            .map_err(|e| e.to_string())?
+    };
+    let Err(decode_error) = direct else {
+        return direct;
+    };
+
+    let transcoded = transcode_image_bytes_to_jpeg(&raw)
+        .await
+        .map_err(|e| format!("{decode_error}; ffmpeg fallback: {e}"))?;
+    tokio::task::spawn_blocking(move || fit_thumb_bytes(&transcoded))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Decode `raw` and encode it down to a grid tile.
+fn fit_thumb_bytes(raw: &[u8]) -> Result<Vec<u8>, String> {
+    encode_jpeg(&resize_within(decode_guarded(raw)?, THUMB_MAX_EDGE), THUMB_JPEG_QUALITY)
 }
 
 /// Whether `raw`'s longest edge is past [`THUMB_MAX_EDGE`]. Reads the header
@@ -697,6 +751,30 @@ mod tests {
             worst_case.len(),
             crate::routers::files::MAX_CLIENT_THUMB_BYTES
         );
+    }
+
+    #[tokio::test]
+    async fn thumb_from_image_builds_a_tile_from_preview_sized_bytes() {
+        // What a stored preview looks like: already a modest JPEG, still far
+        // bigger than a grid tile.
+        let preview = encode_jpeg(
+            &image::load_from_memory(&sample_png(PREVIEW_MAX_EDGE, 1536)).unwrap(),
+            PREVIEW_JPEG_QUALITY,
+        )
+        .unwrap();
+
+        let tile = thumb_from_image(preview).await.expect("a preview always yields a tile");
+
+        let decoded = image::load_from_memory(&tile).unwrap();
+        assert_eq!(decoded.width().max(decoded.height()), THUMB_MAX_EDGE);
+        assert!(is_jpeg(&tile));
+    }
+
+    #[tokio::test]
+    async fn thumb_from_image_reports_failure_instead_of_inventing_a_tile() {
+        // No decoder and no ffmpeg rescue: the caller must be able to tell this
+        // apart from success so it answers 404 rather than caching junk.
+        assert!(thumb_from_image(b"not an image at all".to_vec()).await.is_err());
     }
 
     #[tokio::test]

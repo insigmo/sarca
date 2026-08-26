@@ -265,6 +265,26 @@ def test_junk_client_thumb_falls_back_to_server_generation(
     assert max(media.image_size(r.content)) <= 512
 
 
+def test_full_resolution_photo_still_gets_a_thumbnail(
+    sarca: SarcaClient, storage: str
+) -> None:
+    """A modern phone's full-resolution capture is past MAX_DECODE_PIXELS.
+
+    The direct decode refuses it, so the thumbnail has to come from the ffmpeg
+    fallback. Without that fallback such a photo was stored with a preview and
+    no thumbnail at all, and nothing ever re-derived one, so its grid tile
+    stayed blank forever.
+    """
+    data = media.big_photo(7000, 6000)  # 42MP, over the 40MP decode guard
+    assert sarca.upload(storage, "huge.jpg", data, content_type="image/jpeg").ok
+    sarca.wait_for_file(storage, "huge.jpg")
+
+    r = sarca.thumb(storage, "huge.jpg")
+    assert r.status_code == 200, "a full-resolution photo must still get a tile"
+    assert media.is_jpeg(r.content)
+    assert max(media.image_size(r.content)) <= 512
+
+
 def test_small_image_preview_is_not_upscaled(sarca: SarcaClient, storage: str) -> None:
     data = media.png(64, 48)
     assert sarca.upload(storage, "tiny.png", data, content_type="image/png").ok

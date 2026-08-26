@@ -996,10 +996,6 @@ impl FilesRouter {
             .await
             .map_err(<(StatusCode, String)>::from)?;
 
-        let Some(thumb_id) = file.thumb_telegram_file_id.as_deref() else {
-            return Err((StatusCode::NOT_FOUND, "Thumbnail not found".to_owned()));
-        };
-
         let thumb_cache = MediaCache::thumbs(&state.config.work_dir);
         let cache_key = thumb_cache.key(storage_id, path);
 
@@ -1013,6 +1009,11 @@ impl FilesRouter {
         if let Some(bytes) = cached_jpeg(&thumb_cache, &cache_key).await {
             return Ok(inline_jpeg_response(bytes, "thumb.jpg"));
         }
+
+        let Some(thumb_id) = file.thumb_telegram_file_id.as_deref() else {
+            return Self::derived_thumb(state, storage_id, path, file.id, &thumb_cache, &cache_key)
+                .await;
+        };
 
         let scheduler = StorageWorkersScheduler::new(&state.db, state.config.telegram_rate_limit);
         // Thumbs get their own reserved-smaller semaphore so a scrolled folder
@@ -1043,6 +1044,75 @@ impl FilesRouter {
         }
 
         Ok(inline_jpeg_response(bytes, "thumb.jpg"))
+    }
+
+    /// Build a grid tile for a file that has no stored thumbnail, out of its
+    /// preview.
+    ///
+    /// A photo whose thumbnail step failed at upload — anything the direct
+    /// decode refused, which on a modern phone means every full-resolution
+    /// capture — used to 404 here forever, because nothing in the system ever
+    /// re-derives a thumbnail. Its *preview* exists though (that path always had
+    /// an ffmpeg fallback), so the tile can be built from a JPEG that is already
+    /// small and usually already on disk: no original download, no 50MP decode.
+    ///
+    /// `preview_for_path` is reused rather than reimplemented so this inherits
+    /// its cache, its stored-document read, its slow-path re-encode and its 503
+    /// handling. Anything it declines to serve (a video, a file mid-upload)
+    /// stays the 404 it was before.
+    async fn derived_thumb(
+        state: Arc<AppState>,
+        storage_id: Uuid,
+        path: &str,
+        file_id: Uuid,
+        thumb_cache: &MediaCache,
+        cache_key: &str,
+    ) -> Result<Response, (StatusCode, String)> {
+        let not_found = || (StatusCode::NOT_FOUND, "Thumbnail not found".to_owned());
+
+        let preview = Self::preview_for_path(state.clone(), storage_id, path)
+            .await
+            .map_err(|_| not_found())?;
+        // A busy storage must reach the client as 503 so `thumbQueue.js` backs
+        // off, not as a 404 that retires the tile permanently.
+        if preview.status() == StatusCode::SERVICE_UNAVAILABLE {
+            return Ok(storage_busy_response());
+        }
+        if preview.status() != StatusCode::OK {
+            return Err(not_found());
+        }
+
+        let preview_bytes = axum::body::to_bytes(preview.into_body(), MAX_DERIVED_THUMB_SOURCE)
+            .await
+            .map_err(|e| {
+                tracing::warn!("thumb derive for {path}: reading preview failed: {e}");
+                not_found()
+            })?;
+
+        let jpeg = thumbnails::thumb_from_image(preview_bytes.to_vec()).await.map_err(|e| {
+            tracing::warn!("thumb derive for {path} failed: {e}");
+            not_found()
+        })?;
+
+        if let Err(e) = thumb_cache.put(cache_key, &jpeg).await {
+            tracing::warn!("thumb cache write skipped: {e}");
+        }
+
+        // Detached: store it so the next read is an ordinary stored-thumb
+        // download and `has_thumb` finally turns true for this file, which is
+        // what lets the grid stop treating it as thumbnail-less.
+        let db = state.db.clone();
+        let base_url = state.config.telegram_api_base_url.clone();
+        let rate = state.config.telegram_rate_limit;
+        let work_dir = state.config.work_dir.clone();
+        let backfill_jpeg = jpeg.clone();
+        tokio::spawn(async move {
+            StorageManagerService::new(&db, &base_url, rate, &work_dir)
+                .backfill_thumb(file_id, backfill_jpeg)
+                .await;
+        });
+
+        Ok(inline_jpeg_response(jpeg, "thumb.jpg"))
     }
 
     async fn preview(
@@ -1461,6 +1531,11 @@ async fn assemble_file_bytes(
 
     Ok(out)
 }
+
+/// Ceiling on a preview read back into memory to derive a thumbnail from.
+/// Previews are capped at `PREVIEW_MAX_EDGE`, so this only ever trips on a
+/// pathological one; the derive gives up rather than buffering it.
+const MAX_DERIVED_THUMB_SOURCE: usize = 32 * 1024 * 1024;
 
 /// Ceiling for a client-supplied thumbnail.
 ///

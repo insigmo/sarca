@@ -53,11 +53,14 @@ pub enum WarmKind {
 }
 
 /// One file selected for warming.
+///
+/// Deliberately carries no `has_thumb`: the thumb endpoint derives a tile for a
+/// file that has none, so "does the DB already know about a thumbnail" is no
+/// longer a reason to warm one file and not another.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WarmTarget {
     path: String,
     kind: WarmKind,
-    has_thumb: bool,
 }
 
 fn extension_of(name: &str) -> Option<String> {
@@ -273,7 +276,6 @@ where
                     targets.push(WarmTarget {
                         path: el.path,
                         kind,
-                        has_thumb: el.has_thumb,
                     });
                 }
             } else if dir.depth < max_depth {
@@ -294,7 +296,8 @@ where
 /// rather than an error — the daemon backs off and moves on instead of
 /// hammering a storage already at its Telegram rate limit.
 ///
-/// * thumb — only when the file actually has one stored;
+/// * thumb — always, since the endpoint derives a tile from the preview when no thumbnail was
+///   stored (and backfills one for next time);
 /// * preview — always, since the endpoint re-encodes a JPEG from the original when no preview
 ///   document exists (and backfills one for next time);
 /// * first chunk — videos only, so the player's opening Range is a disk read.
@@ -308,23 +311,23 @@ async fn warm_one(
     let mut summary = WarmSummary::default();
     let path = target.path.as_str();
 
-    if target.has_thumb {
-        let thumb_key = thumb_cache.key(storage_id, path);
-        if thumb_cache.get(&thumb_key).await.is_some() {
-            summary.skipped += 1;
-        } else {
-            // Same code path `FilesRouter::thumb` serves from: cache check,
-            // Telegram download, cache write. Nothing here duplicates it.
-            match FilesRouter::thumb_for_path(state.clone(), storage_id, path).await {
-                Ok(resp) if resp.status() == StatusCode::OK => summary.thumbs_warmed += 1,
-                Ok(_) => summary.skipped += 1,
-                Err((status, msg)) => {
-                    tracing::debug!(
-                        "[MEDIA WARMER] thumb warm failed for '{path}' ({status}): {msg}"
-                    );
-                    summary.errors += 1;
-                },
-            }
+    let thumb_key = thumb_cache.key(storage_id, path);
+    if thumb_cache.get(&thumb_key).await.is_some() {
+        summary.skipped += 1;
+    } else {
+        // Same code path `FilesRouter::thumb` serves from: cache check, stored
+        // download or derive-from-preview, cache write. Nothing here duplicates
+        // it — which is also what makes this the sweep that backfills the
+        // thumbnails a library never got, one file per pass, in the background.
+        match FilesRouter::thumb_for_path(state.clone(), storage_id, path).await {
+            Ok(resp) if resp.status() == StatusCode::OK => summary.thumbs_warmed += 1,
+            // A video with no stored thumbnail cannot be derived from a preview
+            // it does not have — expected, not a failure worth counting.
+            Ok(_) | Err((StatusCode::NOT_FOUND, _)) => summary.skipped += 1,
+            Err((status, msg)) => {
+                tracing::debug!("[MEDIA WARMER] thumb warm failed for '{path}' ({status}): {msg}");
+                summary.errors += 1;
+            },
         }
     }
 
@@ -506,7 +509,6 @@ mod tests {
             vec![WarmTarget {
                 path: "photo-no-thumb-yet.jpg".to_owned(),
                 kind: WarmKind::Image,
-                has_thumb: false,
             }]
         );
     }
