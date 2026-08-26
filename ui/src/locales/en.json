@@ -161,6 +161,8 @@
 		"syncTabDesc": "Auto-upload & folders",
 		"accessTab": "Access",
 		"accessTabDesc": "Who can open",
+		"backupTab": "Backup",
+		"backupTabDesc": "Download & restore",
 		"botHintPrefix": "Telegram bot and channels are in",
 		"storageSettingsLabel": "Storage settings",
 		"botHintSuffix": "— use the gear on a storage card, or (on desktop) the tune icon in the header while browsing files.",

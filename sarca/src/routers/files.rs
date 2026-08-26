@@ -254,6 +254,7 @@ impl FilesRouter {
                     // original for it. Anything bigger than a 128px JPEG could
                     // plausibly be is not a thumbnail, so drop it.
                     let mut bytes = Vec::new();
+                    let mut too_big = false;
                     while let Some(chunk) = field.chunk().await.map_err(|_| {
                         cleanup_tmp(&tmp_path);
                         (StatusCode::BAD_REQUEST, "Invalid thumb stream".to_owned())
@@ -261,10 +262,20 @@ impl FilesRouter {
                         bytes.extend_from_slice(&chunk);
                         if bytes.len() > MAX_CLIENT_THUMB_BYTES {
                             bytes.clear();
+                            too_big = true;
                             break;
                         }
                     }
-                    if is_jpeg(&bytes) {
+                    if too_big {
+                        // Not silent: dropping this falls back to a server-side
+                        // decode of the original, and when *that* also fails the
+                        // file ends up with no thumbnail at all and no trace of
+                        // why. `MAX_CLIENT_THUMB_BYTES` drifting behind
+                        // `THUMB_MAX_EDGE` is the thing this line makes visible.
+                        tracing::warn!(
+                            "client thumb ignored: over {MAX_CLIENT_THUMB_BYTES} bytes"
+                        );
+                    } else if is_jpeg(&bytes) {
                         client_thumb = Some(bytes);
                     } else if !bytes.is_empty() {
                         tracing::warn!("client thumb ignored: not a JPEG");
@@ -1021,6 +1032,12 @@ impl FilesRouter {
             Err(e) => return Err(<(StatusCode, String)>::from(e)),
         };
 
+        // Thumbnails stored while `THUMB_MAX_EDGE` was 1920 are preview-sized
+        // documents. Fit them before they are cached, so the whole pre-existing
+        // library shrinks on first read instead of re-filling (and re-evicting)
+        // the thumb cache with a few hundred oversized tiles.
+        let bytes = thumbnails::fit_thumb(bytes).await;
+
         if is_jpeg(&bytes) {
             if let Err(e) = thumb_cache.put(&cache_key, &bytes).await {
                 tracing::warn!("thumb cache write skipped: {e}");
@@ -1447,10 +1464,19 @@ async fn assemble_file_bytes(
     Ok(out)
 }
 
-/// Ceiling for a client-supplied thumbnail. A 128px JPEG is a few KB; this is
-/// loose enough for any encoder and tight enough that the field cannot be used
-/// to push a second copy of the photo through.
-const MAX_CLIENT_THUMB_BYTES: usize = 256 * 1024;
+/// Ceiling for a client-supplied thumbnail.
+///
+/// A real photo's tile at `THUMB_MAX_EDGE` is tens of KB, but incompressible
+/// detail can push one past 300KB, so the ceiling is set clear of the *worst*
+/// case rather than the typical one — see
+/// `thumbnails::tests::a_client_built_tile_fits_under_the_upload_ceiling`. Even
+/// so it is an order of magnitude under the original being uploaded alongside
+/// it, so the field still cannot smuggle a second copy of the photo through.
+///
+/// A ceiling below what the client actually produces is a silent trap: it was
+/// left at its 128px-era value when the edge went to 1920, which dropped the
+/// tile for every photo detailed enough to clear it, with nothing logged.
+pub(crate) const MAX_CLIENT_THUMB_BYTES: usize = 512 * 1024;
 
 fn is_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 3 && bytes[0..3] == [0xFF, 0xD8, 0xFF]

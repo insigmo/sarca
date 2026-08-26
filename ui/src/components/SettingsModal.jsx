@@ -338,6 +338,16 @@ const SettingsModal = () => {
 		if (!showSyncTab() && tab() === 'sync') setTab('general')
 	})
 
+	// The backup tab is superuser-only. The check is async, so bounce only
+	// once the answer is in — not while `isSuperuser()` is still its
+	// pessimistic initial value, which would kill a deep link to the tab.
+	createEffect(() => {
+		if (!isOpen() || tab() !== 'backup') return
+		refreshSuperuser().then((su) => {
+			if (!su) setTab('general')
+		})
+	})
+
 	const occupiedGb = () => {
 		const id = chrome.storageId()
 		const s = storages().find((x) => x.id === id)
@@ -641,6 +651,25 @@ const SettingsModal = () => {
 										<span class="settings-nav__desc">{i18n.t('settings.accessTabDesc')}</span>
 									</span>
 								</button>
+								<Show when={isSuperuser()}>
+									<button
+										type="button"
+										class="settings-nav__item"
+										classList={{ 'settings-nav__item--active': tab() === 'backup' }}
+										onClick={() => setTab('backup')}
+									>
+										<span class="settings-nav__icon" aria-hidden="true">
+											<FluentIcon
+												name={tab() === 'backup' ? 'historyFilled' : 'history'}
+												size={20}
+											/>
+										</span>
+										<span class="settings-nav__text">
+											<span class="settings-nav__title">{i18n.t('settings.backupTab')}</span>
+											<span class="settings-nav__desc">{i18n.t('settings.backupTabDesc')}</span>
+										</span>
+									</button>
+								</Show>
 							</nav>
 
 							<div class="settings-modal__body">
@@ -1051,100 +1080,6 @@ const SettingsModal = () => {
 												</div>
 											</div>
 										</Show>
-										<Show when={isSuperuser()}>
-											<div class="settings-backup">
-												<p class="settings-account__label">
-													{i18n.t('settings.backupTitle')}
-												</p>
-												<Typography
-													variant="body2"
-													color="text.secondary"
-													sx={{ mb: 2 }}
-												>
-													{i18n.t('settings.backupHint')}
-												</Typography>
-												<TextField
-													type="password"
-													label={i18n.t('settings.backupPasswordLabel')}
-													fullWidth
-													value={backupPassword()}
-													onChange={(e) => setBackupPassword(e.target.value)}
-												/>
-												<p class="settings-account__hint">
-													{i18n.t('settings.backupPasswordHint')}
-												</p>
-												<div style={{ 'margin-top': '16px' }}>
-													<Button
-														variant="contained"
-														color="secondary"
-														disabled={backupBusy()}
-														startIcon={
-															<FluentIcon name="arrowDownload" size={18} />
-														}
-														onClick={downloadBackup}
-													>
-														{backupBusy()
-															? i18n.t('settings.backupWorking')
-															: i18n.t('settings.downloadBackup')}
-													</Button>
-												</div>
-
-												<div class="settings-backup__restore">
-													<p class="settings-account__label">
-														{i18n.t('settings.restoreTitle')}
-													</p>
-													<Typography
-														variant="body2"
-														color="text.secondary"
-														sx={{ mb: 2 }}
-													>
-														{i18n.t('settings.restoreHint')}
-													</Typography>
-													<input
-														ref={restoreInput}
-														type="file"
-														accept=".sarcabak"
-														class="settings-backup__file"
-														aria-label={i18n.t('settings.restorePickFile')}
-														onChange={pickRestoreFile}
-													/>
-													<Show when={restoreFile()}>
-														{(file) => (
-															<p class="settings-account__hint">
-																{file().name} —{' '}
-																{formatBytes(file().size)}
-															</p>
-														)}
-													</Show>
-													<div style={{ 'margin-top': '12px' }}>
-														<TextField
-															type="password"
-															label={i18n.t('settings.restorePasswordLabel')}
-															fullWidth
-															value={restorePassword()}
-															onChange={(e) =>
-																setRestorePassword(e.target.value)
-															}
-														/>
-													</div>
-													<div style={{ 'margin-top': '16px' }}>
-														<Button
-															variant="outlined"
-															color="error"
-															disabled={restoreBusy() || !restoreFile()}
-															startIcon={
-																<FluentIcon name="arrowUndo" size={18} />
-															}
-															onClick={() => setRestoreConfirmOpen(true)}
-														>
-															{restoreBusy()
-																? i18n.t('settings.restoreWorking')
-																: i18n.t('settings.restoreAction')}
-														</Button>
-													</div>
-												</div>
-											</div>
-										</Show>
 										<p class="settings-bot-hint">
 											{i18n.t('settings.appLockHint')}
 										</p>
@@ -1302,6 +1237,103 @@ const SettingsModal = () => {
 											>
 												{i18n.t('sidebar.logOut')}
 											</Button>
+										</div>
+									</div>
+								</Show>
+
+								<Show when={tab() === 'backup' && isSuperuser()}>
+									<div class="settings-account">
+										<div class="settings-backup">
+											<p class="settings-account__label">
+												{i18n.t('settings.backupTitle')}
+											</p>
+											<Typography
+												variant="body2"
+												color="text.secondary"
+												sx={{ mb: 2 }}
+											>
+												{i18n.t('settings.backupHint')}
+											</Typography>
+											<TextField
+												type="password"
+												label={i18n.t('settings.backupPasswordLabel')}
+												fullWidth
+												value={backupPassword()}
+												onChange={(e) => setBackupPassword(e.target.value)}
+											/>
+											<p class="settings-account__hint">
+												{i18n.t('settings.backupPasswordHint')}
+											</p>
+											<div style={{ 'margin-top': '16px' }}>
+												<Button
+													variant="contained"
+													color="secondary"
+													disabled={backupBusy()}
+													startIcon={
+														<FluentIcon name="arrowDownload" size={18} />
+													}
+													onClick={downloadBackup}
+												>
+													{backupBusy()
+														? i18n.t('settings.backupWorking')
+														: i18n.t('settings.downloadBackup')}
+												</Button>
+											</div>
+
+											<div class="settings-backup__restore">
+												<p class="settings-account__label">
+													{i18n.t('settings.restoreTitle')}
+												</p>
+												<Typography
+													variant="body2"
+													color="text.secondary"
+													sx={{ mb: 2 }}
+												>
+													{i18n.t('settings.restoreHint')}
+												</Typography>
+												<input
+													ref={restoreInput}
+													type="file"
+													accept=".sarcabak"
+													class="settings-backup__file"
+													aria-label={i18n.t('settings.restorePickFile')}
+													onChange={pickRestoreFile}
+												/>
+												<Show when={restoreFile()}>
+													{(file) => (
+														<p class="settings-account__hint">
+															{file().name} —{' '}
+															{formatBytes(file().size)}
+														</p>
+													)}
+												</Show>
+												<div style={{ 'margin-top': '12px' }}>
+													<TextField
+														type="password"
+														label={i18n.t('settings.restorePasswordLabel')}
+														fullWidth
+														value={restorePassword()}
+														onChange={(e) =>
+															setRestorePassword(e.target.value)
+														}
+													/>
+												</div>
+												<div style={{ 'margin-top': '16px' }}>
+													<Button
+														variant="outlined"
+														color="error"
+														disabled={restoreBusy() || !restoreFile()}
+														startIcon={
+															<FluentIcon name="arrowUndo" size={18} />
+														}
+														onClick={() => setRestoreConfirmOpen(true)}
+													>
+														{restoreBusy()
+															? i18n.t('settings.restoreWorking')
+															: i18n.t('settings.restoreAction')}
+													</Button>
+												</div>
+											</div>
 										</div>
 									</div>
 								</Show>

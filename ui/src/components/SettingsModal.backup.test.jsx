@@ -79,6 +79,12 @@ const buttonByText = (container, text) =>
 		)
 	)
 
+/** @param {HTMLElement} container @param {string} text */
+const navByText = (container, text) =>
+	[...container.querySelectorAll('.settings-nav__title')].find(
+		(el) => el.textContent === text,
+	)
+
 const fakeBackupFile = () =>
 	new File([new Uint8Array([1, 2, 3])], 'sarca-backup.sarcabak')
 
@@ -97,7 +103,7 @@ describe('SettingsModal backup panel', () => {
 		})
 		globalThis.URL.createObjectURL = vi.fn(() => 'blob:backup')
 		globalThis.URL.revokeObjectURL = vi.fn()
-		settingsStore.openSettings('general')
+		settingsStore.openSettings('backup')
 	})
 
 	it('sends the typed password with the download request', async () => {
@@ -156,18 +162,18 @@ describe('SettingsModal backup panel', () => {
 
 	it('cannot be reached by a non-superuser', async () => {
 		const api = (await import('../api')).default
-		api.auth.meSilent.mockResolvedValueOnce({
+		// Not `...Once`: opening the modal and landing on the tab each ask the
+		// server who you are, and both answers have to say "not a superuser".
+		api.auth.meSilent.mockResolvedValue({
 			email: 'someone@example.com',
 			is_superuser: false,
 		})
 
 		const { container } = render(() => <SettingsModal />)
-		// Wait for something the general tab always renders, then assert the
-		// panel is still absent rather than racing an effect that never fires.
-		await waitFor(() => expect(container.querySelector('.settings-nav')).toBeTruthy())
-		await waitFor(() =>
-			expect(container.querySelector('.settings-trash')).toBeNull(),
-		)
+		// The tab itself is superuser-only: a non-superuser landing on it (deep
+		// link, demotion) gets bounced back to General instead of an empty pane.
+		await waitFor(() => expect(settingsStore.tab()).toBe('general'))
+		expect(navByText(container, 'Backup')).toBeFalsy()
 		expect(container.querySelector('.settings-backup')).toBeNull()
 	})
 })

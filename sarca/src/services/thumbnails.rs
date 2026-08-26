@@ -7,7 +7,19 @@ use image::{GenericImageView, codecs::jpeg::JpegEncoder, imageops::FilterType};
 use tokio::process::Command;
 
 /// Longest edge of a grid tile thumbnail.
-const THUMB_MAX_EDGE: u32 = 1920;
+///
+/// A tile renders the thumbnail at 64 CSS px (grid) or 40 (list row), so even a
+/// 3x display asks for under 200 px. 512 leaves room for a bigger tile later
+/// and still lands around 30KB a piece.
+///
+/// This is a *tile*, not a picture: at 1920 a thumbnail was preview-sized
+/// (hundreds of KB), which is what broke the grid. Every tile is one Telegram
+/// download charged against the storage's 60-per-minute token bucket, and the
+/// 256MB thumb cache only held a few hundred of them before evicting — so a
+/// photo folder permanently re-fetched its own tiles, drained the bucket, and
+/// left whatever lost the race blank. Keep it small enough that a whole
+/// library's tiles fit on disk.
+const THUMB_MAX_EDGE: u32 = 512;
 
 /// Longest edge of a stored/served preview.
 ///
@@ -230,6 +242,54 @@ pub async fn generate_preview(raw: Vec<u8>) -> Result<Vec<u8>, String> {
 /// Decode `raw` and encode it to a screen-sized JPEG preview.
 fn fit_preview(raw: &[u8]) -> Result<Vec<u8>, String> {
     encode_jpeg(&resize_within(decode_guarded(raw)?, PREVIEW_MAX_EDGE), PREVIEW_JPEG_QUALITY)
+}
+
+/// Shrink a stored thumbnail that was encoded against an older, far larger
+/// [`THUMB_MAX_EDGE`].
+///
+/// Thumbnails uploaded while the edge was 1920 are still 1920 in Telegram, and
+/// nothing re-uploads them. Fitting them here — on the cache miss, before the
+/// bytes are cached and sent — shrinks the whole existing library without
+/// touching Telegram: the disk cache goes back to holding thousands of tiles
+/// instead of a few hundred, and a grid stops re-downloading its own tiles.
+///
+/// Bytes that already fit are handed back untouched, and so are bytes that fail
+/// to decode: serving an oversized tile beats serving none.
+pub async fn fit_thumb(raw: Vec<u8>) -> Vec<u8> {
+    if !exceeds_thumb_edge(&raw) {
+        return raw;
+    }
+
+    let source = raw.clone();
+    let fitted = tokio::task::spawn_blocking(move || {
+        let img = decode_guarded(&source)?;
+        encode_jpeg(&resize_within_ref(&img, THUMB_MAX_EDGE), THUMB_JPEG_QUALITY)
+    })
+    .await;
+
+    match fitted {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => {
+            tracing::warn!("oversized thumbnail served as-is: {e}");
+            raw
+        },
+        Err(e) => {
+            tracing::warn!("oversized thumbnail served as-is: {e}");
+            raw
+        },
+    }
+}
+
+/// Whether `raw`'s longest edge is past [`THUMB_MAX_EDGE`]. Reads the header
+/// only — a full decode is what the caller is trying to avoid. Unreadable
+/// dimensions count as "fits", so an undecodable tile is passed through rather
+/// than run into a decode that would fail anyway.
+fn exceeds_thumb_edge(raw: &[u8]) -> bool {
+    image::ImageReader::new(std::io::Cursor::new(raw))
+        .with_guessed_format()
+        .ok()
+        .and_then(|reader| reader.into_dimensions().ok())
+        .is_some_and(|(w, h)| w.max(h) > THUMB_MAX_EDGE)
 }
 
 fn detect_kind(logical_path: &str) -> Option<ThumbKind> {
@@ -616,6 +676,63 @@ mod tests {
         assert!(preview.width() <= PREVIEW_MAX_EDGE);
         assert!(preview.height() <= PREVIEW_MAX_EDGE);
         assert!(preview.width() > THUMB_MAX_EDGE);
+    }
+
+    /// The two constants live in different modules and drifted apart once
+    /// already: `THUMB_MAX_EDGE` went 320 -> 1920 while the upload ceiling
+    /// stayed at its 128px value, so every tile a client built for a detailed
+    /// photo was silently dropped on arrival. Encode the worst case a client
+    /// can hand us and prove it still fits.
+    #[test]
+    fn a_client_built_tile_fits_under_the_upload_ceiling() {
+        let worst_case = encode_jpeg(
+            &image::load_from_memory(&noisy_png(THUMB_MAX_EDGE, THUMB_MAX_EDGE)).unwrap(),
+            THUMB_JPEG_QUALITY,
+        )
+        .unwrap();
+
+        assert!(
+            worst_case.len() < crate::routers::files::MAX_CLIENT_THUMB_BYTES,
+            "a {THUMB_MAX_EDGE}px tile encodes to {} bytes, over the {} byte upload ceiling",
+            worst_case.len(),
+            crate::routers::files::MAX_CLIENT_THUMB_BYTES
+        );
+    }
+
+    #[tokio::test]
+    async fn fit_thumb_shrinks_a_legacy_oversized_tile() {
+        // What a thumbnail uploaded while the edge was 1920 looks like coming
+        // back out of Telegram.
+        let legacy = encode_jpeg(
+            &image::load_from_memory(&sample_png(1920, 1440)).unwrap(),
+            THUMB_JPEG_QUALITY,
+        )
+        .unwrap();
+
+        let fitted = fit_thumb(legacy.clone()).await;
+
+        let decoded = image::load_from_memory(&fitted).unwrap();
+        assert!(decoded.width().max(decoded.height()) <= THUMB_MAX_EDGE);
+        assert!(
+            fitted.len() < legacy.len() / 4,
+            "the point is the bytes: {} vs {}",
+            fitted.len(),
+            legacy.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn fit_thumb_leaves_a_current_tile_and_undecodable_bytes_alone() {
+        let current = encode_jpeg(
+            &image::load_from_memory(&sample_png(THUMB_MAX_EDGE, 300)).unwrap(),
+            THUMB_JPEG_QUALITY,
+        )
+        .unwrap();
+        assert_eq!(fit_thumb(current.clone()).await, current, "no re-encode when it already fits");
+
+        // Serving an odd tile beats serving none.
+        let junk = b"not an image at all".to_vec();
+        assert_eq!(fit_thumb(junk.clone()).await, junk);
     }
 
     #[test]
