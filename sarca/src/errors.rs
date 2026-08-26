@@ -63,6 +63,10 @@ pub enum SarcaError {
     TrashPathConflict,
     #[error("Invalid trash retention days (must be 1–30)")]
     InvalidTrashRetention,
+    #[error("This backup is password-protected — enter its password to restore it")]
+    BackupPasswordRequired,
+    #[error("{0}")]
+    InvalidBackupFile(String),
     #[error("Share expiry must be in the future")]
     InvalidShareExpiry,
     #[error("unknown error")]
@@ -107,6 +111,8 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::NoActiveChannel
             | SarcaError::WorkerRequiresStorage
             | SarcaError::InvalidTrashRetention
+            | SarcaError::BackupPasswordRequired
+            | SarcaError::InvalidBackupFile(_)
             | SarcaError::InvalidShareExpiry
             | SarcaError::BotTokenUnchanged
             | SarcaError::TelegramAPIError(_) => (StatusCode::BAD_REQUEST, e.to_string()),

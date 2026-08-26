@@ -4488,12 +4488,13 @@ dependencies = [
 
 [[package]]
 name = "sarca"
-version = "0.0.159"
+version = "0.0.160"
 dependencies = [
  "async-stream",
  "axum",
  "bytes",
  "chrono",
+ "flate2",
  "futures",
  "h3",
  "h3-axum",
@@ -4511,6 +4512,7 @@ dependencies = [
  "quinn",
  "rcgen 0.13.2",
  "reqwest 0.12.28",
+ "ring",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -4533,7 +4535,7 @@ dependencies = [
 
 [[package]]
 name = "sarca-client"
-version = "0.0.159"
+version = "0.0.160"
 dependencies = [
  "android_logger",
  "anyhow",

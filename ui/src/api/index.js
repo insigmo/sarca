@@ -866,6 +866,78 @@ const setTrashSettings = async (retention_days) => {
 	})
 }
 
+/**
+ * Download a backup of the metadata database — settings, storages and their
+ * bots, and the whole file tree. Superuser only.
+ *
+ * POST, not GET: the password rides in the body so it never lands in a URL,
+ * a proxy log or browser history.
+ *
+ * @param {string} [password] Optional. Without one the archive is plain gzip
+ *   and anyone holding the file can read every bot token in it.
+ * @returns {Promise<{ blob: Blob, filename: string }>}
+ */
+const createBackup = async (password) => {
+	const response = await apiRequest(
+		'/settings/backup',
+		'post',
+		getAuthToken(),
+		{ password: password || null },
+		true,
+	)
+	const disposition = response.headers.get('Content-Disposition') || ''
+	const match = /filename="?([^";]+)"?/.exec(disposition)
+	return {
+		blob: await response.blob(),
+		filename: match?.[1] || 'sarca-backup.sarcabak',
+	}
+}
+
+/**
+ * @typedef {Object} RestoreResult
+ * @property {number} tables Tables copied out of the archive.
+ * @property {number} rows Rows written across those tables.
+ * @property {string[]} skipped_tables Tables this server has no place for.
+ * @property {string | null} safety_copy Server-side path of the pre-restore
+ *   copy of the database that was replaced.
+ */
+
+/**
+ * Replace this server's database with an uploaded backup. Destructive, and it
+ * invalidates the current session — the caller must send the user back to login.
+ *
+ * Talks to `fetch` directly rather than through `apiRequest`: multipart needs
+ * the browser to set its own boundary, which a forced JSON content type breaks.
+ *
+ * @param {File | Blob} file
+ * @param {string} [password]
+ * @returns {Promise<RestoreResult>}
+ */
+const restoreBackup = async (file, password) => {
+	const form = new FormData()
+	form.append('file', file, /** @type {File} */ (file)?.name || 'backup.sarcabak')
+	if (password) form.append('password', password)
+
+	const headers = new Headers()
+	const token = await getFreshAccessToken()
+	if (token) headers.append('Authorization', `Bearer ${token}`)
+
+	const response = await fetch(`${API_BASE}/settings/restore`, {
+		method: 'POST',
+		headers,
+		body: form,
+	})
+
+	if (!response.ok) {
+		const text = await response.text().catch(() => '')
+		const err = new Error(text || 'Restore failed')
+		err.status = response.status
+		throw err
+	}
+
+	return await response.json()
+}
+
 /////////////////////////////////////////////////////////////
 ////  FAVORITES
 /////////////////////////////////////////////////////////////
@@ -1590,6 +1662,8 @@ const API = {
 	settings: {
 		getTrashSettings,
 		setTrashSettings,
+		createBackup,
+		restoreBackup,
 	},
 	setup: {
 		getSetupStatus,

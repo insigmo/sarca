@@ -147,6 +147,14 @@ async fn main() {
         Err(e) => tracing::warn!("upload spool cleanup failed: {e}"),
     }
 
+    // Backup/restore delete their own working files, except when the process
+    // dies mid-run — which is the one case that leaves a whole database copy
+    // sitting in WORK_DIR forever.
+    match sarca::services::backup::cleanup_scratch(&config.work_dir).await {
+        0 => {},
+        n => tracing::info!("removed {n} leftover backup working file(s) under WORK_DIR"),
+    }
+
     eprintln!("ensuring superuser…");
     create_superuser(&db, &config).await;
     let config_copy = config.clone();

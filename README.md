@@ -80,6 +80,18 @@ Watch fire: `docker logs -f sarca`.
    - create private(s) channel(s) (1 necessary and 2 optional)
    - add as admin a bot to the channel(s)
 
+## Move the rock
+
+**Settings -> General -> Backup** (admin only) downloads one `.sarcabak` file:
+settings, storages with their bots and channels, users and access, and the whole
+file tree. Password optional -- without one the file is plain gzip and anyone
+holding it reads every bot token inside.
+
+**Restore** on another Sarca replaces that server's database with the archive.
+Same storages, same files, same tree; the file bytes never left Telegram. Every
+session is invalidated, so sign in again after. The database being replaced is
+copied to `WORK_DIR/backups/pre-restore-*.sqlite` first (last three kept).
+
 ## License
 
 See `LICENSE`. Read before fire spread.

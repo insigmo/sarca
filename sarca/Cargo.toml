@@ -115,6 +115,12 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 
 # folder download as zip
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+# backup/restore archive: gzip payload + optional AES-256-GCM (PBKDF2-HMAC-SHA256).
+# `ring` is already in the tree via rustls; using it keeps the crypto surface to
+# one audited implementation instead of adding a second AEAD crate.
+flate2 = "1"
+ring = "0.17"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 
 [dev-dependencies]

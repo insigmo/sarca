@@ -260,6 +260,18 @@ class SarcaClient:
     def set_trash_settings(self, retention_days: int) -> httpx.Response:
         return self.put("/api/settings/trash", json={"retention_days": retention_days})
 
+    def create_backup(self, password: str | None = None) -> httpx.Response:
+        return self.post("/api/settings/backup", json={"password": password})
+
+    def restore_backup(
+        self, archive: bytes, password: str | None = None
+    ) -> httpx.Response:
+        files = {"file": ("backup.sarcabak", archive, "application/octet-stream")}
+        data = {"password": password} if password else None
+        return self.request(
+            "POST", "/api/settings/restore", files=files, data=data
+        )
+
     # ------------------------------------------------------------------- sync
     def snapshot(self, storage_id: str) -> dict[str, Any]:
         r = self.get(f"/api/storages/{storage_id}/sync/snapshot")
