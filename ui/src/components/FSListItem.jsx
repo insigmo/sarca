@@ -240,27 +240,27 @@ const FSListItem = (props) => {
 
 		setThumbUrl(null)
 
-		// A photo this client just uploaded already has its tile in the local
-		// store, even while `has_thumb` is still false because the thumbnail has
-		// not finished its trip to Telegram. Look there for images either way;
-		// only the network fetch waits for the server to admit it has one.
-		const localOnly = !hasThumb && fileKind(name, isFile) === 'image'
+		// `has_thumb` reports whether a thumbnail is *stored*, which is not the
+		// same question as whether one can be shown. A photo this client just
+		// uploaded already has its tile in the local store while the real one is
+		// still in flight, and a photo whose thumbnail step failed at upload has
+		// none stored at all — but the server derives that one from the preview
+		// on request. So an image is always worth asking for; treating a false
+		// `has_thumb` as "never ask" is what left those tiles permanently blank.
+		const isImage = fileKind(name, isFile) === 'image'
 
 		// A folder with hundreds of files fires every tile's fetch at once (the
 		// list has no virtualization), which can outlast the shared thumb
 		// queue's own per-tile retry budget under sustained Telegram rate
-		// limiting. Nothing else ever re-triggers this effect for a tile whose
-		// `has_thumb` was already true, so without a retry here that tile would
-		// stay permanently blank even after the storm clears. Cache-only misses
-		// are excluded: retrying those without a `has_thumb` change would just
-		// hit the same empty cache again.
+		// limiting. Nothing else ever re-triggers this effect for a tile, so
+		// without a retry here that tile would stay permanently blank even
+		// after the storm clears.
 		const attempt = (retriesLeft) => {
 			loadThumb({
 				scope: storageId,
 				path,
 				fetchBlob: (signal) => API.files.thumb(storageId, path, signal),
 				signal: ac.signal,
-				cacheOnly: localOnly,
 			})
 				.then((blob) => {
 					if (revoked) return
@@ -272,7 +272,10 @@ const FSListItem = (props) => {
 				.catch((err) => {
 					if (revoked || err?.name === 'AbortError') return
 					setThumbUrl(null)
-					if (!localOnly && retriesLeft > 0) {
+					// A 404 is the server saying this file has no thumbnail and
+					// cannot derive one (a document, a video with no preview).
+					// Retrying that is pure noise; anything else may still clear.
+					if (err?.status !== 404 && retriesLeft > 0) {
 						retryTimer = setTimeout(
 							() => attempt(retriesLeft - 1),
 							THUMB_RETRY_DELAY_MS,
@@ -281,7 +284,7 @@ const FSListItem = (props) => {
 				})
 		}
 
-		if (isFile && (hasThumb || localOnly)) {
+		if (isFile && (hasThumb || isImage)) {
 			attempt(THUMB_RETRY_ATTEMPTS)
 		}
 
