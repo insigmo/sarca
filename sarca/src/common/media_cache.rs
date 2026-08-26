@@ -13,7 +13,7 @@ pub const PREVIEW_FORMAT_VERSION: &str = "v4-full-res-q95";
 
 pub const THUMB_CACHE_LIMIT_BYTES: u64 = 256 << 20;
 pub const THUMB_CACHE_EVICT_BYTES: u64 = 32 << 20;
-pub const THUMB_FORMAT_VERSION: &str = "v2-320";
+pub const THUMB_FORMAT_VERSION: &str = "v3-512";
 
 /// On-disk cache of encoded JPEGs under `WORK_DIR/<dir>`.
 ///

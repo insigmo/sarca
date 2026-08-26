@@ -2,7 +2,7 @@ import { createRoot, createSignal } from 'solid-js'
 
 /**
  * Shared open state for the Settings modal / bottom sheet.
- * @typedef {'general' | 'sync' | 'access'} SettingsTab
+ * @typedef {'general' | 'sync' | 'access' | 'backup'} SettingsTab
  */
 
 // Old tabs got folded into the ones above (see SettingsModal rework). Deep

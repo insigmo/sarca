@@ -161,6 +161,8 @@
 		"syncTabDesc": "自动上传与文件夹",
 		"accessTab": "访问",
 		"accessTabDesc": "谁可以打开",
+		"backupTab": "备份",
+		"backupTabDesc": "下载与恢复",
 		"botHintPrefix": "Telegram 机器人和频道位于",
 		"storageSettingsLabel": "存储设置",
 		"botHintSuffix": "— 点击存储卡片上的齿轮图标，或在桌面端浏览文件时点击顶部的调节图标。",

@@ -161,6 +161,8 @@
 		"syncTabDesc": "Subida automática y carpetas",
 		"accessTab": "Acceso",
 		"accessTabDesc": "Quién puede abrir",
+		"backupTab": "Copia de seguridad",
+		"backupTabDesc": "Descargar y restaurar",
 		"botHintPrefix": "El bot y los canales de Telegram están en",
 		"storageSettingsLabel": "Ajustes de almacenamiento",
 		"botHintSuffix": "— usa el engranaje en la tarjeta de un almacenamiento, o (en escritorio) el icono de ajustes en la cabecera mientras navegas archivos.",
