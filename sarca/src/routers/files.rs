@@ -272,9 +272,7 @@ impl FilesRouter {
                         // file ends up with no thumbnail at all and no trace of
                         // why. `MAX_CLIENT_THUMB_BYTES` drifting behind
                         // `THUMB_MAX_EDGE` is the thing this line makes visible.
-                        tracing::warn!(
-                            "client thumb ignored: over {MAX_CLIENT_THUMB_BYTES} bytes"
-                        );
+                        tracing::warn!("client thumb ignored: over {MAX_CLIENT_THUMB_BYTES} bytes");
                     } else if is_jpeg(&bytes) {
                         client_thumb = Some(bytes);
                     } else if !bytes.is_empty() {
