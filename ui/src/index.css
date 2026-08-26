@@ -2110,6 +2110,47 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	color: var(--sarca-ink);
 }
 
+.settings-backup {
+	padding: 16px;
+	border: 1px solid var(--sarca-border);
+	border-radius: 16px;
+	background: color-mix(in srgb, var(--sarca-ink) 3%, transparent);
+}
+
+/* Restore wipes the database, so it is fenced off from the download above it
+   rather than reading as the next button in a row. */
+.settings-backup__restore {
+	margin-top: 24px;
+	padding-top: 20px;
+	border-top: 1px dashed var(--sarca-border);
+}
+
+.settings-backup__file {
+	display: block;
+	width: 100%;
+	font: inherit;
+	font-size: 0.85rem;
+	color: var(--sarca-ink-soft);
+}
+
+.settings-backup__file::file-selector-button {
+	appearance: none;
+	margin-inline-end: 12px;
+	padding: 8px 14px;
+	border: 1px solid var(--sarca-border);
+	border-radius: 9px;
+	cursor: pointer;
+	font: inherit;
+	font-size: 0.82rem;
+	font-weight: 600;
+	color: var(--sarca-ink);
+	background: color-mix(in srgb, var(--sarca-ink) 5%, transparent);
+}
+
+.settings-backup__file::file-selector-button:hover {
+	background: color-mix(in srgb, var(--sarca-ink) 10%, transparent);
+}
+
 .settings-account__hint {
 	margin: 4px 0 0;
 	font-size: 0.82rem;

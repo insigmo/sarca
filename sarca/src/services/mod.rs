@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod backup;
 pub mod channel_health;
 pub mod favorites;
 pub mod files;

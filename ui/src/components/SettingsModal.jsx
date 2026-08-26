@@ -21,6 +21,7 @@ import {
 import { i18n, LOCALES } from '../common/i18n'
 import { alertStore } from './AlertStack'
 import Access from './Access'
+import ActionConfirmDialog from './ActionConfirmDialog'
 import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
 import SettingsSyncPanel from './SettingsSyncPanel'
@@ -46,6 +47,15 @@ const SettingsModal = () => {
 	const [isGrantVisible, setIsGrantVisible] = createSignal(false)
 	const [trashRetentionDays, setTrashRetentionDays] = createSignal(30)
 	const [trashSettingsSaving, setTrashSettingsSaving] = createSignal(false)
+	const [backupPassword, setBackupPassword] = createSignal('')
+	const [backupBusy, setBackupBusy] = createSignal(false)
+	/** @type {[import("solid-js").Accessor<File | null>, any]} */
+	const [restoreFile, setRestoreFile] = createSignal(null)
+	const [restorePassword, setRestorePassword] = createSignal('')
+	const [restoreBusy, setRestoreBusy] = createSignal(false)
+	const [restoreConfirmOpen, setRestoreConfirmOpen] = createSignal(false)
+	/** @type {HTMLInputElement | undefined} */
+	let restoreInput
 	const [about, setAbout] = createSignal({ version: '', platform: '' })
 	const [cacheBytes, setCacheBytes] = createSignal(0)
 	const [cacheLimitBytes, setCacheLimitBytes] = createSignal(1_073_741_824)
@@ -454,6 +464,68 @@ const SettingsModal = () => {
 			}
 		} catch (e) {
 			setSecurityMsg(String(e))
+		}
+	}
+
+	const downloadBackup = async () => {
+		setBackupBusy(true)
+		try {
+			const { blob, filename } = await API.settings.createBackup(backupPassword())
+			const url = URL.createObjectURL(blob)
+			const a = document.createElement('a')
+			a.href = url
+			a.download = filename
+			a.rel = 'noopener'
+			document.body.appendChild(a)
+			a.click()
+			a.remove()
+			URL.revokeObjectURL(url)
+			setBackupPassword('')
+			addAlert(i18n.t('settings.backupDownloaded'), 'success')
+		} catch {
+			// apiRequest already surfaced the server's message.
+		} finally {
+			setBackupBusy(false)
+		}
+	}
+
+	/**
+	 * @param {Event} e
+	 */
+	const pickRestoreFile = (e) => {
+		const input = /** @type {HTMLInputElement} */ (e.currentTarget)
+		setRestoreFile(input.files?.[0] || null)
+	}
+
+	const runRestore = async () => {
+		const file = restoreFile()
+		setRestoreConfirmOpen(false)
+		if (!file) {
+			addAlert(i18n.t('settings.restorePickFile'), 'error')
+			return
+		}
+		setRestoreBusy(true)
+		try {
+			const result = await API.settings.restoreBackup(file, restorePassword())
+			addAlert(
+				i18n.t('settings.restoreDone', {
+					rows: result.rows,
+					tables: result.tables,
+				}),
+				'success',
+			)
+			setRestoreFile(null)
+			setRestorePassword('')
+			if (restoreInput) restoreInput.value = ''
+			// The restored database carries its own accounts, so this session's
+			// token points at a user that may no longer exist. Sending the user
+			// back to login beats letting every later request 401 at them.
+			closeSettings()
+			navigate(clearSession(setStore))
+		} catch (e) {
+			addAlert(String(e?.message || e), 'error')
+		} finally {
+			setRestoreBusy(false)
 		}
 	}
 
@@ -979,6 +1051,100 @@ const SettingsModal = () => {
 												</div>
 											</div>
 										</Show>
+										<Show when={isSuperuser()}>
+											<div class="settings-backup">
+												<p class="settings-account__label">
+													{i18n.t('settings.backupTitle')}
+												</p>
+												<Typography
+													variant="body2"
+													color="text.secondary"
+													sx={{ mb: 2 }}
+												>
+													{i18n.t('settings.backupHint')}
+												</Typography>
+												<TextField
+													type="password"
+													label={i18n.t('settings.backupPasswordLabel')}
+													fullWidth
+													value={backupPassword()}
+													onChange={(e) => setBackupPassword(e.target.value)}
+												/>
+												<p class="settings-account__hint">
+													{i18n.t('settings.backupPasswordHint')}
+												</p>
+												<div style={{ 'margin-top': '16px' }}>
+													<Button
+														variant="contained"
+														color="secondary"
+														disabled={backupBusy()}
+														startIcon={
+															<FluentIcon name="arrowDownload" size={18} />
+														}
+														onClick={downloadBackup}
+													>
+														{backupBusy()
+															? i18n.t('settings.backupWorking')
+															: i18n.t('settings.downloadBackup')}
+													</Button>
+												</div>
+
+												<div class="settings-backup__restore">
+													<p class="settings-account__label">
+														{i18n.t('settings.restoreTitle')}
+													</p>
+													<Typography
+														variant="body2"
+														color="text.secondary"
+														sx={{ mb: 2 }}
+													>
+														{i18n.t('settings.restoreHint')}
+													</Typography>
+													<input
+														ref={restoreInput}
+														type="file"
+														accept=".sarcabak"
+														class="settings-backup__file"
+														aria-label={i18n.t('settings.restorePickFile')}
+														onChange={pickRestoreFile}
+													/>
+													<Show when={restoreFile()}>
+														{(file) => (
+															<p class="settings-account__hint">
+																{file().name} —{' '}
+																{formatBytes(file().size)}
+															</p>
+														)}
+													</Show>
+													<div style={{ 'margin-top': '12px' }}>
+														<TextField
+															type="password"
+															label={i18n.t('settings.restorePasswordLabel')}
+															fullWidth
+															value={restorePassword()}
+															onChange={(e) =>
+																setRestorePassword(e.target.value)
+															}
+														/>
+													</div>
+													<div style={{ 'margin-top': '16px' }}>
+														<Button
+															variant="outlined"
+															color="error"
+															disabled={restoreBusy() || !restoreFile()}
+															startIcon={
+																<FluentIcon name="arrowUndo" size={18} />
+															}
+															onClick={() => setRestoreConfirmOpen(true)}
+														>
+															{restoreBusy()
+																? i18n.t('settings.restoreWorking')
+																: i18n.t('settings.restoreAction')}
+														</Button>
+													</div>
+												</div>
+											</div>
+										</Show>
 										<p class="settings-bot-hint">
 											{i18n.t('settings.appLockHint')}
 										</p>
@@ -1150,6 +1316,15 @@ const SettingsModal = () => {
 						</div>
 					</div>
 				</div>
+
+				<ActionConfirmDialog
+					isOpened={restoreConfirmOpen()}
+					entity={i18n.t('confirmDialog.restoreEntity')}
+					action={i18n.t('confirmDialog.restoreAction')}
+					actionDescription={i18n.t('confirmDialog.restoreDescription')}
+					onConfirm={runRestore}
+					onCancel={() => setRestoreConfirmOpen(false)}
+				/>
 			</Show>
 		</>
 	)

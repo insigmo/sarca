@@ -1,4 +1,5 @@
 pub mod access;
+pub mod backup_archive;
 pub mod channels;
 pub mod chunk_cache;
 pub mod db;
