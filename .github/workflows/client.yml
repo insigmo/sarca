@@ -320,6 +320,16 @@ jobs:
         working-directory: client
         run: pnpm install --frozen-lockfile
 
+      # `tauri ios init` shells out to a brew-installed xcodegen, which now
+      # writes the Xcode 16 project format (objectVersion 77). The image
+      # default on macos-14 is still Xcode 15.4, which refuses to open it
+      # ("a future Xcode project file format"). Pick the newest Xcode on the
+      # runner instead — same step the release workflow's iOS job already has.
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcodebuild -version
+
       - name: Init + build iOS (simulator)
         working-directory: client
         env:
