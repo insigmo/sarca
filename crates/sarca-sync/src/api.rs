@@ -388,22 +388,26 @@ impl SarcaApi {
             })
             .collect();
 
-        let fetch_parts = ranges.iter().zip(part_paths.iter()).map(|(&(start, end), part_path)| {
-            let url = url.to_owned();
-            async move {
-                let resp = self
-                    .send_authed("GET", &url, |client, version| {
-                        client
-                            .get(&url)
-                            .version(version)
-                            .header(RANGE, format!("bytes={start}-{end}"))
-                            .timeout(TRANSFER_MAX_TIMEOUT)
-                    })
-                    .await?
-                    .error_for_status()?;
-                self.write_response_body(resp, part_path).await
-            }
-        });
+        let fetch_parts = ranges
+            .iter()
+            .copied()
+            .zip(part_paths.iter().cloned())
+            .map(|((start, end), part_path)| {
+                let url = url.to_owned();
+                async move {
+                    let resp = self
+                        .send_authed("GET", &url, |client, version| {
+                            client
+                                .get(&url)
+                                .version(version)
+                                .header(RANGE, format!("bytes={start}-{end}"))
+                                .timeout(TRANSFER_MAX_TIMEOUT)
+                        })
+                        .await?
+                        .error_for_status()?;
+                    self.write_response_body(resp, &part_path).await
+                }
+            });
 
         let fetched = futures::stream::iter(fetch_parts)
             .buffer_unordered(part_paths.len().max(1))
