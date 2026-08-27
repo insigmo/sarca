@@ -674,9 +674,145 @@ const consumeResponseWithProgress = async (response, onProgress) => {
 }
 
 /**
+ * Parallel-range fetch (see {@link downloadFileRanged}) only kicks in above
+ * this size — small files aren't worth the extra round trips.
+ */
+const PARALLEL_DOWNLOAD_THRESHOLD_BYTES = 8 * 1024 * 1024
+
+/**
+ * How many concurrent `Range` requests one file download fans out to. The
+ * server's chunk cache is keyed per Telegram chunk, not per byte range (see
+ * `ChunkCache`/`SingleFlight` in `files.rs`), so distinct Range windows land
+ * on distinct chunks and are pulled from Telegram at the same time instead
+ * of the single-chunk-ahead prefetch a lone sequential GET gets.
+ */
+const PARALLEL_DOWNLOAD_PARTS = 4
+
+/**
+ * Fetch one byte range, accumulating it into a single `Uint8Array` while
+ * reporting each chunk's size to `onChunk` as it arrives.
+ * @param {string} url
+ * @param {string} token
+ * @param {number} start
+ * @param {number} end
+ * @param {(bytes: number) => void} [onChunk]
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<Uint8Array>}
+ */
+const fetchRangePart = async (url, token, start, end, onChunk, signal) => {
+	const response = await fetch(url, {
+		headers: { Authorization: `Bearer ${token}`, Range: `bytes=${start}-${end}` },
+		signal,
+	})
+	if (!response.ok && response.status !== 206) {
+		throw new Error(`range fetch failed: ${response.status}`)
+	}
+	const reader = response.body?.getReader?.()
+	if (!reader) {
+		const buffer = new Uint8Array(await response.arrayBuffer())
+		onChunk?.(buffer.byteLength)
+		return buffer
+	}
+	/** @type {Uint8Array[]} */
+	const parts = []
+	let length = 0
+	while (true) {
+		const { done, value } = await reader.read()
+		if (done) break
+		if (!value) continue
+		parts.push(value)
+		length += value.byteLength
+		onChunk?.(value.byteLength)
+	}
+	const buffer = new Uint8Array(length)
+	let offset = 0
+	for (const part of parts) {
+		buffer.set(part, offset)
+		offset += part.byteLength
+	}
+	return buffer
+}
+
+/**
+ * Downloads a single file as several concurrent byte-range requests and
+ * reassembles them client-side (in order, by plain `Blob` concatenation —
+ * these are raw byte ranges of the original file, not a media container, so
+ * no decode/mux step is involved) instead of one sequential stream.
+ *
+ * Throws — deliberately, so the caller falls back to the proven single-
+ * stream path — when the size can't be determined, the server ignored
+ * `Range` (a proxy stripped it, or the file is empty), or the file is too
+ * small to be worth splitting.
+ * @param {string} storage_id
+ * @param {string} path
+ * @param {(progress: DownloadProgress) => void} [onProgress]
+ * @param {AbortSignal} [signal]
+ * @returns {Promise<Blob>}
+ */
+const downloadFileRanged = async (storage_id, path, onProgress, signal) => {
+	const token = await getFreshAccessToken()
+	if (!token) throw new Error('no access token')
+	const url = `${API_BASE}/storages/${storage_id}/files/download/${encodeFilePath(path)}`
+
+	// A 1-byte probe reveals the size via `Content-Range` without committing
+	// to a full-body GET first.
+	const probe = await fetch(url, {
+		headers: { Authorization: `Bearer ${token}`, Range: 'bytes=0-0' },
+		signal,
+	})
+	if (!probe.ok && probe.status !== 206) {
+		throw new Error(`probe failed: ${probe.status}`)
+	}
+	if (probe.status !== 206) {
+		// Range was ignored (or the file is empty) — this response already
+		// carries the whole body, so just consume it.
+		return await consumeResponseWithProgress(probe, onProgress)
+	}
+
+	const total = Number((probe.headers.get('Content-Range') || '').split('/').pop())
+	if (!Number.isFinite(total) || total < PARALLEL_DOWNLOAD_THRESHOLD_BYTES) {
+		throw new Error('file too small for parallel download')
+	}
+	const contentType = probe.headers.get('Content-Type') || undefined
+
+	const partSize = Math.ceil(total / PARALLEL_DOWNLOAD_PARTS)
+	const ranges = []
+	for (let i = 0; i < PARALLEL_DOWNLOAD_PARTS; i++) {
+		const start = i * partSize
+		const end = Math.min(start + partSize, total) - 1
+		if (start <= end) ranges.push([start, end])
+	}
+
+	const batcher = onProgress ? createRafBatcher(onProgress) : null
+	let received = 0
+	const onChunk = (n) => {
+		received += n
+		batcher?.schedule({
+			received,
+			total,
+			percent: Math.min(100, (received / total) * 100),
+		})
+	}
+
+	try {
+		const buffers = await Promise.all(
+			ranges.map(([start, end]) => fetchRangePart(url, token, start, end, onChunk, signal)),
+		)
+		return new Blob(buffers, contentType ? { type: contentType } : undefined)
+	} finally {
+		batcher?.cancel()
+	}
+}
+
+/**
  * Same download as `download`, but reports progress as bytes arrive instead
  * of buffering silently behind `response.blob()` — the difference between an
  * indeterminate spinner and a real bar on a multi-GB file.
+ *
+ * For a single file (not a folder ZIP), tries {@link downloadFileRanged}
+ * first — parallel byte-range requests reassembled client-side — and falls
+ * back to the plain sequential stream below on any failure (proxy strips
+ * `Range`, network hiccup, file too small to bother, etc.).
  * @param {string} storage_id
  * @param {string} path
  * @param {(progress: DownloadProgress) => void} [onProgress]
@@ -684,6 +820,16 @@ const consumeResponseWithProgress = async (response, onProgress) => {
  * @returns {Promise<Blob>}
  */
 const downloadWithProgress = async (storage_id, path, onProgress, signal) => {
+	const isFolder = path.endsWith('/')
+	if (!isFolder) {
+		try {
+			return await downloadFileRanged(storage_id, path, onProgress, signal)
+		} catch (err) {
+			if (err?.name === 'AbortError' || signal?.aborted) throw err
+			// Fall through to the sequential path below.
+		}
+	}
+
 	const response = await apiRequest(
 		`/storages/${storage_id}/files/download/${encodeFilePath(path)}`,
 		'get',
