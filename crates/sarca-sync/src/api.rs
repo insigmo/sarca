@@ -1,12 +1,13 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use reqwest::{
+    header::{CONTENT_RANGE, RANGE},
     multipart::{Form, Part},
-    Client, Response, Version,
+    Client, Response, StatusCode, Version,
 };
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
@@ -50,6 +51,17 @@ const TRANSFER_MAX_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Worst-case sustained throughput assumed when sizing a transfer deadline.
 const TRANSFER_MIN_BYTES_PER_SEC: u64 = 32 * 1024;
+
+/// `download_to` only fans out into parallel Range requests above this size —
+/// small files aren't worth the extra round trips.
+const PARALLEL_DOWNLOAD_THRESHOLD_BYTES: u64 = 8 * 1024 * 1024;
+
+/// How many concurrent `Range` requests one file download fans out to. The
+/// server caches Telegram chunks independently and keyed per-chunk (see
+/// `ChunkCache`/`SingleFlight`), so distinct Range windows let it pull several
+/// Telegram chunks at once instead of the single-chunk-ahead prefetch a lone
+/// sequential GET gets.
+const PARALLEL_DOWNLOAD_PARTS: u64 = 4;
 
 /// Total deadline for transferring `bytes`, clamped to
 /// `[TRANSFER_MIN_TIMEOUT, TRANSFER_MAX_TIMEOUT]`.
@@ -292,65 +304,138 @@ impl SarcaApi {
             "{}/api/storages/{storage_id}/files/download/{encoded}",
             self.base_url
         );
-        // Size is unknown before the response arrives, and the server may have
-        // to pull the file back from Telegram first — same reason uploads get a
-        // long deadline. `READ_IDLE_TIMEOUT` is what catches a dead connection.
-        let resp = self
-            .send_authed("GET", &url, |client, version| {
-                client
-                    .get(&url)
-                    .version(version)
-                    .timeout(TRANSFER_MAX_TIMEOUT)
-            })
-            .await?
-            .error_for_status()?;
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        // Reject an oversized body before reading it. `Content-Length` is only
-        // advisory (a hostile server may omit or understate it), so the stream
-        // below re-checks as bytes arrive.
-        if let Some(len) = resp.content_length() {
-            if len > MAX_DOWNLOAD_BYTES {
-                bail!(
-                    "refusing download of {len} bytes for {}: over the {MAX_DOWNLOAD_BYTES}-byte limit",
-                    dest.display()
-                );
-            }
+        // A 1-byte probe tells us the file size via `Content-Range` and
+        // whether the server actually honors `Range`, without committing to
+        // a full-body GET first. `download_file` on the server always
+        // answers `206` for a non-empty file, but a proxy in front of it
+        // might strip the header — treat a non-`206` reply as the whole
+        // body having arrived already and write it straight through.
+        let probe = self
+            .send_authed("GET", &url, |client, version| {
+                client
+                    .get(&url)
+                    .version(version)
+                    .header(RANGE, "bytes=0-0")
+                    .timeout(TRANSFER_MAX_TIMEOUT)
+            })
+            .await?
+            .error_for_status()?;
+
+        if probe.status() != StatusCode::PARTIAL_CONTENT {
+            return self.write_response_atomically(probe, dest).await;
         }
 
-        // Write to a sibling temp file and rename into place. Writing straight
-        // to `dest` follows a symlink that happens to sit there, which lets a
-        // compromised server overwrite any file the user can write (`~/.bashrc`,
-        // `~/.ssh/authorized_keys`) simply by naming a path whose local
-        // counterpart is a link. `create_new` also means we never write through
-        // a link planted at the temp path itself.
+        let total_len = probe
+            .headers()
+            .get(CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.rsplit('/').next())
+            .and_then(|v| v.parse::<u64>().ok())
+            .with_context(|| format!("server omitted Content-Range for {}", dest.display()))?;
+        drop(probe);
+
+        if total_len > MAX_DOWNLOAD_BYTES {
+            bail!(
+                "refusing download of {total_len} bytes for {}: over the {MAX_DOWNLOAD_BYTES}-byte limit",
+                dest.display()
+            );
+        }
+
+        if total_len < PARALLEL_DOWNLOAD_THRESHOLD_BYTES {
+            // Size is known and small — one more plain GET is cheaper than
+            // fanning out. `READ_IDLE_TIMEOUT` is what actually catches a
+            // dead connection during the long Telegram round trip.
+            let resp = self
+                .send_authed("GET", &url, |client, version| {
+                    client
+                        .get(&url)
+                        .version(version)
+                        .timeout(TRANSFER_MAX_TIMEOUT)
+                })
+                .await?
+                .error_for_status()?;
+            return self.write_response_atomically(resp, dest).await;
+        }
+
+        self.download_parallel(&url, total_len, dest).await
+    }
+
+    /// Fans a large download out into `PARALLEL_DOWNLOAD_PARTS` concurrent
+    /// `Range` GETs, each written to its own scratch file, then concatenates
+    /// the parts in order into `dest`. The server's per-chunk cache
+    /// deduplicates overlapping requests by Telegram chunk, not by byte
+    /// range, so distinct Range windows land on distinct chunks and are
+    /// fetched from Telegram at the same time instead of one-ahead.
+    async fn download_parallel(&self, url: &str, total_len: u64, dest: &Path) -> Result<()> {
+        let parts = PARALLEL_DOWNLOAD_PARTS.min(total_len.div_ceil(PARALLEL_DOWNLOAD_THRESHOLD_BYTES));
+        let part_size = total_len.div_ceil(parts);
+        let ranges: Vec<(u64, u64)> = (0..parts)
+            .map(|i| {
+                let start = i * part_size;
+                let end = (start + part_size).min(total_len).saturating_sub(1);
+                (start, end)
+            })
+            .filter(|&(start, end)| start <= end)
+            .collect();
+
+        let part_paths: Vec<PathBuf> = (0..ranges.len())
+            .map(|idx| {
+                dest.with_extension(format!("sarca-part-{idx}-{}", Uuid::new_v4().simple()))
+            })
+            .collect();
+
+        let fetch_parts = ranges.iter().zip(part_paths.iter()).map(|(&(start, end), part_path)| {
+            let url = url.to_owned();
+            async move {
+                let resp = self
+                    .send_authed("GET", &url, |client, version| {
+                        client
+                            .get(&url)
+                            .version(version)
+                            .header(RANGE, format!("bytes={start}-{end}"))
+                            .timeout(TRANSFER_MAX_TIMEOUT)
+                    })
+                    .await?
+                    .error_for_status()?;
+                self.write_response_body(resp, part_path).await
+            }
+        });
+
+        let fetched = futures::stream::iter(fetch_parts)
+            .buffer_unordered(part_paths.len().max(1))
+            .try_collect::<Vec<()>>()
+            .await;
+
+        if let Err(e) = fetched {
+            for p in &part_paths {
+                let _ = tokio::fs::remove_file(p).await;
+            }
+            return Err(e);
+        }
+
+        // Byte ranges concatenate in order to reproduce the original file —
+        // no container/codec is involved, so a plain streamed copy suffices.
         let tmp = dest.with_extension(format!("sarca-part-{}", Uuid::new_v4().simple()));
-        let write = async {
-            let mut file = tokio::fs::OpenOptions::new()
+        let assemble = async {
+            let mut out = tokio::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&tmp)
                 .await
                 .with_context(|| format!("create {}", tmp.display()))?;
-            let mut written: u64 = 0;
-            let mut stream = resp.bytes_stream();
-            while let Some(chunk) = stream.next().await {
-                let chunk = chunk?;
-                written = written.saturating_add(chunk.len() as u64);
-                if written > MAX_DOWNLOAD_BYTES {
-                    bail!(
-                        "download of {} exceeded the {MAX_DOWNLOAD_BYTES}-byte limit",
-                        dest.display()
-                    );
-                }
-                file.write_all(&chunk).await?;
+            for part_path in &part_paths {
+                let mut part_file = tokio::fs::File::open(part_path)
+                    .await
+                    .with_context(|| format!("open {}", part_path.display()))?;
+                tokio::io::copy(&mut part_file, &mut out).await?;
             }
-            file.flush().await?;
-            file.sync_all().await?;
-            drop(file);
-
+            out.flush().await?;
+            out.sync_all().await?;
+            drop(out);
             // `rename` replaces a symlink at `dest` rather than following it.
             tokio::fs::rename(&tmp, dest)
                 .await
@@ -358,10 +443,72 @@ impl SarcaApi {
         }
         .await;
 
-        if write.is_err() {
+        for p in &part_paths {
+            let _ = tokio::fs::remove_file(p).await;
+        }
+        if assemble.is_err() {
             let _ = tokio::fs::remove_file(&tmp).await;
         }
-        write
+        assemble
+    }
+
+    /// Writes `resp`'s body straight into a freshly created file at `path`
+    /// (no rename — callers wanting an atomic swap into a final destination
+    /// use [`Self::write_response_atomically`]). Rejects an oversized body;
+    /// `Content-Length` is only advisory, so the stream below re-checks as
+    /// bytes arrive.
+    async fn write_response_body(&self, resp: Response, path: &Path) -> Result<()> {
+        if let Some(len) = resp.content_length() {
+            if len > MAX_DOWNLOAD_BYTES {
+                bail!(
+                    "refusing download of {len} bytes for {}: over the {MAX_DOWNLOAD_BYTES}-byte limit",
+                    path.display()
+                );
+            }
+        }
+        let mut file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .await
+            .with_context(|| format!("create {}", path.display()))?;
+        let mut written: u64 = 0;
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            written = written.saturating_add(chunk.len() as u64);
+            if written > MAX_DOWNLOAD_BYTES {
+                bail!(
+                    "download of {} exceeded the {MAX_DOWNLOAD_BYTES}-byte limit",
+                    path.display()
+                );
+            }
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+        file.sync_all().await?;
+        Ok(())
+    }
+
+    /// Writes `resp`'s body to a sibling temp file and renames it into place
+    /// at `dest`. Writing straight to `dest` follows a symlink that happens
+    /// to sit there, which lets a compromised server overwrite any file the
+    /// user can write (`~/.bashrc`, `~/.ssh/authorized_keys`) simply by
+    /// naming a path whose local counterpart is a link. `create_new` (inside
+    /// `write_response_body`) also means we never write through a link
+    /// planted at the temp path itself.
+    async fn write_response_atomically(&self, resp: Response, dest: &Path) -> Result<()> {
+        let tmp = dest.with_extension(format!("sarca-part-{}", Uuid::new_v4().simple()));
+        let result = match self.write_response_body(resp, &tmp).await {
+            Ok(()) => tokio::fs::rename(&tmp, dest)
+                .await
+                .with_context(|| format!("write {}", dest.display())),
+            Err(e) => Err(e),
+        };
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(&tmp).await;
+        }
+        result
     }
 
     pub async fn delete_remote(&self, storage_id: Uuid, remote_path: &str) -> Result<()> {
@@ -1133,6 +1280,75 @@ mod tests {
         assert!(
             !std::fs::symlink_metadata(&dest).unwrap().is_symlink(),
             "the link must have been replaced by a real file"
+        );
+    }
+
+    /// A file at (or above) `PARALLEL_DOWNLOAD_THRESHOLD_BYTES` must fan out
+    /// into concurrent `Range` GETs and reassemble them in byte order, with
+    /// no scratch part files left behind.
+    #[tokio::test]
+    async fn download_to_parallel_range_fetch_reassembles_bytes_in_order() {
+        const TOTAL: usize = PARALLEL_DOWNLOAD_THRESHOLD_BYTES as usize;
+        let expected: Vec<u8> = (0..TOTAL).map(|i| (i % 251) as u8).collect();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_data = expected.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
+                let data = server_data.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let n = sock.read(&mut buf).await.unwrap_or(0);
+                    let req = String::from_utf8_lossy(&buf[..n]);
+                    let range = req
+                        .lines()
+                        .find(|l| l.to_ascii_lowercase().starts_with("range:"))
+                        .and_then(|l| l.split_once(':').map(|(_, v)| v.trim().to_owned()));
+                    let (start, end) = range
+                        .as_deref()
+                        .and_then(|v| v.strip_prefix("bytes="))
+                        .and_then(|v| v.split_once('-'))
+                        .map(|(s, e)| (s.parse::<usize>().unwrap(), e.parse::<usize>().unwrap()))
+                        .unwrap_or((0, data.len() - 1));
+                    let end = end.min(data.len() - 1);
+                    let slice = &data[start..=end];
+                    let header = format!(
+                        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes {start}-{end}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        data.len(),
+                        slice.len()
+                    );
+                    let _ = sock.write_all(header.as_bytes()).await;
+                    let _ = sock.write_all(slice).await;
+                });
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("big.bin");
+
+        let api = SarcaApi::new(format!("http://{addr}"), "t");
+        api.download_to(Uuid::nil(), "big.bin", &dest)
+            .await
+            .expect("parallel download must succeed");
+
+        let got = tokio::fs::read(&dest).await.unwrap();
+        assert_eq!(
+            got, expected,
+            "parts must reassemble in the original byte order"
+        );
+
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name() != "big.bin")
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "temp part files must be cleaned up: {leftovers:?}"
         );
     }
 
