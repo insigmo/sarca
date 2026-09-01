@@ -118,8 +118,8 @@ jobs:
           conf.write_text(text)
           PY
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "Beta"
+          git config user.email "qwantone@gmail.com"
           git add sarca/Cargo.toml ui/package.json client/package.json client/src-tauri/Cargo.toml client/src-tauri/tauri.conf.json
           git commit -m "chore: release ${TAG}"
           git tag "${TAG}"
