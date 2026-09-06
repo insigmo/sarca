@@ -123,17 +123,24 @@ export function isMobileNativePlatform(label) {
  * @returns {Promise<string | null>}
  */
 export async function pickLocalFolder(existing = '') {
-	let platform = ''
-	try {
-		platform = String((await nativeInvoke('platform_label')) || '')
-	} catch {
-		// ignore
+	// `platform_label` only picks the wording of the typed-path prompt below, and
+	// that prompt is reached only when the native picker cannot give us a path.
+	// Asking for it up front put a whole extra bridge round trip in front of
+	// every folder dialog, so it is resolved lazily instead.
+	const isMobile = async () => {
+		let platform = ''
+		try {
+			platform = String((await nativeInvoke('platform_label')) || '')
+		} catch {
+			// ignore
+		}
+		// UA fallback when platform_label is blocked (misconfigured ACL) so
+		// Android still gets the mobile hint instead of the desktop wording.
+		return (
+			isMobileNativePlatform(platform) ||
+			/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')
+		)
 	}
-	// UA fallback when platform_label is blocked (misconfigured ACL) so Android
-	// still gets the mobile hint instead of the desktop prompt wording.
-	const mobile =
-		isMobileNativePlatform(platform) ||
-		/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')
 
 	try {
 		// Hand the dialog a start directory: the Linux portal otherwise opens
@@ -157,6 +164,7 @@ export async function pickLocalFolder(existing = '') {
 		}
 	}
 
+	const mobile = await isMobile()
 	const hint = mobile
 		? 'Folder picker could not resolve a filesystem path. Enter a local folder path, e.g. /storage/emulated/0/DCIM or /storage/emulated/0/Pictures'
 		: 'Enter a local folder path'
