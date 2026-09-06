@@ -46,7 +46,10 @@ async function enableBackgroundSync() {
 /** Prefer system folder picker; typed path only when native signals FOLDER_PICKER_USE_PROMPT. */
 async function chooseLocalFolder(existing) {
   try {
-    const path = await invoke("pick_local_folder");
+    // Hand the dialog the folder being changed. Without `current` the native
+    // side has nothing to `set_directory` to, and the picker opens on whatever
+    // the OS last remembered instead of the folder the user is editing.
+    const path = await invoke("pick_local_folder", { current: existing || "" });
     if (path) return path;
     return null;
   } catch (e) {

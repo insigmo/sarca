@@ -533,10 +533,25 @@ pub const OPEN_SYNC_JS: &str = r#"
     var payload = args || {};
     // Push the webview's live tokens into native state before Sync API commands
     // so create_folder / list_storages use the same session as the logged-in UI.
+    //
+    // Only when they actually changed. The tokens turn over on refresh, not on
+    // every click, so re-sending them ahead of each command doubled the bridge
+    // round trips for every native call in the UI and made the native side
+    // rewrite server.json each time — a synchronous disk write in front of, for
+    // instance, the folder picker, which the user experiences as the dialog
+    // being slow to appear.
     if (cmd !== 'update_session' && cmd !== 'connect' && cmd !== 'disconnect') {
       var session = __sarcaReadSession();
       if (session) {
-        return invokeOnce('update_session', session).catch(function(){
+        var fingerprint = JSON.stringify(session);
+        if (window.__sarcaPushedSession === fingerprint) {
+          return invokeOnce(cmd, payload);
+        }
+        return invokeOnce('update_session', session).then(function(){
+          // Only remember a push the native side accepted; a failed one must
+          // be retried before the next command, not assumed applied.
+          window.__sarcaPushedSession = fingerprint;
+        }, function(){
           // Best-effort; still attempt the original command.
         }).then(function(){
           return invokeOnce(cmd, payload);
