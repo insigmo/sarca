@@ -141,10 +141,15 @@ pub fn validate_local_dir(
 mod tests {
     use super::*;
 
+    /// A canonical temp directory to use as an allowed root.
+    ///
+    /// The Windows extended-length prefix `canonicalize` adds is stripped: a
+    /// `\\?\` path is handed to the object manager verbatim, so `..` inside one
+    /// is never resolved and `validate_local_dir` does not return one either.
     fn tmp_root(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("sarca-paths-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        dir.canonicalize().unwrap()
+        strip_verbatim(&dir.canonicalize().unwrap())
     }
 
     #[test]
@@ -154,16 +159,21 @@ mod tests {
         std::fs::create_dir_all(&pictures).unwrap();
 
         let got = validate_local_dir(pictures.to_str().unwrap(), &[root.clone()], &[]).unwrap();
-        assert_eq!(PathBuf::from(got), pictures.canonicalize().unwrap());
+        assert_eq!(
+            PathBuf::from(got),
+            strip_verbatim(&pictures.canonicalize().unwrap())
+        );
     }
 
     #[test]
     fn rejects_traversal_out_of_the_root() {
         let root = tmp_root("traversal");
-        let escaped = format!("{}/Pictures/../../..", root.display());
         std::fs::create_dir_all(root.join("Pictures")).unwrap();
+        // Join rather than concatenate: on Windows the separator is `\`, and a
+        // path spelled with `/` does not normalize, so the `..` never resolve.
+        let escaped = root.join("Pictures").join("..").join("..").join("..");
 
-        let err = validate_local_dir(&escaped, &[root], &[]).unwrap_err();
+        let err = validate_local_dir(escaped.to_str().unwrap(), &[root], &[]).unwrap_err();
         assert!(err.contains("inside your own user folder"), "{err}");
     }
 
