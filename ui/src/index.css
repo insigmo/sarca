@@ -167,9 +167,19 @@ body,
 	--sarca-safe-right: env(safe-area-inset-right, 0px);
 	--sarca-safe-bottom: env(safe-area-inset-bottom, 0px);
 	--sarca-safe-left: env(safe-area-inset-left, 0px);
+	/* Writing-direction-relative aliases. `env(safe-area-inset-*)` is always
+	 * physical, so anything positioned with `inset-inline-*` has to pick the
+	 * matching physical inset itself — see the `[dir='rtl']` swap below. */
+	--sarca-safe-inline-start: var(--sarca-safe-left);
+	--sarca-safe-inline-end: var(--sarca-safe-right);
 	/* Android WebView often reports 0 insets while drawing edge-to-edge */
 	--sarca-android-top: 0px;
 	--sarca-android-bottom: 0px;
+}
+
+[dir='rtl'] {
+	--sarca-safe-inline-start: var(--sarca-safe-right);
+	--sarca-safe-inline-end: var(--sarca-safe-left);
 }
 
 body {
@@ -1739,7 +1749,7 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 }
 
 .menu-fab-icon {
-	margin-right: 8px;
+	margin-inline-end: 8px;
 }
 
 .fs-grid-item:hover .fs-grid-item__star,
@@ -2903,7 +2913,10 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 .files-new-fab {
 	display: inline-flex;
 	position: fixed;
-	right: max(24px, var(--sarca-safe-right));
+	/* Logical, not `right`: Arabic sets <html dir="rtl">, and a physical inset
+	 * would leave the "+" stranded on the right while the rest of the page
+	 * mirrored to the left. */
+	inset-inline-end: max(24px, var(--sarca-safe-inline-end));
 	bottom: calc(32px + max(var(--sarca-safe-bottom), var(--sarca-android-bottom)));
 	z-index: 1100;
 	width: 48px;
