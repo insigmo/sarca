@@ -251,13 +251,21 @@ class ClientApp:
         return self
 
     def _wait_for_socket(self) -> None:
+        """Wait until the plugin answers on its control endpoint.
+
+        Unix: gate on the socket file so we only pay for a `ping`
+        subprocess once there is something to connect to. Windows: a named
+        pipe is not a filesystem entry and `Path.exists()` is always False
+        for it, so the `ping` probe is the whole readiness signal — it
+        fails cleanly until the plugin binds the pipe.
+        """
         deadline = time.monotonic() + START_TIMEOUT_S
         while time.monotonic() < deadline:
             if self.proc is not None and self.proc.poll() is not None:
                 raise PilotError(
                     f"client exited with {self.proc.returncode}\n{self.tail_log()}"
                 )
-            if self.socket.exists():
+            if IS_WINDOWS or self.socket.exists():
                 try:
                     self.run("ping", timeout=10)
                     return
@@ -265,6 +273,7 @@ class ClientApp:
                     pass
             time.sleep(0.2)
         raise PilotError(f"pilot socket never appeared at {self.socket}\n{self.tail_log()}")
+
     def _wait_for_window(self) -> None:
         """The plugin binds its socket during setup, before Tauri builds the
         window from the config, so `ping` succeeding does not mean there is a
