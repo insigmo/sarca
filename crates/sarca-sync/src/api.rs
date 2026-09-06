@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use futures::{StreamExt, TryStreamExt};
@@ -34,13 +35,37 @@ const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 /// transfer deadlines below are measured in minutes.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Longest silence tolerated between two reads of a response body.
+/// Longest silence tolerated between two frames of a *response body*.
 ///
-/// This is what actually guards file transfers: an upload's NDJSON progress
-/// stream heartbeats every 15s (see the server's `HEARTBEAT_SECS`), so a
-/// connection that goes quiet for this long is dead, no matter how long the
-/// transfer as a whole is allowed to take.
+/// An upload's NDJSON progress stream heartbeats every 15s (see the server's
+/// `HEARTBEAT_SECS`), so a body that goes quiet for this long is dead however
+/// long the transfer as a whole is allowed to take.
+///
+/// Applied by [`drain_upload_progress`] and [`write_response_body`], *not* by
+/// `reqwest::ClientBuilder::read_timeout`. That setting reads like this one and
+/// is not: reqwest arms a single sleep when the request is dispatched, never
+/// resets it, and fails the whole request if the response *head* has not
+/// arrived when it expires. The upload endpoint answers only once the entire
+/// multipart body is on the server's disk, so a client-wide `read_timeout` was
+/// really a hard 45-second ceiling on time-to-first-byte — every file too big
+/// to push in that window died with "error sending request for url (…):
+/// operation timed out" on a perfectly healthy connection. The send side is
+/// bounded by [`UPLOAD_STALL_TIMEOUT`] and the per-request `transfer_timeout`
+/// instead.
 const READ_IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// Longest an upload may hand *zero* bytes to the connection before we call the
+/// socket wedged.
+///
+/// [`READ_IDLE_TIMEOUT`] cannot cover this: while the body is going up there is
+/// no response to read yet. `transfer_timeout` is sized for a whole
+/// multi-gigabyte file, so on its own it would let a dead connection hold a
+/// sync slot for hours. Deliberately generous — a congested uplink may go quiet
+/// for a while, but not for two minutes with nothing accepted at all.
+const UPLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How often the stall watchdog wakes to compare against the last progress.
+const UPLOAD_STALL_POLL: Duration = Duration::from_secs(5);
 
 /// Floor for one file transfer, whatever its size.
 const TRANSFER_MIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -347,8 +372,8 @@ impl SarcaApi {
 
         if total_len < PARALLEL_DOWNLOAD_THRESHOLD_BYTES {
             // Size is known and small — one more plain GET is cheaper than
-            // fanning out. `READ_IDLE_TIMEOUT` is what actually catches a
-            // dead connection during the long Telegram round trip.
+            // fanning out. `write_response_body`'s per-frame idle guard is what
+            // catches a dead connection during the long Telegram round trip.
             let resp = self
                 .send_authed("GET", &url, |client, version| {
                     client
@@ -478,8 +503,7 @@ impl SarcaApi {
             .with_context(|| format!("create {}", path.display()))?;
         let mut written: u64 = 0;
         let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk?;
+        while let Some(chunk) = next_frame_before_idle(&mut stream, "download").await? {
             written = written.saturating_add(chunk.len() as u64);
             if written > MAX_DOWNLOAD_BYTES {
                 bail!(
@@ -563,10 +587,11 @@ impl SarcaApi {
             url: &str,
             version: Version,
             params: &UploadParams<'_>,
-        ) -> Result<reqwest::RequestBuilder> {
+        ) -> Result<(reqwest::RequestBuilder, Arc<UploadProgress>)> {
             let file = File::open(params.local_path).await?;
             let meta = file.metadata().await?;
-            let stream = ReaderStream::new(file);
+            let progress = Arc::new(UploadProgress::new());
+            let stream = instrumented_upload_body(ReaderStream::new(file), progress.clone());
             let body = reqwest::Body::wrap_stream(stream);
             let part = Part::stream_with_length(body, meta.len())
                 .file_name(params.filename.to_owned())
@@ -586,9 +611,10 @@ impl SarcaApi {
             // seconds. Without this the response body read died mid-stream with
             // "error decoding response body: operation timed out" and the file
             // was reported as failed even though the server kept going.
-            Ok(api
+            let req = api
                 .auth(client.post(url).version(version).multipart(form))
-                .timeout(transfer_timeout(meta.len())))
+                .timeout(transfer_timeout(meta.len()));
+            Ok((req, progress))
         }
 
         let h3_client = if h3_version == Version::HTTP_3 {
@@ -603,31 +629,34 @@ impl SarcaApi {
             mtime_ms,
             content_hash,
         };
-        let resp = match build_upload(self, h3_client, &url, h3_version, &params)
-            .await?
-            .send()
-            .await
-        {
+        let (req, progress) = build_upload(self, h3_client, &url, h3_version, &params).await?;
+        let resp = match send_upload(req, progress.clone()).await {
             Ok(resp) => {
                 log_response_protocol("POST", &url, resp.version());
                 resp
             }
-            Err(err) if should_fallback_from_h3(&url, h3_version, &err) => {
+            // Falling back re-sends the whole file, so only do it when HTTP/3
+            // gave up before a single byte left the machine. Otherwise the
+            // "fallback" is a silent second upload of a multi-gigabyte file —
+            // and when the first attempt hit its deadline, a second one against
+            // an already-expired budget.
+            Err(UploadSendError::Transport(err))
+                if should_fallback_from_h3(&url, h3_version, &err) && !progress.sent_any() =>
+            {
                 tracing::info!(
                     method = "POST",
                     url = %url,
                     error = %err,
-                    "HTTP/3 upload failed, falling back to TCP HTTPS"
+                    "HTTP/3 upload failed before sending, falling back to TCP HTTPS"
                 );
                 log::info!("HTTP/3 upload failed, falling back to TCP HTTPS url={url} error={err}");
-                let resp = build_upload(self, &self.tcp_client, &url, Version::HTTP_11, &params)
-                    .await?
-                    .send()
-                    .await?;
+                let (req, progress) =
+                    build_upload(self, &self.tcp_client, &url, Version::HTTP_11, &params).await?;
+                let resp = send_upload(req, progress).await.map_err(|e| e.into_report())?;
                 log_response_protocol("POST", &url, resp.version());
                 resp
             }
-            Err(err) => return Err(describe_transfer_error("upload", err)),
+            Err(e) => return Err(e.into_report()),
         };
         if !resp.status().is_success() {
             let status = resp.status();
@@ -636,11 +665,7 @@ impl SarcaApi {
         }
         // Status is sent before Telegram delivery even starts — the real
         // outcome is a `phase` line in the streamed NDJSON body.
-        let body = resp
-            .bytes()
-            .await
-            .map_err(|e| describe_transfer_error("upload", e))?;
-        if let Some(msg) = ndjson_error_message(&body) {
+        if let Some(msg) = drain_upload_progress(resp).await? {
             bail!("upload failed: {msg}");
         }
         Ok(())
@@ -678,6 +703,197 @@ impl SarcaApi {
     }
 }
 
+/// How far an upload's request body has got.
+///
+/// Lets the stall watchdog tell "the connection is not draining" from "the body
+/// is up and the server is busy pushing it to Telegram", and lets the HTTP/3
+/// fallback tell "nothing was sent, retrying is free" from "half a gigabyte is
+/// already on the wire".
+#[derive(Debug)]
+struct UploadProgress {
+    /// Bytes handed to the connection so far.
+    sent: AtomicU64,
+    /// Milliseconds since `started` at the last handover.
+    last_ms: AtomicU64,
+    /// Set once the final chunk of the file has been handed over.
+    body_complete: AtomicBool,
+    started: Instant,
+    /// Silence that counts as wedged, and how often to check for it. Fields
+    /// rather than constants so tests can watch a real stall resolve without
+    /// waiting out the production budget.
+    stall_after: Duration,
+    stall_poll: Duration,
+}
+
+impl UploadProgress {
+    fn new() -> Self {
+        Self::with_stall_budget(UPLOAD_STALL_TIMEOUT, UPLOAD_STALL_POLL)
+    }
+
+    fn with_stall_budget(stall_after: Duration, stall_poll: Duration) -> Self {
+        Self {
+            sent: AtomicU64::new(0),
+            last_ms: AtomicU64::new(0),
+            body_complete: AtomicBool::new(false),
+            started: Instant::now(),
+            stall_after,
+            stall_poll,
+        }
+    }
+
+    fn note_sent(&self, bytes: usize) {
+        self.sent.fetch_add(bytes as u64, Ordering::Relaxed);
+        self.last_ms.store(self.elapsed_ms(), Ordering::Relaxed);
+    }
+
+    fn note_body_complete(&self) {
+        self.body_complete.store(true, Ordering::Relaxed);
+    }
+
+    fn sent_any(&self) -> bool {
+        self.sent.load(Ordering::Relaxed) > 0
+    }
+
+    fn body_complete(&self) -> bool {
+        self.body_complete.load(Ordering::Relaxed)
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+
+    /// How long the body has been silent. Before the first chunk this is the
+    /// age of the request, which is what we want: a connection that never
+    /// accepts a byte is as wedged as one that stops halfway.
+    fn idle(&self) -> Duration {
+        Duration::from_millis(
+            self.elapsed_ms()
+                .saturating_sub(self.last_ms.load(Ordering::Relaxed)),
+        )
+    }
+}
+
+/// Wraps an upload body so every chunk the connection takes is recorded, and
+/// the end of the file is marked.
+///
+/// The trailing empty chunk exists only to give the stream somewhere to run
+/// `note_body_complete` — it is polled exactly when the file hits EOF, which is
+/// the moment silence stops meaning "wedged" and starts meaning "the server is
+/// working". An empty frame is a no-op in the body.
+fn instrumented_upload_body<S>(
+    stream: S,
+    progress: Arc<UploadProgress>,
+) -> impl futures::Stream<Item = std::io::Result<bytes::Bytes>> + Send
+where
+    S: futures::Stream<Item = std::io::Result<bytes::Bytes>> + Send,
+{
+    let on_chunk = progress.clone();
+    stream
+        .inspect(move |chunk| {
+            if let Ok(chunk) = chunk {
+                on_chunk.note_sent(chunk.len());
+            }
+        })
+        .chain(futures::stream::once(async move {
+            progress.note_body_complete();
+            Ok(bytes::Bytes::new())
+        }))
+}
+
+/// Why an upload never got a response.
+enum UploadSendError {
+    Transport(reqwest::Error),
+    /// The connection stopped accepting body bytes for this long.
+    Stalled(Duration),
+}
+
+impl UploadSendError {
+    fn into_report(self) -> anyhow::Error {
+        match self {
+            Self::Transport(e) => describe_transfer_error("upload", e),
+            Self::Stalled(after) => anyhow::anyhow!(
+                "upload stalled — the connection stopped accepting data for {}s. \
+                 It will be retried.",
+                after.as_secs()
+            ),
+        }
+    }
+}
+
+/// Resolves only once the request body has been silent for
+/// [`UPLOAD_STALL_TIMEOUT`]; never resolves after the body is fully sent.
+async fn upload_stalled(progress: Arc<UploadProgress>) -> Duration {
+    loop {
+        tokio::time::sleep(progress.stall_poll).await;
+        if progress.body_complete() {
+            // Everything is on the wire. What remains is the server pushing to
+            // Telegram, bounded by the request's own `transfer_timeout`, and
+            // then the NDJSON body, bounded by `READ_IDLE_TIMEOUT`.
+            std::future::pending::<()>().await;
+        }
+        if progress.idle() >= progress.stall_after {
+            return progress.stall_after;
+        }
+    }
+}
+
+/// Sends an upload, failing fast if the socket wedges mid-body.
+async fn send_upload(
+    req: reqwest::RequestBuilder,
+    progress: Arc<UploadProgress>,
+) -> std::result::Result<Response, UploadSendError> {
+    tokio::select! {
+        biased;
+        sent = req.send() => sent.map_err(UploadSendError::Transport),
+        after = upload_stalled(progress) => Err(UploadSendError::Stalled(after)),
+    }
+}
+
+/// Pulls the next body frame, failing if the stream goes [`READ_IDLE_TIMEOUT`]
+/// without one.
+///
+/// `Ok(None)` is a clean end of body.
+async fn next_frame_before_idle<S>(stream: &mut S, action: &str) -> Result<Option<bytes::Bytes>>
+where
+    S: futures::Stream<Item = reqwest::Result<bytes::Bytes>> + Unpin,
+{
+    match tokio::time::timeout(READ_IDLE_TIMEOUT, stream.next()).await {
+        Ok(Some(chunk)) => Ok(Some(chunk.map_err(|e| describe_transfer_error(action, e))?)),
+        Ok(None) => Ok(None),
+        Err(_) => Err(anyhow::anyhow!(
+            "{action} stalled — the server sent nothing for {}s. It will be retried.",
+            READ_IDLE_TIMEOUT.as_secs()
+        )),
+    }
+}
+
+/// Reads an upload's NDJSON progress stream to the end, returning the message
+/// of the first `phase: "error"` line.
+///
+/// Scanned line by line rather than buffered whole: a long upload heartbeats
+/// every 15s for as long as Telegram takes, and there is no reason to hold all
+/// of that in memory to find one field.
+async fn drain_upload_progress(resp: Response) -> Result<Option<String>> {
+    let mut stream = resp.bytes_stream();
+    let mut pending: Vec<u8> = Vec::new();
+    let mut failure: Option<String> = None;
+    while let Some(chunk) = next_frame_before_idle(&mut stream, "upload").await? {
+        pending.extend_from_slice(&chunk);
+        while let Some(nl) = pending.iter().position(|&b| b == b'\n') {
+            let line: Vec<u8> = pending.drain(..=nl).collect();
+            if failure.is_none() {
+                failure = ndjson_error_message(&line);
+            }
+        }
+        // A `phase: "error"` line is terminal, but keep draining so the
+        // connection closes cleanly rather than being reset mid-response.
+    }
+    if failure.is_none() {
+        failure = ndjson_error_message(&pending);
+    }
+    Ok(failure)
+}
+
 /// Turns a transport failure during a file transfer into something the Sync
 /// panel can show. reqwest's own wording ("error decoding response body:
 /// request or response body error: operation timed out") names the layer that
@@ -703,10 +919,13 @@ pub struct HttpClients {
 /// reqwest routes a preconfigured rustls config to both the TCP connector and
 /// the HTTP/3 connector, so the same verifier covers QUIC.
 fn client_builder(timeout: Duration) -> reqwest::ClientBuilder {
+    // No `.read_timeout()`: see [`READ_IDLE_TIMEOUT`]. reqwest applies it as a
+    // deadline on the response head, which the upload endpoint cannot meet for
+    // any file that takes longer than it to send. Body-idle detection is done
+    // by the callers that actually read a body.
     let builder = Client::builder()
         .timeout(timeout)
-        .connect_timeout(CONNECT_TIMEOUT)
-        .read_timeout(READ_IDLE_TIMEOUT);
+        .connect_timeout(CONNECT_TIMEOUT);
     match crate::pinning::pinned_tls_config() {
         Some(config) => builder.use_preconfigured_tls(config),
         None => builder,
@@ -1059,6 +1278,208 @@ mod tests {
         // Past the cap it stops growing — a wedged transfer cannot hold a sync
         // slot indefinitely.
         assert_eq!(transfer_timeout(64 * bytes), TRANSFER_MAX_TIMEOUT);
+    }
+
+    /// Answers a POST only after the whole request body has arrived and
+    /// `head_delay` has passed — the shape of the real upload endpoint, which
+    /// spools the multipart to disk and only then starts the NDJSON stream.
+    async fn slow_upload_endpoint(head_delay: Duration, body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    // Drain the request until the client stops sending. The
+                    // multipart bodies in these tests are small enough to
+                    // arrive in a couple of reads.
+                    let mut buf = vec![0u8; 64 * 1024];
+                    loop {
+                        match tokio::time::timeout(
+                            Duration::from_millis(150),
+                            sock.read(&mut buf),
+                        )
+                        .await
+                        {
+                            Ok(Ok(0)) | Err(_) => break,
+                            Ok(Ok(_)) => continue,
+                            Ok(Err(_)) => return,
+                        }
+                    }
+                    tokio::time::sleep(head_delay).await;
+                    let head = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let _ = sock.write_all(body.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// Why `client_builder` must not set `read_timeout`.
+    ///
+    /// It reads like "longest silence between two body reads" and is not:
+    /// reqwest arms one sleep at dispatch, never resets it, and fails the whole
+    /// request if the response *head* has not arrived. Against an endpoint that
+    /// answers only after the body is spooled, that is a hard ceiling on
+    /// upload duration — which is what killed every large file with
+    /// "error sending request for url (…): operation timed out".
+    #[tokio::test]
+    async fn reqwest_read_timeout_is_a_deadline_on_the_response_head() {
+        let base = slow_upload_endpoint(Duration::from_millis(900), "{}\n").await;
+        let client = Client::builder()
+            .timeout(Duration::from_secs(30))
+            .read_timeout(Duration::from_millis(200))
+            .build()
+            .unwrap();
+
+        let err = client
+            .post(format!("{base}/api/upload"))
+            .body("x".repeat(4096))
+            .send()
+            .await
+            .expect_err("read_timeout fires before the head arrives");
+
+        assert!(err.is_timeout(), "expected a timeout, got: {err}");
+        // Same wording the failing uploads recorded in `upload_failures`.
+        assert!(
+            err.to_string().contains("error sending request"),
+            "got: {err}"
+        );
+    }
+
+    /// The fix: transfer clients carry no head-phase read deadline, so an
+    /// upload is bounded only by its own `transfer_timeout`.
+    #[tokio::test]
+    async fn transfer_clients_have_no_response_head_deadline() {
+        let client = build_tcp_client(DEFAULT_HTTP_TIMEOUT).unwrap();
+        assert!(
+            !format!("{client:?}").contains("read_timeout"),
+            "a client-wide read_timeout caps every upload at that many seconds \
+             regardless of file size: {client:?}"
+        );
+
+        // And it really does outlive one: same endpoint as the test above,
+        // answering well after the body is in.
+        let base = slow_upload_endpoint(Duration::from_millis(900), "{}\n").await;
+        let resp = client
+            .post(format!("{base}/api/upload"))
+            .body("x".repeat(4096))
+            .send()
+            .await
+            .expect("a slow head must not fail a healthy upload");
+        assert!(resp.status().is_success());
+    }
+
+    #[tokio::test]
+    async fn upload_body_records_progress_and_marks_completion() {
+        let progress = Arc::new(UploadProgress::new());
+        assert!(!progress.sent_any());
+        assert!(!progress.body_complete());
+
+        let chunks = futures::stream::iter(vec![
+            Ok(bytes::Bytes::from_static(b"hello")),
+            Ok(bytes::Bytes::from_static(b" world")),
+        ]);
+        let mut body = Box::pin(instrumented_upload_body(chunks, progress.clone()));
+
+        assert_eq!(body.next().await.unwrap().unwrap().len(), 5);
+        assert!(progress.sent_any(), "first chunk must count as progress");
+        assert!(
+            !progress.body_complete(),
+            "the file is not finished after one chunk"
+        );
+
+        body.next().await.unwrap().unwrap();
+        // The trailing empty frame is what marks the end of the file.
+        assert!(body.next().await.unwrap().unwrap().is_empty());
+        assert!(
+            progress.body_complete(),
+            "EOF must flip the watchdog off so a slow Telegram push is not \
+             mistaken for a wedged socket"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stalled_upload_fails_instead_of_holding_the_slot() {
+        // A server that accepts the connection and then never reads or
+        // answers. `send_upload` must give up on the stall watchdog rather
+        // than sit on the request's multi-hour transfer deadline.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let held = tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+            drop(sock);
+        });
+
+        // Same watchdog as production, on a budget a test can wait out.
+        let progress = Arc::new(UploadProgress::with_stall_budget(
+            Duration::from_millis(300),
+            Duration::from_millis(50),
+        ));
+
+        let client = Client::builder().build().unwrap();
+        let req = client
+            .post(format!("http://{addr}/api/upload"))
+            .timeout(TRANSFER_MAX_TIMEOUT)
+            .body("x".repeat(4096));
+
+        let Err(err) = tokio::time::timeout(Duration::from_secs(10), send_upload(req, progress))
+            .await
+            .expect("the watchdog must resolve, not wait out transfer_timeout")
+        else {
+            panic!("a wedged socket is not a successful upload");
+        };
+
+        assert!(
+            matches!(err, UploadSendError::Stalled(_)),
+            "expected a stall, not a transport error"
+        );
+        assert!(err.into_report().to_string().contains("upload stalled"));
+        held.abort();
+    }
+
+    #[tokio::test]
+    async fn ndjson_error_is_found_across_chunk_boundaries() {
+        // The progress stream arrives in arbitrary TCP-sized pieces, so a
+        // `phase: "error"` line is routinely split. Buffering the whole body
+        // hid that; line reassembly must not.
+        let body = "{\"phase\":\"heartbeat\"}\n\
+                    {\"phase\":\"error\",\"message\":\"Telegram flood wait\"}\n";
+        let base = slow_upload_endpoint(Duration::from_millis(10), body).await;
+        let resp = Client::builder()
+            .build()
+            .unwrap()
+            .post(format!("{base}/api/upload"))
+            .body("x")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            drain_upload_progress(resp).await.unwrap().as_deref(),
+            Some("Telegram flood wait")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_clean_progress_stream_reports_no_failure() {
+        let body = "{\"phase\":\"spooled\"}\n{\"phase\":\"done\"}\n";
+        let base = slow_upload_endpoint(Duration::from_millis(10), body).await;
+        let resp = Client::builder()
+            .build()
+            .unwrap()
+            .post(format!("{base}/api/upload"))
+            .body("x")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(drain_upload_progress(resp).await.unwrap(), None);
     }
 
     #[tokio::test]
