@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 use crate::{
-    api::SarcaApi,
+    api::{failure_scope, FailureScope, SarcaApi},
     candidate::LocalCandidate,
     hash::sha256_file,
     index::{mtime_ms_from_system, now_ms, IndexEntry, LocalIndex, UploadFailure},
@@ -46,6 +46,17 @@ const UPLOAD_BACKOFF_MS: [i64; 5] = [
     3_600_000,  // 1 h
     21_600_000, // 6 h
 ];
+
+/// How many files may fail in a row, each with a verdict from the server about
+/// that file, before the batch gives up for this tick.
+///
+/// A per-file failure is per-file only as far as the server's answer goes. When
+/// the real cause is behind it — a bot token that stopped working, a full disk,
+/// a storage that no longer exists — every file gets its own honest-looking
+/// rejection, and a batch that keeps going walks the entire backlog onto the
+/// retry ladder in one pass. The files that actually failed still get deferred;
+/// this only stops the ones behind them from being condemned for company.
+const MAX_CONSECUTIVE_UPLOAD_FAILURES: usize = 10;
 
 /// How long to wait before retrying a file that has failed `fail_count` times
 /// in a row. Saturates at the last rung — a file is never given up on
@@ -268,11 +279,10 @@ impl SyncEngine {
         self.transfers.write().await.abandon(id);
     }
 
-    // `cleanup_abandoned_ephemeral` used to live here, for the case where
-    // `push_local` bailed out mid-batch and left candidates unattempted. There
-    // is no such case any more: every candidate in the pending set is now
-    // attempted, and `push_one` deletes its own ephemeral file on every exit
-    // path, success or failure.
+    // `push_one` deletes its own ephemeral file on every exit path, success or
+    // failure, so an attempted candidate never leaks. An *unattempted* one can:
+    // `push_local` stops the batch when the link to the server goes down, and
+    // cleans up the leftovers itself at the end of that function.
 
     /// Promote a previously-enqueued Waiting transfer to Active. Falls back
     /// to [`begin`](TransferQueue::begin) if `waiting_id` is no longer in the
@@ -692,12 +702,19 @@ impl SyncEngine {
         let mut uploaded = 0usize;
         let mut failed = 0usize;
         let mut first_error: Option<String> = None;
+        let mut consecutive_failures = 0usize;
+        let mut stop_batch = false;
         let mut pending_iter = pending.into_iter();
-        // Files leave in waves (of `UPLOAD_PARALLELISM`, currently one). A failing
-        // file is recorded with a retry deadline and the batch keeps going: it must
-        // not abort the wave, the batch, or — via `sync_binding`'s `?` — the whole
-        // tick, because that let a single unuploadable file at the head of the scan
-        // order block every file behind it and stop downloads too, forever.
+        // Files leave in waves (of `UPLOAD_PARALLELISM`, currently one). A file
+        // the *server* refused is recorded with a retry deadline and the batch
+        // keeps going: it must not abort the wave, the batch, or — via
+        // `sync_binding`'s `?` — the whole tick, because that let a single
+        // unuploadable file at the head of the scan order block every file
+        // behind it and stop downloads too, forever.
+        //
+        // A file that failed because there was no server there to refuse it is
+        // the opposite case, and gets the opposite treatment: see the
+        // `FailureScope::Link` arm below.
         loop {
             let wave: Vec<_> = pending_iter.by_ref().take(UPLOAD_PARALLELISM).collect();
             if wave.is_empty() {
@@ -720,22 +737,57 @@ impl SyncEngine {
                         if sent {
                             uploaded += 1;
                         }
+                        consecutive_failures = 0;
                         if let Err(e) = self.index.clear_upload_failure(&binding.id, &rel) {
                             warn!(binding = %binding.id, path = %rel, error = %e,
                                 "clearing upload failure failed");
                         }
                     }
                     Err(e) => {
-                        failed += 1;
                         let msg = format!("{e:#}");
-                        self.note_upload_failure(&binding.id, &rel, &msg);
                         // The cached remote-folder set is an optimistic guess.
                         // If an upload fails, a folder we skipped re-creating
                         // may have been removed on the server, so drop this
                         // binding's entries and let the next tick recreate them.
                         self.forget_remote_dirs(&binding.id).await;
                         if first_error.is_none() {
-                            first_error = Some(msg);
+                            first_error = Some(msg.clone());
+                        }
+                        if matches!(failure_scope(&e), FailureScope::Link) {
+                            // Nothing reached the server, so nothing was learned
+                            // about this file — and nothing will be learned about
+                            // the next one either. Marching on would attempt the
+                            // whole backlog against a dead link at
+                            // connection-refused speed and put every one of those
+                            // files on the retry ladder, which is how a one-minute
+                            // outage became "132 files failed to upload" and a
+                            // six-hour lockout on a queue that was perfectly
+                            // healthy. Stop instead: each file keeps its place,
+                            // the outage is reported through `last_error` (what
+                            // the Sync panel's banner is for), and the next tick
+                            // — 60s away, with a freshly refreshed access token —
+                            // picks the batch straight back up. `continue`, not
+                            // `break`: results already in hand for this wave
+                            // still deserve to be recorded.
+                            warn!(binding = %binding.id, path = %rel, error = %msg,
+                                "upload batch stopped: the link is down, not this file");
+                            stop_batch = true;
+                            continue;
+                        }
+                        failed += 1;
+                        consecutive_failures += 1;
+                        self.note_upload_failure(&binding.id, &rel, &msg);
+                        if consecutive_failures >= MAX_CONSECUTIVE_UPLOAD_FAILURES {
+                            // Not classifiable as a link failure, yet nothing has
+                            // gone through in a long while. A bad bot token or a
+                            // full server disk looks exactly like this: per-file
+                            // verdicts, every file, forever. Deferring the ones
+                            // that actually failed is right; deferring the whole
+                            // backlog queued behind them is not, so leave the rest
+                            // to the next tick.
+                            warn!(binding = %binding.id, consecutive_failures,
+                                "upload batch stopped after too many consecutive file failures");
+                            stop_batch = true;
                         }
                     }
                 }
@@ -748,6 +800,30 @@ impl SyncEngine {
                     s.uploading = uploaded;
                     s.failed = failed;
                     s.last_error = first_error.clone();
+                }
+            }
+
+            if stop_batch {
+                break;
+            }
+        }
+
+        // A stopped batch leaves candidates that were enqueued but never
+        // attempted. Each still holds a Waiting slot in the transfer queue, and
+        // an ephemeral (MediaStore cache-copy) one still holds a file on disk;
+        // `push_one` is what normally releases both, and it never ran. The next
+        // tick re-enqueues whatever is still pending.
+        let unattempted: Vec<(LocalCandidate, String)> = pending_iter.collect();
+        if !unattempted.is_empty() {
+            {
+                let mut queue = self.transfers.write().await;
+                for (_, waiting_id) in &unattempted {
+                    queue.abandon(waiting_id);
+                }
+            }
+            for (candidate, _) in &unattempted {
+                if candidate.ephemeral {
+                    tokio::fs::remove_file(&candidate.absolute_path).await.ok();
                 }
             }
         }
@@ -1375,23 +1451,71 @@ mod tests {
         );
     }
 
-    /// Engine wired to port 9 ("discard"), which is never bound in test
-    /// environments — every upload fails fast with connection-refused instead
-    /// of a slow timeout (same trick used by api.rs's own tests).
-    fn unreachable_engine(dir: &std::path::Path) -> SyncEngine {
+    /// A server that drains every request body and then answers `status_line`.
+    /// Returns its base URL and a counter of requests it saw, so a test can
+    /// assert not just the outcome but how many files were attempted.
+    async fn canned_status_server(
+        status_line: &'static str,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_task = hits.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let hits = hits_for_task.clone();
+                tokio::spawn(async move {
+                    // Answer only once the client has stopped talking: replying
+                    // mid-body would fail the request as a transport error and
+                    // defeat the point of choosing a status.
+                    let mut buf = vec![0u8; 65536];
+                    loop {
+                        match tokio::time::timeout(
+                            Duration::from_millis(100),
+                            sock.read(&mut buf),
+                        )
+                        .await
+                        {
+                            Ok(Ok(0) | Err(_)) | Err(_) => break,
+                            Ok(Ok(_)) => {}
+                        }
+                    }
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    let resp = format!(
+                        "HTTP/1.1 {status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        (format!("http://{addr}"), hits)
+    }
+
+    fn engine_facing(dir: &std::path::Path, base_url: &str) -> SyncEngine {
         SyncEngine::open(
             SyncEngineConfig {
                 poll_interval: Duration::from_secs(30),
-                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
-                    "http://127.0.0.1:9",
-                    "",
-                ))),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(base_url, "t"))),
                 data_dir: dir.to_path_buf(),
                 media_source: Arc::new(crate::media_source::FsMediaSource),
             },
             Arc::new(KeepBothPrompt),
         )
         .unwrap()
+    }
+
+    /// Engine facing a server that refuses each file on its merits (400). This
+    /// is the failure the retry ladder is *for*: the server answered, about
+    /// this file, and the answer will not change on the next tick.
+    async fn rejecting_engine(dir: &std::path::Path) -> SyncEngine {
+        let (base, _) = canned_status_server("400 Bad Request").await;
+        engine_facing(dir, &base)
     }
 
     fn cam_binding(local_path: &std::path::Path) -> Binding {
@@ -1418,11 +1542,11 @@ mod tests {
 
     #[tokio::test]
     async fn push_local_attempts_every_candidate_despite_failures() {
-        // Regression test for "nothing syncs": an upload failure used to abort
-        // the whole batch (and, via sync_binding's `?`, the whole tick), so one
-        // unuploadable file at the head of the scan order starved every file
-        // behind it forever. Now every candidate is attempted and the failures
-        // are reported, not raised.
+        // Regression test for "nothing syncs": a file the server refuses used
+        // to abort the whole batch (and, via sync_binding's `?`, the whole
+        // tick), so one unuploadable file at the head of the scan order
+        // starved every file behind it forever. Now every candidate is
+        // attempted and the failures are reported, not raised.
         const FILES: usize = 5;
         let dir = tempfile::tempdir().unwrap();
         let pics = dir.path().join("pics");
@@ -1430,7 +1554,7 @@ mod tests {
         for i in 0..FILES {
             std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
         }
-        let engine = unreachable_engine(dir.path());
+        let engine = rejecting_engine(dir.path()).await;
         let binding = cam_binding(&pics);
 
         let result = engine.push_local(&binding).await.expect(
@@ -1443,6 +1567,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_server_outage_stops_the_batch_instead_of_deferring_every_file() {
+        // The bug this test exists for: an outage used to be charged to the
+        // files. Every candidate was attempted against a dead server, each
+        // failed in milliseconds, and each was pushed a rung up the retry
+        // ladder — so a minute of downtime showed up as "132 files failed to
+        // upload" and locked a healthy backlog out for six hours.
+        const FILES: usize = 5;
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        for i in 0..FILES {
+            std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
+        }
+        let (base, hits) = canned_status_server("502 Bad Gateway").await;
+        let engine = engine_facing(dir.path(), &base);
+        let binding = cam_binding(&pics);
+
+        let result = engine.push_local(&binding).await.unwrap();
+
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one refusal from the gateway is enough — the rest of the backlog \
+             must not be thrown at a server that is not there"
+        );
+        assert_eq!(result.failed, 0, "the link failed, not the files");
+        assert!(
+            result.first_error.is_some(),
+            "the outage must still be reported, via the error banner"
+        );
+        assert_eq!(
+            engine.index.upload_failure_count(&binding.id).unwrap(),
+            0,
+            "an outage must leave no file deferred"
+        );
+
+        // And the whole backlog is still there for the next tick, undeferred.
+        assert_eq!(
+            filter_pending_candidates(
+                &engine.index,
+                &binding.id,
+                &crate::media_source::FsMediaSource
+                    .list_candidates(&binding)
+                    .await
+                    .unwrap(),
+            )
+            .unwrap()
+            .len(),
+            FILES,
+        );
+    }
+
+    #[tokio::test]
+    async fn an_outage_leaves_no_file_stuck_waiting_in_the_transfer_queue() {
+        // Candidates are enqueued as Waiting up front, and `push_one` is what
+        // clears each one. A stopped batch never runs it, so the Sync panel
+        // would go on showing files as queued that nothing is working on.
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        for i in 0..5 {
+            std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
+        }
+        let (base, _) = canned_status_server("503 Service Unavailable").await;
+        let engine = engine_facing(dir.path(), &base);
+        let binding = cam_binding(&pics);
+
+        engine.push_local(&binding).await.unwrap();
+
+        assert_eq!(
+            engine.transfer_queue().await.uploading,
+            0,
+            "unattempted candidates must be released, not left queued forever"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_run_of_rejections_stops_the_batch_without_condemning_the_rest() {
+        // Belt and braces for the failures that arrive one honest per-file
+        // verdict at a time (bad bot token, full server disk): the ones that
+        // actually failed are deferred, the queue behind them is not.
+        const FILES: usize = MAX_CONSECUTIVE_UPLOAD_FAILURES + 5;
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        for i in 0..FILES {
+            std::fs::write(pics.join(format!("{i:02}.jpg")), b"x").unwrap();
+        }
+        let engine = rejecting_engine(dir.path()).await;
+        let binding = cam_binding(&pics);
+
+        let result = engine.push_local(&binding).await.unwrap();
+
+        assert_eq!(result.failed, MAX_CONSECUTIVE_UPLOAD_FAILURES);
+        assert_eq!(
+            engine.index.upload_failure_count(&binding.id).unwrap(),
+            MAX_CONSECUTIVE_UPLOAD_FAILURES,
+            "only the files that were actually refused may be deferred"
+        );
+    }
+
+    #[tokio::test]
     async fn failed_upload_is_deferred_then_retried_after_backoff() {
         // The point of the backoff: a file that just failed drops out of the
         // next scan's pending set, so it cannot re-occupy the head of the queue
@@ -1451,7 +1677,7 @@ mod tests {
         let pics = dir.path().join("pics");
         std::fs::create_dir_all(&pics).unwrap();
         std::fs::write(pics.join("bad.jpg"), b"x").unwrap();
-        let engine = unreachable_engine(dir.path());
+        let engine = rejecting_engine(dir.path()).await;
         let binding = cam_binding(&pics);
 
         let first = engine.push_local(&binding).await.unwrap();
@@ -1507,7 +1733,7 @@ mod tests {
         let pics = dir.path().join("pics");
         std::fs::create_dir_all(&pics).unwrap();
         std::fs::write(pics.join("0-bad.jpg"), b"x").unwrap();
-        let engine = unreachable_engine(dir.path());
+        let engine = rejecting_engine(dir.path()).await;
         let binding = cam_binding(&pics);
 
         engine.push_local(&binding).await.unwrap();
@@ -1530,7 +1756,7 @@ mod tests {
         let pics = dir.path().join("pics");
         std::fs::create_dir_all(&pics).unwrap();
         std::fs::write(pics.join("bad.jpg"), b"x").unwrap();
-        let engine = unreachable_engine(dir.path());
+        let engine = rejecting_engine(dir.path()).await;
         let binding = cam_binding(&pics);
         engine.index.upsert_binding(&binding).unwrap();
 
@@ -1554,7 +1780,7 @@ mod tests {
         std::fs::create_dir_all(&pics).unwrap();
         let path = pics.join("photo.jpg");
         std::fs::write(&path, b"x").unwrap();
-        let engine = unreachable_engine(dir.path());
+        let engine = rejecting_engine(dir.path()).await;
         let binding = cam_binding(&pics);
 
         engine.push_local(&binding).await.unwrap();

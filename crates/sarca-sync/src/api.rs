@@ -661,10 +661,14 @@ impl SarcaApi {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("upload failed: {status} {body}");
+            return Err(
+                anyhow::Error::new(HttpStatusError { status, body }).context("upload failed")
+            );
         }
         // Status is sent before Telegram delivery even starts — the real
-        // outcome is a `phase` line in the streamed NDJSON body.
+        // outcome is a `phase` line in the streamed NDJSON body. That one stays
+        // untyped, and so classifies as `FailureScope::File`: the server took
+        // the bytes and reached a verdict about *this* file.
         if let Some(msg) = drain_upload_progress(resp).await? {
             bail!("upload failed: {msg}");
         }
@@ -811,11 +815,7 @@ impl UploadSendError {
     fn into_report(self) -> anyhow::Error {
         match self {
             Self::Transport(e) => describe_transfer_error("upload", e),
-            Self::Stalled(after) => anyhow::anyhow!(
-                "upload stalled — the connection stopped accepting data for {}s. \
-                 It will be retried.",
-                after.as_secs()
-            ),
+            Self::Stalled(after) => anyhow::Error::new(UploadStalled(after)),
         }
     }
 }
@@ -898,13 +898,132 @@ async fn drain_upload_progress(resp: Response) -> Result<Option<String>> {
 /// panel can show. reqwest's own wording ("error decoding response body:
 /// request or response body error: operation timed out") names the layer that
 /// noticed, not what went wrong.
+///
+/// Both branches stay classifiable by [`failure_scope`]: the non-timeout one
+/// keeps the `reqwest::Error` in the chain, and the timeout one — whose whole
+/// point is to replace reqwest's wording — carries [`TransferTimedOut`] instead.
 fn describe_transfer_error(action: &str, err: reqwest::Error) -> anyhow::Error {
     if err.is_timeout() {
-        return anyhow::anyhow!(
-            "{action} timed out — the server stopped responding. It will be retried."
-        );
+        return anyhow::Error::new(TransferTimedOut(action.to_owned()));
     }
     anyhow::Error::from(err).context(format!("{action} failed"))
+}
+
+/// What a failed transfer says about the *next* file in the batch.
+///
+/// The upload retry ladder in `engine.rs` defers a file that fails, on the
+/// theory that the file is the problem. That theory only holds when the server
+/// actually formed an opinion about it. When the server is simply not there,
+/// every file in the backlog "fails" in milliseconds, and a ladder applied to
+/// all of them buries a whole queue for hours over an outage that lasted a
+/// minute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureScope {
+    /// This file: the server took the request and refused the content, or the
+    /// bytes could not be read off local disk. Nothing else is implicated.
+    File,
+    /// The link to the server: nothing arrived, the connection wedged, a
+    /// gateway answered for a backend that is not there, or the session
+    /// expired. Every other file is about to fail exactly the same way.
+    Link,
+}
+
+/// A non-2xx answer, kept as a typed error so callers can classify by status
+/// instead of re-parsing the message they just formatted. `Display` is bare
+/// (`"502 Bad Gateway "`) because every construction site adds its own
+/// `.context(...)` prefix.
+#[derive(Debug)]
+pub struct HttpStatusError {
+    pub status: StatusCode,
+    pub body: String,
+}
+
+impl std::fmt::Display for HttpStatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.status, self.body)
+    }
+}
+
+impl std::error::Error for HttpStatusError {}
+
+/// The send side went silent for [`UPLOAD_STALL_TIMEOUT`]. Typed for the same
+/// reason as [`HttpStatusError`]: a wedged socket is a link problem, and the
+/// only way to know that from an `anyhow::Error` is to leave a type behind.
+#[derive(Debug)]
+struct UploadStalled(Duration);
+
+impl std::fmt::Display for UploadStalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "upload stalled — the connection stopped accepting data for {}s. It will be retried.",
+            self.0.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for UploadStalled {}
+
+/// A transfer that ran out its deadline. Typed for the same reason as
+/// [`UploadStalled`]: [`describe_transfer_error`] deliberately drops reqwest's
+/// own wording, and dropping the error with it would leave nothing to classify.
+#[derive(Debug)]
+struct TransferTimedOut(String);
+
+impl std::fmt::Display for TransferTimedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} timed out — the server stopped responding. It will be retried.",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for TransferTimedOut {}
+
+/// Statuses that say nothing about the file that happened to be in flight.
+fn scope_for_status(status: StatusCode) -> FailureScope {
+    match status.as_u16() {
+        // The session, not the file. Self-heals: the client refreshes the
+        // access token before every tick.
+        401 | 403 => FailureScope::Link,
+        // Congestion and throttling — "come back later", for any file.
+        408 | 425 | 429 => FailureScope::Link,
+        // Sarca answers 4xx for everything it blames on the request itself, so
+        // a 5xx is the server or the gateway in front of it: overloaded,
+        // restarting, or gone. Caddy's empty-bodied 502 for a backend that is
+        // not listening is the shape this whole classification exists for.
+        s if s >= 500 => FailureScope::Link,
+        _ => FailureScope::File,
+    }
+}
+
+/// Classifies a failed transfer by walking the error chain for something that
+/// positively identifies the link — a status code, a transport error, a wedged
+/// socket.
+///
+/// Anything else is [`FailureScope::File`], deliberately: that is the
+/// conservative answer, because it preserves head-of-line isolation, which is
+/// the property the retry ladder exists for.
+pub fn failure_scope(err: &anyhow::Error) -> FailureScope {
+    for cause in err.chain() {
+        if let Some(e) = cause.downcast_ref::<HttpStatusError>() {
+            return scope_for_status(e.status);
+        }
+        if let Some(e) = cause.downcast_ref::<reqwest::Error>() {
+            return match e.status() {
+                Some(status) => scope_for_status(status),
+                // No status means no answer: connection refused, TLS failure,
+                // DNS, timeout, a reset mid-body.
+                None => FailureScope::Link,
+            };
+        }
+        if cause.is::<UploadStalled>() || cause.is::<TransferTimedOut>() {
+            return FailureScope::Link;
+        }
+    }
+    FailureScope::File
 }
 
 /// Pair of HTTP clients: QUIC/HTTP/3 (ALPN `h3`) and TCP HTTPS fallback.
@@ -1774,6 +1893,101 @@ mod tests {
         assert!(
             leftovers.is_empty(),
             "temp part files must be cleaned up: {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn failure_scope_blames_the_link_for_a_gateway_that_has_no_backend() {
+        // The 502 storm: Caddy answering for a sarca that was restarting. The
+        // file in flight had nothing to do with it, and 130 files behind it
+        // even less.
+        for status in [502u16, 503, 504, 500, 507] {
+            let err = anyhow::Error::new(HttpStatusError {
+                status: StatusCode::from_u16(status).unwrap(),
+                body: String::new(),
+            })
+            .context("upload failed");
+            assert_eq!(failure_scope(&err), FailureScope::Link, "status {status}");
+        }
+    }
+
+    #[test]
+    fn failure_scope_blames_the_link_for_an_expired_session() {
+        // An access token lives 30 minutes; a batch of multi-gigabyte videos
+        // does not finish in 30 minutes. Deferring files over it would punish
+        // the backlog for the clock.
+        for status in [401u16, 403, 408, 429] {
+            let err = anyhow::Error::new(HttpStatusError {
+                status: StatusCode::from_u16(status).unwrap(),
+                body: String::new(),
+            })
+            .context("upload failed");
+            assert_eq!(failure_scope(&err), FailureScope::Link, "status {status}");
+        }
+    }
+
+    #[test]
+    fn failure_scope_blames_the_file_when_the_server_refused_it() {
+        for status in [400u16, 404, 409, 413, 422] {
+            let err = anyhow::Error::new(HttpStatusError {
+                status: StatusCode::from_u16(status).unwrap(),
+                body: "no".into(),
+            })
+            .context("upload failed");
+            assert_eq!(failure_scope(&err), FailureScope::File, "status {status}");
+        }
+        // Nothing typed in the chain at all — e.g. the NDJSON `error` phase, or
+        // a local read failure. Unknown has to mean "the file", so head-of-line
+        // isolation still holds.
+        assert_eq!(
+            failure_scope(&anyhow::anyhow!("upload failed: [Telegram API] file is too big")),
+            FailureScope::File
+        );
+    }
+
+    #[test]
+    fn failure_scope_blames_the_link_for_a_wedged_socket() {
+        assert_eq!(
+            failure_scope(&UploadSendError::Stalled(Duration::from_secs(120)).into_report()),
+            FailureScope::Link
+        );
+    }
+
+    #[tokio::test]
+    async fn failure_scope_blames_the_link_when_the_request_never_landed() {
+        // Port 9 ("discard") is never bound in test environments, so this is a
+        // connection refused: no status, no answer, no verdict about the file.
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("test.txt");
+        tokio::fs::write(&file_path, b"test").await.unwrap();
+        let api = SarcaApi::new("http://127.0.0.1:9", "t");
+        let err = api
+            .upload_file(Uuid::nil(), "", "test.txt", &file_path, None, None)
+            .await
+            .expect_err("an unreachable server must fail the upload");
+        assert_eq!(failure_scope(&err), FailureScope::Link);
+    }
+
+    #[test]
+    fn a_transfer_timeout_is_a_link_failure_and_keeps_its_wording() {
+        let err = anyhow::Error::new(TransferTimedOut("upload".to_owned()));
+        assert_eq!(
+            format!("{err:#}"),
+            "upload timed out — the server stopped responding. It will be retried."
+        );
+        assert_eq!(failure_scope(&err), FailureScope::Link);
+    }
+
+    #[test]
+    fn upload_stall_message_is_unchanged_by_being_typed() {
+        // The Sync panel shows this string; typing the error was for the retry
+        // logic, not a rewording.
+        assert_eq!(
+            format!(
+                "{:#}",
+                UploadSendError::Stalled(Duration::from_secs(120)).into_report()
+            ),
+            "upload stalled — the connection stopped accepting data for 120s. It will be retried."
         );
     }
 
