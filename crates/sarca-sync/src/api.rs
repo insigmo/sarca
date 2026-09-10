@@ -67,6 +67,15 @@ const UPLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(120);
 /// How often the stall watchdog wakes to compare against the last progress.
 const UPLOAD_STALL_POLL: Duration = Duration::from_secs(5);
 
+/// How long an upload keeps listening after the server confirms it has the
+/// bytes (`spooled`), hoping to hear the relay finish before letting go.
+///
+/// Sized to be worth having, not to be sufficient: a small photo finishes well
+/// inside it and is confirmed on the same pass, while a multi-gigabyte video
+/// never could — its relay is bounded by the server's uplink, not by anything
+/// this client can wait out. See [`drain_upload_progress`].
+const RELAY_CONFIRM_GRACE: Duration = Duration::from_secs(90);
+
 /// Floor for one file transfer, whatever its size.
 const TRANSFER_MIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
@@ -116,6 +125,22 @@ pub struct StorageSummary {
 #[derive(Debug, Clone, Deserialize)]
 struct StoragesResponse {
     pub storages: Vec<StorageSummary>,
+}
+
+/// What the server already holds at one remote path.
+///
+/// Only the fields an upload decision turns on. `content_hash` is what a client
+/// sent with a previous upload of this path, and `is_uploaded` says whether the
+/// relay onward to Telegram finished — a row exists from the moment the bytes
+/// are spooled, hours before that becomes true for a large file.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RemoteFileStatus {
+    #[serde(default)]
+    pub size: i64,
+    #[serde(default)]
+    pub is_uploaded: bool,
+    #[serde(default)]
+    pub content_hash: Option<String>,
 }
 
 #[derive(Clone)]
@@ -568,7 +593,7 @@ impl SarcaApi {
         local_path: &Path,
         mtime_ms: Option<i64>,
         content_hash: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<UploadOutcome> {
         self.require_access_token()?;
         let url = format!("{}/api/storages/{storage_id}/files/upload", self.base_url);
         let h3_version = preferred_request_version(&url);
@@ -666,13 +691,50 @@ impl SarcaApi {
             );
         }
         // Status is sent before Telegram delivery even starts — the real
-        // outcome is a `phase` line in the streamed NDJSON body. That one stays
-        // untyped, and so classifies as `FailureScope::File`: the server took
-        // the bytes and reached a verdict about *this* file.
-        if let Some(msg) = drain_upload_progress(resp).await? {
-            bail!("upload failed: {msg}");
+        // outcome is a `phase` line in the streamed NDJSON body. A `phase:
+        // "error"` line stays untyped, and so classifies as
+        // `FailureScope::File`: the server took the bytes and reached a verdict
+        // about *this* file.
+        drain_upload_progress(resp, RELAY_CONFIRM_GRACE).await
+    }
+
+    /// What the server holds at `remote_path`, or `None` when it holds nothing.
+    ///
+    /// One cheap GET in front of an upload, and the reason it earns its place is
+    /// arithmetic: relaying a file onward to Telegram runs at the server's uplink
+    /// speed, which for a multi-gigabyte video is hours, while the client's own
+    /// deadline for the request is a fraction of that. Every time the client gave
+    /// up first it re-sent the entire file — minutes to hours of *its* uplink —
+    /// to be told the server was already busy with those exact bytes. Asking
+    /// first turns that into one small request.
+    ///
+    /// An error is the caller's cue to just upload: a preflight that cannot
+    /// answer must never be the reason a file does not get sent.
+    pub async fn remote_file(
+        &self,
+        storage_id: Uuid,
+        remote_path: &str,
+    ) -> Result<Option<RemoteFileStatus>> {
+        self.require_access_token()?;
+        let encoded = remote_path
+            .split('/')
+            .map(urlencoding_encode)
+            .collect::<Vec<_>>()
+            .join("/");
+        let url = format!(
+            "{}/api/storages/{storage_id}/files/info/{encoded}",
+            self.base_url
+        );
+        let resp = self
+            .send_authed("GET", &url, |client, version| {
+                client.get(&url).version(version)
+            })
+            .await?;
+        // No row at that path yet — the common case for a new file.
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
         }
-        Ok(())
+        Ok(Some(resp.error_for_status()?.json().await?))
     }
 
     pub async fn create_folder(
@@ -860,38 +922,111 @@ where
     match tokio::time::timeout(READ_IDLE_TIMEOUT, stream.next()).await {
         Ok(Some(chunk)) => Ok(Some(chunk.map_err(|e| describe_transfer_error(action, e))?)),
         Ok(None) => Ok(None),
-        Err(_) => Err(anyhow::anyhow!(
-            "{action} stalled — the server sent nothing for {}s. It will be retried.",
-            READ_IDLE_TIMEOUT.as_secs()
-        )),
+        Err(_) => Err(anyhow::Error::new(TransferReadStalled(READ_IDLE_TIMEOUT))),
     }
 }
 
-/// Reads an upload's NDJSON progress stream to the end, returning the message
-/// of the first `phase: "error"` line.
+/// True when this NDJSON line carries exactly `phase`.
+fn ndjson_phase_is(line: &[u8], phase: &str) -> bool {
+    std::str::from_utf8(line)
+        .ok()
+        .and_then(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok())
+        .and_then(|ev| {
+            ev.get("phase")
+                .and_then(|p| p.as_str())
+                .map(|p| p == phase)
+        })
+        .unwrap_or(false)
+}
+
+/// How an upload's response stream ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UploadOutcome {
+    /// The server saw the file all the way into storage. Nothing left to check.
+    Stored,
+    /// The server has the bytes and its own row for them, and is still relaying
+    /// them onward. We stopped listening; it did not stop working. A caller must
+    /// not record the file as stored on this alone — a later pass confirms it
+    /// through [`SarcaApi::remote_state`].
+    HandedOff,
+}
+
+/// Reads an upload's NDJSON progress stream, returning how it ended.
 ///
 /// Scanned line by line rather than buffered whole: a long upload heartbeats
-/// every 15s for as long as Telegram takes, and there is no reason to hold all
+/// every 15s for as long as the relay takes, and there is no reason to hold all
 /// of that in memory to find one field.
-async fn drain_upload_progress(resp: Response) -> Result<Option<String>> {
+///
+/// The stream is deliberately not followed to the end. `spooled` means the bytes
+/// and the server's row for them are committed; everything after it is the
+/// server relaying to Telegram at its own uplink's pace, which for a large video
+/// is hours. Holding the request open across that is the single thing that made
+/// big files impossible — no connection survives it, the client's own deadline
+/// expires first, and every expiry re-sent the whole file from the top. So once
+/// `spooled` has been seen, waiting is capped at [`RELAY_CONFIRM_GRACE`]: long
+/// enough that anything quick still reports `Stored` on this same pass, short
+/// enough that a long relay is left to get on with it unattended.
+async fn drain_upload_progress(resp: Response, grace: Duration) -> Result<UploadOutcome> {
     let mut stream = resp.bytes_stream();
     let mut pending: Vec<u8> = Vec::new();
     let mut failure: Option<String> = None;
-    while let Some(chunk) = next_frame_before_idle(&mut stream, "upload").await? {
+    let mut spooled_at: Option<std::time::Instant> = None;
+
+    loop {
+        // Committed, and past the point where waiting for the relay pays.
+        let grace_left = match spooled_at {
+            Some(at) => {
+                let left = grace.saturating_sub(at.elapsed());
+                if left.is_zero() {
+                    return Ok(UploadOutcome::HandedOff);
+                }
+                Some(left)
+            },
+            None => None,
+        };
+        // Before `spooled` the only bound is the idle one; after it, whichever
+        // of the two runs out first.
+        let wait = grace_left.map_or(READ_IDLE_TIMEOUT, |left| READ_IDLE_TIMEOUT.min(left));
+
+        let chunk = match tokio::time::timeout(wait, stream.next()).await {
+            Ok(Some(chunk)) => chunk.map_err(|e| describe_transfer_error("upload", e))?,
+            // Clean end of body: the server said everything it had to say.
+            Ok(None) => break,
+            Err(_) => {
+                // The grace ran out, not the server's patience.
+                if spooled_at.is_some_and(|at| at.elapsed() >= grace) {
+                    return Ok(UploadOutcome::HandedOff);
+                }
+                return Err(anyhow::Error::new(TransferReadStalled(READ_IDLE_TIMEOUT)));
+            },
+        };
+
         pending.extend_from_slice(&chunk);
         while let Some(nl) = pending.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = pending.drain(..=nl).collect();
+            // Another request is already relaying these bytes — the race the
+            // preflight normally wins. Nothing failed and nothing more to send.
+            if ndjson_phase_is(&line, "in_progress") {
+                return Ok(UploadOutcome::HandedOff);
+            }
             if failure.is_none() {
                 failure = ndjson_error_message(&line);
+            }
+            if spooled_at.is_none() && ndjson_phase_is(&line, "spooled") {
+                spooled_at = Some(std::time::Instant::now());
             }
         }
         // A `phase: "error"` line is terminal, but keep draining so the
         // connection closes cleanly rather than being reset mid-response.
     }
+
     if failure.is_none() {
         failure = ndjson_error_message(&pending);
     }
-    Ok(failure)
+    match failure {
+        Some(msg) => bail!("upload failed: {msg}"),
+        None => Ok(UploadOutcome::Stored),
+    }
 }
 
 /// Turns a transport failure during a file transfer into something the Sync
@@ -964,6 +1099,28 @@ impl std::fmt::Display for UploadStalled {
 
 impl std::error::Error for UploadStalled {}
 
+/// The *response* went silent for [`READ_IDLE_TIMEOUT`].
+///
+/// Typed rather than a formatted string, and specifically so [`failure_scope`]
+/// can see it. The send-side twin ([`UploadStalled`]) has always been a link
+/// failure; this one used to be an untyped `anyhow!`, so it fell through to
+/// `FailureScope::File` and put the file on the retry ladder — punishing a
+/// perfectly good file for a connection that went quiet.
+#[derive(Debug)]
+struct TransferReadStalled(Duration);
+
+impl std::fmt::Display for TransferReadStalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the server sent nothing for {}s. It will be retried.",
+            self.0.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for TransferReadStalled {}
+
 /// A transfer that ran out its deadline. Typed for the same reason as
 /// [`UploadStalled`]: [`describe_transfer_error`] deliberately drops reqwest's
 /// own wording, and dropping the error with it would leave nothing to classify.
@@ -1008,6 +1165,11 @@ fn scope_for_status(status: StatusCode) -> FailureScope {
 /// the property the retry ladder exists for.
 pub fn failure_scope(err: &anyhow::Error) -> FailureScope {
     for cause in err.chain() {
+        // A response that went quiet says nothing about the file that happened
+        // to be in flight — the next one is about to meet the same silence.
+        if cause.is::<TransferReadStalled>() {
+            return FailureScope::Link;
+        }
         if let Some(e) = cause.downcast_ref::<HttpStatusError>() {
             return scope_for_status(e.status);
         }
@@ -1579,10 +1741,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
-            drain_upload_progress(resp).await.unwrap().as_deref(),
-            Some("Telegram flood wait")
-        );
+        let err = drain_upload_progress(resp, RELAY_CONFIRM_GRACE)
+            .await
+            .expect_err("a phase:error line is a failed upload");
+        assert!(err.to_string().contains("Telegram flood wait"));
+        // The server formed a verdict about this file, so only this file is
+        // deferred — the rest of the batch keeps going.
+        assert_eq!(failure_scope(&err), FailureScope::File);
     }
 
     #[tokio::test]
@@ -1598,7 +1763,122 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(drain_upload_progress(resp).await.unwrap(), None);
+        assert_eq!(
+            drain_upload_progress(resp, RELAY_CONFIRM_GRACE).await.unwrap(),
+            UploadOutcome::Stored
+        );
+    }
+
+    /// The race the preflight normally wins: two passes offered the same bytes
+    /// and the second arrived while the first was still relaying. Nothing
+    /// failed, so nothing about this file belongs on the retry ladder.
+    #[tokio::test]
+    async fn an_upload_already_in_progress_is_a_handoff_not_a_failure() {
+        let body = "{\"phase\":\"in_progress\"}\n";
+        let base = slow_upload_endpoint(Duration::from_millis(10), body).await;
+        let resp = Client::builder()
+            .build()
+            .unwrap()
+            .post(format!("{base}/api/upload"))
+            .body("x")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            drain_upload_progress(resp, RELAY_CONFIRM_GRACE).await.unwrap(),
+            UploadOutcome::HandedOff
+        );
+    }
+
+    /// The relay outlasting the client is the normal case for a large file, not
+    /// an error: the bytes and the server's row for them are committed at
+    /// `spooled`, and everything after it runs at the server's uplink speed.
+    /// Waiting it out was what made big videos impossible, so the client lets
+    /// go and confirms later.
+    #[tokio::test]
+    async fn a_relay_that_outlasts_the_grace_is_handed_off_not_failed() {
+        // Spooled, then the silence of a server pushing bytes onward for hours.
+        let body = "{\"phase\":\"spooled\",\"total\":1}\n";
+        let base = silent_after_body_endpoint(body).await;
+        let resp = Client::builder()
+            .build()
+            .unwrap()
+            .post(format!("{base}/api/upload"))
+            .body("x")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            drain_upload_progress(resp, Duration::from_millis(150))
+                .await
+                .unwrap(),
+            UploadOutcome::HandedOff
+        );
+    }
+
+    /// Before `spooled` there is nothing committed to hand off, so the same
+    /// silence is still a stalled transfer — and one the *link*, not the file,
+    /// is to blame for.
+    #[tokio::test]
+    async fn silence_before_spooled_is_a_link_failure() {
+        let body = "{\"phase\":\"heartbeat\"}\n";
+        let base = silent_after_body_endpoint(body).await;
+        let resp = Client::builder()
+            .build()
+            .unwrap()
+            .post(format!("{base}/api/upload"))
+            .body("x")
+            .send()
+            .await
+            .unwrap();
+
+        let err = tokio::time::timeout(
+            Duration::from_secs(90),
+            drain_upload_progress(resp, Duration::from_millis(150)),
+        )
+        .await
+        .expect("drain should give up on its own")
+        .expect_err("a silent response is not a successful upload");
+        assert!(err.to_string().contains("sent nothing"), "{err}");
+        assert_eq!(failure_scope(&err), FailureScope::Link);
+    }
+
+    /// Sends `body`, then holds the connection open saying nothing — a response
+    /// that has started but will not end.
+    async fn silent_after_body_endpoint(body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 64 * 1024];
+                    loop {
+                        match tokio::time::timeout(
+                            Duration::from_millis(150),
+                            sock.read(&mut buf),
+                        )
+                        .await
+                        {
+                            Ok(Ok(0)) | Err(_) => break,
+                            Ok(Ok(_)) => continue,
+                            Ok(Err(_)) => return,
+                        }
+                    }
+                    // Chunked, so the body can start without promising a length
+                    // — and never send its terminating chunk.
+                    let head = "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\
+                                Transfer-Encoding: chunked\r\n\r\n";
+                    let _ = sock.write_all(head.as_bytes()).await;
+                    let frame = format!("{:x}\r\n{}\r\n", body.len(), body);
+                    let _ = sock.write_all(frame.as_bytes()).await;
+                    // Hold it open; never finish.
+                    tokio::time::sleep(Duration::from_secs(120)).await;
+                });
+            }
+        });
+        format!("http://{addr}")
     }
 
     #[tokio::test]

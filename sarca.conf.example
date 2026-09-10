@@ -31,6 +31,13 @@ TELEGRAM_API_BASE_URL=https://api.telegram.org
 TELEGRAM_RATE_LIMIT=60
 TELEGRAM_CHUNK_SIZE_MB=20
 
+# Ceiling on how many megabytes of received-but-not-yet-relayed files may sit in
+# WORK_DIR at once. Clients hand a file off as soon as it is on disk here and go
+# straight on to the next one, so this is what stops a fast uplink from filling
+# the disk of a server that relays to Telegram far more slowly than it receives.
+# Over budget, uploads are answered 503 ("try again shortly") until it drains.
+UPLOAD_SPOOL_BUDGET_MB=8192
+
 # Route all Telegram Bot API traffic (uploads, downloads, setup calls) through
 # a proxy. Useful when api.telegram.org is blocked or slow to reach directly.
 # Accepted schemes: http://, https://, socks5://, socks5h://. Leave blank to

@@ -1,4 +1,8 @@
-use std::path::PathBuf;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{LazyLock, Mutex},
+};
 
 use sqlx::SqlitePool;
 use tokio::sync::{mpsc, oneshot};
@@ -36,6 +40,64 @@ use crate::{
     schemas::files::InFolderSchema,
     services::trash::purge_file_ids,
 };
+
+/// Files whose Telegram relay is running right now, by `files.id`, with the size of the
+/// spool each is still holding in `WORK_DIR`.
+///
+/// A relay outlives the request that started it (see `ndjson_upload_progress_response`:
+/// the abort guard is disarmed once the bytes are spooled), and on a slow uplink it can
+/// run for hours. Two things need to know about that window.
+///
+/// The first is the duplicate-retry path below. A client whose own deadline expired will
+/// come back and offer the same file again; without this map that retry would purge the
+/// row the running relay is writing to, the relay would fail at `set_as_uploaded`, and the
+/// work would start over from chunk 0 — forever, for any file too large to finish inside
+/// one client deadline.
+///
+/// The second is [`spool_backlog_bytes`]. Clients hand off and move on now, so nothing
+/// upstream is paced by how fast this server can drain its backlog — and every waiting
+/// file is a full copy on disk. Accepting them faster than they relay is how `WORK_DIR`
+/// fills up.
+///
+/// A plain in-memory map is enough: it only has to be right for the lifetime of the
+/// relays it tracks, and a restart ends those too.
+static RELAYS_IN_FLIGHT: LazyLock<Mutex<HashMap<Uuid, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Marks `file_id` as relaying for as long as it is alive. Removal on drop covers the
+/// panic and cancellation paths as well as the ordinary one.
+struct RelayGuard(Uuid);
+
+impl RelayGuard {
+    fn new(file_id: Uuid, spooled_bytes: u64) -> Self {
+        if let Ok(mut guard) = RELAYS_IN_FLIGHT.lock() {
+            guard.insert(file_id, spooled_bytes);
+        }
+        Self(file_id)
+    }
+}
+
+impl Drop for RelayGuard {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = RELAYS_IN_FLIGHT.lock() {
+            guard.remove(&self.0);
+        }
+    }
+}
+
+/// True while `file_id`'s Telegram relay is running in this process.
+fn relay_in_flight(file_id: Uuid) -> bool {
+    RELAYS_IN_FLIGHT.lock().is_ok_and(|g| g.contains_key(&file_id))
+}
+
+/// Bytes currently spooled in `WORK_DIR` waiting to be relayed onward.
+///
+/// The upload handler refuses new work once this is over budget. That refusal is the only
+/// backpressure left in the system: a client used to be paced by holding its request open
+/// until the relay finished, and it deliberately no longer does.
+pub fn spool_backlog_bytes() -> u64 {
+    RELAYS_IN_FLIGHT.lock().map_or(0, |g| g.values().sum())
+}
 
 pub struct FilesService<'d> {
     repo: FilesRepository<'d>,
@@ -157,6 +219,21 @@ impl<'d> FilesService<'d> {
                         return Ok(());
                     }
 
+                    // Same bytes at the same path, and the relay for them is
+                    // still running. The client is offering the file again
+                    // because *its* side gave up — a deadline it cannot make on
+                    // this uplink, or a dropped connection — not because
+                    // anything here went wrong. Purging now would destroy hours
+                    // of Telegram progress and start the same file over, which
+                    // is exactly the loop that kept large videos from ever
+                    // landing. Tell the client to stand down instead; the relay
+                    // finishes on its own and the next attempt short-circuits on
+                    // `is_uploaded` above.
+                    if relay_in_flight(existing.id) {
+                        let _ = tokio::fs::remove_file(&file_path).await;
+                        return Err(SarcaError::UploadAlreadyInProgress);
+                    }
+
                     // Same bytes at the same path, but the previous attempt never
                     // reached set_as_uploaded and never ran the failure purge either
                     // — the client's connection dropped mid-relay, so this handler
@@ -196,6 +273,10 @@ impl<'d> FilesService<'d> {
         progress: Option<mpsc::Sender<UploadProgressEvent>>,
         client_thumb: Option<Vec<u8>>,
     ) -> SarcaResult<()> {
+        // Claimed before the `spooled` event goes out, so there is no window in
+        // which a retry of the same path+hash can purge the row this relay is
+        // about to write to.
+        let _relay = RelayGuard::new(file.id, file_size.max(0).cast_unsigned());
         let (resp_tx, resp_rx) = oneshot::channel();
 
         let chunk_size =
@@ -663,6 +744,55 @@ async fn live_conflict_at(
         return Ok(true);
     }
     Ok(false)
+}
+
+#[cfg(test)]
+mod relay_registry_tests {
+    use uuid::Uuid;
+
+    use super::{RelayGuard, relay_in_flight, spool_backlog_bytes};
+
+    #[test]
+    fn a_relay_is_visible_while_it_runs_and_gone_afterwards() {
+        let id = Uuid::new_v4();
+        assert!(!relay_in_flight(id));
+        {
+            let _relay = RelayGuard::new(id, 1024);
+            // While this is alive, the duplicate-retry path must refuse to
+            // purge the row instead of restarting the Telegram upload.
+            assert!(relay_in_flight(id));
+        }
+        assert!(!relay_in_flight(id));
+    }
+
+    #[test]
+    fn relays_do_not_shadow_each_other() {
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        let guard_a = RelayGuard::new(a, 1);
+        {
+            let _guard_b = RelayGuard::new(b, 1);
+            assert!(relay_in_flight(a) && relay_in_flight(b));
+        }
+        assert!(relay_in_flight(a), "dropping one relay must not clear another");
+        assert!(!relay_in_flight(b));
+        drop(guard_a);
+        assert!(!relay_in_flight(a));
+    }
+
+    /// The backlog is what the upload handler refuses on, so it has to count
+    /// every waiting spool and let go of each one as its relay ends.
+    #[test]
+    fn the_backlog_totals_what_is_still_waiting_to_relay() {
+        let before = spool_backlog_bytes();
+        let guard = RelayGuard::new(Uuid::new_v4(), 700);
+        {
+            let _second = RelayGuard::new(Uuid::new_v4(), 300);
+            assert_eq!(spool_backlog_bytes(), before + 1000);
+        }
+        assert_eq!(spool_backlog_bytes(), before + 700);
+        drop(guard);
+        assert_eq!(spool_backlog_bytes(), before);
+    }
 }
 
 #[cfg(test)]

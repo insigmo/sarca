@@ -94,25 +94,29 @@ impl UploadProgressEvent {
     }
 }
 
-/// Push an upload progress event without ever blocking the Storage Manager.
+/// Push an upload progress event, without ever blocking the Storage Manager and
+/// without ever failing the upload.
 ///
-/// A full channel means the HTTP client is slow/stuck draining NDJSON — drop the
-/// event rather than stall Telegram (blocking here deadlocks the serial SM queue
-/// and holds the per-token send permit forever). A closed channel means the
-/// client canceled; return an error so the upload aborts promptly.
-pub fn emit_upload_progress(
-    tx: &mpsc::Sender<UploadProgressEvent>,
-    ev: UploadProgressEvent,
-) -> SarcaResult<()> {
-    if tx.is_closed() {
-        return Err(crate::errors::SarcaError::TelegramAPIError("Upload canceled".to_owned()));
-    }
-    match tx.try_send(ev) {
-        Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => Ok(()),
-        Err(mpsc::error::TrySendError::Closed(_)) => {
-            Err(crate::errors::SarcaError::TelegramAPIError("Upload canceled".to_owned()))
-        },
-    }
+/// Reporting only. A full channel means the HTTP client is slow at draining
+/// NDJSON, and a closed one means nobody is reading any more — neither says
+/// anything about whether the file should be stored, so both drop the event and
+/// carry on.
+///
+/// This used to treat a closed channel as a cancellation, which made the
+/// client's connection the upload's lifeline. That cannot hold: by the time any
+/// progress is emitted the bytes are already spooled and the file row already
+/// exists, and relaying them onward takes as long as the server's uplink needs —
+/// hours for a large video, far longer than one HTTP request survives. So every
+/// dropped connection abandoned a committed upload, left an unfinished row
+/// behind, and sent the client back to re-upload the whole file, which is how a
+/// big file could fail forever.
+///
+/// The trade-off is deliberate: an upload can no longer be called off by hanging
+/// up on it. Once the server has the bytes it finishes with them, and getting
+/// rid of the result means deleting the file.
+pub fn emit_upload_progress(tx: &mpsc::Sender<UploadProgressEvent>, ev: UploadProgressEvent) {
+    // Full or closed: either way there is nothing useful to do with the event.
+    let _ = tx.try_send(ev);
 }
 
 //////////////////////////////////////

@@ -14,11 +14,11 @@ const STORAGE_KEY = 'sarca.locale'
  * (`margin-inline-start` and friends) so it mirrors without a second sheet.
  */
 export const LOCALES = [
-	{ code: 'en', label: 'English', dir: 'ltr', dict: en },
-	{ code: 'ru', label: 'Русский', dir: 'ltr', dict: ru },
-	{ code: 'zh-CN', label: '简体中文', dir: 'ltr', dict: zh },
-	{ code: 'es', label: 'Español', dir: 'ltr', dict: es },
-	{ code: 'ar', label: 'العربية', dir: 'rtl', dict: ar },
+	{ code: 'en', label: 'English', short: 'En', dir: 'ltr', dict: en },
+	{ code: 'ru', label: 'Русский', short: 'Ru', dir: 'ltr', dict: ru },
+	{ code: 'zh-CN', label: '简体中文', short: 'Ch', dir: 'ltr', dict: zh },
+	{ code: 'es', label: 'Español', short: 'Es', dir: 'ltr', dict: es },
+	{ code: 'ar', label: 'العربية', short: 'Ar', dir: 'rtl', dict: ar },
 ]
 
 export const DEFAULT_LOCALE = 'en'

@@ -77,6 +77,8 @@ pub enum SarcaError {
     HeaderIsInvalid(String, String),
     #[error("storage is busy, retry shortly")]
     StorageBusy,
+    #[error("this file is already being uploaded — it will finish on its own")]
+    UploadAlreadyInProgress,
 }
 
 impl From<SarcaError> for (StatusCode, String) {
@@ -92,7 +94,8 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::LastActiveChannel
             | SarcaError::BotReplacementRequiresChannelConfirmation
             | SarcaError::CannotManageAccessOfYourself
-            | SarcaError::TrashPathConflict => (StatusCode::CONFLICT, e.to_string()),
+            | SarcaError::TrashPathConflict
+            | SarcaError::UploadAlreadyInProgress => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
             SarcaError::TooManyAttempts => (StatusCode::TOO_MANY_REQUESTS, e.to_string()),
             SarcaError::Forbidden

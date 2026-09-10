@@ -108,7 +108,9 @@ const SidebarLanguageSwitcher = () => {
 				aria-expanded={open()}
 				onClick={(e) => setAnchorEl(e.currentTarget)}
 			>
-				<FluentIcon name="localLanguage" size={20} />
+				<span class="files-sidebar__lang-code" aria-hidden="true">
+					{current().short}
+				</span>
 				<span class="files-sidebar__label">{current().label}</span>
 			</button>
 			<MenuMUI anchorEl={anchorEl()} open={open()} onClose={closeMenu}>

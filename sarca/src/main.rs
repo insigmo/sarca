@@ -20,6 +20,7 @@ use sarca::{
         create_superuser,
         delete_orphan_storage_workers,
         init_db,
+        purge_interrupted_uploads,
         reset_previews_on_format_change,
     },
     storage_manager::StorageManager,
@@ -121,6 +122,7 @@ async fn main() {
     init_db(&db).await;
     delete_orphan_storage_workers(&db).await;
     reset_previews_on_format_change(&db, config.work_dir.as_ref()).await;
+    purge_interrupted_uploads(&db, &config).await;
 
     match sarca::repositories::files::FilesRepository::new(&db).list_stale_upload_ids().await {
         Ok(ids) if !ids.is_empty() => {

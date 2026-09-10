@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use sqlx::SqlitePool;
+use uuid::Uuid;
 
 use crate::{
     common::password_manager::PasswordManager,
@@ -13,6 +14,7 @@ use crate::{
         storages::StoragesRepository,
         users::UsersRepository,
     },
+    services::trash::purge_file_ids,
 };
 
 /// Current embedded schema version for fresh `SQLite` databases (`schema_version`).
@@ -481,6 +483,69 @@ pub async fn reset_previews_on_format_change(db: &SqlitePool, work_dir: &Path) {
     }
     if let Err(e) = tokio::fs::write(&marker, current).await {
         tracing::warn!("could not record the preview format: {e}");
+    }
+}
+
+/// Clear out uploads this process was in the middle of when it last stopped.
+///
+/// A relay lives only in memory: the file row is written when the bytes land in
+/// `WORK_DIR`, and `is_uploaded` is set once the last chunk is away. Anything
+/// still `is_uploaded = 0` at startup was interrupted, and nothing will ever
+/// pick it back up.
+///
+/// Leaving those rows is worse than it sounds now that clients hand a file off
+/// and confirm it later: a client's preflight reads such a row as "the server is
+/// still working on it" and waits — forever, since no one is. Purging frees the
+/// path so the next pass re-uploads it, and takes the partial Telegram chunks
+/// with it via refcount GC.
+///
+/// The spool files those uploads left behind go too. Each is a full copy of its
+/// file, and on a small disk a handful of interrupted large videos is the whole
+/// of it.
+pub async fn purge_interrupted_uploads(db: &SqlitePool, config: &Config) {
+    let ids: Vec<Uuid> = match sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM files WHERE is_uploaded = false AND deleted_at IS NULL",
+    )
+    .fetch_all(db)
+    .await
+    {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!("could not look for interrupted uploads: {e}");
+            Vec::new()
+        },
+    };
+
+    if !ids.is_empty() {
+        tracing::info!("purging {} upload(s) interrupted by the last shutdown", ids.len());
+        if let Err(e) =
+            purge_file_ids(db, &config.telegram_api_base_url, config.telegram_rate_limit, &ids)
+                .await
+        {
+            tracing::warn!("purging interrupted uploads failed: {e}");
+        }
+    }
+
+    // Spools are named `<uuid>.upload`; every one of them belonged to a request
+    // that is long gone.
+    let uploads = Path::new(&config.work_dir).join("uploads");
+    let Ok(mut entries) = tokio::fs::read_dir(&uploads).await else {
+        return;
+    };
+    let (mut removed, mut bytes) = (0usize, 0u64);
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "upload") {
+            continue;
+        }
+        let size = entry.metadata().await.map_or(0, |m| m.len());
+        if tokio::fs::remove_file(&path).await.is_ok() {
+            removed += 1;
+            bytes += size;
+        }
+    }
+    if removed > 0 {
+        tracing::info!("removed {removed} abandoned upload spool(s), {bytes} bytes");
     }
 }
 
