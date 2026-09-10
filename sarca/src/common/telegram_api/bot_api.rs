@@ -277,10 +277,10 @@ impl<'t> TelegramBotApi<'t> {
         let sleep_for = Self::flood_sleep_duration(wait_secs);
         let deadline = Instant::now() + sleep_for;
         let mut last_emit = Instant::now();
+        // A flood wait is Telegram pacing us, and it has to be honoured whether
+        // or not a client is still watching the NDJSON stream — hanging up no
+        // longer calls an upload off (see `emit_upload_progress`).
         while Instant::now() < deadline {
-            if progress.is_some_and(tokio::sync::mpsc::Sender::is_closed) {
-                return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
-            }
             if let Some(tx) = progress {
                 if last_emit.elapsed() >= Duration::from_secs(15) {
                     let remaining =
@@ -289,7 +289,7 @@ impl<'t> TelegramBotApi<'t> {
                     emit_upload_progress(
                         tx,
                         UploadProgressEvent::waiting(uploaded, total, chunk, chunks, remaining),
-                    )?;
+                    );
                     last_emit = Instant::now();
                 }
             }
@@ -584,7 +584,7 @@ impl<'t> TelegramBotApi<'t> {
                                     req.total_chunks,
                                     wait_secs,
                                 ),
-                            )?;
+                            );
                         }
                         Self::honor_flood_wait(
                             wait_secs,

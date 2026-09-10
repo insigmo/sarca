@@ -8,10 +8,10 @@ use std::{
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
-    api::{failure_scope, FailureScope, SarcaApi},
+    api::{failure_scope, FailureScope, SarcaApi, UploadOutcome},
     candidate::LocalCandidate,
     hash::sha256_file,
     index::{mtime_ms_from_system, now_ms, IndexEntry, LocalIndex, UploadFailure},
@@ -142,6 +142,22 @@ enum TickScope {
     PullOnly,
 }
 
+/// What one candidate's turn came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PushOutcome {
+    /// Bytes went up, and the server confirmed it stored them.
+    Stored,
+    /// Bytes went up and the server has them, but it is still storing them.
+    /// Counts as progress *and* as something still outstanding.
+    HandedOff,
+    /// Nothing to send: already recorded here, or the server confirmed it has
+    /// these bytes already.
+    Skipped,
+    /// The server is already storing these bytes from an earlier pass. Nothing
+    /// was sent and nothing failed — we are waiting on it.
+    Relaying,
+}
+
 struct PushLocalResult {
     uploaded: usize,
     scanned: usize,
@@ -151,6 +167,9 @@ struct PushLocalResult {
     failed: usize,
     /// First failure's message, for the status banner.
     first_error: Option<String>,
+    /// Files the server is still storing — handed off this tick, or handed off
+    /// earlier and found still in progress by the preflight.
+    relaying: usize,
 }
 
 impl SyncEngine {
@@ -176,8 +195,26 @@ impl SyncEngine {
         self.known_remote_dirs.write().await.clear();
     }
 
-    async fn api(&self) -> tokio::sync::RwLockReadGuard<'_, SarcaApi> {
-        self.config.api.read().await
+    /// A snapshot of the API client, *not* a guard on it.
+    ///
+    /// Every caller here uses the result to `.await` a request, and an upload
+    /// on a slow uplink stays in that request for hours. Returning the read
+    /// guard meant the lock was held for exactly that long, and `tokio`'s
+    /// `RwLock` is write-preferring: the moment `set_credentials` queued behind
+    /// it (the webview pushes a rotated token roughly every 30 minutes, and the
+    /// background loop refreshes on its own) the writer parked, and *every*
+    /// later reader parked behind the writer. That wedged the whole native
+    /// bridge — `__sarcaInvoke` chains `update_session` in front of each Sync
+    /// command, so `list_bindings`, `sync_statuses` and `sync_transfer_queue`
+    /// never even ran, and the Sync panel went blind (no binding path, no
+    /// transfers, no error) for as long as the upload lasted.
+    ///
+    /// `SarcaApi` is cheap to clone — the `reqwest` clients behind it are
+    /// `Arc`s — so cloning under the lock and releasing it immediately costs
+    /// nothing and keeps the lock uncontended. An in-flight request keeps the
+    /// credentials it started with, which is what it did before anyway.
+    async fn api(&self) -> SarcaApi {
+        self.config.api.read().await.clone()
     }
 
     pub fn list_bindings(&self) -> Result<Vec<Binding>> {
@@ -564,6 +601,7 @@ impl SyncEngine {
                 pending: 0,
                 failed: 0,
                 first_error: None,
+                relaying: 0,
             },
         };
         let (_scanned, pending, already_synced) =
@@ -586,6 +624,7 @@ impl SyncEngine {
             already_synced,
             failed: push.failed,
             deferred: self.index.upload_failure_count(&binding.id)?,
+            relaying: push.relaying,
         })
     }
 
@@ -700,6 +739,7 @@ impl SyncEngine {
         };
 
         let mut uploaded = 0usize;
+        let mut relaying = 0usize;
         let mut failed = 0usize;
         let mut first_error: Option<String> = None;
         let mut consecutive_failures = 0usize;
@@ -733,9 +773,12 @@ impl SyncEngine {
                     // Sent, or already up to date: either way this path is
                     // healthy, so any earlier failure recorded against it is
                     // stale and the ladder should restart from the bottom.
-                    Ok(sent) => {
-                        if sent {
+                    Ok(outcome) => {
+                        if matches!(outcome, PushOutcome::Stored | PushOutcome::HandedOff) {
                             uploaded += 1;
+                        }
+                        if matches!(outcome, PushOutcome::HandedOff | PushOutcome::Relaying) {
+                            relaying += 1;
                         }
                         consecutive_failures = 0;
                         if let Err(e) = self.index.clear_upload_failure(&binding.id, &rel) {
@@ -841,6 +884,7 @@ impl SyncEngine {
             pending: pending_n,
             failed,
             first_error,
+            relaying,
         })
     }
 
@@ -874,15 +918,14 @@ impl SyncEngine {
         }
     }
 
-    /// Uploads a single candidate. `Ok(true)` means bytes reached the server,
-    /// `Ok(false)` that there was nothing to send (content unchanged). On error only
+    /// Uploads a single candidate, reporting what became of it. On error only
     /// this candidate is cleaned up; the caller handles the rest of the batch.
     async fn push_one(
         &self,
         binding: &Binding,
         candidate: LocalCandidate,
         waiting_id: String,
-    ) -> Result<bool> {
+    ) -> Result<PushOutcome> {
         {
             let LocalCandidate {
                 relative_path: rel,
@@ -902,6 +945,47 @@ impl SyncEngine {
                     Some(size),
                 )
                 .await;
+
+            let (parent, filename) = split_parent_name(&rel);
+            let remote_parent = join_remote(&binding.remote_root, &parent);
+            let remote_path = join_remote(&binding.remote_root, &rel);
+
+            // Ask before sending, and before hashing: reading a multi-gigabyte
+            // file to hash it is not free either, and the answer we most want is
+            // "already dealt with".
+            //
+            // `Err` here is not a reason to stop — a preflight that cannot
+            // answer must never be why a file goes unsent, and the upload below
+            // will meet the same problem and report it properly.
+            let remote = self
+                .api()
+                .await
+                .remote_file(binding.storage_id, &remote_path)
+                .await
+                .unwrap_or_else(|e| {
+                    debug!(binding = %binding.id, path = %rel, error = %format!("{e:#}"),
+                        "upload preflight failed; sending the file anyway");
+                    None
+                });
+
+            // A row of the same size that has not finished its relay is this
+            // file, still on its way up. Sending it again would cost the whole
+            // file for a `409`, and before the server learned to say `409` it
+            // cost the relay's progress too. Leave it be: no index entry, so the
+            // next pass looks again, and no failure recorded, so nothing about
+            // this file goes on the retry ladder.
+            if remote
+                .as_ref()
+                .is_some_and(|r| !r.is_uploaded && r.size == size)
+            {
+                debug!(binding = %binding.id, path = %rel,
+                    "already being stored by the server; leaving it to finish");
+                self.transfer_abandon(&tid).await;
+                if ephemeral {
+                    tokio::fs::remove_file(&path).await.ok();
+                }
+                return Ok(PushOutcome::Relaying);
+            }
 
             let hash = match sha256_file(&path).await {
                 Ok(h) => h,
@@ -925,11 +1009,34 @@ impl SyncEngine {
                 if ephemeral {
                     tokio::fs::remove_file(&path).await.ok();
                 }
-                return Ok(false);
+                return Ok(PushOutcome::Skipped);
             }
 
-            let (parent, filename) = split_parent_name(&rel);
-            let remote_parent = join_remote(&binding.remote_root, &parent);
+            // Stored, and these are the bytes. Normally a handoff from an
+            // earlier pass that has since finished relaying — record it now and
+            // send nothing.
+            if remote
+                .as_ref()
+                .is_some_and(|r| r.is_uploaded && r.content_hash.as_deref() == Some(hash.as_str()))
+            {
+                self.index.upsert_entry(
+                    &binding.id,
+                    &IndexEntry {
+                        relative_path: rel,
+                        size,
+                        mtime_ms: mtime,
+                        content_hash: Some(hash),
+                        remote_file_id: existing.and_then(|e| e.remote_file_id),
+                        last_cursor: self.index.get_cursor(&binding.id)?,
+                    },
+                )?;
+                self.transfer_complete(&tid).await;
+                if ephemeral {
+                    tokio::fs::remove_file(&path).await.ok();
+                }
+                return Ok(PushOutcome::Skipped);
+            }
+
             if let Err(e) = self.ensure_remote_parents(binding, &parent).await {
                 self.transfer_abandon(&tid).await;
                 if ephemeral {
@@ -949,16 +1056,36 @@ impl SyncEngine {
                     Some(&hash),
                 )
                 .await;
-            if let Err(e) = upload_result {
-                self.transfer_abandon(&tid).await;
-                if ephemeral {
-                    tokio::fs::remove_file(&path).await.ok();
+            let outcome = match upload_result {
+                Ok(outcome) => outcome,
+                Err(e) => {
+                    self.transfer_abandon(&tid).await;
+                    if ephemeral {
+                        tokio::fs::remove_file(&path).await.ok();
+                    }
+                    return Err(e).with_context(|| {
+                        format!("upload {} → {}/{}", path.display(), remote_parent, filename)
+                    });
                 }
-                return Err(e).with_context(|| {
-                    format!("upload {} → {}/{}", path.display(), remote_parent, filename)
-                });
-            }
+            };
             self.transfer_complete(&tid).await;
+            if ephemeral {
+                tokio::fs::remove_file(&path).await.ok();
+            }
+
+            // The bytes are the server's now, but it has not said they are
+            // stored — only that it has them and is still relaying. Writing the
+            // index entry here would call the file done on the strength of a
+            // promise, and if the relay failed the file would never be offered
+            // again. Leave the entry out: the preflight above turns the next
+            // pass into one small request, and writes the entry when the server
+            // confirms.
+            if outcome == UploadOutcome::HandedOff {
+                debug!(binding = %binding.id, path = %rel,
+                    "bytes handed off; the server is storing them, confirming later");
+                return Ok(PushOutcome::HandedOff);
+            }
+
             self.index.upsert_entry(
                 &binding.id,
                 &IndexEntry {
@@ -970,12 +1097,9 @@ impl SyncEngine {
                     last_cursor: self.index.get_cursor(&binding.id)?,
                 },
             )?;
-            if ephemeral {
-                tokio::fs::remove_file(&path).await.ok();
-            }
         }
 
-        Ok(true)
+        Ok(PushOutcome::Stored)
     }
 
     async fn pull_remote(&self, binding: &Binding, cursor: &mut i64) -> Result<usize> {
@@ -1356,6 +1480,34 @@ mod tests {
         .unwrap()
     }
 
+    /// A transfer holds the value `api()` returns for as long as the request
+    /// runs — hours, on the uplink this client actually meets. If that value is
+    /// still a read guard, `set_credentials` (a writer) parks behind it, and
+    /// because `tokio`'s `RwLock` is write-preferring every later reader parks
+    /// behind the writer: token refresh stops, and the native bridge — which
+    /// chains `update_session` in front of every Sync command — stops with it,
+    /// leaving the Sync panel with no binding, no transfers and no error.
+    #[tokio::test]
+    async fn credentials_can_be_rotated_while_a_transfer_holds_the_api() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = test_engine(dir.path());
+
+        // Stands in for an upload: taken before, still alive across the write.
+        let in_flight = engine.api().await;
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            engine.set_credentials("https://example.invalid".into(), "rotated".into()),
+        )
+        .await
+        .expect("set_credentials blocked behind an in-flight transfer");
+
+        // The in-flight request keeps the credentials it started with, and the
+        // next one picks up the rotated pair.
+        assert_eq!(in_flight.access_token(), "");
+        assert_eq!(engine.api().await.access_token(), "rotated");
+    }
+
     #[tokio::test]
     async fn disabling_binding_clears_its_status_immediately() {
         let dir = tempfile::tempdir().unwrap();
@@ -1529,6 +1681,160 @@ mod tests {
         }
     }
 
+    /// A server that answers `GET .../files/info/...` with `info_body` and
+    /// refuses everything else, counting how many uploads it was offered.
+    ///
+    /// Enough to drive the preflight: the point of these tests is what the
+    /// client decides *from the answer*, and an upload reaching this server at
+    /// all is already the failure being tested for.
+    async fn preflight_server(
+        info_body: &'static str,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let uploads = Arc::new(AtomicUsize::new(0));
+        let uploads_for_task = uploads.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let uploads = uploads_for_task.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 65536];
+                    let mut seen = Vec::new();
+                    loop {
+                        match tokio::time::timeout(
+                            Duration::from_millis(100),
+                            sock.read(&mut buf),
+                        )
+                        .await
+                        {
+                            Ok(Ok(0) | Err(_)) | Err(_) => break,
+                            Ok(Ok(n)) => seen.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let head = String::from_utf8_lossy(&seen[..seen.len().min(512)]).to_string();
+                    let resp = if head.contains("/files/info/") {
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n{info_body}",
+                            info_body.len()
+                        )
+                    } else {
+                        if head.contains("/files/upload") {
+                            uploads.fetch_add(1, Ordering::SeqCst);
+                        }
+                        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\
+                         Connection: close\r\n\r\n"
+                            .to_owned()
+                    };
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        (format!("http://{addr}"), uploads)
+    }
+
+    /// The case that made large videos impossible. The server already has these
+    /// bytes and is still relaying them onward — which for a big file is hours,
+    /// far longer than any single request of ours survives. Offering the file
+    /// again costs its whole size on the uplink and buys nothing.
+    #[tokio::test]
+    async fn a_file_the_server_is_still_relaying_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        std::fs::write(pics.join("clip.mp4"), b"video-bytes").unwrap();
+
+        // Same size, relay unfinished.
+        let (base, uploads) = preflight_server(
+            r#"{"size":11,"is_uploaded":false,"content_hash":null}"#,
+        )
+        .await;
+        let engine = engine_facing(dir.path(), &base);
+        let binding = cam_binding(&pics);
+
+        let result = engine.push_local(&binding).await.unwrap();
+
+        assert_eq!(
+            uploads.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "re-sending a file the server is already relaying is the whole file wasted"
+        );
+        assert_eq!(result.failed, 0, "waiting on a relay is not a failure");
+        // No index entry: the file is not stored until the server says so, and
+        // the next pass is what asks again.
+        assert!(engine
+            .index
+            .get_entry(&binding.id, "clip.mp4")
+            .unwrap()
+            .is_none());
+    }
+
+    /// The other half of the handoff: the relay finished while we were away, so
+    /// the file is recorded without a single byte going up.
+    #[tokio::test]
+    async fn a_file_the_server_already_stored_is_recorded_without_re_uploading() {
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        std::fs::write(pics.join("clip.mp4"), b"video-bytes").unwrap();
+        let hash = crate::hash::sha256_file(&pics.join("clip.mp4")).await.unwrap();
+
+        let body: &'static str = Box::leak(
+            format!(r#"{{"size":11,"is_uploaded":true,"content_hash":"{hash}"}}"#)
+                .into_boxed_str(),
+        );
+        let (base, uploads) = preflight_server(body).await;
+        let engine = engine_facing(dir.path(), &base);
+        let binding = cam_binding(&pics);
+
+        let result = engine.push_local(&binding).await.unwrap();
+
+        assert_eq!(uploads.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(result.failed, 0);
+        let entry = engine
+            .index
+            .get_entry(&binding.id, "clip.mp4")
+            .unwrap()
+            .expect("a file the server confirms it stored must be recorded");
+        assert_eq!(entry.content_hash.as_deref(), Some(hash.as_str()));
+    }
+
+    /// A stored file whose *local* bytes have since changed is a real edit, and
+    /// must still be sent — the preflight is a shortcut, not a veto.
+    #[tokio::test]
+    async fn a_stored_file_with_different_bytes_is_still_uploaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let pics = dir.path().join("pics");
+        std::fs::create_dir_all(&pics).unwrap();
+        std::fs::write(pics.join("clip.mp4"), b"video-bytes").unwrap();
+
+        // Stored, but under a different hash and a different size.
+        let (base, uploads) = preflight_server(
+            r#"{"size":4,"is_uploaded":true,"content_hash":"sha256:something-else"}"#,
+        )
+        .await;
+        let engine = engine_facing(dir.path(), &base);
+        let binding = cam_binding(&pics);
+
+        let result = engine.push_local(&binding).await.unwrap();
+
+        assert_eq!(
+            uploads.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "changed content must still reach the server"
+        );
+        assert!(
+            result.first_error.is_some(),
+            "and whatever the server said about it is reported"
+        );
+    }
+
     #[test]
     fn upload_backoff_climbs_then_saturates() {
         assert_eq!(upload_backoff_ms(1), 60_000);
@@ -1586,11 +1892,14 @@ mod tests {
 
         let result = engine.push_local(&binding).await.unwrap();
 
-        assert_eq!(
-            hits.load(std::sync::atomic::Ordering::SeqCst),
-            1,
+        // One file's worth of requests: the preflight asks first, and the upload
+        // follows when it cannot answer. What must not happen is the *backlog*
+        // marching through — five files thrown at a dead gateway.
+        let hits = hits.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            hits <= 2,
             "one refusal from the gateway is enough — the rest of the backlog \
-             must not be thrown at a server that is not there"
+             must not be thrown at a server that is not there; got {hits} requests"
         );
         assert_eq!(result.failed, 0, "the link failed, not the files");
         assert!(

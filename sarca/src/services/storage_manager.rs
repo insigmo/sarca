@@ -143,13 +143,13 @@ impl<'d> StorageManagerService<'d> {
 
         if let Some(tx) = data.progress.as_ref() {
             // Never await progress: a stuck NDJSON client must not freeze SM.
-            emit_upload_progress(tx, UploadProgressEvent::telegram(0, total, 1, total_chunks))?;
+            emit_upload_progress(tx, UploadProgressEvent::telegram(0, total, 1, total_chunks));
         }
 
+        // No cancel check here on purpose. Reaching this point means the bytes
+        // are spooled and the row exists, so the file is the server's to finish
+        // whether or not anyone is still listening — see `emit_upload_progress`.
         while offset < total {
-            if data.progress.as_ref().is_some_and(tokio::sync::mpsc::Sender::is_closed) {
-                return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
-            }
             let len = std::cmp::min(chunk_size, total - offset);
             let chunk_no = u32::try_from(position).unwrap_or(u32::MAX).saturating_add(1);
             let (chunk, replica) = self
@@ -186,7 +186,7 @@ impl<'d> StorageManagerService<'d> {
                         chunk_no.min(total_chunks),
                         total_chunks,
                     ),
-                )?;
+                );
             }
         }
 

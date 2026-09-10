@@ -2,7 +2,7 @@
  * Build a short honesty hint for Sync Settings after a scan tick.
  * Returns null when the error banner or transfer queue should own the UX.
  *
- * @param {{ last_error?: string|null, scanned?: number, pending?: number, already_synced?: number, deferred?: number }|null|undefined} status
+ * @param {{ last_error?: string|null, scanned?: number, pending?: number, already_synced?: number, deferred?: number, relaying?: number }|null|undefined} status
  * @param {{ unfinishedUploads?: number }} [opts]
  * @returns {string|null}
  */
@@ -16,6 +16,16 @@ export function syncScanHint(status, opts = {}) {
 	if (deferred > 0) {
 		const label = deferred === 1 ? 'file' : 'files'
 		return `${deferred} ${label} failed to upload and will be retried automatically — use Upload now to retry immediately`
+	}
+	// Files whose bytes have left this machine but that the server has not
+	// finished storing. Nothing about them shows up anywhere else — they are not
+	// pending, not transferring and not failed — so without this the panel goes
+	// silent on work that is very much happening, which for a large video can be
+	// hours of it.
+	const relaying = Number(status.relaying) || 0
+	if (relaying > 0) {
+		const label = relaying === 1 ? 'file is' : 'files are'
+		return `${relaying} ${label} uploaded and finishing on the server — large videos can take a while`
 	}
 	if (status.last_error) return null
 	const unfinished = Number(opts.unfinishedUploads) || 0

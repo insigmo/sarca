@@ -149,8 +149,39 @@ impl FilesRouter {
         State(state): State<Arc<AppState>>,
         Extension(user): Extension<AuthUser>,
         RoutePath(storage_id): RoutePath<Uuid>,
+        headers: HeaderMap,
         mut multipart: Multipart,
     ) -> Result<Response, (StatusCode, String)> {
+        // The only backpressure in the system. A client no longer waits out the
+        // relay before sending the next file — it hands off as soon as the bytes
+        // are spooled — so nothing but this paces it against a server that
+        // relays far slower than it receives. Every file waiting to relay is a
+        // full copy in WORK_DIR, and without a ceiling a big enough backlog
+        // simply fills the disk.
+        //
+        // 503 on purpose: this is "come back later", about the server, not about
+        // the file. Clients classify it as a link condition and retry the whole
+        // batch on the next pass rather than blaming any one file for it.
+        let incoming = headers
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        let backlog = crate::services::files::spool_backlog_bytes();
+        let budget = state.config.upload_spool_budget_bytes();
+        if backlog > 0 && backlog.saturating_add(incoming) > budget {
+            tracing::info!(
+                backlog,
+                incoming,
+                budget,
+                "upload deferred: too much already waiting to be relayed"
+            );
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Still storing earlier uploads — try again shortly".to_owned(),
+            ));
+        }
+
         // stream multipart to disk
         let upload_dir = Path::new(&state.config.work_dir).join("uploads");
         tokio::fs::create_dir_all(&upload_dir).await.map_err(|e| {
@@ -368,7 +399,8 @@ impl FilesRouter {
         Ok(StatusCode::CREATED)
     }
 
-    /// Stream NDJSON upload progress (`phase=spooled|telegram|waiting|heartbeat|done|error`).
+    /// Stream NDJSON upload progress
+    /// (`phase=spooled|telegram|waiting|heartbeat|done|in_progress|error`).
     ///
     /// `spooled` is emitted after the multipart is on disk and the DB row exists, before
     /// Telegram starts — clients may overlap the next file's client→Sarca upload.
@@ -376,8 +408,10 @@ impl FilesRouter {
     /// Heartbeats are emitted while Telegram is quiet (Storage Manager queue wait or long
     /// flood sleeps) so reverse proxies / browsers do not idle-timeout the response.
     ///
-    /// If the client disconnects (`AbortSignal` / tab close), the upload task is aborted so
-    /// unlimited flood-wait retries do not continue in the background.
+    /// If the client disconnects (`AbortSignal` / tab close) *before* `spooled`, the upload
+    /// task is aborted so unlimited flood-wait retries do not continue in the background.
+    /// After `spooled` the bytes are on disk and the file row exists, so the relay is left
+    /// to finish on its own — see the `spooled` arm below.
     fn ndjson_upload_progress_response(
         mut progress_rx: mpsc::Receiver<UploadProgressEvent>,
         upload_task: tokio::task::JoinHandle<SarcaResult<()>>,
@@ -414,6 +448,22 @@ impl FilesRouter {
                     ev = progress_rx.recv(), if progress_open => {
                         match ev {
                             Some(ev) => {
+                                // `spooled` means the bytes are on disk and the
+                                // file row exists: the upload is committed, and
+                                // from here on the client is only a spectator,
+                                // so stop treating its disconnect as a cancel.
+                                //
+                                // Telegram relay runs at the uplink's pace, and
+                                // a multi-gigabyte file is hours of it — far
+                                // longer than one HTTP request survives over a
+                                // home connection. Aborting on drop threw that
+                                // work away on every dropped connection *and*
+                                // made the client re-send the whole file only to
+                                // restart the relay from chunk 0, which is how a
+                                // large video could never finish at all.
+                                if ev.phase == "spooled" {
+                                    abort_guard.disarm();
+                                }
                                 // Real progress resets the idle heartbeat timer.
                                 heartbeat.reset();
                                 if let Ok(mut line) = serde_json::to_string(&ev) {
@@ -442,6 +492,16 @@ impl FilesRouter {
                             }
                         }
                         match joined {
+                            // Not a failure: another request is already relaying
+                            // these exact bytes and will finish them. Its own
+                            // phase, so the client can tell it apart from a real
+                            // error and neither re-send the file nor put it on a
+                            // retry ladder it does not belong on.
+                            Ok(Err(SarcaError::UploadAlreadyInProgress)) => {
+                                yield Ok(Bytes::from(
+                                    "{\"phase\":\"in_progress\"}\n",
+                                ));
+                            }
                             Ok(Ok(())) => {
                                 yield Ok(Bytes::from("{\"phase\":\"done\"}\n"));
                             }

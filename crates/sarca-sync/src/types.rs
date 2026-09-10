@@ -56,6 +56,12 @@ pub struct SyncStatus {
     /// which is why an idle-looking panel is not necessarily "all uploaded".
     #[serde(default)]
     pub deferred: usize,
+    /// Files the server has taken and is still storing. Their bytes are off
+    /// this machine and safe, but the server has not confirmed them yet — for a
+    /// large video that can be hours. Without this the panel has nothing to say
+    /// about them at all, and a queue that is quietly working looks stuck.
+    #[serde(default)]
+    pub relaying: usize,
 }
 
 /// Derive scan honesty counters from discovery + filter sizes.

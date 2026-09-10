@@ -248,6 +248,7 @@ pub mod tests {
             media_concurrency: 16,
             work_dir: String::new(),
             telegram_chunk_size_mb: 20,
+            upload_spool_budget_mb: 8192,
             debug_log: false,
             prefetch_enabled: false,
             prefetch_depth: 3,

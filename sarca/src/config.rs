@@ -54,6 +54,9 @@ pub struct Config {
 
     /// Max size of a single Telegram document chunk (official Bot API ≤20 MB).
     pub telegram_chunk_size_mb: u32,
+    /// Ceiling on bytes spooled in `WORK_DIR` awaiting relay. See
+    /// `services::files::spool_backlog_bytes`.
+    pub upload_spool_budget_mb: u32,
 
     /// Verbose (debug-level) tracing for requests and background jobs. `RUST_LOG` still wins.
     pub debug_log: bool,
@@ -133,6 +136,14 @@ impl Config {
             Self::get_env_var_with_default("MEDIA_CONCURRENCY", 16u16)?.clamp(1, 128);
         let telegram_chunk_size_mb =
             Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", 20u32)?;
+        // Clients hand a file off as soon as it is spooled and move straight on
+        // to the next one, so nothing on their side is paced by how fast this
+        // server drains its backlog. Every waiting file is a full copy in
+        // WORK_DIR; this is the ceiling on how much of that may pile up before
+        // uploads are told to come back later. 8 GiB leaves room for a couple of
+        // large videos in the queue without threatening a modest disk.
+        let upload_spool_budget_mb =
+            Self::get_env_var_with_default("UPLOAD_SPOOL_BUDGET_MB", 8192u32)?.max(1);
 
         let debug_log = Self::get_optional_env_var("DEBUG_LOG")
             .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
@@ -171,6 +182,7 @@ impl Config {
             media_concurrency,
             work_dir,
             telegram_chunk_size_mb,
+            upload_spool_budget_mb,
             debug_log,
             prefetch_enabled,
             prefetch_depth,
@@ -183,6 +195,11 @@ impl Config {
     /// Default chunk size in bytes — used when a file row has no `chunk_size_bytes`.
     pub fn default_chunk_size_bytes(&self) -> u64 {
         u64::from(self.telegram_chunk_size_mb).saturating_mul(1024 * 1024).max(1)
+    }
+
+    /// [`Self::upload_spool_budget_mb`] in bytes.
+    pub fn upload_spool_budget_bytes(&self) -> u64 {
+        u64::from(self.upload_spool_budget_mb).saturating_mul(1024 * 1024)
     }
 
     #[inline]
