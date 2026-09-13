@@ -532,9 +532,9 @@ impl<'t> TelegramBotApi<'t> {
             if req.progress.as_ref().is_some_and(tokio::sync::mpsc::Sender::is_closed) {
                 return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
             }
-			let form = Self::build_upload_part_form(file_path, req).await?;
-			let send_fut = http_client::client().post(url).multipart(form).send();
-			let result = send_fut.await;
+            let form = Self::build_upload_part_form(file_path, req).await?;
+            let send_fut = http_client::client().post(url).multipart(form).send();
+            let result = send_fut.await;
             match result {
                 Ok(response) => {
                     let status = response.status();
