@@ -230,7 +230,7 @@ impl<'d> FilesService<'d> {
                     // finishes on its own and the next attempt short-circuits on
                     // `is_uploaded` above.
                     if relay_in_flight(existing.id) {
-                    	let _ = tokio::fs::remove_file(&file_path).await;
+                        let _ = tokio::fs::remove_file(&file_path).await;
 
                         while relay_in_flight(existing.id) {
                             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
