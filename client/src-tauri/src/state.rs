@@ -558,7 +558,9 @@ pub const OPEN_SYNC_JS: &str = r#"
         });
       }
     }
-    return invokeOnce(cmd, payload);
+	return invokeOnce('update_session', session).then(...).then(() => {
+        return invokeOnce(cmd, payload);
+    });
   }
   // Preview disk cache must never block opening images. cache_put payloads are
   // large base64 JPEGs — navigation IPC puts them in a URL and hits length /
