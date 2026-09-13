@@ -300,9 +300,6 @@ impl<'t> TelegramBotApi<'t> {
             p.note_flood().await;
         }
         tokio::time::sleep(post_flood_extra_cooldown()).await;
-        if progress.is_some_and(tokio::sync::mpsc::Sender::is_closed) {
-            return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
-        }
         Ok(())
     }
 
@@ -535,21 +532,9 @@ impl<'t> TelegramBotApi<'t> {
             if req.progress.as_ref().is_some_and(tokio::sync::mpsc::Sender::is_closed) {
                 return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
             }
-            let form = Self::build_upload_part_form(file_path, req).await?;
-            // Shared pooled client: connect time is bounded (see http_client),
-            // and cancel is still via progress.closed() when the NDJSON client
-            // disconnects, below.
-            let send_fut = http_client::client().post(url).multipart(form).send();
-            let result = if let Some(tx) = req.progress.as_ref() {
-                tokio::select! {
-                    r = send_fut => r,
-                    () = tx.closed() => {
-                        return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
-                    }
-                }
-            } else {
-                send_fut.await
-            };
+			let form = Self::build_upload_part_form(file_path, req).await?;
+			let send_fut = http_client::client().post(url).multipart(form).send();
+			let result = send_fut.await;
             match result {
                 Ok(response) => {
                     let status = response.status();
