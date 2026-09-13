@@ -1086,14 +1086,14 @@ pub fn set_client_prefs(
 /// WebView used to receive it from `get_client_prefs` and compare in JS, which
 /// meant reading the lock screen's own secret was enough to walk past it.
 #[tauri::command]
-pub fn verify_app_lock_pin(state: State<'_, AppSyncState>, pin: String) -> Result<bool, String> {
+pub async fn verify_app_lock_pin(state: State<'_, AppSyncState>, pin: String) -> Result<bool, String> {
     let prefs = load_prefs(&state);
     if !prefs.app_lock_enabled || !prefs.has_pin() {
         return Ok(true);
     }
     // Rate-limit guessing. A 4-digit PIN is 10k combinations; without a delay a
     // script walks the whole space in well under a second.
-    std::thread::sleep(std::time::Duration::from_millis(250));
+    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     Ok(prefs.verify_pin(&pin))
 }
 

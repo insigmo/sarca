@@ -276,7 +276,9 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
         }
         "verify_app_lock_pin" => {
             let pin = arg_str(&args, "pin", "pin").unwrap_or_default();
-            Ok(json!(commands::verify_app_lock_pin(state.clone(), pin)?))
+                Ok(json!(
+					commands::verify_app_lock_pin(state.clone(), pin).await?
+				))
         }
         "export_logs" => {
             let dto = commands::export_logs(app.clone(), state.clone()).await?;
