@@ -230,8 +230,18 @@ impl<'d> FilesService<'d> {
                     // finishes on its own and the next attempt short-circuits on
                     // `is_uploaded` above.
                     if relay_in_flight(existing.id) {
-                        let _ = tokio::fs::remove_file(&file_path).await;
-                        return Err(SarcaError::UploadAlreadyInProgress);
+                    	let _ = tokio::fs::remove_file(&file_path).await;
+
+                    	while relay_in_flight(existing.id) {
+                    		tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    	}
+
+                    	match self.repo.get_by_id(existing.id).await {
+                    		Ok(file) if file.is_uploaded => {
+                    			return Ok(());
+                    		}
+                    		Ok(_) | Err(_) => {}
+                    	}
                     }
 
                     // Same bytes at the same path, but the previous attempt never
