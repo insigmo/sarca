@@ -230,17 +230,33 @@ impl<'d> FilesService<'d> {
                     // finishes on its own and the next attempt short-circuits on
                     // `is_uploaded` above.
                     if relay_in_flight(existing.id) {
-                        let _ = tokio::fs::remove_file(&file_path).await;
+                        // Keep the retry's spool until we know what happened to the
+                        // existing relay. If that relay fails, this request must still
+                        // have its own bytes available to restart the upload.
+                        const DUPLICATE_RELAY_WAIT: std::time::Duration =
+                            std::time::Duration::from_secs(90);
 
-                        while relay_in_flight(existing.id) {
-                            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        let relay_finished = tokio::time::timeout(DUPLICATE_RELAY_WAIT, async {
+                            while relay_in_flight(existing.id) {
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                            }
+                        })
+                        .await
+                        .is_ok();
+
+                        if !relay_finished {
+                            return Err(SarcaError::UploadAlreadyInProgress);
                         }
 
                         match self.repo.get_by_id(existing.id).await {
                             Ok(file) if file.is_uploaded => {
+                                let _ = tokio::fs::remove_file(&file_path).await;
                                 return Ok(());
                             },
-                            Ok(_) | Err(_) => {},
+                            Ok(_) | Err(_) => {
+                                // Previous relay failed or its row disappeared.
+                                // Keep file_path and retry the upload below.
+                            },
                         }
                     }
 
