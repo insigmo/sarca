@@ -52,6 +52,11 @@ const submitLogin = async (container) => {
 	for (let i = 0; i < 10; i++) await Promise.resolve()
 }
 
+const rememberBox = (container) =>
+	container.querySelector('.auth-remember input[type=checkbox]')
+
+const savedAccounts = () => JSON.parse(localStorage.getItem('saved_accounts') || 'null')
+
 describe('Login', () => {
 	beforeEach(() => {
 		localStorage.clear()
@@ -87,6 +92,73 @@ describe('Login', () => {
 		await submitLogin(container)
 
 		expect(await findByTestId('home')).toBeInTheDocument()
+	})
+
+	// "Remember me" exists so the next sign-in is one click, which means the
+	// password has to be stored, not just the email.
+	it('stores the credentials only when remember me is ticked', async () => {
+		const { container } = renderApp()
+
+		fireEvent.click(rememberBox(container))
+		await submitLogin(container)
+
+		expect(savedAccounts()).toEqual([
+			{ email: 'user@example.com', password: 'secret' },
+		])
+	})
+
+	it('saves nothing when remember me is left unticked', async () => {
+		const { container } = renderApp()
+
+		await submitLogin(container)
+
+		expect(savedAccounts()).toBeNull()
+	})
+
+	// A rejected password must not be handed back as a one-click login.
+	it('does not store credentials the server refused', async () => {
+		login.mockRejectedValue(new Error('bad credentials'))
+		const { container } = renderApp()
+
+		fireEvent.click(rememberBox(container))
+		await submitLogin(container).catch(() => {})
+
+		expect(savedAccounts()).toBeNull()
+	})
+
+	it('fills both fields from a saved account and re-arms remember me', async () => {
+		localStorage.setItem(
+			'saved_accounts',
+			JSON.stringify([{ email: 'saved@example.com', password: 'stored' }]),
+		)
+		const { container, findByLabelText } = renderApp()
+
+		fireEvent.click(
+			await findByLabelText(/saved@example\.com/i, { selector: '.auth-accounts__pick' }),
+		)
+		for (let i = 0; i < 5; i++) await Promise.resolve()
+
+		expect(container.querySelector('input[name=email]').value).toBe(
+			'saved@example.com',
+		)
+		expect(container.querySelector('input[name=password]').value).toBe('stored')
+		expect(rememberBox(container).checked).toBe(true)
+	})
+
+	it('drops a saved account from the picker', async () => {
+		localStorage.setItem(
+			'saved_accounts',
+			JSON.stringify([{ email: 'saved@example.com', password: 'stored' }]),
+		)
+		const { container } = renderApp()
+
+		fireEvent.click(container.querySelector('.auth-accounts__forget'))
+		for (let i = 0; i < 5; i++) await Promise.resolve()
+
+		expect(savedAccounts()).toEqual([])
+		expect(container.querySelector('.auth-accounts')).toBeNull()
+		// The unticked box must not silently re-save it on the next sign-in.
+		expect(rememberBox(container).checked).toBe(false)
 	})
 
 	// Regression: the native shell can land on the login screen while still

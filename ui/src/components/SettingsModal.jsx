@@ -106,6 +106,12 @@ const SettingsModal = () => {
 	const [openPasswordRowId, setOpenPasswordRowId] = createSignal('')
 	const [rowNewPassword, setRowNewPassword] = createSignal('')
 	const [rowPasswordBusy, setRowPasswordBusy] = createSignal(false)
+	// The account row awaiting delete confirmation, or null when the dialog is
+	// closed. Holding the whole row (not just the id) keeps the confirmation
+	// text readable after `fetchAdminUsers` replaces the list.
+	/** @type {[import("solid-js").Accessor<{id: string, email: string} | null>, any]} */
+	const [userToDelete, setUserToDelete] = createSignal(null)
+	const [deleteUserBusy, setDeleteUserBusy] = createSignal(false)
 	const [ownCurrentPassword, setOwnCurrentPassword] = createSignal('')
 	const [ownNewPassword, setOwnNewPassword] = createSignal('')
 	const [ownConfirmPassword, setOwnConfirmPassword] = createSignal('')
@@ -235,6 +241,28 @@ const SettingsModal = () => {
 			await fetchAdminUsers()
 		} catch (err) {
 			console.error(err)
+		}
+	}
+
+	/**
+	 * Wiping an account is not just a row: the server drops the user's grants
+	 * and bots, and deletes any storage nobody else could reach — hence the
+	 * confirmation step before this ever runs.
+	 */
+	const deleteAdminUser = async () => {
+		const target = userToDelete()
+		if (!target || deleteUserBusy()) return
+		setDeleteUserBusy(true)
+		try {
+			await API.users.deleteUser(target.id)
+			setUserToDelete(null)
+			addAlert(i18n.t('settings.userDeleted', { email: target.email }), 'success')
+			await fetchAdminUsers()
+		} catch (err) {
+			console.error(err)
+			// Leave the dialog open; apiRequest already raised the error alert.
+		} finally {
+			setDeleteUserBusy(false)
 		}
 	}
 
@@ -1154,6 +1182,24 @@ const SettingsModal = () => {
 																		disabled={store.user?.email === u.email}
 																		onChange={() => toggleUserDisabled(u)}
 																	/>
+																	{/* The server refuses to delete the configured
+																	    superuser or the caller themselves (403), so
+																	    those rows are disabled rather than left to
+																	    fail on click. */}
+																	<IconButton
+																		size="small"
+																		color="error"
+																		disabled={
+																			u.is_superuser ||
+																			store.user?.email === u.email
+																		}
+																		aria-label={i18n.t('settings.deleteUserAriaLabel', {
+																			email: u.email,
+																		})}
+																		onClick={() => setUserToDelete(u)}
+																	>
+																		<FluentIcon name="delete" size={18} />
+																	</IconButton>
 																</div>
 															</div>
 															<Show when={openPasswordRowId() === u.id}>
@@ -1189,6 +1235,17 @@ const SettingsModal = () => {
 											</div>
 										</Show>
 									</div>
+
+									<ActionConfirmDialog
+										action={i18n.t('settings.deleteUserAction')}
+										actionDescription={i18n.t('settings.deleteUserDescription', {
+											email: userToDelete()?.email || '',
+										})}
+										entity={i18n.t('settings.deleteUserEntity')}
+										isOpened={!!userToDelete()}
+										onCancel={() => setUserToDelete(null)}
+										onConfirm={deleteAdminUser}
+									/>
 								</Show>
 
 								<Show when={tab() === 'general'}>

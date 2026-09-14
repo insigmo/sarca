@@ -266,7 +266,12 @@
 		"updateNativeOnly": "Abre el cliente de escritorio o móvil de Sarca para actualizarlo.",
 		"unknownVersion": "desconocida",
 		"releaseNotes": "Novedades",
-		"versionOnPlatform": "{{version}} · {{platform}}"
+		"versionOnPlatform": "{{version}} · {{platform}}",
+		"deleteUserAriaLabel": "Eliminar la cuenta {{email}}",
+		"deleteUserAction": "Eliminar",
+		"deleteUserEntity": "cuenta",
+		"deleteUserDescription": "eliminar definitivamente la cuenta «{{email}}»: sus permisos y bots desaparecen con ella, y también se elimina todo almacenamiento al que nadie más tenga acceso",
+		"userDeleted": "Cuenta {{email}} eliminada"
 	},
 	"viewer": {
 		"openFailed": "No se pudo abrir este archivo",
@@ -499,7 +504,13 @@
 			"tagline": "Inicia sesión en tu almacenamiento en la nube",
 			"email": "Correo electrónico",
 			"password": "Contraseña",
-			"signIn": "Iniciar sesión"
+			"signIn": "Iniciar sesión",
+			"rememberMe": "Recordarme",
+			"rememberMeHint": "Guarda tu correo y contraseña en este dispositivo para iniciar sesión con un clic. No lo uses en un equipo compartido.",
+			"savedAccounts": "Cuentas guardadas",
+			"useAccountAria": "Rellenar las credenciales de {{email}}",
+			"forgetAccount": "Olvidar esta cuenta",
+			"forgetAccountAria": "Olvidar la cuenta guardada {{email}}"
 		},
 		"notFound": {
 			"message": "Esta página no está en tu almacenamiento",
