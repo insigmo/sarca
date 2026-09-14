@@ -11,6 +11,7 @@ mod pin_store;
 mod remote_ipc;
 mod startup;
 mod state;
+mod updater;
 
 use std::time::Duration;
 
@@ -293,7 +294,21 @@ pub fn run() {
             }
             {
                 let prefs = commands::load_prefs(&state);
+                // Install the subscriber before the level is applied and before
+                // the background loop starts, so the first tick's `tracing`
+                // output has somewhere to go.
+                client_log::install(state.data_dir().clone());
+                client_log::set_level(prefs.log_level(), state.data_dir());
                 client_log::set_enabled(prefs.enable_logs, state.data_dir());
+                client_log::debug_line(
+                    state.data_dir(),
+                    &format!(
+                        "startup: version={} platform={} data_dir={}",
+                        env!("CARGO_PKG_VERSION"),
+                        std::env::consts::OS,
+                        state.data_dir().display()
+                    ),
+                );
             }
             // Resolve device identity once early so Sync UI / Camera remote_root
             // never wait on a later Android plugin IPC round-trip.
@@ -369,8 +384,12 @@ pub fn run() {
                     commands::set_client_prefs,
                     commands::verify_app_lock_pin,
                     commands::export_logs,
+                    commands::get_log_status,
+                    commands::clear_logs,
                     commands::is_on_wifi,
                     commands::get_about,
+                    commands::check_client_update,
+                    commands::install_client_update,
                     commands::get_cache_size,
                     commands::clear_local_cache,
                     commands::cache_get_preview,

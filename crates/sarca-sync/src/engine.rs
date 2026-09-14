@@ -708,6 +708,14 @@ impl SyncEngine {
         let pending_candidates = filter_pending_candidates(&self.index, &binding.id, &candidates)?;
         let scanned = candidates.len();
         let pending_n = pending_candidates.len();
+        debug!(
+            binding = %binding.id,
+            local_path = %binding.local_path,
+            remote_root = %binding.remote_root,
+            scanned,
+            pending = pending_n,
+            "local scan"
+        );
         let ephemeral_selected: std::collections::HashSet<PathBuf> = pending_candidates
             .iter()
             .filter(|c| c.ephemeral)
@@ -878,6 +886,16 @@ impl SyncEngine {
         // content ever moves is an explicit user action (upload, or a
         // deliberate download elsewhere in the app), never something
         // inferred from local disk state.
+        debug!(
+            binding = %binding.id,
+            scanned,
+            pending = pending_n,
+            uploaded,
+            relaying,
+            failed,
+            error = first_error.as_deref().unwrap_or(""),
+            "push_local done"
+        );
         Ok(PushLocalResult {
             uploaded,
             scanned,
@@ -968,16 +986,31 @@ impl SyncEngine {
                     None
                 });
 
+            debug!(
+                binding = %binding.id,
+                path = %rel,
+                size,
+                remote_size = remote.as_ref().map(|r| r.size),
+                remote_uploaded = remote.as_ref().map(|r| r.is_uploaded),
+                remote_relaying = remote.as_ref().and_then(|r| r.is_relaying),
+                indexed = existing.is_some(),
+                "upload preflight"
+            );
+
             // A row of the same size that has not finished its relay is this
             // file, still on its way up. Sending it again would cost the whole
             // file for a `409`, and before the server learned to say `409` it
             // cost the relay's progress too. Leave it be: no index entry, so the
             // next pass looks again, and no failure recorded, so nothing about
             // this file goes on the retry ladder.
-            if remote
-                .as_ref()
-                .is_some_and(|r| !r.is_uploaded && r.size == size)
-            {
+            //
+            // `still_relaying` is what keeps that from becoming a permanent
+            // wait. A relay only exists in the server's memory, so a row whose
+            // relay was killed mid-flight looks exactly like one in progress —
+            // and a client that waits on it waits forever while the file sits
+            // in neither place. Asking the server which of the two it is turns
+            // an abandoned row back into an upload.
+            if remote.as_ref().is_some_and(|r| r.still_relaying() && r.size == size) {
                 debug!(binding = %binding.id, path = %rel,
                     "already being stored by the server; leaving it to finish");
                 self.transfer_abandon(&tid).await;
@@ -1085,6 +1118,8 @@ impl SyncEngine {
                     "bytes handed off; the server is storing them, confirming later");
                 return Ok(PushOutcome::HandedOff);
             }
+            debug!(binding = %binding.id, path = %rel, size,
+                "server confirmed the file is stored; recording it");
 
             self.index.upsert_entry(
                 &binding.id,

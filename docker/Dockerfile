@@ -111,6 +111,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 FROM runtime-base AS runtime
 ENV WORK_DIR=/work
 ENV PATH="/usr/local/bin:${PATH}"
+# Tells the self-updater to refuse: swapping the binary inside a container's
+# writable layer works until the container is recreated and then silently
+# reverts. Pulling a newer image is the update here. `/.dockerenv` covers the
+# Docker case on its own; this also covers podman and Kubernetes.
+ENV SARCA_IN_DOCKER=1
 
 COPY --link --from=release --chmod=755 /out/sarca /sarca
 COPY --link --from=release /out/ui /ui

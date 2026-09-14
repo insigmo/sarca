@@ -141,6 +141,25 @@ pub struct RemoteFileStatus {
     pub is_uploaded: bool,
     #[serde(default)]
     pub content_hash: Option<String>,
+    /// Whether the server is relaying this file onward *right now*.
+    ///
+    /// `None` is an older server that does not report it, and then the only
+    /// safe reading of an unfinished row is the old one: assume it is being
+    /// worked on. `Some(false)` is the server saying nobody owns that row —
+    /// it was left behind by a relay that died — and the file has to be sent
+    /// again, because nothing else will ever finish it.
+    #[serde(default)]
+    pub is_relaying: Option<bool>,
+}
+
+impl RemoteFileStatus {
+    /// Whether an unfinished row should be left alone to finish.
+    ///
+    /// Only meaningful for a row that is not yet uploaded; see
+    /// [`RemoteFileStatus::is_relaying`] for why the absent case says yes.
+    pub fn still_relaying(&self) -> bool {
+        !self.is_uploaded && self.is_relaying.unwrap_or(true)
+    }
 }
 
 #[derive(Clone)]
@@ -971,6 +990,7 @@ async fn drain_upload_progress(resp: Response, grace: Duration) -> Result<Upload
     let mut pending: Vec<u8> = Vec::new();
     let mut failure: Option<String> = None;
     let mut spooled_at: Option<std::time::Instant> = None;
+    let mut done = false;
 
     loop {
         // Committed, and past the point where waiting for the relay pays.
@@ -1015,6 +1035,9 @@ async fn drain_upload_progress(resp: Response, grace: Duration) -> Result<Upload
             if spooled_at.is_none() && ndjson_phase_is(&line, "spooled") {
                 spooled_at = Some(std::time::Instant::now());
             }
+            if ndjson_phase_is(&line, "done") {
+                done = true;
+            }
         }
         // A `phase: "error"` line is terminal, but keep draining so the
         // connection closes cleanly rather than being reset mid-response.
@@ -1023,10 +1046,34 @@ async fn drain_upload_progress(resp: Response, grace: Duration) -> Result<Upload
     if failure.is_none() {
         failure = ndjson_error_message(&pending);
     }
-    match failure {
-        Some(msg) => bail!("upload failed: {msg}"),
-        None => Ok(UploadOutcome::Stored),
+    if !done && !pending.is_empty() && ndjson_phase_is(&pending, "done") {
+        done = true;
     }
+    if let Some(msg) = failure {
+        bail!("upload failed: {msg}");
+    }
+    // `Stored` is a promise the caller acts on by writing an index entry and
+    // never looking at the file again, so it has to be something the server
+    // actually said. A body that simply stops saying anything is not that: the
+    // server restarting mid-relay, a proxy closing an idle response, a QUIC
+    // stream finishing early — all of them end the stream cleanly with no
+    // verdict in it, and reading that as success is how a file could be
+    // recorded as uploaded while the server's row for it stayed unfinished and
+    // was purged on the next start. The file was then gone from the storage
+    // and gone from the scan, so nothing ever sent it again.
+    if done {
+        return Ok(UploadOutcome::Stored);
+    }
+    // Past `spooled` the bytes and the row are committed, so an early end is
+    // the ordinary hand-off: a later pass confirms it through
+    // `SarcaApi::remote_file`.
+    if spooled_at.is_some() {
+        return Ok(UploadOutcome::HandedOff);
+    }
+    // Before `spooled` nothing is committed, and the link is what failed —
+    // scoped accordingly so the whole batch retries instead of this one file
+    // being blamed and put on the ladder.
+    Err(anyhow::Error::new(TransferTruncated))
 }
 
 /// Turns a transport failure during a file transfer into something the Sync
@@ -1121,6 +1168,25 @@ impl std::fmt::Display for TransferReadStalled {
 
 impl std::error::Error for TransferReadStalled {}
 
+/// The response body ended before the server said what became of the upload.
+///
+/// Typed so [`failure_scope`] can call it what it is. Nothing was committed —
+/// the stream stopped before `spooled` — and the connection ending early is a
+/// property of the link, not of the file that happened to be on it.
+#[derive(Debug)]
+struct TransferTruncated;
+
+impl std::fmt::Display for TransferTruncated {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "the server closed the upload response without saying whether it stored the file. \
+             It will be retried.",
+        )
+    }
+}
+
+impl std::error::Error for TransferTruncated {}
+
 /// A transfer that ran out its deadline. Typed for the same reason as
 /// [`UploadStalled`]: [`describe_transfer_error`] deliberately drops reqwest's
 /// own wording, and dropping the error with it would leave nothing to classify.
@@ -1167,7 +1233,7 @@ pub fn failure_scope(err: &anyhow::Error) -> FailureScope {
     for cause in err.chain() {
         // A response that went quiet says nothing about the file that happened
         // to be in flight — the next one is about to meet the same silence.
-        if cause.is::<TransferReadStalled>() {
+        if cause.is::<TransferReadStalled>() || cause.is::<TransferTruncated>() {
             return FailureScope::Link;
         }
         if let Some(e) = cause.downcast_ref::<HttpStatusError>() {
@@ -1767,6 +1833,77 @@ mod tests {
             drain_upload_progress(resp, RELAY_CONFIRM_GRACE).await.unwrap(),
             UploadOutcome::Stored
         );
+    }
+
+    /// The bug this whole distinction exists for: a progress stream that simply
+    /// ends is not the server saying it stored the file. A restart mid-relay, a
+    /// proxy closing an idle response, a QUIC stream finishing early — each of
+    /// them ends the body cleanly with no verdict in it. Reading that as
+    /// `Stored` made the caller write an index entry and stop scanning the
+    /// file, while the server's unfinished row for it was purged on the next
+    /// start: gone from the storage, gone from the scan, never sent again.
+    #[tokio::test]
+    async fn a_stream_that_ends_after_spooled_is_handed_off_not_stored() {
+        let body = "{\"phase\":\"spooled\"}\n{\"phase\":\"telegram\"}\n";
+        let base = slow_upload_endpoint(Duration::from_millis(10), body).await;
+        let resp = Client::builder()
+            .build()
+            .unwrap()
+            .post(format!("{base}/api/upload"))
+            .body("x")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            drain_upload_progress(resp, RELAY_CONFIRM_GRACE).await.unwrap(),
+            UploadOutcome::HandedOff
+        );
+    }
+
+    /// The same truncation before `spooled` has nothing committed behind it, so
+    /// it is a failed attempt — and one the link is to blame for, which keeps
+    /// the file off the retry ladder while the whole batch backs off together.
+    #[tokio::test]
+    async fn a_stream_that_ends_before_spooled_is_a_link_failure() {
+        let body = "{\"phase\":\"heartbeat\"}\n";
+        let base = slow_upload_endpoint(Duration::from_millis(10), body).await;
+        let resp = Client::builder()
+            .build()
+            .unwrap()
+            .post(format!("{base}/api/upload"))
+            .body("x")
+            .send()
+            .await
+            .unwrap();
+
+        let err = drain_upload_progress(resp, RELAY_CONFIRM_GRACE)
+            .await
+            .expect_err("no verdict and nothing committed is not a success");
+        assert_eq!(failure_scope(&err), FailureScope::Link);
+    }
+
+    /// An unfinished row is only worth waiting on while someone is actually
+    /// working on it. An older server says nothing either way, and there the
+    /// old assumption still holds.
+    #[test]
+    fn an_unfinished_row_is_only_waited_on_while_a_relay_owns_it() {
+        let row = |is_uploaded, is_relaying| RemoteFileStatus {
+            size: 4,
+            is_uploaded,
+            content_hash: None,
+            is_relaying,
+        };
+        assert!(row(false, Some(true)).still_relaying());
+        assert!(
+            row(false, None).still_relaying(),
+            "an old server is given the benefit of the doubt"
+        );
+        assert!(
+            !row(false, Some(false)).still_relaying(),
+            "a row nobody owns must be re-uploaded, not waited on forever"
+        );
+        assert!(!row(true, Some(true)).still_relaying());
     }
 
     /// The race the preflight normally wins: two passes offered the same bytes

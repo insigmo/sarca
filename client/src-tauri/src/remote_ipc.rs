@@ -39,12 +39,16 @@ pub const REMOTE_SETTINGS_COMMANDS: &[&str] = &[
     "default_gallery_path",
     "is_on_wifi",
     "get_about",
+    "check_client_update",
+    "install_client_update",
     "get_session",
     "update_session",
     "get_client_prefs",
     "set_client_prefs",
     "verify_app_lock_pin",
     "export_logs",
+    "get_log_status",
+    "clear_logs",
     "list_storages",
     "list_bindings",
     "sync_statuses",
@@ -282,6 +286,22 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
         }
         "export_logs" => {
             let dto = commands::export_logs(app.clone(), state.clone()).await?;
+            serde_json::to_value(dto).map_err(|e| e.to_string())
+        }
+        "check_client_update" => {
+            let dto = commands::check_client_update(state.clone()).await?;
+            serde_json::to_value(dto).map_err(|e| e.to_string())
+        }
+        "install_client_update" => {
+            let dto = commands::install_client_update(state.clone()).await?;
+            serde_json::to_value(dto).map_err(|e| e.to_string())
+        }
+        "get_log_status" => {
+            let dto = commands::get_log_status(state.clone())?;
+            serde_json::to_value(dto).map_err(|e| e.to_string())
+        }
+        "clear_logs" => {
+            let dto = commands::clear_logs(state.clone())?;
             serde_json::to_value(dto).map_err(|e| e.to_string())
         }
         "list_storages" => {
@@ -651,6 +671,8 @@ mod tests {
             "set_client_prefs",
             "get_client_prefs",
             "export_logs",
+            "get_log_status",
+            "clear_logs",
             "add_binding",
             "remove_binding",
             "ensure_remote_folder",
@@ -662,6 +684,8 @@ mod tests {
             "set_app_foreground",
             "is_on_wifi",
             "get_about",
+            "check_client_update",
+            "install_client_update",
             "get_cache_size",
             "clear_local_cache",
             "cache_get_preview",

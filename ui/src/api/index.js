@@ -1003,6 +1003,42 @@ const getTrashSettings = async () => {
 }
 
 /**
+ * What the server is running. Any signed-in account may ask.
+ * @returns {Promise<{ version: string, os: string, arch: string, asset: string | null }>}
+ */
+const getServerVersion = async () => {
+	return await apiRequest('/settings/version', 'get', getAuthToken())
+}
+
+/**
+ * Ask the server to check GitHub for a newer release. Superuser only.
+ * @returns {Promise<{
+ *   current: string,
+ *   latest: string | null,
+ *   update_available: boolean,
+ *   notes: string,
+ *   asset: string | null,
+ *   can_self_update: boolean,
+ *   reason: string | null
+ * }>}
+ */
+const checkServerUpdate = async () => {
+	return await apiRequest('/settings/update', 'get', getAuthToken())
+}
+
+/**
+ * Install the newest release and restart into it. Superuser only.
+ *
+ * Answers before restarting, so a success here means "the new files are in
+ * place and the process is about to go away" — not that it is back yet. The
+ * caller polls {@link getServerVersion} to see it return.
+ * @returns {Promise<{ version: string, restarting: boolean }>}
+ */
+const applyServerUpdate = async () => {
+	return await apiRequest('/settings/update', 'post', getAuthToken())
+}
+
+/**
  * @param {number} retention_days
  * @returns {Promise<{ retention_days: number }>}
  */
@@ -1808,6 +1844,9 @@ const API = {
 	settings: {
 		getTrashSettings,
 		setTrashSettings,
+		getServerVersion,
+		checkServerUpdate,
+		applyServerUpdate,
 		createBackup,
 		restoreBackup,
 	},

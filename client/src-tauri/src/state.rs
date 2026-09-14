@@ -687,6 +687,11 @@ pub struct ClientPrefs {
     pub legacy_app_lock_pin: Option<String>,
     #[serde(default = "default_true")]
     pub enable_logs: bool,
+    /// `"info"` or `"debug"` — the Settings -> Logs "advanced logging" switch.
+    /// Stored as the word rather than a bool so the file says what it means and
+    /// a third level would not need a migration.
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
     #[serde(default = "default_cache_limit_bytes")]
     pub cache_limit_bytes: u64,
 }
@@ -713,8 +718,14 @@ pub struct ClientPrefsDto {
     pub current_app_lock_pin: Option<String>,
     #[serde(default = "default_true")]
     pub enable_logs: bool,
+    #[serde(default = "default_log_level")]
+    pub log_level: String,
     #[serde(default = "default_cache_limit_bytes")]
     pub cache_limit_bytes: u64,
+}
+
+fn default_log_level() -> String {
+    crate::client_log::LogLevel::Info.as_str().to_owned()
 }
 
 fn default_cache_limit_bytes() -> u64 {
@@ -748,6 +759,7 @@ impl Default for ClientPrefs {
             app_lock_pin_hash: None,
             legacy_app_lock_pin: None,
             enable_logs: true,
+            log_level: default_log_level(),
             cache_limit_bytes: default_cache_limit_bytes(),
         }
     }
@@ -851,8 +863,15 @@ impl ClientPrefs {
             app_lock_pin: None,
             current_app_lock_pin: None,
             enable_logs: self.enable_logs,
+            log_level: self.log_level().as_str().to_owned(),
             cache_limit_bytes: self.cache_limit_bytes,
         }
+    }
+
+    /// The stored level, normalised. Reading it through here means a hand-edited
+    /// or truncated prefs file cannot leave the app at an unknown level.
+    pub fn log_level(&self) -> crate::client_log::LogLevel {
+        crate::client_log::LogLevel::parse(&self.log_level)
     }
 
     /// Fold a request from the WebView into the stored prefs.
@@ -878,6 +897,9 @@ impl ClientPrefs {
 
         self.wifi_only = dto.wifi_only;
         self.enable_logs = dto.enable_logs;
+        self.log_level = crate::client_log::LogLevel::parse(&dto.log_level)
+            .as_str()
+            .to_owned();
         self.cache_limit_bytes = dto
             .cache_limit_bytes
             .clamp(MIN_CACHE_LIMIT_BYTES, MAX_CACHE_LIMIT_BYTES);
@@ -1188,6 +1210,14 @@ impl AppSyncState {
                 // is otherwise always on — there is no user-facing toggle.
                 if connected {
                     let allow_auto = crate::commands::allow_auto_upload(&prefs);
+                    crate::client_log::debug_line(
+                        &data_dir,
+                        &format!(
+                            "tick: foreground={fg} woken={woken} allow_auto={allow_auto} \
+                             wifi_only={} base_url={}",
+                            prefs.wifi_only, server.base_url
+                        ),
+                    );
                     // A full pass costs a local disk / MediaStore scan, so it
                     // only runs when it is actually needed: backgrounded (every
                     // background tick already only happens every
@@ -1215,10 +1245,27 @@ impl AppSyncState {
                             Err(e) => Err(e),
                         }
                     };
-                    if let Err(e) = result {
-                        tracing::warn!(error = %e, "sync tick error");
-                        crate::client_log::write_line(&data_dir, &format!("sync tick error: {e}"));
+                    match &result {
+                        Ok(()) => crate::client_log::debug_line(
+                            &data_dir,
+                            &format!(
+                                "tick ok ({})",
+                                if due_for_full_pass { "full pass" } else { "pull only" }
+                            ),
+                        ),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "sync tick error");
+                            crate::client_log::write_line(
+                                &data_dir,
+                                &format!("sync tick error: {e}"),
+                            );
+                        },
                     }
+                } else {
+                    crate::client_log::debug_line(
+                        &data_dir,
+                        "tick skipped: not connected to a server",
+                    );
                 }
 
                 woken = false;

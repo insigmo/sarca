@@ -187,6 +187,7 @@ fn save_prefs(state: &AppSyncState, prefs: &ClientPrefs) -> Result<(), String> {
     let json = serde_json::to_string_pretty(prefs).map_err(|e| e.to_string())?;
     // Holds the app-lock hash: keep it out of reach of other local accounts.
     write_private(&prefs_path(state), json.as_bytes()).map_err(|e| e.to_string())?;
+    client_log::set_level(prefs.log_level(), state.data_dir());
     client_log::set_enabled(prefs.enable_logs, state.data_dir());
     Ok(())
 }
@@ -998,6 +999,17 @@ pub async fn sync_now(
     }
     let prefs = load_prefs(&state);
     let allow_auto = allow_auto_upload(&prefs);
+    // The single most common "auto-upload is not working" answer: Wi-Fi-only is
+    // on and the phone is on mobile data, so every upload binding is skipped
+    // and nothing anywhere says why.
+    client_log::debug_line(
+        state.data_dir(),
+        &format!(
+            "sync_now: allow_auto={allow_auto} wifi_only={} on_wifi={}",
+            prefs.wifi_only,
+            is_wifi_connected()
+        ),
+    );
     let allow = |b: &Binding| {
         if b.mode.is_upload_only() && !allow_auto {
             return false;
@@ -1075,9 +1087,53 @@ pub fn set_client_prefs(
     // The writer reads a process-global flag, set from the stored prefs at
     // startup. Without this the toggle only took effect on the next launch:
     // turning logging on wrote nothing, turning it off kept writing.
+    client_log::set_level(stored.log_level(), state.data_dir());
     client_log::set_enabled(stored.enable_logs, state.data_dir());
-    client_log::write_line(state.data_dir(), "set_client_prefs saved");
+    client_log::write_line(
+        state.data_dir(),
+        &format!(
+            "set_client_prefs saved (logs={}, level={}, wifi_only={})",
+            stored.enable_logs,
+            stored.log_level().as_str(),
+            stored.wifi_only
+        ),
+    );
     Ok(stored.to_dto())
+}
+
+/// What the Logs tab shows about the log file itself.
+#[derive(Serialize)]
+pub struct LogStatusDto {
+    pub enabled: bool,
+    /// `"info"` or `"debug"`.
+    pub level: String,
+    pub path: String,
+    pub size_bytes: u64,
+}
+
+#[tauri::command]
+pub fn get_log_status(state: State<'_, AppSyncState>) -> Result<LogStatusDto, String> {
+    let data_dir = state.data_dir();
+    let prefs = load_prefs(&state);
+    Ok(LogStatusDto {
+        enabled: prefs.enable_logs,
+        level: prefs.log_level().as_str().to_owned(),
+        path: client_log::log_path(data_dir).display().to_string(),
+        size_bytes: client_log::size_bytes(data_dir),
+    })
+}
+
+/// Throw away what has been collected so far.
+///
+/// The point of the button is a clean slate before reproducing something: a log
+/// that already holds a week of unrelated ticks buries the twenty lines that
+/// matter.
+#[tauri::command]
+pub fn clear_logs(state: State<'_, AppSyncState>) -> Result<LogStatusDto, String> {
+    let data_dir = state.data_dir();
+    let freed = client_log::clear(data_dir)?;
+    client_log::write_line(data_dir, &format!("log cleared ({freed} bytes)"));
+    get_log_status(state)
 }
 
 /// Check an app-lock PIN.
@@ -1150,6 +1206,28 @@ pub async fn export_logs(
 #[tauri::command]
 pub fn is_on_wifi() -> bool {
     is_wifi_connected()
+}
+
+/// Ask GitHub whether a newer client exists.
+#[tauri::command]
+pub async fn check_client_update(
+    state: State<'_, AppSyncState>,
+) -> Result<crate::updater::UpdateStatusDto, String> {
+    let data_dir = state.data_dir().clone();
+    crate::updater::check(&data_dir).await
+}
+
+/// Download the newest client and hand it to the platform's installer.
+///
+/// Returns as soon as the installer has been started, not when the update is
+/// finished: from that point the platform's own flow owns it, including the
+/// elevation prompt and the restart.
+#[tauri::command]
+pub async fn install_client_update(
+    state: State<'_, AppSyncState>,
+) -> Result<crate::updater::InstallStartedDto, String> {
+    let data_dir = state.data_dir().clone();
+    crate::updater::install(&data_dir).await
 }
 
 #[tauri::command]
