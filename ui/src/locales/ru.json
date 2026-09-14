@@ -266,7 +266,12 @@
 		"updateNativeOnly": "Откройте десктопный или мобильный клиент Sarca, чтобы обновить его.",
 		"unknownVersion": "неизвестно",
 		"releaseNotes": "Что нового",
-		"versionOnPlatform": "{{version}} · {{platform}}"
+		"versionOnPlatform": "{{version}} · {{platform}}",
+		"deleteUserAriaLabel": "Удалить учётную запись {{email}}",
+		"deleteUserAction": "Удалить",
+		"deleteUserEntity": "учётную запись",
+		"deleteUserDescription": "безвозвратно удалить учётную запись «{{email}}» — вместе с ней исчезнут её доступы и боты, а хранилища, к которым больше ни у кого нет доступа, будут удалены",
+		"userDeleted": "Учётная запись {{email}} удалена"
 	},
 	"viewer": {
 		"openFailed": "Не удалось открыть этот файл",
@@ -499,7 +504,13 @@
 			"tagline": "Войдите в своё облачное хранилище",
 			"email": "Эл. почта",
 			"password": "Пароль",
-			"signIn": "Войти"
+			"signIn": "Войти",
+			"rememberMe": "Запомнить меня",
+			"rememberMeHint": "Почта и пароль сохранятся на этом устройстве, чтобы входить в один клик. Не используйте на общем компьютере.",
+			"savedAccounts": "Сохранённые учётные записи",
+			"useAccountAria": "Подставить данные для {{email}}",
+			"forgetAccount": "Забыть эту учётную запись",
+			"forgetAccountAria": "Забыть сохранённую учётную запись {{email}}"
 		},
 		"notFound": {
 			"message": "Такой страницы нет в вашем хранилище",

@@ -7,11 +7,19 @@ import Stack from '@suid/material/Stack'
 import MenuMUI from '@suid/material/Menu'
 import MenuItem from '@suid/material/MenuItem'
 import ListItemText from '@suid/material/ListItemText'
+import Checkbox from '@suid/material/Checkbox'
+import FormControlLabel from '@suid/material/FormControlLabel'
 import createLocalStore from '../../libs'
 import { useNavigate } from '@solidjs/router'
 
 import API from '../api'
 import { safeRedirectPath } from '../common/auth'
+import {
+	forgetAccount,
+	isRemembered,
+	rememberAccount,
+	savedAccounts,
+} from '../common/savedAccounts'
 import logoUrl from '../assets/logo.svg'
 import { i18n, LOCALES, t } from '../common/i18n'
 import FluentIcon from '../components/FluentIcon'
@@ -64,6 +72,40 @@ const Login = () => {
 	// still connected at the transport level: offer a way out of that loop.
 	const [showDisconnect, setShowDisconnect] = createSignal(false)
 	const [disconnecting, setDisconnecting] = createSignal(false)
+	// The fields are controlled so picking a saved account can fill them.
+	const [email, setEmail] = createSignal('')
+	const [password, setPassword] = createSignal('')
+	const [remember, setRemember] = createSignal(false)
+	// Once the user works the checkbox themselves, typing in the email field
+	// must stop overriding it — otherwise ticking the box and then correcting
+	// a typo in the address silently unticks it again.
+	const [rememberTouched, setRememberTouched] = createSignal(false)
+	const accounts = () => savedAccounts()
+
+	/** One click to sign in as a remembered account: fill both fields. */
+	const useAccount = (account) => {
+		setEmail(account.email)
+		setPassword(account.password)
+		setRemember(true)
+		setRememberTouched(true)
+	}
+
+	/**
+	 * Drop a remembered account without signing in as it. Stops the click from
+	 * reaching the row button underneath.
+	 * @param {MouseEvent} event
+	 * @param {string} accountEmail
+	 */
+	const dropAccount = (event, accountEmail) => {
+		event.stopPropagation()
+		forgetAccount(accountEmail)
+		if (email() === accountEmail) {
+			setEmail('')
+			setPassword('')
+			setRemember(false)
+			setRememberTouched(false)
+		}
+	}
 
 	onMount(() => {
 		if (store.access_token) {
@@ -94,16 +136,33 @@ const Login = () => {
 	 */
 	const handleSubmit = async (event) => {
 		event.preventDefault()
+		// Read the DOM, not the signals: a browser password manager can fill
+		// these fields without ever firing an input event.
 		const data = new FormData(event.currentTarget)
-		const email = data.get('email')
-		const password = data.get('password')
+		const submittedEmail = String(data.get('email') || '')
+		const submittedPassword = String(data.get('password') || '')
 
-		const tokenData = await API.auth.login(email, password)
+		// apiRequest already alerted the user about a rejected sign-in; without
+		// this the throw escapes the event handler as an unhandled rejection.
+		let tokenData
+		try {
+			tokenData = await API.auth.login(submittedEmail, submittedPassword)
+		} catch {
+			return
+		}
+
+		// Only after the server accepted them — storing a rejected password
+		// would hand the user a one-click path to a failing login.
+		if (remember()) {
+			rememberAccount(submittedEmail, submittedPassword)
+		} else {
+			forgetAccount(submittedEmail)
+		}
 
 		setStore('access_token', tokenData.access_token)
 		setStore('refresh_token', tokenData.refresh_token)
 		setStore('user', {
-			email: tokenData.email || email,
+			email: tokenData.email || submittedEmail,
 			email_verified: tokenData.email_verified,
 		})
 
@@ -145,6 +204,43 @@ const Login = () => {
 						<p>{t('auth.login.tagline')}</p>
 					</div>
 
+					<Show when={accounts().length}>
+						<div class="auth-accounts">
+							<p class="auth-accounts__title">{t('auth.login.savedAccounts')}</p>
+							<For each={accounts()}>
+								{(account) => (
+									<div class="auth-accounts__row">
+										<button
+											type="button"
+											class="auth-accounts__pick"
+											classList={{
+												'auth-accounts__pick--active': email() === account.email,
+											}}
+											aria-label={t('auth.login.useAccountAria', {
+												email: account.email,
+											})}
+											onClick={() => useAccount(account)}
+										>
+											<FluentIcon name="person" size={18} />
+											<span class="auth-accounts__email">{account.email}</span>
+										</button>
+										<button
+											type="button"
+											class="auth-accounts__forget"
+											aria-label={t('auth.login.forgetAccountAria', {
+												email: account.email,
+											})}
+											title={t('auth.login.forgetAccount')}
+											onClick={(e) => dropAccount(e, account.email)}
+										>
+											<FluentIcon name="dismiss" size={16} />
+										</button>
+									</div>
+								)}
+							</For>
+						</div>
+					</Show>
+
 					<Box
 						component="form"
 						onSubmit={handleSubmit}
@@ -156,6 +252,15 @@ const Login = () => {
 							type="email"
 							autoComplete="email"
 							required
+							value={email()}
+							onChange={(e) => {
+								setEmail(e.target.value)
+								// Re-signing in as a remembered account keeps it
+								// remembered without a second tick of the box.
+								if (!rememberTouched()) {
+									setRemember(isRemembered(e.target.value))
+								}
+							}}
 						/>
 						<TextField
 							name="password"
@@ -163,7 +268,26 @@ const Login = () => {
 							type="password"
 							autoComplete="current-password"
 							required
+							value={password()}
+							onChange={(e) => setPassword(e.target.value)}
 						/>
+
+						<FormControlLabel
+							class="auth-remember"
+							control={
+								<Checkbox
+									name="remember"
+									color="secondary"
+									checked={remember()}
+									onChange={(_, checked) => {
+										setRemember(checked)
+										setRememberTouched(true)
+									}}
+								/>
+							}
+							label={t('auth.login.rememberMe')}
+						/>
+						<p class="auth-remember__hint">{t('auth.login.rememberMeHint')}</p>
 
 						<Stack spacing={1.5} sx={{ mt: 0.5 }}>
 							<Button type="submit" variant="contained" color="secondary" size="large">

@@ -86,6 +86,17 @@ const setUserDisabled = async (userId, disabled) => {
 }
 
 /**
+ * Delete a user (superuser only). The server also drops their grants, bots and
+ * any storage nobody else could reach; it refuses to delete the configured
+ * superuser or the caller themselves.
+ * @param {string} userId
+ * @returns {Promise<void>}
+ */
+const deleteUser = async (userId) => {
+	await apiRequest(`/users/${userId}`, 'delete', getAuthToken())
+}
+
+/**
  * Directory of registered users, for the grant-access autocomplete. Open to
  * the superuser or any user holding AccessType::A on at least one storage.
  * @returns {Promise<{users: Array<{id: string, email: string}>}>}
@@ -1762,6 +1773,7 @@ const API = {
 		changeMyPassword,
 		setUserPassword,
 		setUserDisabled,
+		deleteUser,
 		listUserDirectory,
 	},
 	auth: {

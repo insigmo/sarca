@@ -266,7 +266,12 @@
 		"updateNativeOnly": "请打开 Sarca 桌面端或移动端客户端进行更新。",
 		"unknownVersion": "未知",
 		"releaseNotes": "更新说明",
-		"versionOnPlatform": "{{version}} · {{platform}}"
+		"versionOnPlatform": "{{version}} · {{platform}}",
+		"deleteUserAriaLabel": "删除账号 {{email}}",
+		"deleteUserAction": "删除",
+		"deleteUserEntity": "账号",
+		"deleteUserDescription": "永久删除账号“{{email}}”——其访问授权和机器人将一并移除，其他人无法访问的存储也会被删除",
+		"userDeleted": "已删除账号 {{email}}"
 	},
 	"viewer": {
 		"openFailed": "无法打开此文件",
@@ -499,7 +504,13 @@
 			"tagline": "登录以访问您的云存储",
 			"email": "邮箱",
 			"password": "密码",
-			"signIn": "登录"
+			"signIn": "登录",
+			"rememberMe": "记住我",
+			"rememberMeHint": "将邮箱和密码保存在此设备上，下次可一键登录。请勿在共用电脑上使用。",
+			"savedAccounts": "已保存的账号",
+			"useAccountAria": "填入 {{email}} 的登录信息",
+			"forgetAccount": "忘记此账号",
+			"forgetAccountAria": "忘记已保存的账号 {{email}}"
 		},
 		"notFound": {
 			"message": "您的存储中没有此页面",

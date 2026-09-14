@@ -266,7 +266,12 @@
 		"updateNativeOnly": "افتح تطبيق Sarca لسطح المكتب أو الهاتف لتحديثه.",
 		"unknownVersion": "غير معروف",
 		"releaseNotes": "ملاحظات الإصدار",
-		"versionOnPlatform": "{{version}} · {{platform}}"
+		"versionOnPlatform": "{{version}} · {{platform}}",
+		"deleteUserAriaLabel": "حذف الحساب {{email}}",
+		"deleteUserAction": "حذف",
+		"deleteUserEntity": "الحساب",
+		"deleteUserDescription": "حذف الحساب «{{email}}» نهائيًا — ستُزال معه صلاحياته وروبوتاته، كما تُحذف أي مساحة تخزين لا يستطيع غيره الوصول إليها",
+		"userDeleted": "تم حذف الحساب {{email}}"
 	},
 	"viewer": {
 		"openFailed": "تعذر فتح هذا الملف",
@@ -499,7 +504,13 @@
 			"tagline": "سجل الدخول إلى مساحة التخزين السحابي الخاصة بك",
 			"email": "البريد الإلكتروني",
 			"password": "كلمة المرور",
-			"signIn": "تسجيل الدخول"
+			"signIn": "تسجيل الدخول",
+			"rememberMe": "تذكّرني",
+			"rememberMeHint": "يحفظ بريدك وكلمة المرور على هذا الجهاز لتسجيل الدخول بنقرة واحدة. لا تستخدمه على جهاز مشترك.",
+			"savedAccounts": "الحسابات المحفوظة",
+			"useAccountAria": "تعبئة بيانات الدخول لـ {{email}}",
+			"forgetAccount": "نسيان هذا الحساب",
+			"forgetAccountAria": "نسيان الحساب المحفوظ {{email}}"
 		},
 		"notFound": {
 			"message": "هذه الصفحة غير موجودة في مساحة التخزين الخاصة بك",

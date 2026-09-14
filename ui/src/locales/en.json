@@ -266,7 +266,12 @@
 		"updateNativeOnly": "Open the Sarca desktop or mobile client to update it.",
 		"unknownVersion": "unknown",
 		"releaseNotes": "Release notes",
-		"versionOnPlatform": "{{version}} · {{platform}}"
+		"versionOnPlatform": "{{version}} · {{platform}}",
+		"deleteUserAriaLabel": "Delete the account {{email}}",
+		"deleteUserAction": "Delete",
+		"deleteUserEntity": "account",
+		"deleteUserDescription": "permanently delete the account \"{{email}}\" — their access grants and bots go with it, and any storage nobody else can reach is deleted too",
+		"userDeleted": "Deleted the account {{email}}"
 	},
 	"viewer": {
 		"openFailed": "Could not open this file",
@@ -499,7 +504,13 @@
 			"tagline": "Sign in to your cloud storage",
 			"email": "Email",
 			"password": "Password",
-			"signIn": "Sign in"
+			"signIn": "Sign in",
+			"rememberMe": "Remember me",
+			"rememberMeHint": "Saves your email and password on this device so you can sign in with one click. Do not use it on a shared computer.",
+			"savedAccounts": "Saved accounts",
+			"useAccountAria": "Fill in the credentials for {{email}}",
+			"forgetAccount": "Forget this account",
+			"forgetAccountAria": "Forget the saved account {{email}}"
 		},
 		"notFound": {
 			"message": "This page is not in your storage",

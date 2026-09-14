@@ -396,6 +396,93 @@ a.default-link:hover {
 	text-align: center;
 }
 
+/* —— Remembered accounts on the sign-in card —— */
+.auth-accounts {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.auth-accounts__title {
+	margin: 0 0 2px;
+	font-size: 0.78rem;
+	font-weight: 600;
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	color: var(--sarca-ink-soft);
+}
+
+.auth-accounts__row {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	min-width: 0;
+}
+
+.auth-accounts__pick {
+	flex: 1;
+	min-width: 0;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 12px;
+	border: 1px solid var(--sarca-border);
+	border-radius: 12px;
+	background: var(--sarca-glass);
+	color: var(--sarca-ink);
+	font: inherit;
+	font-size: 0.9rem;
+	text-align: start;
+	cursor: pointer;
+	transition: background 0.18s ease, border-color 0.18s ease;
+}
+
+.auth-accounts__pick:hover {
+	background: color-mix(in srgb, var(--sarca-teal) 10%, transparent);
+}
+
+.auth-accounts__pick--active {
+	border-color: var(--sarca-teal-deep);
+	background: color-mix(in srgb, var(--sarca-teal) 14%, transparent);
+}
+
+.auth-accounts__email {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.auth-accounts__forget {
+	flex-shrink: 0;
+	display: grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	border: none;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--sarca-ink-soft);
+	cursor: pointer;
+	transition: background 0.18s ease, color 0.18s ease;
+}
+
+.auth-accounts__forget:hover {
+	background: color-mix(in srgb, var(--sarca-ink-soft) 12%, transparent);
+	color: var(--sarca-ink);
+}
+
+.auth-remember {
+	margin: -4px 0 -8px !important;
+	align-self: flex-start;
+}
+
+.auth-remember__hint {
+	margin: 0;
+	font-size: 0.78rem;
+	line-height: 1.35;
+	color: var(--sarca-ink-soft);
+}
+
 .auth-language-switch {
 	position: absolute;
 	top: 20px;
