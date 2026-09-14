@@ -18,4 +18,5 @@ pub mod sync;
 pub mod thumbnails;
 pub mod trash;
 pub mod trash_purge;
+pub mod update;
 pub mod users;

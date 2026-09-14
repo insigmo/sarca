@@ -16,6 +16,8 @@ import delete24Filled from '@fluentui/svg-icons/icons/delete_24_filled.svg?raw'
 import deleteDismiss24Regular from '@fluentui/svg-icons/icons/delete_dismiss_24_regular.svg?raw'
 import dismiss24Regular from '@fluentui/svg-icons/icons/dismiss_24_regular.svg?raw'
 import documentArrowUp24Regular from '@fluentui/svg-icons/icons/document_arrow_up_24_regular.svg?raw'
+import documentBulletList24Regular from '@fluentui/svg-icons/icons/document_bullet_list_24_regular.svg?raw'
+import documentBulletList24Filled from '@fluentui/svg-icons/icons/document_bullet_list_24_filled.svg?raw'
 import edit24Regular from '@fluentui/svg-icons/icons/edit_24_regular.svg?raw'
 import eye24Regular from '@fluentui/svg-icons/icons/eye_24_regular.svg?raw'
 import folder24Regular from '@fluentui/svg-icons/icons/folder_24_regular.svg?raw'
@@ -27,6 +29,7 @@ import grid24Filled from '@fluentui/svg-icons/icons/grid_24_filled.svg?raw'
 import history24Regular from '@fluentui/svg-icons/icons/history_24_regular.svg?raw'
 import history24Filled from '@fluentui/svg-icons/icons/history_24_filled.svg?raw'
 import info24Regular from '@fluentui/svg-icons/icons/info_24_regular.svg?raw'
+import info24Filled from '@fluentui/svg-icons/icons/info_24_filled.svg?raw'
 import link24Regular from '@fluentui/svg-icons/icons/link_24_regular.svg?raw'
 import link24Filled from '@fluentui/svg-icons/icons/link_24_filled.svg?raw'
 import list24Regular from '@fluentui/svg-icons/icons/list_24_regular.svg?raw'
@@ -74,6 +77,8 @@ export const fluentIcons = {
 	deleteDismiss: deleteDismiss24Regular,
 	dismiss: dismiss24Regular,
 	documentArrowUp: documentArrowUp24Regular,
+	documentBulletList: documentBulletList24Regular,
+	documentBulletListFilled: documentBulletList24Filled,
 	edit: edit24Regular,
 	eye: eye24Regular,
 	folder: folder24Regular,
@@ -85,6 +90,7 @@ export const fluentIcons = {
 	history: history24Regular,
 	historyFilled: history24Filled,
 	info: info24Regular,
+	infoFilled: info24Filled,
 	link: link24Regular,
 	linkFilled: link24Filled,
 	list: list24Regular,

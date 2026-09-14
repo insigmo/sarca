@@ -4240,6 +4240,49 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	margin-top: 8px;
 }
 
+/*
+ * Release notes come from a GitHub release body: arbitrary length, arbitrary
+ * line breaks, and often a URL long enough to push the whole modal sideways.
+ * Bounded and scrollable so the About tab keeps its shape whatever the release
+ * says.
+ */
+.settings-release-notes {
+	max-height: 220px;
+	overflow-y: auto;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	width: 100%;
+	margin-top: 8px;
+	padding-inline-end: 8px;
+	line-height: 1.5;
+}
+
+/* The notes read as a block, not as a label/value pair like the rows above. */
+.settings-account__row--notes {
+	flex-direction: column;
+	align-items: stretch;
+}
+
+/* A log file path (and a Windows one especially) has no spaces to break on. */
+.settings-account__hint {
+	overflow-wrap: anywhere;
+}
+
+/*
+ * Lets a long value shrink instead of pushing the row's button onto its own
+ * line — a flex item will not go below its content width without this.
+ */
+.settings-account__grow {
+	flex: 1 1 240px;
+	min-width: 0;
+}
+
+.settings-path {
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
 .settings-sync-panel__section {
 	margin-top: 16px;
 	padding-top: 8px;

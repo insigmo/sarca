@@ -72,6 +72,10 @@ pub struct TrashListQuery {
     pub path: Option<String>,
 }
 
+// A wire DTO, not a state machine: every flag here answers a separate question
+// the UI and the sync client ask about one path, and folding them into enums
+// would change the JSON for no gain at either end.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Serialize)]
 pub struct FileInfoSchema {
     pub path: String,
@@ -80,6 +84,16 @@ pub struct FileInfoSchema {
     pub is_file: bool,
     pub has_thumb: bool,
     pub is_uploaded: bool,
+    /// True while this process is actually relaying the file onward to
+    /// Telegram right now.
+    ///
+    /// `is_uploaded: false` alone cannot be read as "still working on it": a
+    /// relay lives only in memory, so a row left behind by a crashed or killed
+    /// process looks identical to one being worked on. Sync clients wait on a
+    /// file they believe is relaying, and waiting on a row nobody owns is
+    /// waiting forever — the file is never re-sent, and it is not in the
+    /// storage either. This says which of the two it is.
+    pub is_relaying: bool,
     pub content_type: Option<String>,
     pub deleted_at: Option<chrono::DateTime<chrono::Utc>>,
     /// When the file was added to Sarca.

@@ -412,6 +412,7 @@ impl<'d> FilesService<'d> {
                     is_file: true,
                     has_thumb: file.thumb_telegram_file_id.is_some(),
                     is_uploaded: file.is_uploaded,
+                    is_relaying: !file.is_uploaded && relay_in_flight(file.id),
                     content_type,
                     deleted_at: file.deleted_at,
                     added_at: Some(file.created_at),
@@ -460,6 +461,8 @@ impl<'d> FilesService<'d> {
             is_file: false,
             has_thumb: false,
             is_uploaded: marker.as_ref().is_none_or(|m| m.is_uploaded),
+            // A folder marker is never relayed anywhere.
+            is_relaying: false,
             content_type: None,
             deleted_at: marker.as_ref().and_then(|m| m.deleted_at),
             added_at: marker.as_ref().map(|m| m.created_at),

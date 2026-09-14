@@ -120,6 +120,8 @@ zip = { version = "2.2", default-features = false, features = ["deflate"] }
 # `ring` is already in the tree via rustls; using it keeps the crypto surface to
 # one audited implementation instead of adding a second AEAD crate.
 flate2 = "1"
+# Unpacking the release archive during a self-update (services::update).
+tar = "0.4"
 ring = "0.17"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 

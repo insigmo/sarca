@@ -26,6 +26,7 @@ use crate::{
     services::{
         backup::{BACKUP_EXTENSION, BackupService, ScratchFile, scratch_dir},
         settings::SettingsService,
+        update::{self, UpdateStatusSchema},
     },
 };
 
@@ -40,6 +41,8 @@ impl SettingsRouter {
     pub fn get_router(state: Arc<AppState>) -> Router {
         Router::new()
             .route("/trash", get(Self::get_trash).put(Self::set_trash))
+            .route("/version", get(Self::version))
+            .route("/update", get(Self::check_update).post(Self::apply_update))
             .route("/backup", post(Self::create_backup))
             .route(
                 "/restore",
@@ -80,6 +83,59 @@ impl SettingsRouter {
     ) -> Result<Json<TrashSettingsSchema>, (StatusCode, String)> {
         Self::require_superuser(&state, &user)?;
         Self::service(&state).set_trash(body.retention_days).await.map(Json).map_err(Into::into)
+    }
+
+    /// What this server is running. Readable by anyone signed in — the About
+    /// screen shows it, and there is nothing sensitive in a version string.
+    #[allow(clippy::unused_async, clippy::unused_async_trait_impl)]
+    async fn version(Extension(_user): Extension<AuthUser>) -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "version": update::CURRENT_VERSION,
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "asset": update::asset_name(),
+        }))
+    }
+
+    /// Ask GitHub whether a newer release exists.
+    ///
+    /// Superuser-only despite being a read: it makes this server issue an
+    /// outbound request on the caller's say-so, and anything that does that on
+    /// behalf of a non-admin is a lever worth not handing out.
+    async fn check_update(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+    ) -> Result<Json<UpdateStatusSchema>, (StatusCode, String)> {
+        Self::require_superuser(&state, &user)?;
+        update::check().await.map(Json).map_err(Into::into)
+    }
+
+    /// Install the newest release and restart into it.
+    ///
+    /// The response is sent *before* the restart, and deliberately: `exec`
+    /// replaces this process, so a handler that restarted first would never
+    /// answer, and the browser would show a network error for an update that
+    /// actually succeeded. The client waits for the server to come back on its
+    /// own — `GET /api/settings/version` returning the new number is the
+    /// confirmation.
+    async fn apply_update(
+        State(state): State<Arc<AppState>>,
+        Extension(user): Extension<AuthUser>,
+    ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+        Self::require_superuser(&state, &user)?;
+        let version = update::apply().await.map_err(<(StatusCode, String)>::from)?;
+
+        // Long enough for this response to reach the client through whatever is
+        // in front of the server, short enough that nobody is left wondering.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(750)).await;
+            update::restart_into_new_binary();
+        });
+
+        Ok(Json(serde_json::json!({
+            "version": version,
+            "restarting": true,
+        })))
     }
 
     /// Download a `.sarcabak` archive of the metadata database.

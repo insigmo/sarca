@@ -80,6 +80,30 @@ Watch fire: `docker logs -f sarca`.
    - create private(s) channel(s) (1 necessary and 2 optional)
    - add as admin a bot to the channel(s)
 
+## Keep it new
+
+**Settings -> About** shows what the client and the server are running, with a
+**Check for updates** button beside each. It reads the newest release from
+GitHub, and the numbers are compared as numbers -- `0.0.170` is newer than
+`0.0.9`, whatever a string sort thinks.
+
+Updating the server (admin only) downloads the release archive for that host,
+swaps the binary and `ui/` next to the running one, writes `VERSION`, and
+restarts into it. Same files `install.sh` lays down, same place. A server in a
+container refuses and says so: pull the image instead.
+
+Updating the client downloads the installer for your platform and starts it --
+the `.exe`, `.dmg` or `.deb` does the rest, including asking for the rights an
+install needs. On Android the APK is downloaded and the system takes over.
+
+## Look inside
+
+**Settings -> Logs** (native client) keeps a log file on the device, and nowhere
+else. **Advanced logging** switches it from `INFO` to `DEBUG`, which adds the
+sync engine's own detail: what each scan found, what the server said about each
+file, and why an upload was skipped. Turn it on, reproduce the problem, then
+**Export logs**. Leave it off otherwise -- it is verbose by design.
+
 ## Move the rock
 
 **Settings -> General -> Backup** (admin only) downloads one `.sarcabak` file:

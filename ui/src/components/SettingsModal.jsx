@@ -69,6 +69,20 @@ const SettingsModal = () => {
 	const [enablingLock, setEnablingLock] = createSignal(false)
 	const [logsEnabled, setLogsEnabled] = createSignal(false)
 	const [logsBusy, setLogsBusy] = createSignal(false)
+	/** 'info' | 'debug' — 'debug' is what the advanced-logging switch turns on. */
+	const [logLevel, setLogLevel] = createSignal('info')
+	const [logBytes, setLogBytes] = createSignal(0)
+	const [logFilePath, setLogFilePath] = createSignal('')
+	/** @type {[import("solid-js").Accessor<{version: string, os?: string, arch?: string}>, any]} */
+	const [serverAbout, setServerAbout] = createSignal({ version: '' })
+	/** @type {[import("solid-js").Accessor<any>, any]} */
+	const [clientUpdate, setClientUpdate] = createSignal(null)
+	/** @type {[import("solid-js").Accessor<any>, any]} */
+	const [serverUpdate, setServerUpdate] = createSignal(null)
+	const [clientUpdateBusy, setClientUpdateBusy] = createSignal('')
+	const [serverUpdateBusy, setServerUpdateBusy] = createSignal('')
+	const [clientUpdateMsg, setClientUpdateMsg] = createSignal('')
+	const [serverUpdateMsg, setServerUpdateMsg] = createSignal('')
 	const [pinDraft, setPinDraft] = createSignal('')
 	const [pinConfirm, setPinConfirm] = createSignal('')
 	// Whether a PIN is stored natively. The PIN itself is never readable from
@@ -335,7 +349,32 @@ const SettingsModal = () => {
 	})
 
 	createEffect(() => {
+		if (!isOpen() || tab() !== 'logs' || !isNative()) return
+		refreshLogStatus()
+	})
+
+	createEffect(() => {
+		if (!isOpen() || tab() !== 'about') return
+		if (isNative()) {
+			nativeInvoke('get_about')
+				.then((a) => setAbout(a || { version: '', platform: '' }))
+				.catch(() => {})
+		}
+		API.settings
+			.getServerVersion()
+			.then((v) => setServerAbout(v || { version: '' }))
+			.catch(() => setServerAbout({ version: '' }))
+		refreshSuperuser()
+	})
+
+	createEffect(() => {
 		if (!showSyncTab() && tab() === 'sync') setTab('general')
+	})
+
+	// The Logs tab is the native client's own log file; a browser has nothing
+	// to show there.
+	createEffect(() => {
+		if (!isNative() && tab() === 'logs') setTab('general')
 	})
 
 	// The backup tab is superuser-only. The check is async, so bounce only
@@ -365,13 +404,170 @@ const SettingsModal = () => {
 		}
 	}
 
+	const refreshLogStatus = async () => {
+		try {
+			const status = (await nativeInvoke('get_log_status')) || {}
+			setLogsEnabled(Boolean(status.enabled))
+			setLogLevel(status.level === 'debug' ? 'debug' : 'info')
+			setLogBytes(Number(status.size_bytes) || 0)
+			setLogFilePath(String(status.path || ''))
+		} catch {
+			// A client too old to answer still has the prefs-backed switch below.
+			nativeInvoke('get_client_prefs')
+				.then((p) => {
+					setLogsEnabled(Boolean(p?.enable_logs))
+					setLogLevel(p?.log_level === 'debug' ? 'debug' : 'info')
+				})
+				.catch(() => {})
+		}
+	}
+
+	/**
+	 * Writes one field of the client prefs without clobbering the rest.
+	 *
+	 * `set_client_prefs` takes the whole object, so a partial write would reset
+	 * every other setting to its default — including turning the app lock off.
+	 * @param {Record<string, unknown>} patch
+	 */
+	const patchClientPrefs = async (patch) => {
+		const prefs = (await nativeInvoke('get_client_prefs')) || {}
+		return await nativeInvoke('set_client_prefs', { prefs: { ...prefs, ...patch } })
+	}
+
+	const setAdvancedLogging = async (on) => {
+		const next = on ? 'debug' : 'info'
+		setLogsBusy(true)
+		try {
+			await patchClientPrefs({ log_level: next })
+			setLogLevel(next)
+			await refreshLogStatus()
+		} catch (e) {
+			addAlert(String(e), 'error')
+		} finally {
+			setLogsBusy(false)
+		}
+	}
+
+	const clearLogs = async () => {
+		setLogsBusy(true)
+		try {
+			const status = (await nativeInvoke('clear_logs')) || {}
+			setLogBytes(Number(status.size_bytes) || 0)
+			addAlert(i18n.t('settings.logsCleared'), 'success')
+		} catch (e) {
+			addAlert(String(e), 'error')
+		} finally {
+			setLogsBusy(false)
+		}
+	}
+
+	const checkClientUpdate = async () => {
+		setClientUpdateBusy('check')
+		setClientUpdateMsg('')
+		try {
+			const found = await nativeInvoke('check_client_update')
+			setClientUpdate(found || null)
+		} catch (e) {
+			setClientUpdate(null)
+			setClientUpdateMsg(String(e))
+		} finally {
+			setClientUpdateBusy('')
+		}
+	}
+
+	const installClientUpdate = async () => {
+		setClientUpdateBusy('install')
+		setClientUpdateMsg('')
+		try {
+			const started = await nativeInvoke('install_client_update')
+			// The platform installer owns it from here, so the message says what
+			// the user has to do rather than claiming the update is finished.
+			setClientUpdateMsg(
+				started?.launched
+					? i18n.t('settings.clientUpdateStarted')
+					: i18n.t('settings.clientUpdateDownloaded', { path: started?.path || '' }),
+			)
+			addAlert(i18n.t('settings.clientUpdateStarted'), 'success')
+		} catch (e) {
+			setClientUpdateMsg(String(e))
+		} finally {
+			setClientUpdateBusy('')
+		}
+	}
+
+	const checkServerUpdate = async () => {
+		setServerUpdateBusy('check')
+		setServerUpdateMsg('')
+		try {
+			const found = await API.settings.checkServerUpdate()
+			setServerUpdate(found || null)
+		} catch (e) {
+			setServerUpdate(null)
+			setServerUpdateMsg(String(e?.message || e))
+		} finally {
+			setServerUpdateBusy('')
+		}
+	}
+
+	const installServerUpdate = async () => {
+		setServerUpdateBusy('install')
+		setServerUpdateMsg('')
+		try {
+			const result = await API.settings.applyServerUpdate()
+			const version = result?.version || ''
+			setServerUpdateMsg(i18n.t('settings.serverRestarting', { version }))
+			addAlert(i18n.t('settings.serverRestarting', { version }), 'success')
+			// The server answers and *then* execs itself, so the new version only
+			// shows up once it is listening again. Poll instead of asking the
+			// user to reload into a connection refused.
+			pollServerVersion(version)
+		} catch (e) {
+			setServerUpdateMsg(String(e?.message || e))
+		} finally {
+			setServerUpdateBusy('')
+		}
+	}
+
+	/** Notes for whichever side has been checked, when there is an update. */
+	const releaseNotes = () => {
+		const found = [clientUpdate(), serverUpdate()].find(
+			(u) => u?.update_available && u?.notes,
+		)
+		return found?.notes || ''
+	}
+
+	/**
+	 * Wait for the restarted server to answer with its new version.
+	 * @param {string} expected
+	 */
+	const pollServerVersion = (expected) => {
+		let attempts = 0
+		const tick = async () => {
+			attempts += 1
+			try {
+				const v = await API.settings.getServerVersion()
+				if (v?.version) {
+					setServerAbout(v)
+					if (!expected || v.version === expected.replace(/^v/, '')) {
+						setServerUpdate(null)
+						return
+					}
+				}
+			} catch {
+				// Still down; that is the expected answer for the first few tries.
+			}
+			// ~90s of patience: a Raspberry Pi restarting Sarca takes a while.
+			if (attempts < 30) setTimeout(tick, 3000)
+		}
+		setTimeout(tick, 3000)
+	}
+
 	const setEnableLogs = async (enabled) => {
 		setLogsBusy(true)
 		try {
-			const prefs = (await nativeInvoke('get_client_prefs')) || {}
-			const next = { ...prefs, enable_logs: enabled }
-			await nativeInvoke('set_client_prefs', { prefs: next })
+			await patchClientPrefs({ enable_logs: enabled })
 			setLogsEnabled(enabled)
+			await refreshLogStatus()
 		} catch (e) {
 			addAlert(String(e), 'error')
 		} finally {
@@ -407,7 +603,10 @@ const SettingsModal = () => {
 					: i18n.t('settings.logsExported'),
 				'success',
 			)
+			// `export_logs` turns logging on when it was off, so the switch has
+			// to catch up or it would read "off" for a log that is now growing.
 			setLogsEnabled(true)
+			refreshLogStatus()
 		} catch (e) {
 			addAlert(String(e), 'error')
 		} finally {
@@ -632,6 +831,46 @@ const SettingsModal = () => {
 										</span>
 									</button>
 								</Show>
+								<Show when={isNative()}>
+									<button
+										type="button"
+										class="settings-nav__item"
+										classList={{ 'settings-nav__item--active': tab() === 'logs' }}
+										onClick={() => setTab('logs')}
+									>
+										<span class="settings-nav__icon" aria-hidden="true">
+											<FluentIcon
+												name={
+													tab() === 'logs'
+														? 'documentBulletListFilled'
+														: 'documentBulletList'
+												}
+												size={20}
+											/>
+										</span>
+										<span class="settings-nav__text">
+											<span class="settings-nav__title">{i18n.t('settings.logsTab')}</span>
+											<span class="settings-nav__desc">{i18n.t('settings.logsTabDesc')}</span>
+										</span>
+									</button>
+								</Show>
+								<button
+									type="button"
+									class="settings-nav__item"
+									classList={{ 'settings-nav__item--active': tab() === 'about' }}
+									onClick={() => setTab('about')}
+								>
+									<span class="settings-nav__icon" aria-hidden="true">
+										<FluentIcon
+											name={tab() === 'about' ? 'infoFilled' : 'info'}
+											size={20}
+										/>
+									</span>
+									<span class="settings-nav__text">
+										<span class="settings-nav__title">{i18n.t('settings.aboutTab')}</span>
+										<span class="settings-nav__desc">{i18n.t('settings.aboutTabDesc')}</span>
+									</span>
+								</button>
 								<button
 									type="button"
 									class="settings-nav__item"
@@ -1186,41 +1425,6 @@ const SettingsModal = () => {
 													{i18n.t('settings.clearCache')}
 												</Button>
 											</div>
-											<div class="settings-account__row">
-												<div>
-													<p class="settings-account__label">{i18n.t('settings.about')}</p>
-													<p class="settings-account__hint">
-														{i18n.t('settings.clientVersion', {
-															version: about().version || '—',
-															platform: about().platform || i18n.t('settings.nativePlatform'),
-														})}
-													</p>
-												</div>
-											</div>
-											<div class="settings-toggle">
-												<span>{i18n.t('settings.enableLogs')}</span>
-												<SettingsSwitch
-													id="settings-enable-logs-switch"
-													checked={logsEnabled()}
-													disabled={logsBusy()}
-													onChange={(checked) => setEnableLogs(checked)}
-												/>
-											</div>
-											<div class="settings-account__row">
-												<div>
-													<p class="settings-account__label">{i18n.t('settings.exportLogs')}</p>
-													<p class="settings-account__hint">
-														{i18n.t('settings.exportLogsHint')}
-													</p>
-												</div>
-												<Button
-													variant="outlined"
-													disabled={logsBusy()}
-													onClick={exportLogs}
-												>
-													{i18n.t('settings.exportLogs')}
-												</Button>
-											</div>
 										</Show>
 										<div class="settings-account__row">
 											<div>
@@ -1238,6 +1442,240 @@ const SettingsModal = () => {
 												{i18n.t('sidebar.logOut')}
 											</Button>
 										</div>
+									</div>
+								</Show>
+
+								<Show when={tab() === 'logs' && isNative()}>
+									<div class="settings-account">
+										<p class="settings-bot-hint">{i18n.t('settings.logsIntro')}</p>
+										<div class="settings-toggle">
+											<span>{i18n.t('settings.enableLogs')}</span>
+											<SettingsSwitch
+												id="settings-enable-logs-switch"
+												checked={logsEnabled()}
+												disabled={logsBusy()}
+												onChange={(checked) => setEnableLogs(checked)}
+											/>
+										</div>
+										<div class="settings-toggle">
+											<span>{i18n.t('settings.advancedLogging')}</span>
+											<SettingsSwitch
+												id="settings-advanced-logging-switch"
+												checked={logLevel() === 'debug'}
+												disabled={logsBusy()}
+												onChange={(checked) => setAdvancedLogging(checked)}
+											/>
+										</div>
+										<p class="settings-account__hint">
+											{i18n.t('settings.advancedLoggingHint')}
+										</p>
+										<div class="settings-account__row">
+											<div>
+												<p class="settings-account__label">
+													{i18n.t('settings.logLevel')}
+												</p>
+												<p class="settings-account__hint">
+													{logLevel().toUpperCase()}
+												</p>
+											</div>
+										</div>
+										<div class="settings-account__row">
+											<div class="settings-account__grow">
+												<p class="settings-account__label">{i18n.t('settings.logFile')}</p>
+												<p class="settings-account__hint">
+													{i18n.t('settings.logFileSize', {
+														size: formatBytes(logBytes()),
+													})}
+												</p>
+												{/* Full path in the tooltip, elided in the row: a
+												    Windows data-dir path is long enough to push the
+												    button onto its own line, and the path is for
+												    finding the file, not for reading here. */}
+												<Show when={logFilePath()}>
+													<p class="settings-account__hint settings-path" title={logFilePath()}>
+														{logFilePath()}
+													</p>
+												</Show>
+											</div>
+											<Button
+												variant="outlined"
+												color="error"
+												disabled={logsBusy()}
+												onClick={clearLogs}
+											>
+												{i18n.t('settings.clearLogs')}
+											</Button>
+										</div>
+										<div class="settings-account__row">
+											<div>
+												<p class="settings-account__label">{i18n.t('settings.exportLogs')}</p>
+												<p class="settings-account__hint">
+													{i18n.t('settings.exportLogsHint')}
+												</p>
+											</div>
+											<Button
+												variant="outlined"
+												disabled={logsBusy()}
+												onClick={exportLogs}
+											>
+												{i18n.t('settings.exportLogs')}
+											</Button>
+										</div>
+									</div>
+								</Show>
+
+								<Show when={tab() === 'about'}>
+									<div class="settings-account">
+										<div class="settings-account__row">
+											<div>
+												<p class="settings-account__label">
+													{i18n.t('settings.clientLabel')}
+												</p>
+												<p class="settings-account__hint">
+													<Show
+														when={isNative()}
+														fallback={i18n.t('settings.updateNativeOnly')}
+													>
+														{i18n.t('settings.versionOnPlatform', {
+															version:
+																about().version ||
+																i18n.t('settings.unknownVersion'),
+															platform:
+																about().platform ||
+																i18n.t('settings.nativePlatform'),
+														})}
+													</Show>
+												</p>
+												<Show when={isNative() && clientUpdate()}>
+													<p class="settings-account__hint">
+														{clientUpdate().update_available
+															? i18n.t('settings.updateAvailable', {
+																	version: clientUpdate().latest || '',
+																})
+															: i18n.t('settings.upToDate')}
+													</p>
+												</Show>
+												<Show when={clientUpdateMsg()}>
+													<p class="settings-account__hint" role="status">
+														{clientUpdateMsg()}
+													</p>
+												</Show>
+											</div>
+											<Show when={isNative()}>
+												<div class="settings-sync-panel__row">
+													<Button
+														variant="outlined"
+														disabled={Boolean(clientUpdateBusy())}
+														onClick={checkClientUpdate}
+													>
+														{clientUpdateBusy() === 'check'
+															? i18n.t('settings.checking')
+															: i18n.t('settings.checkUpdate')}
+													</Button>
+													<Show
+														when={
+															clientUpdate()?.update_available &&
+															clientUpdate()?.can_install
+														}
+													>
+														<Button
+															variant="contained"
+															color="secondary"
+															disabled={Boolean(clientUpdateBusy())}
+															onClick={installClientUpdate}
+														>
+															{clientUpdateBusy() === 'install'
+																? i18n.t('settings.installing')
+																: i18n.t('settings.installUpdate')}
+														</Button>
+													</Show>
+												</div>
+											</Show>
+										</div>
+
+										<div class="settings-account__row">
+											<div>
+												<p class="settings-account__label">
+													{i18n.t('settings.serverLabel')}
+												</p>
+												<p class="settings-account__hint">
+													{serverAbout().version ||
+														i18n.t('settings.unknownVersion')}
+												</p>
+												<Show when={serverUpdate()}>
+													<p class="settings-account__hint">
+														{serverUpdate().update_available
+															? i18n.t('settings.updateAvailable', {
+																	version: serverUpdate().latest || '',
+																})
+															: i18n.t('settings.upToDate')}
+													</p>
+													{/* Reasons are server-authored plain text: a
+													    container deployment, or a release with no
+													    archive for this platform. Shown verbatim
+													    because the fix differs per case. */}
+													<Show when={serverUpdate().reason}>
+														<p class="settings-account__hint">
+															{serverUpdate().reason}
+														</p>
+													</Show>
+												</Show>
+												<Show when={serverUpdateMsg()}>
+													<p class="settings-account__hint" role="status">
+														{serverUpdateMsg()}
+													</p>
+												</Show>
+												<Show when={!isSuperuser()}>
+													<p class="settings-account__hint">
+														{i18n.t('settings.updateSuperuserOnly')}
+													</p>
+												</Show>
+											</div>
+											<Show when={isSuperuser()}>
+												<div class="settings-sync-panel__row">
+													<Button
+														variant="outlined"
+														disabled={Boolean(serverUpdateBusy())}
+														onClick={checkServerUpdate}
+													>
+														{serverUpdateBusy() === 'check'
+															? i18n.t('settings.checking')
+															: i18n.t('settings.checkUpdate')}
+													</Button>
+													<Show
+														when={
+															serverUpdate()?.update_available &&
+															serverUpdate()?.can_self_update
+														}
+													>
+														<Button
+															variant="contained"
+															color="secondary"
+															disabled={Boolean(serverUpdateBusy())}
+															onClick={installServerUpdate}
+														>
+															{serverUpdateBusy() === 'install'
+																? i18n.t('settings.installing')
+																: i18n.t('settings.installUpdate')}
+														</Button>
+													</Show>
+												</div>
+											</Show>
+										</div>
+
+										{/* Client and server track the same repository, so the
+										    notes are the same release's either way — show
+										    whichever check has run. */}
+										<Show when={releaseNotes()}>
+											<div class="settings-account__row settings-account__row--notes">
+												<p class="settings-account__label">
+													{i18n.t('settings.releaseNotes')}
+												</p>
+												<p class="settings-account__hint settings-release-notes">
+													{releaseNotes()}
+												</p>
+											</div>
+										</Show>
 									</div>
 								</Show>
 

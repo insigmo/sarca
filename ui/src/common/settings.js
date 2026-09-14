@@ -2,7 +2,7 @@ import { createRoot, createSignal } from 'solid-js'
 
 /**
  * Shared open state for the Settings modal / bottom sheet.
- * @typedef {'general' | 'sync' | 'access' | 'backup'} SettingsTab
+ * @typedef {'general' | 'sync' | 'logs' | 'about' | 'access' | 'backup'} SettingsTab
  */
 
 // Old tabs got folded into the ones above (see SettingsModal rework). Deep
@@ -14,6 +14,11 @@ const LEGACY_TAB_MAP = {
 	trash: 'general',
 	storage: 'general',
 	users: 'access',
+	// Logging moved out of General into its own tab; a deep link that still
+	// says `general` is honoured as written, but one that asked for the log
+	// controls by name lands where they actually are now.
+	diagnostics: 'logs',
+	version: 'about',
 }
 
 /**

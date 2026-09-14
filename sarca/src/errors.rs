@@ -79,6 +79,14 @@ pub enum SarcaError {
     StorageBusy,
     #[error("this file is already being uploaded — it will finish on its own")]
     UploadAlreadyInProgress,
+    #[error("could not reach GitHub to check for updates")]
+    UpdateCheckFailed,
+    #[error("this server is already on the newest release")]
+    UpdateNotAvailable,
+    #[error("this server cannot update itself: {0}")]
+    UpdateNotSupported(String),
+    #[error("the update failed: {0}")]
+    UpdateFailed(String),
 }
 
 impl From<SarcaError> for (StatusCode, String) {
@@ -106,6 +114,21 @@ impl From<SarcaError> for (StatusCode, String) {
             // Distinct from TelegramAPIError/NoStorageWorkers below: this is a transient
             // capacity wait, not a client mistake, so it must not join their 400 arm.
             SarcaError::StorageBusy => (StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+            // GitHub was unreachable — about the network, not the request, and
+            // the only useful answer is "try again".
+            SarcaError::UpdateCheckFailed => (StatusCode::BAD_GATEWAY, e.to_string()),
+            // Nothing to install, or nothing this deployment can install. Both
+            // are answers, not faults, and the UI shows the text verbatim.
+            SarcaError::UpdateNotAvailable | SarcaError::UpdateNotSupported(_) => {
+                (StatusCode::CONFLICT, e.to_string())
+            },
+            // Unlike the generic 500 arm below, the message is deliberately kept:
+            // "cannot write to /srv/sarca/.sarca-update" is the whole diagnosis,
+            // and it names nothing the caller could not already see.
+            SarcaError::UpdateFailed(_) => {
+                tracing::error!("{e}");
+                (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+            },
             SarcaError::HeaderMissed(_)
             | SarcaError::HeaderIsInvalid(..)
             | SarcaError::InvalidFolderName
