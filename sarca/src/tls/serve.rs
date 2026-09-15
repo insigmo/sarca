@@ -92,6 +92,18 @@ pub struct TlsRuntime {
 const QUIC_ALPN: &[&[u8]] = &[b"h3"];
 const TCP_ALPN: &[&[u8]] = &[b"h2", b"http/1.1"];
 
+/// Starting HTTP/2 window for one stream, before adaptive sizing takes over.
+///
+/// An upload is a single long-lived stream, so its ceiling is window/RTT. The
+/// h2 default of 64 KiB puts that at ~1.3 MB/s over a 50ms link — the shape of
+/// the production path, where the Pi is reached through a VPS. 8 MiB covers a
+/// 150ms round trip at 50 MB/s, and costs nothing on a fast link because
+/// adaptive window shrinks back toward what the connection actually needs.
+const HTTP2_STREAM_WINDOW: u32 = 8 * 1024 * 1024;
+/// Same, summed across the streams of one connection. Kept at twice the
+/// per-stream figure so two concurrent uploads do not throttle each other.
+const HTTP2_CONNECTION_WINDOW: u32 = 16 * 1024 * 1024;
+
 /// Consecutive HTTP/3 handshake failures that trigger a certificate refresh.
 ///
 /// A broken or expired certificate makes every QUIC handshake fail while TCP
@@ -372,12 +384,27 @@ async fn serve_tcp_tls(
                 Ok(tls_stream) => {
                     let io = hyper_util::rt::TokioIo::new(tls_stream);
                     let service = TowerToHyperService::new(router);
-                    if let Err(e) = hyper_util::server::conn::auto::Builder::new(
+                    let mut builder = hyper_util::server::conn::auto::Builder::new(
                         hyper_util::rt::TokioExecutor::new(),
-                    )
-                    .serve_connection(io, service)
-                    .await
-                    {
+                    );
+                    // HTTP/2 flow control, sized for a long link rather than a
+                    // LAN. h2's default 64 KiB window means one upload stream
+                    // can never exceed window/RTT — 1.3 MB/s at 50ms — however
+                    // fast the pipe is, and an upload is one long stream.
+                    //
+                    // This is not hypothetical here: production reaches the Pi
+                    // through Caddy on a VPS, which proxies over h2, and the
+                    // same 16 MiB body measured 8.6 MB/s over HTTP/1.1 and
+                    // 4.4 MB/s over HTTP/2 through that hop. Adaptive window
+                    // lets hyper size it from the measured bandwidth-delay
+                    // product instead, so a LAN client is not made to pay for a
+                    // buffer a distant one needs.
+                    builder
+                        .http2()
+                        .adaptive_window(true)
+                        .initial_stream_window_size(HTTP2_STREAM_WINDOW)
+                        .initial_connection_window_size(HTTP2_CONNECTION_WINDOW);
+                    if let Err(e) = builder.serve_connection(io, service).await {
                         tracing::debug!("TCP TLS connection from {remote} ended: {e}");
                     }
                 },
