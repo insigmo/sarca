@@ -46,7 +46,7 @@ pub struct StorageManagerService<'d> {
 
 /// Chunks of one file uploaded at once. Three streams was where the production
 /// Pi's uplink stopped improving (8.0 MB/s serial, 12.6 MB/s at three, 11.9 at
-/// six), and the per-token gate in `bot_api` caps the real total anyway.
+/// six), and the per-chat gate in `bot_api` caps the real total anyway.
 ///
 /// Override with `TELEGRAM_CHUNK_CONCURRENCY`.
 const CHUNK_CONCURRENCY: usize = 3;
@@ -150,8 +150,24 @@ impl<'d> StorageManagerService<'d> {
         let storage = self.storages_repo.get_by_file_id(data.file_id).await?;
         let (primary, active_channels) =
             self.resolve_primary_channel(storage.id, storage.primary_position).await?;
-        let secondary_channels: Vec<StorageChannel> =
-            active_channels.into_iter().filter(|c| c.id != primary.id).collect();
+
+        // Telegram's flood limit that actually bites here is per *chat*: about
+        // 20 documents a minute to one channel, which at 20 MiB a document is a
+        // hard 6.7 MB/s however fast the uplink is. Measured on the production
+        // Pi: 20 chunks went up in 34s and then Telegram asked for a 28s wait.
+        //
+        // The chunks of a file do not have to share a channel — a download
+        // collects candidates per position across every active channel
+        // (`resolve_chunk_candidates`) — so deal them round-robin instead and
+        // the storage's budget becomes 20/min *per channel*. Replication still
+        // ends up putting every chunk everywhere; this only changes which
+        // channel pays for the first copy.
+        //
+        // Primary stays first in the list so a single-chunk file still lands
+        // where it always did, and thumbnails and previews keep using it.
+        let upload_channels: Vec<StorageChannel> = std::iter::once(primary.clone())
+            .chain(active_channels.iter().filter(|c| c.id != primary.id).cloned())
+            .collect();
 
         let total: u64 = data.file_size.max(0).cast_unsigned();
         let chunk_size = data.chunk_size.max(1) as u64;
@@ -183,8 +199,8 @@ impl<'d> StorageManagerService<'d> {
         // Chunks used to go up strictly one after another, which left the
         // uplink idle for the whole round trip of each `sendDocument`. They are
         // independent documents, so run several — `chunk_concurrency` here and
-        // the per-token gate in `bot_api` both cap it, and the gate collapses
-        // to one send while Telegram is flood-limiting the bot.
+        // the per-chat gate in `bot_api` both cap it, and that gate collapses
+        // to one send while Telegram is flood-limiting the channel in question.
         //
         // No cancel check anywhere in here, on purpose. Reaching this point
         // means the bytes are spooled and the row exists, so the file is the
@@ -193,18 +209,19 @@ impl<'d> StorageManagerService<'d> {
         // `&Path` is Copy, so each chunk's future can hold it without the
         // closure taking `data.file_path` away from the code below.
         let spool_path = data.file_path.as_path();
-        let mut done: Vec<(usize, FileChunk, ChunkReplica)> =
+        let mut done: Vec<(usize, Uuid, FileChunk, ChunkReplica)> =
             futures::stream::iter(plan.map(|(position, offset, len)| {
                 let progress = data.progress.clone();
                 let sent_total = Arc::clone(&sent_total);
                 let done_chunks = Arc::clone(&done_chunks);
+                let target = &upload_channels[position % upload_channels.len()];
                 async move {
                     let chunk_no = u32::try_from(position).unwrap_or(u32::MAX).saturating_add(1);
                     let (chunk, replica) = self
                         .upload_chunk_from_file(
                             storage.id,
-                            primary.id,
-                            primary.chat_id,
+                            target.id,
+                            target.chat_id,
                             data.file_id,
                             position,
                             spool_path,
@@ -231,7 +248,7 @@ impl<'d> StorageManagerService<'d> {
                             ),
                         );
                     }
-                    Ok::<_, SarcaError>((position, chunk, replica))
+                    Ok::<_, SarcaError>((position, target.id, chunk, replica))
                 }
             }))
             .buffer_unordered(chunk_concurrency())
@@ -244,9 +261,11 @@ impl<'d> StorageManagerService<'d> {
 
         let mut chunks: Vec<FileChunk> = Vec::with_capacity(done.len());
         let mut replicas: Vec<ChunkReplica> = Vec::with_capacity(done.len());
-        for (_, chunk, replica) in done {
-            for secondary in &secondary_channels {
-                replicas.push(ChunkReplica::new_pending(Uuid::new_v4(), chunk.id, secondary.id));
+        for (_, uploaded_to, chunk, replica) in done {
+            // Everywhere this chunk is not yet — which now varies per chunk,
+            // since they no longer all start life on the primary.
+            for other in upload_channels.iter().filter(|c| c.id != uploaded_to) {
+                replicas.push(ChunkReplica::new_pending(Uuid::new_v4(), chunk.id, other.id));
             }
             chunks.push(chunk);
             replicas.push(replica);

@@ -129,12 +129,19 @@ struct TokenSendGate {
     flood_cooldown_until: Mutex<Option<Instant>>,
 }
 
-/// Holds a per-token send slot for the duration of one mutating Telegram API call
+/// Holds a send slot for the duration of one mutating Telegram API call
 /// (`sendDocument`, `copyMessage`, `deleteMessage`, including flood-wait sleeps), so
 /// concurrent uploads / replication / purge cannot storm the same bot.
 ///
+/// Keyed by token *and* destination chat, because that is the shape of the
+/// limit being respected: Telegram meters roughly 20 messages a minute into one
+/// channel, while the per-bot ceiling is orders of magnitude higher and nothing
+/// here comes close to it. A file's chunks are dealt across a storage's
+/// channels, so one flooded channel must not stall the other two — which a
+/// token-wide gate did.
+///
 /// Outside a flood window the gate hands out [`send_concurrency`] slots at once;
-/// a caller that starts while the token is in a flood window takes *every* slot
+/// a caller that starts while that chat is in a flood window takes *every* slot
 /// instead, which both serializes it and drains the sends already in flight
 /// before it runs. So the fast path is parallel and the apologetic path is
 /// strictly one at a time, with no second mechanism to keep in sync.
@@ -144,10 +151,10 @@ struct SendPermit {
 }
 
 impl SendPermit {
-    async fn acquire(token: &str) -> Self {
+    async fn acquire(token: &str, chat_id: ChatId) -> Self {
         let gate = {
             let mut map = send_gates().lock().await;
-            map.entry(token.to_owned())
+            map.entry(format!("{token}:{chat_id}"))
                 .or_insert_with(|| {
                     Arc::new(TokenSendGate {
                         sem: Arc::new(Semaphore::new(send_concurrency() as usize)),
@@ -220,6 +227,7 @@ pub fn flood_active() -> bool {
         .is_some_and(|until| Instant::now() < until)
 }
 
+/// Send gates, keyed `"{token}:{chat_id}"` — see [`SendPermit`].
 fn send_gates() -> &'static Mutex<HashMap<String, Arc<TokenSendGate>>> {
     static GATES: OnceLock<Mutex<HashMap<String, Arc<TokenSendGate>>>> = OnceLock::new();
     GATES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -473,7 +481,7 @@ impl<'t> TelegramBotApi<'t> {
         let file_len = file.len();
 
         let start = Instant::now();
-        let permit = SendPermit::acquire(&token).await;
+        let permit = SendPermit::acquire(&token, chat_id).await;
         let response = Self::send_with_retries("upload", Some(&permit), || {
             let file_part = multipart::Part::bytes(file.to_vec()).file_name("sarca_chunk.bin");
             let form = multipart::Form::new()
@@ -718,7 +726,7 @@ impl<'t> TelegramBotApi<'t> {
         let masked_url = Self::mask_url(&url);
 
         let start = Instant::now();
-        let permit = SendPermit::acquire(&token).await;
+        let permit = SendPermit::acquire(&token, req.chat_id).await;
         let response = Self::send_upload_part_with_retries(&url, file_path, &req, &permit).await?;
         permit.mark_ok().await;
         drop(permit);
@@ -988,7 +996,7 @@ impl<'t> TelegramBotApi<'t> {
         let url = self.build_url("", "copyMessage", &token);
         let masked_url = Self::mask_url(&url);
 
-        let permit = SendPermit::acquire(&token).await;
+        let permit = SendPermit::acquire(&token, to_chat_id).await;
         let response = Self::send_with_retries("copyMessage", Some(&permit), || {
             http_client::client()
                 .post(&url)
@@ -1054,7 +1062,7 @@ impl<'t> TelegramBotApi<'t> {
     ) -> SarcaResult<()> {
         let url = self.build_url("", "deleteMessage", token);
 
-        let permit = SendPermit::acquire(token).await;
+        let permit = SendPermit::acquire(token, chat_id).await;
         let result = Self::send_with_retries("deleteMessage", Some(&permit), || {
             http_client::client()
                 .post(&url)
@@ -1259,7 +1267,7 @@ mod relay_outlives_client_tests {
 
         let req = part_request(Some(tx), 4096);
         let status = {
-            let permit = SendPermit::acquire("relay-outlives-client").await;
+            let permit = SendPermit::acquire("relay-outlives-client", req.chat_id).await;
             TelegramBotApi::send_upload_part_with_retries(&url, spool.path(), &req, &permit)
                 .await
                 .expect("a hung-up client must not cancel a committed relay")
@@ -1282,7 +1290,7 @@ mod relay_outlives_client_tests {
 
         let req = part_request(None, 1024);
         let status = {
-            let permit = SendPermit::acquire("relay-no-listener").await;
+            let permit = SendPermit::acquire("relay-no-listener", req.chat_id).await;
             TelegramBotApi::send_upload_part_with_retries(&url, spool.path(), &req, &permit)
                 .await
                 .unwrap()
