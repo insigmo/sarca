@@ -41,11 +41,32 @@ const MAX_ATTEMPTS: u32 = 5;
 const BASE_BACKOFF_MS: u64 = 200;
 /// Honor Telegram's `retry_after` up to this per wait (don't truncate short).
 const MAX_FLOOD_WAIT_SECS: u64 = 900;
-/// Soft pace between successful sends (~0.45 msg/s). Telegram FAQ is ~1/s; stay
-/// conservative so multi-chunk uploads don't trip flood control.
-const MIN_SEND_GAP: Duration = Duration::from_millis(2200);
+/// Soft pace between successful sends, applied only while a token has *not*
+/// been flood-limited recently.
+///
+/// This used to be 2200ms, chosen to sit under Telegram's ~1 msg/s FAQ
+/// guideline. For 20 MiB documents that guideline is the wrong budget to
+/// spend: one chunk takes ~2.5s of actual transfer, so a 2.2s gap on top threw
+/// away almost half of the uplink, and a 2 GB video paid an extra three
+/// minutes in sleeps alone. Telegram answers a flood limit explicitly and this
+/// module already honors it — `retry_after`, then [`MIN_SEND_GAP_AFTER_FLOOD`]
+/// for [`FLOOD_PACING_WINDOW`] — so the pace is now discovered rather than
+/// assumed: go fast, and slow down when actually told to.
+///
+/// Override with `TELEGRAM_SEND_GAP_MS` if a particular bot needs a floor.
+const MIN_SEND_GAP: Duration = Duration::from_millis(50);
 /// Elevated inter-send gap while a token is in a recent flood window.
 const MIN_SEND_GAP_AFTER_FLOOD: Duration = Duration::from_secs(3);
+/// Sends allowed in flight at once on one bot token, outside a flood window.
+///
+/// A single `sendDocument` of a 20 MiB chunk does not fill the uplink on its
+/// own — measured on the production Pi, one stream reaches ~8 MB/s and three
+/// concurrent streams ~12.6 MB/s with no flood control at all. Inside a flood
+/// window the gate collapses back to one send at a time (see
+/// [`SendPermit::acquire`]).
+///
+/// Override with `TELEGRAM_SEND_CONCURRENCY`.
+const SEND_CONCURRENCY: u32 = 3;
 /// How long after a flood wait we keep the elevated send gap.
 const FLOOD_PACING_WINDOW: Duration = Duration::from_mins(5);
 /// Extra cooldown after honoring `retry_after`, before the next attempt.
@@ -63,8 +84,34 @@ fn pacing_override() -> Option<Duration> {
     })
 }
 
+/// Deployment override for the non-flood send gap, in milliseconds. `0` is
+/// allowed and means "no proactive gap at all". Read once.
+fn send_gap_override() -> Option<Duration> {
+    static OVERRIDE: OnceLock<Option<Duration>> = OnceLock::new();
+    *OVERRIDE.get_or_init(|| {
+        let ms = std::env::var("TELEGRAM_SEND_GAP_MS").ok()?.parse::<u64>().ok()?;
+        tracing::info!("[TELEGRAM API] send gap set to {ms}ms");
+        Some(Duration::from_millis(ms))
+    })
+}
+
+/// Concurrent sends permitted per bot token outside a flood window. Clamped to
+/// a sane range so a typo cannot serialize (0) or storm (huge) the bot.
+fn send_concurrency() -> u32 {
+    static VALUE: OnceLock<u32> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        let n = std::env::var("TELEGRAM_SEND_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(SEND_CONCURRENCY)
+            .clamp(1, 16);
+        tracing::info!("[TELEGRAM API] per-token send concurrency {n}");
+        n
+    })
+}
+
 fn min_send_gap() -> Duration {
-    pacing_override().unwrap_or(MIN_SEND_GAP)
+    pacing_override().or_else(send_gap_override).unwrap_or(MIN_SEND_GAP)
 }
 
 fn min_send_gap_after_flood() -> Duration {
@@ -82,9 +129,15 @@ struct TokenSendGate {
     flood_cooldown_until: Mutex<Option<Instant>>,
 }
 
-/// Holds the per-token send lock for the duration of one mutating Telegram API call
+/// Holds a per-token send slot for the duration of one mutating Telegram API call
 /// (`sendDocument`, `copyMessage`, `deleteMessage`, including flood-wait sleeps), so
 /// concurrent uploads / replication / purge cannot storm the same bot.
+///
+/// Outside a flood window the gate hands out [`send_concurrency`] slots at once;
+/// a caller that starts while the token is in a flood window takes *every* slot
+/// instead, which both serializes it and drains the sends already in flight
+/// before it runs. So the fast path is parallel and the apologetic path is
+/// strictly one at a time, with no second mechanism to keep in sync.
 struct SendPermit {
     _permit: OwnedSemaphorePermit,
     gate: Arc<TokenSendGate>,
@@ -97,17 +150,25 @@ impl SendPermit {
             map.entry(token.to_owned())
                 .or_insert_with(|| {
                     Arc::new(TokenSendGate {
-                        sem: Arc::new(Semaphore::new(1)),
+                        sem: Arc::new(Semaphore::new(send_concurrency() as usize)),
                         last_ok: Mutex::new(None),
                         flood_cooldown_until: Mutex::new(None),
                     })
                 })
                 .clone()
         };
-        let permit =
-            gate.sem.clone().acquire_owned().await.expect("Telegram send semaphore closed");
+        let in_flood =
+            gate.flood_cooldown_until.lock().await.is_some_and(|until| Instant::now() < until);
+        let slots = if in_flood { send_concurrency() } else { 1 };
+        let permit = gate
+            .sem
+            .clone()
+            .acquire_many_owned(slots)
+            .await
+            .expect("Telegram send semaphore closed");
         let sleep_for = {
             let last = gate.last_ok.lock().await;
+            // Re-read: the wait above can outlast the window we sampled.
             let flood_until = *gate.flood_cooldown_until.lock().await;
             let gap = if flood_until.is_some_and(|t| Instant::now() < t) {
                 min_send_gap_after_flood()
@@ -174,6 +235,14 @@ pub struct UploadFilePartRequest {
     pub chunk_no: u32,
     pub total_chunks: u32,
     pub progress: Option<tokio::sync::mpsc::Sender<UploadProgressEvent>>,
+    /// Bytes of the *whole file* accepted by Telegram so far, shared by every
+    /// chunk of that file.
+    ///
+    /// Chunks no longer run one after another, so `offset + sent` is not a
+    /// figure that only grows: two chunks in flight would report positions
+    /// either side of each other and the client's bar would jump backwards.
+    /// Each stream adds its own delta here instead and reports the total.
+    pub sent_total: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 pub struct TelegramBotApi<'t> {
@@ -488,18 +557,26 @@ impl<'t> TelegramBotApi<'t> {
         let sent = AtomicU64::new(0);
         let last_emit = AtomicU64::new(0);
         let progress_tx = req.progress.clone();
-        let (offset, len, file_total, chunk_no, total_chunks) =
-            (req.offset, req.len, req.file_total, req.chunk_no, req.total_chunks);
+        // Shared across this file's chunks when the caller supplies one; a lone
+        // per-chunk counter otherwise (replication, thumbs, single-chunk files).
+        let sent_total = req.sent_total.clone().unwrap_or_else(|| Arc::new(AtomicU64::new(0)));
+        let file_base = if req.sent_total.is_some() { 0 } else { req.offset };
+        let (len, file_total, chunk_no, total_chunks) =
+            (req.len, req.file_total, req.chunk_no, req.total_chunks);
         let stream = base_stream.map(move |item| {
             if let Ok(ref bytes) = item {
-                let n = sent.fetch_add(bytes.len() as u64, Ordering::Relaxed) + bytes.len() as u64;
+                let delta = bytes.len() as u64;
+                let n = sent.fetch_add(delta, Ordering::Relaxed) + delta;
+                // The file-wide total is what the client sees; this chunk's own
+                // count only decides how often to say so.
+                let whole = sent_total.fetch_add(delta, Ordering::Relaxed) + delta;
                 let prev = last_emit.load(Ordering::Relaxed);
                 // Emit about every 1 MiB (or on chunk completion).
                 if n == len || n.saturating_sub(prev) >= 1024 * 1024 {
                     last_emit.store(n, Ordering::Relaxed);
                     if let Some(tx) = progress_tx.as_ref() {
                         let _ = tx.try_send(UploadProgressEvent::telegram(
-                            offset.saturating_add(n).min(file_total),
+                            file_base.saturating_add(whole).min(file_total),
                             file_total,
                             chunk_no,
                             total_chunks,
@@ -529,9 +606,22 @@ impl<'t> TelegramBotApi<'t> {
         let mut other_tries: u32 = 0;
 
         loop {
-            if req.progress.as_ref().is_some_and(tokio::sync::mpsc::Sender::is_closed) {
-                return Err(SarcaError::TelegramAPIError("Upload canceled".to_owned()));
-            }
+            // No cancel check on the progress channel here, on purpose.
+            //
+            // It used to start every attempt with `progress.is_closed()` ->
+            // "Upload canceled", which made the client's connection the relay's
+            // lifeline: the sync client stops reading 90s after `spooled`
+            // (RELAY_CONFIRM_GRACE) and hangs up, so the next chunk to start
+            // after that killed the whole relay, `upload_from_path` purged the
+            // row, and the next pass re-sent the file from byte zero. The
+            // relay runs at ~4.5s/chunk, so every file over ~20 chunks
+            // (~400 MB) looped forever and could never be stored.
+            //
+            // By the time any chunk runs the bytes are spooled and the row
+            // exists, so the file is the server's to finish whether or not
+            // anyone is still listening — the same rule `emit_upload_progress`
+            // states. A disconnect *before* `spooled` is still handled, by the
+            // router aborting this task outright (`AbortOnDrop`).
             let form = Self::build_upload_part_form(file_path, req).await?;
             let send_fut = http_client::client().post(url).multipart(form).send();
             let result = send_fut.await;
@@ -1070,13 +1160,16 @@ mod flood_wait_tests {
         assert!(d.as_secs() <= 12);
     }
 
+    /// The proactive gap is deliberately small — throughput, not politeness,
+    /// is what a 20 MiB document upload is short of. What still has to hold is
+    /// the apologetic half: once Telegram *says* it is flooded, back off hard
+    /// and stay backed off for a while.
     #[test]
-    fn pacing_defaults_are_conservative() {
-        // Keep proactive gaps well under Telegram's ~1 msg/s FAQ guideline.
-        assert!(super::MIN_SEND_GAP.as_millis() >= 2000);
+    fn flood_response_stays_conservative() {
         assert!(super::MIN_SEND_GAP_AFTER_FLOOD.as_millis() >= 3000);
         assert!(super::POST_FLOOD_EXTRA_COOLDOWN.as_secs() >= 5);
         assert!(super::FLOOD_PACING_WINDOW.as_secs() >= 180);
+        assert!(super::MIN_SEND_GAP < super::MIN_SEND_GAP_AFTER_FLOOD);
     }
 }
 
@@ -1090,5 +1183,112 @@ mod delete_message_tests {
         assert!(is_soft_delete_error(r#"{"description":"Bad Request: message can't be deleted"}"#));
         assert!(is_soft_delete_error("400: MESSAGE_ID_INVALID"));
         assert!(!is_soft_delete_error("400 Bad Request: chat not found"));
+    }
+}
+
+/// The relay must outlive the client that started it.
+///
+/// This is the shape of a bug that shipped twice. `emit_upload_progress` was
+/// taught not to treat a closed progress channel as a cancellation, but the
+/// chunk retry loop kept its own `progress.is_closed()` check — so the sync
+/// client hanging up 90s after `spooled` (its `RELAY_CONFIRM_GRACE`) still
+/// killed the relay, the row was purged, and the next pass re-sent the file
+/// from byte zero. At roughly 4.5s per 20 MiB chunk that made every file over
+/// ~400 MB an infinite loop: hours of uploading, nothing stored.
+#[cfg(test)]
+mod relay_outlives_client_tests {
+    use std::io::Write;
+
+    use axum::{Router, routing::post};
+    use tokio::sync::mpsc;
+
+    use super::{SendPermit, TelegramBotApi, UploadFilePartRequest};
+    use crate::common::types::ChatId;
+
+    /// A Bot API stand-in that accepts any `sendDocument` and reports success.
+    async fn fake_bot_api() -> String {
+        let app = Router::new().route(
+            "/botTEST/sendDocument",
+            post(|| {
+                async {
+                    axum::Json(serde_json::json!({
+                        "ok": true,
+                        "result": {"message_id": 7, "document": {"file_id": "FAKE"}}
+                    }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.ok();
+        });
+        format!("http://{addr}/botTEST/sendDocument")
+    }
+
+    fn part_request(
+        progress: Option<mpsc::Sender<crate::common::channels::UploadProgressEvent>>,
+        len: u64,
+    ) -> UploadFilePartRequest {
+        UploadFilePartRequest {
+            offset: 0,
+            len,
+            chat_id: ChatId::from(-1_001_234_567_890_i64),
+            storage_id: uuid::Uuid::new_v4(),
+            file_total: len,
+            chunk_no: 1,
+            total_chunks: 1,
+            progress,
+            sent_total: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_chunk_still_uploads_after_the_client_stops_listening() {
+        let url = fake_bot_api().await;
+
+        let mut spool = tempfile::NamedTempFile::new().unwrap();
+        spool.write_all(&vec![7u8; 4096]).unwrap();
+        spool.flush().unwrap();
+
+        // Exactly what the sync client leaves behind when it hands off: a
+        // sender whose receiver is gone.
+        let (tx, rx) = mpsc::channel(4);
+        drop(rx);
+        assert!(tx.is_closed(), "test set-up: the channel must look hung-up");
+
+        let req = part_request(Some(tx), 4096);
+        let status = {
+            let permit = SendPermit::acquire("relay-outlives-client").await;
+            TelegramBotApi::send_upload_part_with_retries(&url, spool.path(), &req, &permit)
+                .await
+                .expect("a hung-up client must not cancel a committed relay")
+                .status()
+        };
+
+        assert!(status.is_success());
+    }
+
+    /// The same call with nobody listening at all has always been fine; it is
+    /// here so a future `is_closed`-style guard has to break both tests, not
+    /// just the one that looks like an edge case.
+    #[tokio::test]
+    async fn a_chunk_uploads_with_no_progress_channel_at_all() {
+        let url = fake_bot_api().await;
+
+        let mut spool = tempfile::NamedTempFile::new().unwrap();
+        spool.write_all(&vec![3u8; 1024]).unwrap();
+        spool.flush().unwrap();
+
+        let req = part_request(None, 1024);
+        let status = {
+            let permit = SendPermit::acquire("relay-no-listener").await;
+            TelegramBotApi::send_upload_part_with_retries(&url, spool.path(), &req, &permit)
+                .await
+                .unwrap()
+                .status()
+        };
+
+        assert!(status.is_success());
     }
 }
