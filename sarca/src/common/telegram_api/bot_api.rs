@@ -276,6 +276,34 @@ impl<'t> TelegramBotApi<'t> {
         url.to_string()
     }
 
+    /// Mask every bot token in arbitrary text, for logging a transport error.
+    ///
+    /// `reqwest::Error`'s `Display` embeds the URL it was given, so a plain
+    /// `{e}` in a retry warning prints the bot token in full — and on a host
+    /// with a flaky resolver these fire often enough to be the bulk of a day's
+    /// warnings, in exactly the log someone pastes into an issue. Same rule as
+    /// [`Self::mask_url`], applied wherever a token appears rather than only at
+    /// the start.
+    fn mask_secrets(text: &str) -> String {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(bot_idx) = rest.find("/bot") {
+            out.push_str(&rest[..bot_idx + 4]);
+            let after = &rest[bot_idx + 4..];
+            // A token runs to the next path separator and always contains a
+            // colon; `/botanical/...` and a trailing `/bot` are not tokens.
+            match after.find('/') {
+                Some(end) if after[..end].contains(':') => {
+                    out.push_str("***");
+                    rest = &after[end..];
+                },
+                _ => rest = after,
+            }
+        }
+        out.push_str(rest);
+        out
+    }
+
     /// Seconds to wait for a Telegram flood-control response, if any.
     ///
     /// Official API uses HTTP 429; some responses use HTTP 400 with
@@ -450,7 +478,8 @@ impl<'t> TelegramBotApi<'t> {
                         let backoff = Self::server_backoff_ms(other_tries.saturating_sub(1));
                         tracing::warn!(
                             "[TELEGRAM API] {op} network error, retrying in {backoff}ms (attempt \
-                             {other_tries}/{MAX_ATTEMPTS}): {e}"
+                             {other_tries}/{MAX_ATTEMPTS}): {}",
+                            Self::mask_secrets(&e.to_string())
                         );
                         tokio::time::sleep(Duration::from_millis(backoff)).await;
                         continue;
@@ -1298,5 +1327,36 @@ mod relay_outlives_client_tests {
         };
 
         assert!(status.is_success());
+    }
+}
+
+#[cfg(test)]
+mod mask_secrets_tests {
+    use super::TelegramBotApi;
+
+    #[test]
+    fn masks_the_token_in_a_reqwest_style_error() {
+        let text = "error sending request for url (https://api.telegram.org/bot8876571618:AAE9qfZ\
+                    qfa5VDmuvr817rqMCu3RbqVBMLbk/getChat?chat_id=-1004417157762)";
+        let masked = TelegramBotApi::mask_secrets(text);
+        assert!(!masked.contains("AAE9qfZqfa5VDmuvr817rqMCu3RbqVBMLbk"), "{masked}");
+        assert!(!masked.contains("8876571618"), "{masked}");
+        assert!(masked.contains("/bot***/getChat?chat_id=-1004417157762"), "{masked}");
+    }
+
+    #[test]
+    fn masks_every_token_when_a_message_carries_more_than_one() {
+        let text = "a https://api.telegram.org/bot111:AAA/getChat then \
+                    https://api.telegram.org/bot222:BBB/sendDocument";
+        let masked = TelegramBotApi::mask_secrets(text);
+        assert!(!masked.contains("AAA") && !masked.contains("BBB"), "{masked}");
+        assert_eq!(masked.matches("/bot***").count(), 2, "{masked}");
+    }
+
+    #[test]
+    fn leaves_text_without_a_token_alone() {
+        for text in ["operation timed out", "connect error to /botanical/garden", "trailing /bot"] {
+            assert_eq!(TelegramBotApi::mask_secrets(text), text);
+        }
     }
 }
