@@ -346,12 +346,20 @@ impl<'d> FilesService<'d> {
                 Err(SarcaError::Unknown)
             },
         };
-        if let Err(e) = message_back.and({
-            tracing::debug!("file loaded successfully");
+        // `Result::and` takes a value, so the old `message_back.and({ ... })`
+        // ran its block whatever the manager said: a failed relay still logged
+        // "file loaded successfully" and still marked the row uploaded, right
+        // before the purge below deleted it. Only the log survived to be read.
+        let outcome = match message_back {
+            Ok(()) => {
+                tracing::debug!("file loaded successfully");
 
-            // 4. setting file as uploaded
-            self.repo.set_as_uploaded(file.id).await
-        }) {
+                // 4. setting file as uploaded
+                self.repo.set_as_uploaded(file.id).await
+            },
+            Err(e) => Err(e),
+        };
+        if let Err(e) = outcome {
             tracing::error!("{e}");
 
             // fallback: hard-purge with refcount GC (may have partial Telegram uploads)

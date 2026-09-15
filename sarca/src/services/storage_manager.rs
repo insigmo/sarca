@@ -1,3 +1,10 @@
+use std::sync::{
+    Arc,
+    OnceLock,
+    atomic::{AtomicU32, AtomicU64, Ordering},
+};
+
+use futures::{StreamExt, TryStreamExt};
 use sqlx::SqlitePool;
 use uuid::Uuid;
 
@@ -35,6 +42,24 @@ pub struct StorageManagerService<'d> {
     rate_limit: u16,
     /// `WORK_DIR`, so freshly built previews can warm the on-disk preview cache.
     work_dir: &'d str,
+}
+
+/// Chunks of one file uploaded at once. Three streams was where the production
+/// Pi's uplink stopped improving (8.0 MB/s serial, 12.6 MB/s at three, 11.9 at
+/// six), and the per-token gate in `bot_api` caps the real total anyway.
+///
+/// Override with `TELEGRAM_CHUNK_CONCURRENCY`.
+const CHUNK_CONCURRENCY: usize = 3;
+
+fn chunk_concurrency() -> usize {
+    static VALUE: OnceLock<usize> = OnceLock::new();
+    *VALUE.get_or_init(|| {
+        std::env::var("TELEGRAM_CHUNK_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(CHUNK_CONCURRENCY)
+            .clamp(1, 16)
+    })
 }
 
 enum PreviewSource {
@@ -128,11 +153,6 @@ impl<'d> StorageManagerService<'d> {
         let secondary_channels: Vec<StorageChannel> =
             active_channels.into_iter().filter(|c| c.id != primary.id).collect();
 
-        let mut position: usize = 0;
-        let mut chunks: Vec<FileChunk> = Vec::new();
-        let mut replicas: Vec<ChunkReplica> = Vec::new();
-
-        let mut offset: u64 = 0;
         let total: u64 = data.file_size.max(0).cast_unsigned();
         let chunk_size = data.chunk_size.max(1) as u64;
         let total_chunks = if total == 0 {
@@ -146,48 +166,90 @@ impl<'d> StorageManagerService<'d> {
             emit_upload_progress(tx, UploadProgressEvent::telegram(0, total, 1, total_chunks));
         }
 
-        // No cancel check here on purpose. Reaching this point means the bytes
-        // are spooled and the row exists, so the file is the server's to finish
-        // whether or not anyone is still listening — see `emit_upload_progress`.
-        while offset < total {
-            let len = std::cmp::min(chunk_size, total - offset);
-            let chunk_no = u32::try_from(position).unwrap_or(u32::MAX).saturating_add(1);
-            let (chunk, replica) = self
-                .upload_chunk_from_file(
-                    storage.id,
-                    primary.id,
-                    primary.chat_id,
-                    data.file_id,
-                    position,
-                    &data.file_path,
-                    offset,
-                    len,
-                    total,
-                    chunk_no,
-                    total_chunks,
-                    data.progress.clone(),
-                )
-                .await?;
+        // Every chunk of this file, as (position, offset, len).
+        let plan = (0..total_chunks as usize)
+            .map(|position| {
+                let offset = position as u64 * chunk_size;
+                (position, offset, std::cmp::min(chunk_size, total.saturating_sub(offset)))
+            })
+            .filter(|&(_, offset, len)| offset < total && len > 0);
 
+        // Bytes Telegram has accepted across all of this file's chunks, so the
+        // client still sees one number that only grows while several chunks are
+        // in flight at once.
+        let sent_total = Arc::new(AtomicU64::new(0));
+        let done_chunks = Arc::new(AtomicU32::new(0));
+
+        // Chunks used to go up strictly one after another, which left the
+        // uplink idle for the whole round trip of each `sendDocument`. They are
+        // independent documents, so run several — `chunk_concurrency` here and
+        // the per-token gate in `bot_api` both cap it, and the gate collapses
+        // to one send while Telegram is flood-limiting the bot.
+        //
+        // No cancel check anywhere in here, on purpose. Reaching this point
+        // means the bytes are spooled and the row exists, so the file is the
+        // server's to finish whether or not anyone is still listening — see
+        // `emit_upload_progress`.
+        // `&Path` is Copy, so each chunk's future can hold it without the
+        // closure taking `data.file_path` away from the code below.
+        let spool_path = data.file_path.as_path();
+        let mut done: Vec<(usize, FileChunk, ChunkReplica)> =
+            futures::stream::iter(plan.map(|(position, offset, len)| {
+                let progress = data.progress.clone();
+                let sent_total = Arc::clone(&sent_total);
+                let done_chunks = Arc::clone(&done_chunks);
+                async move {
+                    let chunk_no = u32::try_from(position).unwrap_or(u32::MAX).saturating_add(1);
+                    let (chunk, replica) = self
+                        .upload_chunk_from_file(
+                            storage.id,
+                            primary.id,
+                            primary.chat_id,
+                            data.file_id,
+                            position,
+                            spool_path,
+                            offset,
+                            len,
+                            total,
+                            chunk_no,
+                            total_chunks,
+                            progress.clone(),
+                            Some(Arc::clone(&sent_total)),
+                        )
+                        .await?;
+                    // Report chunks *finished*, not the position that happened
+                    // to land last: out of order, the latter goes backwards.
+                    let finished = done_chunks.fetch_add(1, Ordering::Relaxed) + 1;
+                    if let Some(tx) = progress.as_ref() {
+                        emit_upload_progress(
+                            tx,
+                            UploadProgressEvent::telegram(
+                                sent_total.load(Ordering::Relaxed).min(total),
+                                total,
+                                finished.min(total_chunks),
+                                total_chunks,
+                            ),
+                        );
+                    }
+                    Ok::<_, SarcaError>((position, chunk, replica))
+                }
+            }))
+            .buffer_unordered(chunk_concurrency())
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        // Chunk position is the file's byte order, so the rows have to go in
+        // that order however the uploads finished.
+        done.sort_unstable_by_key(|&(position, ..)| position);
+
+        let mut chunks: Vec<FileChunk> = Vec::with_capacity(done.len());
+        let mut replicas: Vec<ChunkReplica> = Vec::with_capacity(done.len());
+        for (_, chunk, replica) in done {
             for secondary in &secondary_channels {
                 replicas.push(ChunkReplica::new_pending(Uuid::new_v4(), chunk.id, secondary.id));
             }
-
             chunks.push(chunk);
             replicas.push(replica);
-            offset += len;
-            position += 1;
-            if let Some(tx) = data.progress.as_ref() {
-                emit_upload_progress(
-                    tx,
-                    UploadProgressEvent::telegram(
-                        offset,
-                        total,
-                        chunk_no.min(total_chunks),
-                        total_chunks,
-                    ),
-                );
-            }
         }
 
         self.files_repo.create_chunks_batch(chunks).await?;
@@ -471,6 +533,7 @@ impl<'d> StorageManagerService<'d> {
         chunk_no: u32,
         total_chunks: u32,
         progress: Option<tokio::sync::mpsc::Sender<UploadProgressEvent>>,
+        sent_total: Option<Arc<AtomicU64>>,
     ) -> SarcaResult<(FileChunk, ChunkReplica)> {
         let scheduler = StorageWorkersScheduler::new(self.db, self.rate_limit);
 
@@ -486,6 +549,7 @@ impl<'d> StorageManagerService<'d> {
                     chunk_no,
                     total_chunks,
                     progress,
+                    sent_total,
                 },
             )
             .await?;
