@@ -390,6 +390,69 @@ pub async fn init_db(db: &SqlitePool) {
     transaction.commit().await.unwrap();
 
     add_missing_columns(db).await;
+    enforce_one_row_per_chunk_position(db).await;
+}
+
+/// Give `file_chunks` its `(file_id, position)` unique index, deduplicating first.
+///
+/// A relay writes each chunk row as soon as Telegram accepts that chunk, so an
+/// interrupted upload leaves a partial set behind and the next attempt at the
+/// same file resumes into it. That only holds while one position means one row:
+/// a second row for a position the file already has would leave the download
+/// path picking between two documents for the same bytes.
+///
+/// Kept out of `init_db`'s statement list on purpose — every statement there is
+/// `unwrap()`ed, and a database that somehow carries a duplicate from before the
+/// index existed would then refuse to boot. Here it can be cleaned up first, and
+/// a failure is a warning rather than a dead server.
+#[inline]
+async fn enforce_one_row_per_chunk_position(db: &SqlitePool) {
+    const INDEX: &str = "file_chunks_file_id_position_uidx";
+
+    let exists = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = $1",
+    )
+    .bind(INDEX)
+    .fetch_one(db)
+    .await
+    // On a read error, assume it is there: never rewrite chunk rows blindly.
+    .unwrap_or(1);
+    if exists > 0 {
+        return;
+    }
+
+    // Nothing has ever written a second row for a position, so this is expected
+    // to delete nothing. It runs once, before the index that makes it
+    // impossible, so that "expected" does not have to be "guaranteed".
+    match sqlx::query(
+        "DELETE FROM file_chunks
+          WHERE rowid NOT IN (SELECT MIN(rowid) FROM file_chunks GROUP BY file_id, position)",
+    )
+    .execute(db)
+    .await
+    {
+        Ok(result) if result.rows_affected() > 0 => {
+            tracing::warn!(
+                "dropped {} duplicate chunk row(s) before indexing file_chunks",
+                result.rows_affected()
+            );
+        },
+        Ok(_) => {},
+        Err(e) => {
+            tracing::error!("could not deduplicate file_chunks: {e}");
+            return;
+        },
+    }
+
+    match sqlx::query(&format!(
+        "CREATE UNIQUE INDEX IF NOT EXISTS {INDEX} ON file_chunks (file_id, position)"
+    ))
+    .execute(db)
+    .await
+    {
+        Ok(_) => tracing::info!("migrated: file_chunks is now unique per (file_id, position)"),
+        Err(e) => tracing::error!("failed to index file_chunks (file_id, position): {e}"),
+    }
 }
 
 /// Columns added after a table's first release: `CREATE TABLE IF NOT EXISTS` never
@@ -486,25 +549,35 @@ pub async fn reset_previews_on_format_change(db: &SqlitePool, work_dir: &Path) {
     }
 }
 
-/// Clear out uploads this process was in the middle of when it last stopped.
+/// Clear out uploads this process was in the middle of when it last stopped —
+/// except the ones a later attempt can resume into.
 ///
 /// A relay lives only in memory: the file row is written when the bytes land in
 /// `WORK_DIR`, and `is_uploaded` is set once the last chunk is away. Anything
-/// still `is_uploaded = 0` at startup was interrupted, and nothing will ever
-/// pick it back up.
+/// still `is_uploaded = 0` at startup was interrupted, and nothing in this
+/// process will pick it back up.
 ///
-/// Leaving those rows is worse than it sounds now that clients hand a file off
-/// and confirm it later: a client's preflight reads such a row as "the server is
-/// still working on it" and waits — forever, since no one is. Purging frees the
-/// path so the next pass re-uploads it, and takes the partial Telegram chunks
-/// with it via refcount GC.
+/// A row with no chunks recorded has nothing behind it, and leaving it is worse
+/// than it sounds now that clients hand a file off and confirm it later: the
+/// client's preflight reads it as "the server is still working on it" and waits.
+/// Purging frees the path so the next pass re-uploads it.
 ///
-/// The spool files those uploads left behind go too. Each is a full copy of its
-/// file, and on a small disk a handful of interrupted large videos is the whole
-/// of it.
+/// A row that *does* have chunks is the opposite case. Those chunks are in the
+/// channel and every one of them is a slice of a large file that took real time
+/// to send; the next attempt at the same bytes skips the positions it finds and
+/// relays only the rest. So they stay, and `/files/info` answers
+/// `is_relaying: false` for them, which is what sends the client back to finish
+/// the job rather than to wait on nobody. They go when the file is deleted.
+///
+/// The spool files those uploads left behind go either way. Each is a full copy
+/// of its file, and on a small disk a handful of interrupted large videos is the
+/// whole of it — a resume re-reads the bytes from the client, not from here.
 pub async fn purge_interrupted_uploads(db: &SqlitePool, config: &Config) {
     let ids: Vec<Uuid> = match sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM files WHERE is_uploaded = false AND deleted_at IS NULL",
+        "SELECT id FROM files
+          WHERE is_uploaded = false
+            AND deleted_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM file_chunks WHERE file_chunks.file_id = files.id)",
     )
     .fetch_all(db)
     .await

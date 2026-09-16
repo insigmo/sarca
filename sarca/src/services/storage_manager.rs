@@ -1,7 +1,10 @@
-use std::sync::{
-    Arc,
-    OnceLock,
-    atomic::{AtomicU32, AtomicU64, Ordering},
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        OnceLock,
+        atomic::{AtomicU32, AtomicU64, Ordering},
+    },
 };
 
 use futures::{StreamExt, TryStreamExt};
@@ -177,24 +180,49 @@ impl<'d> StorageManagerService<'d> {
             u32::try_from(total.div_ceil(chunk_size)).unwrap_or(u32::MAX)
         };
 
-        if let Some(tx) = data.progress.as_ref() {
-            // Never await progress: a stuck NDJSON client must not freeze SM.
-            emit_upload_progress(tx, UploadProgressEvent::telegram(0, total, 1, total_chunks));
+        // What an earlier attempt at this same row already put in a channel.
+        //
+        // Each chunk's rows are written the moment Telegram accepts it, so an
+        // interrupted relay — a chunk that ran out of retries, a restart mid-file
+        // — leaves its finished positions behind, and this attempt only has to
+        // send what is missing. Those positions hold the right bytes because the
+        // row is only handed back here for the same content hash at the same
+        // chunk size; see `upload_anyway_from_path_with_progress`.
+        let stored = self.files_repo.list_stored_chunk_positions(data.file_id).await?;
+        let stored_positions: HashSet<usize> =
+            stored.iter().filter_map(|&(position, _)| usize::try_from(position).ok()).collect();
+        let mut chunk_ids: Vec<Uuid> = stored.iter().map(|&(_, id)| id).collect();
+
+        // Everything still to send, and the bytes the earlier attempt is worth.
+        let (plan, resumed_bytes) = remaining_chunk_plan(total, chunk_size, &stored_positions);
+        let resumed_chunks = u32::try_from(stored_positions.len()).unwrap_or(u32::MAX);
+        if resumed_chunks > 0 {
+            tracing::info!(
+                "resuming upload of file {}: {resumed_chunks} of {total_chunks} chunk(s) already                  stored, sending {}",
+                data.file_id,
+                plan.len()
+            );
         }
 
-        // Every chunk of this file, as (position, offset, len).
-        let plan = (0..total_chunks as usize)
-            .map(|position| {
-                let offset = position as u64 * chunk_size;
-                (position, offset, std::cmp::min(chunk_size, total.saturating_sub(offset)))
-            })
-            .filter(|&(_, offset, len)| offset < total && len > 0);
+        if let Some(tx) = data.progress.as_ref() {
+            // Never await progress: a stuck NDJSON client must not freeze SM.
+            emit_upload_progress(
+                tx,
+                UploadProgressEvent::telegram(
+                    resumed_bytes.min(total),
+                    total,
+                    resumed_chunks.saturating_add(1).min(total_chunks),
+                    total_chunks,
+                ),
+            );
+        }
 
         // Bytes Telegram has accepted across all of this file's chunks, so the
         // client still sees one number that only grows while several chunks are
-        // in flight at once.
-        let sent_total = Arc::new(AtomicU64::new(0));
-        let done_chunks = Arc::new(AtomicU32::new(0));
+        // in flight at once. A resume starts it at what is already stored rather
+        // than at zero, so the bar picks up where the last attempt left it.
+        let sent_total = Arc::new(AtomicU64::new(resumed_bytes));
+        let done_chunks = Arc::new(AtomicU32::new(resumed_chunks));
 
         // Chunks used to go up strictly one after another, which left the
         // uplink idle for the whole round trip of each `sendDocument`. They are
@@ -209,15 +237,15 @@ impl<'d> StorageManagerService<'d> {
         // `&Path` is Copy, so each chunk's future can hold it without the
         // closure taking `data.file_path` away from the code below.
         let spool_path = data.file_path.as_path();
-        let mut done: Vec<(usize, Uuid, FileChunk, ChunkReplica)> =
-            futures::stream::iter(plan.map(|(position, offset, len)| {
+        let done: Vec<Uuid> =
+            futures::stream::iter(plan.into_iter().map(|(position, offset, len)| {
                 let progress = data.progress.clone();
                 let sent_total = Arc::clone(&sent_total);
                 let done_chunks = Arc::clone(&done_chunks);
                 let target = &upload_channels[position % upload_channels.len()];
                 async move {
                     let chunk_no = u32::try_from(position).unwrap_or(u32::MAX).saturating_add(1);
-                    let (chunk, replica) = self
+                    let chunk_id = self
                         .upload_chunk_from_file(
                             storage.id,
                             target.id,
@@ -248,30 +276,32 @@ impl<'d> StorageManagerService<'d> {
                             ),
                         );
                     }
-                    Ok::<_, SarcaError>((position, target.id, chunk, replica))
+                    Ok::<_, SarcaError>(chunk_id)
                 }
             }))
             .buffer_unordered(chunk_concurrency())
             .try_collect::<Vec<_>>()
             .await?;
 
-        // Chunk position is the file's byte order, so the rows have to go in
-        // that order however the uploads finished.
-        done.sort_unstable_by_key(|&(position, ..)| position);
+        // Every position of the file is stored now: the ones this attempt sent,
+        // plus whatever it resumed on top of.
+        chunk_ids.extend(done);
 
-        let mut chunks: Vec<FileChunk> = Vec::with_capacity(done.len());
-        let mut replicas: Vec<ChunkReplica> = Vec::with_capacity(done.len());
-        for (_, uploaded_to, chunk, replica) in done {
-            // Everywhere this chunk is not yet — which now varies per chunk,
-            // since they no longer all start life on the primary.
-            for other in upload_channels.iter().filter(|c| c.id != uploaded_to) {
-                replicas.push(ChunkReplica::new_pending(Uuid::new_v4(), chunk.id, other.id));
-            }
-            chunks.push(chunk);
-            replicas.push(replica);
-        }
+        // Ask for a copy of each chunk on every active channel and let
+        // `insert_batch` ignore the rows that already exist. Which channel a
+        // chunk started on varies per chunk — they are dealt round-robin, and a
+        // resumed file's earlier chunks were dealt by a previous run — so naming
+        // "the others" per chunk is no longer something this loop can know
+        // without asking; the unique index knows, and answers for free.
+        let replicas: Vec<ChunkReplica> = chunk_ids
+            .iter()
+            .flat_map(|&chunk_id| {
+                upload_channels.iter().map(move |channel| {
+                    ChunkReplica::new_pending(Uuid::new_v4(), chunk_id, channel.id)
+                })
+            })
+            .collect();
 
-        self.files_repo.create_chunks_batch(chunks).await?;
         let result = self.replicas_repo.insert_batch(replicas).await;
 
         if result.is_ok() {
@@ -537,6 +567,13 @@ impl<'d> StorageManagerService<'d> {
         .await
     }
 
+    /// Send one chunk to Telegram and record it before returning.
+    ///
+    /// The write is what makes an interrupted upload resumable: a position with
+    /// rows is a position the next attempt skips. It happens here, per chunk,
+    /// rather than in one batch after the last chunk — a batch is nothing at all
+    /// until the whole file is through, which is why an interrupted relay used to
+    /// leave its work unreachable and start over from position 0.
     #[allow(clippy::too_many_arguments)]
     async fn upload_chunk_from_file(
         &self,
@@ -553,7 +590,7 @@ impl<'d> StorageManagerService<'d> {
         total_chunks: u32,
         progress: Option<tokio::sync::mpsc::Sender<UploadProgressEvent>>,
         sent_total: Option<Arc<AtomicU64>>,
-    ) -> SarcaResult<(FileChunk, ChunkReplica)> {
+    ) -> SarcaResult<Uuid> {
         let scheduler = StorageWorkersScheduler::new(self.db, self.rate_limit);
 
         let outcome = TelegramBotApi::new(self.telegram_baseurl, scheduler)
@@ -588,14 +625,121 @@ impl<'d> StorageManagerService<'d> {
             outcome.file_id,
             outcome.message_id,
         );
+        self.files_repo.create_chunk_with_replica(&chunk, &replica).await?;
 
-        Ok((chunk, replica))
+        Ok(chunk_id)
     }
+}
+
+/// The chunks of a `total`-byte file at `chunk_size` that are not in
+/// `stored_positions`, as `(position, offset, len)`, plus the bytes the stored
+/// ones account for.
+///
+/// Positions are stable for a given `(total, chunk_size)` pair — position `n`
+/// is always the same slice of the same file — which is what makes resuming a
+/// partial upload a matter of skipping positions rather than of remembering how
+/// far a byte stream got.
+fn remaining_chunk_plan(
+    total: u64,
+    chunk_size: u64,
+    stored_positions: &HashSet<usize>,
+) -> (Vec<(usize, u64, u64)>, u64) {
+    let chunk_size = chunk_size.max(1);
+    let count = usize::try_from(total.div_ceil(chunk_size)).unwrap_or(usize::MAX);
+
+    let mut remaining = Vec::new();
+    let mut resumed_bytes = 0u64;
+    for position in 0..count {
+        let offset = position as u64 * chunk_size;
+        let len = std::cmp::min(chunk_size, total.saturating_sub(offset));
+        if offset >= total || len == 0 {
+            continue;
+        }
+        if stored_positions.contains(&position) {
+            resumed_bytes = resumed_bytes.saturating_add(len);
+        } else {
+            remaining.push((position, offset, len));
+        }
+    }
+
+    (remaining, resumed_bytes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn positions(plan: &[(usize, u64, u64)]) -> Vec<usize> {
+        plan.iter().map(|&(position, ..)| position).collect()
+    }
+
+    /// Nothing stored yet: the plan is the whole file, cut at chunk boundaries,
+    /// with the last chunk holding the remainder.
+    #[test]
+    fn a_fresh_upload_plans_every_chunk() {
+        let (plan, resumed) = remaining_chunk_plan(250, 100, &HashSet::new());
+
+        assert_eq!(plan, vec![(0, 0, 100), (1, 100, 100), (2, 200, 50)]);
+        assert_eq!(resumed, 0);
+    }
+
+    /// The point of the whole change: an interrupted upload sends what is
+    /// missing, in the original positions, and reports the rest as already done.
+    #[test]
+    fn a_resumed_upload_plans_only_the_gaps() {
+        let stored: HashSet<usize> = [0, 1, 3].into_iter().collect();
+        let (plan, resumed) = remaining_chunk_plan(250, 100, &stored);
+
+        assert_eq!(plan, vec![(2, 200, 50)]);
+        assert_eq!(resumed, 200, "two whole chunks are already in the channel");
+    }
+
+    /// A position keeps its offset whatever else is stored — that identity is
+    /// what makes skipping safe, so pin it against a gap in the middle.
+    #[test]
+    fn offsets_do_not_shift_when_earlier_chunks_are_skipped() {
+        let stored: HashSet<usize> = std::iter::once(0).collect();
+        let (plan, _) = remaining_chunk_plan(1000, 100, &stored);
+
+        assert_eq!(positions(&plan), (1..10).collect::<Vec<_>>());
+        for &(position, offset, len) in &plan {
+            assert_eq!(offset, position as u64 * 100);
+            assert_eq!(len, 100);
+        }
+    }
+
+    /// Everything already there: a relay that gets this far has only the
+    /// bookkeeping left, and must not re-send a byte.
+    #[test]
+    fn a_fully_stored_file_plans_nothing() {
+        let stored: HashSet<usize> = [0, 1, 2].into_iter().collect();
+        let (plan, resumed) = remaining_chunk_plan(250, 100, &stored);
+
+        assert!(plan.is_empty());
+        assert_eq!(resumed, 250);
+    }
+
+    /// An empty file has no chunks at all — the row exists and that is the whole
+    /// upload. A zero-length plan here is what keeps it from being "resumed"
+    /// into an infinite nothing.
+    #[test]
+    fn an_empty_file_plans_nothing() {
+        let (plan, resumed) = remaining_chunk_plan(0, 100, &HashSet::new());
+
+        assert!(plan.is_empty());
+        assert_eq!(resumed, 0);
+    }
+
+    /// Positions past the end of the file cannot be stored, so a stale set that
+    /// mentions them must not be able to shorten the plan or inflate progress.
+    #[test]
+    fn positions_beyond_the_file_are_ignored() {
+        let stored: HashSet<usize> = [7, 9].into_iter().collect();
+        let (plan, resumed) = remaining_chunk_plan(150, 100, &stored);
+
+        assert_eq!(positions(&plan), vec![0, 1]);
+        assert_eq!(resumed, 0);
+    }
 
     #[test]
     fn resolve_preview_bytes_prefers_precomputed_video_bytes() {

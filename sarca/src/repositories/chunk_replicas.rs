@@ -44,6 +44,12 @@ impl<'d> ChunkReplicasRepository<'d> {
         }
     }
 
+    /// Insert replicas, leaving any that already exist alone.
+    ///
+    /// `OR IGNORE` against `UNIQUE (chunk_id, channel_id)`: a resumed upload asks
+    /// for the replication fan-out of *every* chunk it ends with, including the
+    /// ones an earlier attempt stored, and the copy each of those already has on
+    /// the channel it first landed on must not be demoted back to `pending`.
     pub async fn insert_batch(&self, replicas: Vec<ChunkReplica>) -> SarcaResult<()> {
         if replicas.is_empty() {
             return Ok(());
@@ -51,7 +57,7 @@ impl<'d> ChunkReplicasRepository<'d> {
 
         QueryBuilder::new(
             format!(
-                "INSERT INTO {TABLE} (id, chunk_id, channel_id, telegram_file_id, \
+                "INSERT OR IGNORE INTO {TABLE} (id, chunk_id, channel_id, telegram_file_id, \
                  telegram_message_id, status) "
             )
             .as_str(),

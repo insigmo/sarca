@@ -354,6 +354,23 @@ impl FilesRouter {
 
         let chunk_size_bytes =
             i64::try_from(state.config.default_chunk_size_bytes()).unwrap_or(i64::MAX);
+
+        // A resumed upload is matched to the row it is resuming by content hash:
+        // the hash is what says position n of these bytes is position n of the
+        // half-relayed row, and so what makes skipping the stored positions safe.
+        //
+        // The sync client sends one. A browser does not — and a browser is
+        // exactly where a large upload gets picked by hand a second time after a
+        // failure — so hash the spool here when nobody else did. Only for a file
+        // long enough to be cut into more than one chunk: a single-chunk file has
+        // no partial progress to resume, and the read is seconds of disk on a
+        // slow box.
+        let content_hash = match content_hash {
+            Some(hash) => Some(hash),
+            None if file_size > chunk_size_bytes => hash_spooled_upload(&tmp_path).await,
+            None => None,
+        };
+
         let in_file = InFile::new(path, file_size, storage_id)
             .with_chunk_size(chunk_size_bytes)
             .with_source_times(source_created_at, source_mtime)
@@ -1610,6 +1627,50 @@ const MAX_DERIVED_THUMB_SOURCE: usize = 32 * 1024 * 1024;
 /// left at its 128px-era value when the edge went to 1920, which dropped the
 /// tile for every photo detailed enough to clear it, with nothing logged.
 pub(crate) const MAX_CLIENT_THUMB_BYTES: usize = 512 * 1024;
+
+/// `sha256:<hex>` of a spooled upload, in the same shape the sync client sends,
+/// so a hash computed here and a hash sent by a client mean the same thing to
+/// the resume check in `upload_anyway_from_path_with_progress`.
+///
+/// Best-effort: a file that cannot be read back just goes up without a hash and
+/// behaves as uploads did before resuming existed.
+async fn hash_spooled_upload(path: &Path) -> Option<String> {
+    use std::io::Read;
+
+    use sha2::{Digest, Sha256};
+
+    let path = path.to_path_buf();
+    let hashed = tokio::task::spawn_blocking(move || -> io::Result<String> {
+        let mut file = std::fs::File::open(&path)?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 1024 * 1024];
+        loop {
+            let read = file.read(&mut buf)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buf[..read]);
+        }
+        Ok(hasher.finalize().iter().fold(String::from("sha256:"), |mut acc, byte| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{byte:02x}");
+            acc
+        }))
+    })
+    .await;
+
+    match hashed {
+        Ok(Ok(hash)) => Some(hash),
+        Ok(Err(e)) => {
+            tracing::warn!("could not hash spooled upload: {e}");
+            None
+        },
+        Err(e) => {
+            tracing::warn!("hashing task for a spooled upload failed: {e}");
+            None
+        },
+    }
+}
 
 fn is_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 3 && bytes[0..3] == [0xFF, 0xD8, 0xFF]

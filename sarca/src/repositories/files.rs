@@ -5,9 +5,13 @@ use sqlx::{QueryBuilder, SqlitePool};
 use uuid::Uuid;
 
 use crate::{
-    common::db::{errors::map_not_found, sql::push_uuid_list},
+    common::{
+        db::{errors::map_not_found, sql::push_uuid_list},
+        types::Position,
+    },
     errors::{SarcaError, SarcaResult},
     models::{
+        chunk_replicas::{ChunkReplica, REPLICA_STATUS_UPLOADED},
         file_chunks::{FileChunk, FileChunkWithReplica},
         files::{FSElement, File, InFile, SearchFSElement},
     },
@@ -324,6 +328,99 @@ impl<'d> FilesRepository<'d> {
             .map_err(|_| SarcaError::Unknown)?;
 
         Ok(())
+    }
+
+    /// Record one chunk and the replica Telegram just accepted for it, in a single
+    /// transaction.
+    ///
+    /// Chunk rows used to be written as one batch after the last chunk was away,
+    /// which meant an interrupted relay left nothing behind and the next attempt
+    /// re-sent the whole file. Writing each chunk as it lands is what lets a
+    /// later attempt skip the positions already stored — so the two rows have to
+    /// arrive together: a chunk row without its replica is a position that looks
+    /// stored but can never be read back.
+    pub async fn create_chunk_with_replica(
+        &self,
+        chunk: &FileChunk,
+        replica: &ChunkReplica,
+    ) -> SarcaResult<()> {
+        let mut transaction = self.db.begin().await.map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+
+        sqlx::query(
+            format!("INSERT INTO {CHUNKS_TABLE} (id, file_id, position) VALUES ($1, $2, $3)")
+                .as_str(),
+        )
+        .bind(chunk.id)
+        .bind(chunk.file_id)
+        .bind(chunk.position)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+
+        sqlx::query(
+            "INSERT INTO chunk_replicas (
+                 id, chunk_id, channel_id, telegram_file_id, telegram_message_id, status
+             ) VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(replica.id)
+        .bind(replica.chunk_id)
+        .bind(replica.channel_id)
+        .bind(&replica.telegram_file_id)
+        .bind(replica.telegram_message_id)
+        .bind(&replica.status)
+        .execute(&mut *transaction)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
+
+        transaction.commit().await.map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })
+    }
+
+    /// Positions of `file_id` that are already stored — each with its chunk id — so a
+    /// resumed relay can skip them.
+    ///
+    /// "Stored" means the chunk row has a replica that actually reached Telegram.
+    /// A `pending` replica is a copy replication still owes another channel, not
+    /// bytes anybody can read, so a position with only those is not done.
+    pub async fn list_stored_chunk_positions(
+        &self,
+        file_id: Uuid,
+    ) -> SarcaResult<Vec<(Position, Uuid)>> {
+        sqlx::query_as(
+            format!(
+                "
+                SELECT fc.position, fc.id
+                FROM {CHUNKS_TABLE} fc
+                WHERE fc.file_id = $1
+                  AND EXISTS (
+                      SELECT 1 FROM chunk_replicas cr
+                       WHERE cr.chunk_id = fc.id
+                         AND cr.status = '{REPLICA_STATUS_UPLOADED}'
+                         AND cr.telegram_file_id IS NOT NULL
+                  )
+                ORDER BY fc.position
+                "
+            )
+            .as_str(),
+        )
+        .bind(file_id)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })
     }
 
     /// Chunks of `file_id` that have an `uploaded` replica on `channel_id`, ordered by position.
@@ -1463,14 +1560,20 @@ impl<'d> FilesRepository<'d> {
         })
     }
 
-    /// Ids of unfinished live uploads (for refcount-aware hard purge).
+    /// Ids of unfinished live uploads with nothing stored behind them (for
+    /// refcount-aware hard purge).
+    ///
+    /// A row that already has chunks is left alone: those chunks are in the
+    /// channel, and the next attempt at the same file resumes into them instead
+    /// of relaying it from position 0. See `purge_interrupted_uploads`.
     pub async fn list_stale_upload_ids(&self) -> SarcaResult<Vec<Uuid>> {
         let rows: Vec<(Uuid,)> = sqlx::query_as(&format!(
             "
-            SELECT id FROM {FILES_TABLE}
+            SELECT id FROM {FILES_TABLE} f
             WHERE is_uploaded = false
               AND deleted_at IS NULL
               AND path NOT LIKE '%/'
+              AND NOT EXISTS (SELECT 1 FROM {CHUNKS_TABLE} WHERE {CHUNKS_TABLE}.file_id = f.id)
             "
         ))
         .fetch_all(self.db)
@@ -1540,6 +1643,201 @@ mod concurrency_tests {
             assert!(paths.insert(file.path.clone()), "duplicate path assigned: {}", file.path);
         }
         assert_eq!(paths.len(), 8, "every concurrent upload must land on a distinct path");
+    }
+}
+
+#[cfg(test)]
+mod resume_tests {
+    use super::*;
+    use crate::models::chunk_replicas::ChunkReplica;
+
+    async fn test_pool() -> SqlitePool {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sarca.sqlite");
+        let pool = crate::common::db::pool::get_pool(
+            path.to_str().unwrap(),
+            8,
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        crate::startup::init_db(&pool).await;
+        // Keep the tempdir (and its backing file) alive for the pool's lifetime.
+        std::mem::forget(dir);
+        pool
+    }
+
+    /// A storage with one channel to put chunks in.
+    async fn insert_storage_with_channel(db: &SqlitePool) -> (Uuid, Uuid) {
+        let storage_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO storages (id, name, primary_position) VALUES ($1, $2, 1)")
+            .bind(storage_id)
+            .bind("test storage")
+            .execute(db)
+            .await
+            .unwrap();
+
+        let channel_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO storage_channels (id, storage_id, position, chat_id, name)
+             VALUES ($1, $2, 1, $3, 'test channel')",
+        )
+        .bind(channel_id)
+        .bind(storage_id)
+        .bind(unique_chat_id())
+        .execute(db)
+        .await
+        .unwrap();
+
+        (storage_id, channel_id)
+    }
+
+    /// `chat_id` is UNIQUE across the table; each test gets its own database,
+    /// but a fresh number keeps that true even if they ever share one.
+    fn unique_chat_id() -> i64 {
+        i64::try_from(Uuid::new_v4().as_u128() % 1_000_000).unwrap_or(1)
+    }
+
+    async fn unfinished_file(db: &SqlitePool, storage_id: Uuid, size: i64) -> File {
+        FilesRepository::new(db)
+            .create_file_anyway(
+                InFile::new("clip.mp4".to_owned(), size, storage_id)
+                    .with_chunk_size(20)
+                    .with_content_hash(Some("sha256:abc".to_owned())),
+            )
+            .await
+            .unwrap()
+    }
+
+    async fn store_chunk(db: &SqlitePool, file_id: Uuid, channel_id: Uuid, position: Position) {
+        let chunk = FileChunk::new(Uuid::new_v4(), file_id, position);
+        let replica = ChunkReplica::new_uploaded(
+            Uuid::new_v4(),
+            chunk.id,
+            channel_id,
+            format!("telegram-file-{position}"),
+            i64::from(position) + 1,
+        );
+        FilesRepository::new(db).create_chunk_with_replica(&chunk, &replica).await.unwrap();
+    }
+
+    /// The question a resumed relay asks: which positions are already in a
+    /// channel? Only the ones whose replica actually got there.
+    #[tokio::test]
+    async fn stored_positions_are_the_ones_telegram_took() {
+        let db = test_pool().await;
+        let (storage_id, channel_id) = insert_storage_with_channel(&db).await;
+        let file = unfinished_file(&db, storage_id, 100).await;
+        let repo = FilesRepository::new(&db);
+
+        store_chunk(&db, file.id, channel_id, 0).await;
+        store_chunk(&db, file.id, channel_id, 2).await;
+
+        // A position replication still owes a channel is not a position anyone
+        // can read back, so it must not be skipped on resume.
+        let pending_chunk = FileChunk::new(Uuid::new_v4(), file.id, 3);
+        let pending_replica =
+            ChunkReplica::new_pending(Uuid::new_v4(), pending_chunk.id, channel_id);
+        repo.create_chunk_with_replica(&pending_chunk, &pending_replica).await.unwrap();
+
+        let stored: Vec<Position> = repo
+            .list_stored_chunk_positions(file.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|(position, _)| position)
+            .collect();
+
+        assert_eq!(stored, vec![0, 2]);
+    }
+
+    /// Every chunk row carries a replica, written in the same transaction. A
+    /// chunk row on its own is a position that looks stored and can never be
+    /// read back, which would silently lose that slice of the file on resume.
+    #[tokio::test]
+    async fn a_chunk_and_its_replica_are_written_together() {
+        let db = test_pool().await;
+        let (storage_id, channel_id) = insert_storage_with_channel(&db).await;
+        let file = unfinished_file(&db, storage_id, 100).await;
+        let repo = FilesRepository::new(&db);
+
+        let chunk = FileChunk::new(Uuid::new_v4(), file.id, 0);
+        // A channel that does not exist fails the replica insert's foreign key.
+        let replica = ChunkReplica::new_uploaded(
+            Uuid::new_v4(),
+            chunk.id,
+            Uuid::new_v4(),
+            "telegram-file".to_owned(),
+            1,
+        );
+        assert!(repo.create_chunk_with_replica(&chunk, &replica).await.is_err());
+
+        let orphans: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM file_chunks WHERE file_id = $1")
+                .bind(file.id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert_eq!(orphans, 0, "a failed replica insert must take its chunk row with it");
+
+        // The good path still works on the same position afterwards.
+        store_chunk(&db, file.id, channel_id, 0).await;
+        assert_eq!(repo.list_stored_chunk_positions(file.id).await.unwrap().len(), 1);
+    }
+
+    /// Resuming means "send the positions that are missing", which is only sound
+    /// while a position cannot be stored twice.
+    #[tokio::test]
+    async fn a_position_cannot_be_stored_twice() {
+        let db = test_pool().await;
+        let (storage_id, channel_id) = insert_storage_with_channel(&db).await;
+        let file = unfinished_file(&db, storage_id, 100).await;
+
+        store_chunk(&db, file.id, channel_id, 1).await;
+
+        let duplicate = FileChunk::new(Uuid::new_v4(), file.id, 1);
+        let replica = ChunkReplica::new_uploaded(
+            Uuid::new_v4(),
+            duplicate.id,
+            channel_id,
+            "telegram-file-again".to_owned(),
+            99,
+        );
+        assert!(
+            FilesRepository::new(&db)
+                .create_chunk_with_replica(&duplicate, &replica)
+                .await
+                .is_err(),
+            "a second row for position 1 must be refused"
+        );
+    }
+
+    /// Startup cleanup is what used to make a restart mid-relay cost the whole
+    /// file. A row with chunks behind it is now left for the next attempt to
+    /// resume into; one with nothing behind it is still cleared, so its path
+    /// does not sit there occupied by an upload that will never continue.
+    #[tokio::test]
+    async fn stale_cleanup_keeps_what_can_be_resumed() {
+        let db = test_pool().await;
+        let (storage_id, channel_id) = insert_storage_with_channel(&db).await;
+        let repo = FilesRepository::new(&db);
+
+        let partial = unfinished_file(&db, storage_id, 100).await;
+        store_chunk(&db, partial.id, channel_id, 0).await;
+
+        let untouched = repo
+            .create_file_anyway(
+                InFile::new("never-started.mp4".to_owned(), 100, storage_id).with_chunk_size(20),
+            )
+            .await
+            .unwrap();
+
+        let stale = repo.list_stale_upload_ids().await.unwrap();
+        assert!(stale.contains(&untouched.id), "a row with no chunks has nothing to resume");
+        assert!(
+            !stale.contains(&partial.id),
+            "a row with chunks in a channel must survive the restart that interrupted it"
+        );
     }
 }
 

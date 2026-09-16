@@ -260,13 +260,40 @@ impl<'d> FilesService<'d> {
                         }
                     }
 
-                    // Same bytes at the same path, but the previous attempt never
-                    // reached set_as_uploaded and never ran the failure purge either
-                    // — the client's connection dropped mid-relay, so this handler
-                    // was cancelled before its cleanup. That abandoned row still
-                    // holds the path, which would push this retry to "name (1).ext".
-                    // Purge it (refcount GC also drops whatever chunks it managed to
-                    // store) so the retry reclaims the original name.
+                    // Same bytes at the same path, and the previous attempt is
+                    // over without having finished: it never reached
+                    // set_as_uploaded and nobody owns it now. Its chunks are
+                    // still in the channel and still recorded, so hand this
+                    // attempt the same row and let the relay send only the
+                    // positions that are missing.
+                    //
+                    // This used to purge instead, which was the only way to stop
+                    // the abandoned row's path pushing the retry to
+                    // "name (1).ext" — and it threw away however much of a large
+                    // file had already gone up. The row is safe to reuse because
+                    // the content hash matches, so position n means the same
+                    // bytes it meant last time.
+                    if resumable(&existing, file_size) {
+                        tracing::info!(
+                            "resuming interrupted upload {} at {}",
+                            existing.id,
+                            existing.path
+                        );
+                        return self
+                            .upload_from_path(
+                                existing,
+                                file_path,
+                                file_size,
+                                progress,
+                                client_thumb,
+                            )
+                            .await;
+                    }
+
+                    // Not resumable — a row whose size or chunking no longer
+                    // matches what is being sent, so its stored positions are
+                    // not this file's positions. Purge it (refcount GC also
+                    // drops whatever chunks it managed to store) and start over.
                     //
                     // If the earlier attempt is somehow still running, it fails at
                     // set_as_uploaded and purges its own (already gone) id — the same
@@ -362,8 +389,34 @@ impl<'d> FilesService<'d> {
         if let Err(e) = outcome {
             tracing::error!("{e}");
 
-            // fallback: hard-purge with refcount GC (may have partial Telegram uploads)
-            let _ = purge_file_ids(self.db, self.base_url, self.rate_limit, &[file.id]).await;
+            // Keep whatever reached a channel. The chunks this relay did store
+            // are recorded, the row still names the file they belong to, and the
+            // next attempt at the same bytes resumes into them instead of
+            // sending the whole file again — which for a large file over a slow
+            // uplink is the difference between eventually finishing and never
+            // finishing. They stay in the channel until the file is deleted.
+            //
+            // Nothing stored means nothing to resume, so that case purges as it
+            // always did rather than leaving a row that only occupies a path.
+            let stored = match self.repo.list_stored_chunk_positions(file.id).await {
+                Ok(stored) => stored.len(),
+                Err(e) => {
+                    // Unreadable is not "empty": purging on a database hiccup is
+                    // exactly the destructive half of the old behaviour.
+                    tracing::warn!("could not count stored chunks of {}: {e}", file.id);
+                    1
+                },
+            };
+
+            if stored == 0 {
+                // fallback: hard-purge with refcount GC (may have partial Telegram uploads)
+                let _ = purge_file_ids(self.db, self.base_url, self.rate_limit, &[file.id]).await;
+            } else {
+                tracing::warn!(
+                    "upload of {} interrupted with {stored} chunk(s) stored; the next attempt                      will resume",
+                    file.path
+                );
+            }
 
             return Err(e);
         }
@@ -781,6 +834,71 @@ async fn live_conflict_at(
         return Ok(true);
     }
     Ok(false)
+}
+
+/// Whether an unfinished row can be handed to a fresh attempt at the same file
+/// instead of being purged and replaced.
+///
+/// The caller has already established that this is the same content hash at the
+/// same path, which is what makes position `n` mean the same bytes across the two
+/// attempts. What is checked here is that the row's own chunking still describes
+/// those bytes: the same total size, and a chunk size to cut it by. A row failing
+/// either is not a partial copy of this file, so its stored positions are not
+/// this file's positions.
+fn resumable(existing: &File, incoming_size: i64) -> bool {
+    !existing.is_uploaded
+        && existing.deleted_at.is_none()
+        && !existing.path.ends_with('/')
+        && existing.size == incoming_size
+        && existing.chunk_size_bytes.is_some_and(|n| n > 0)
+}
+
+#[cfg(test)]
+mod resume_eligibility_tests {
+    use super::{File, resumable};
+
+    fn partial(size: i64) -> File {
+        File::new(uuid::Uuid::new_v4(), "video.mp4".to_owned(), size, uuid::Uuid::new_v4(), false, Some(20 * 1024 * 1024))
+    }
+
+    #[test]
+    fn an_unfinished_row_for_the_same_bytes_is_resumed() {
+        assert!(resumable(&partial(1_000), 1_000));
+    }
+
+    /// The whole point: a finished file is never re-relayed, resume or not.
+    #[test]
+    fn a_finished_row_is_not_resumed() {
+        let mut file = partial(1_000);
+        file.is_uploaded = true;
+        assert!(!resumable(&file, 1_000));
+    }
+
+    /// Same path and same hash, different length — the hash says the bytes match,
+    /// so a row that disagrees about the size is describing something else, and
+    /// its positions cannot be trusted to line up.
+    #[test]
+    fn a_row_of_another_size_is_not_resumed() {
+        assert!(!resumable(&partial(1_000), 2_000));
+    }
+
+    /// Pre-feature and folder rows carry no chunk size, so nothing says where
+    /// their positions were cut.
+    #[test]
+    fn a_row_without_a_chunk_size_is_not_resumed() {
+        let mut file = partial(1_000);
+        file.chunk_size_bytes = None;
+        assert!(!resumable(&file, 1_000));
+        file.chunk_size_bytes = Some(0);
+        assert!(!resumable(&file, 1_000));
+    }
+
+    #[test]
+    fn a_trashed_row_is_not_resumed() {
+        let mut file = partial(1_000);
+        file.deleted_at = Some(chrono::Utc::now());
+        assert!(!resumable(&file, 1_000));
+    }
 }
 
 #[cfg(test)]
