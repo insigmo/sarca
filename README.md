@@ -2,19 +2,19 @@
 <p align="center">
   <img src="logo.svg" width="120" alt="Sarca logo">
 </p>
-<h1 align="center">🗿 Sarca</h1>
+<h1 align="center">🪿 Sarca</h1>
 
-<p align="center"><b>Cloud storage. Zero bill. Telegram pay, not you.</b></p>
+<p align="center"><b>Cloud storage. Zero bill. HONK. Telegram pays, not you.</b></p>
 
 <p align="center">
   <a href="https://github.com/insigmo/sarca/actions/workflows/release.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/insigmo/sarca/release.yml?style=flat-square&logo=github"></a>
   <a href="https://github.com/insigmo/sarca/pkgs/container/sarca"><img alt="GHCR" src="https://img.shields.io/badge/ghcr.io-sarca-14635C?style=flat-square&logo=docker"></a>
 </p>
 
-<p>Files go in. Files get chopped small.</p>
-<p>Small file live in Telegram channel, free, forever.</p>
-<p>Metadata stay home, in SQLite, on your box.</p>
-<p>No S3 bill. No disk bill. Just tribe's own server and Telegram's good will.</p>
+<p>Files waddle in. Files get pecked into small pieces.</p>
+<p>The pieces fly south to a Telegram channel and nest there, free, for as many winters as you like.</p>
+<p>Metadata stays by the home pond, in SQLite, on your box.</p>
+<p>No S3 bill. No disk bill. Just your own flock's server and Telegram's generous bread.</p>
 
 ## Why Sarca, not other solutions?
 | Feature                | **Sarca** | Nextcloud | ownCloud | Other Telegram-storage scripts |
@@ -30,7 +30,7 @@
 | Background sync client | ✅        | ✅        | ✅       | ❌                             |
 | Multi-user accounts    | ✅        | ✅        | ✅       | ❌                             |
 
-Sarca small. Sarca fast. Sarca no ask money.
+Sarca is light as a feather, fast as a V-formation, and never asks you for bread money. Honk.
 
 ## Clients
 
@@ -48,10 +48,10 @@ Latest release assets ([releases/latest](https://github.com/insigmo/sarca/releas
 
 Open the app, enter your server URL, sign in. See [`client/`](client/) for building from source.
 
-No iOS build ships today. No money for developer account. 
+No iOS build ships today: the Apple developer account costs more bread than this goose has.
 The iOS job in CI is disabled (`if: false` in `client.yml`).
 
-## Grab rock, install servers
+## Waddle in, install the server
 
 **Linux / macOS**
 
@@ -59,18 +59,18 @@ The iOS job in CI is disabled (`if: false` in `client.yml`).
 curl -fsSL https://raw.githubusercontent.com/insigmo/sarca/refs/heads/master/install.sh | bash
 ```
 
-Binary land in `~/.local/share/sarca`. Database and certs sit in `work/` next to it. Simple.
+The binary lands in `~/.local/share/sarca`. The database and certs nest in `work/` right next to it. Honk, done.
 
-**Docker, prefer container**
+**Docker, for geese who prefer a container**
 
 ```sh
 docker run -d --name sarca -p 8000:8000 -v sarca-data:/app/work ghcr.io/insigmo/sarca:latest
 ```
 
-Open `https://your-domain` when `TLS_HOSTNAME` set. Not set? 
-Server sniff own public IP at startup, serve HTTPS on that. 
-No reachable address, no worry — fall to `http://127.0.0.1:8000`. 
-Watch fire: `docker logs -f sarca`.
+Open `https://your-domain` when `TLS_HOSTNAME` is set. Not set?
+The server looks up its own public IP at startup, like a goose checking the sky, and serves HTTPS on that.
+No reachable address? No flapping needed — it settles on `http://127.0.0.1:8000`.
+Keep a beady eye on it: `docker logs -f sarca`.
 
 ## Usage
 
@@ -80,7 +80,7 @@ Watch fire: `docker logs -f sarca`.
    - create private(s) channel(s) (1 necessary and 2 optional)
    - add as admin a bot to the channel(s)
 
-## Keep it new
+## Moult on schedule
 
 **Settings -> About** shows what the client and the server are running, with a
 **Check for updates** button beside each. It reads the newest release from
@@ -96,7 +96,7 @@ Updating the client downloads the installer for your platform and starts it --
 the `.exe`, `.dmg` or `.deb` does the rest, including asking for the rights an
 install needs. On Android the APK is downloaded and the system takes over.
 
-## Look inside
+## Look under the wing
 
 **Settings -> Logs** (native client) keeps a log file on the device, and nowhere
 else. **Advanced logging** switches it from `INFO` to `DEBUG`, which adds the
@@ -104,7 +104,7 @@ sync engine's own detail: what each scan found, what the server said about each
 file, and why an upload was skipped. Turn it on, reproduce the problem, then
 **Export logs**. Leave it off otherwise -- it is verbose by design.
 
-## Move the rock
+## Migrate the nest
 
 **Settings -> General -> Backup** (admin only) downloads one `.sarcabak` file:
 settings, storages with their bots and channels, users and access, and the whole
@@ -118,4 +118,4 @@ copied to `WORK_DIR/backups/pre-restore-*.sqlite` first (last three kept).
 
 ## License
 
-See `LICENSE`. Read before fire spread.
+See `LICENSE`. Read it before you honk at anyone.
