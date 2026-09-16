@@ -2,8 +2,7 @@
 <p align="center">
   <img src="logo.svg" width="120" alt="Sarca logo">
 </p>
-<h1 align="center">🪿 Sarca</h1>
-
+<h1 align="center">Sarca</h1>
 <p align="center"><b>Cloud storage. Zero bill. HONK. Telegram pays, not you.</b></p>
 
 <p align="center">

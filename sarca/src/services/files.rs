@@ -858,7 +858,14 @@ mod resume_eligibility_tests {
     use super::{File, resumable};
 
     fn partial(size: i64) -> File {
-        File::new(uuid::Uuid::new_v4(), "video.mp4".to_owned(), size, uuid::Uuid::new_v4(), false, Some(20 * 1024 * 1024))
+        File::new(
+            uuid::Uuid::new_v4(),
+            "video.mp4".to_owned(),
+            size,
+            uuid::Uuid::new_v4(),
+            false,
+            Some(20 * 1024 * 1024),
+        )
     }
 
     #[test]
