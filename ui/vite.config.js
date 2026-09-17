@@ -2,8 +2,11 @@ import { defineConfig } from 'vite'
 import solidPlugin from 'vite-plugin-solid'
 import suidPlugin from '@suid/vite-plugin'
 
-export default defineConfig({
-	plugins: [suidPlugin(), solidPlugin()],
+export default defineConfig(({ mode }) => ({
+	// `hot` pulls in solid-refresh, which vitest has no use for and which
+	// blows up under the Vite 7 module runner on Windows ("The argument
+	// 'filename' must be a file URL object ... Received 'file:///@solid-refresh'").
+	plugins: [suidPlugin(), solidPlugin({ hot: mode !== 'test' })],
 	server: {
 		port: 3000,
 		proxy: {
@@ -32,4 +35,4 @@ export default defineConfig({
 		setupFiles: './src/test/setup.js',
 		include: ['src/**/*.test.{js,jsx}'],
 	},
-})
+}))

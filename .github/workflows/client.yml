@@ -173,6 +173,13 @@ jobs:
           java-version: 17
 
       - uses: android-actions/setup-android@v4
+        with:
+          # The action's own default used to include the legacy `tools`
+          # package, which Google has removed from the SDK repository --
+          # sdkmanager then exits 1 with "Failed to find package 'tools'".
+          # Pin the list here so this job never rides on that default again;
+          # everything else it needs is installed by the step below.
+          packages: platform-tools
 
       - name: Install Android NDK / SDK packages
         run: |

@@ -1,4 +1,4 @@
-import { render, fireEvent } from '@solidjs/testing-library'
+import { render, fireEvent, waitFor } from '@solidjs/testing-library'
 import { Router, Routes, Route, useLocation } from '@solidjs/router'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -169,9 +169,9 @@ describe('Login', () => {
 
 		const button = await findByRole('button', { name: /disconnect|Отключиться/i })
 		fireEvent.click(button)
-		for (let i = 0; i < 10; i++) await Promise.resolve()
-
-		expect(nativeInvoke).toHaveBeenCalledWith('disconnect')
+		// The handler reaches the bridge through a dynamic import, which needs
+		// more than a few microtasks to settle -- poll instead of spinning.
+		await waitFor(() => expect(nativeInvoke).toHaveBeenCalledWith('disconnect'))
 		// The click must not submit the sign-in form.
 		expect(login).not.toHaveBeenCalled()
 		expect(container.querySelector('form')).toBeInTheDocument()
