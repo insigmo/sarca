@@ -12,8 +12,8 @@ services:
     environment:
       WORK_DIR: /work
     ports:
-      - "8443:443"
-      - "8443:443/udp"
+      - "4321:443"
+      - "4321:443/udp"
       # Optional. If you don't have caddy or nginx
       # - "80:80"
     env_file:
