@@ -152,14 +152,54 @@ impl From<SarcaError> for (StatusCode, String) {
 
 impl From<reqwest::Error> for SarcaError {
     fn from(e: reqwest::Error) -> Self {
+        let e = redact_url(e);
         match e.status() {
             Some(e) if e.is_client_error() => Self::TelegramAPIError(e.to_string()),
             Some(_) | None => {
-                tracing::error!("{e}");
+                tracing::error!("{}", error_chain(&e));
                 Self::Unknown
             },
         }
     }
+}
+
+/// Blank out the bot token in the URL a `reqwest::Error` carries.
+///
+/// A send error's `Display` ends in `for url (...)`, and every Telegram URL
+/// has the token as a path segment — `/bot<id>:<secret>/sendDocument`,
+/// `/file/bot<id>:<secret>/<path>` — so logging one as-is publishes the bot.
+/// Redacting the error itself, rather than the text it prints, covers every
+/// later `{e}` and does not depend on the token looking like a token: the
+/// setup wizard sends whatever the user pasted. The rest of the URL stays, as
+/// it is what says which call failed.
+pub fn redact_url(mut e: reqwest::Error) -> reqwest::Error {
+    if let Some(url) = e.url_mut() {
+        let path = url
+            .path()
+            .split('/')
+            .map(|segment| if segment.starts_with("bot") { "bot***" } else { segment })
+            .collect::<Vec<_>>()
+            .join("/");
+        url.set_path(&path);
+    }
+    e
+}
+
+/// An error followed by every `source()` beneath it, `: `-joined.
+///
+/// reqwest's own `Display` stops at "error sending request for url (...)";
+/// whether that was a reset, a timeout or a DNS failure lives only in the
+/// sources, and without them a failing uplink cannot be told apart from
+/// anything else.
+pub fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut text = e.to_string();
+    let mut source = e.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
 }
 
 pub type SarcaResult<T> = Result<T, SarcaError>;
@@ -180,5 +220,77 @@ mod tests {
     fn a_bad_credential_still_answers_401() {
         let (status, _): (StatusCode, String) = SarcaError::NotAuthenticated.into();
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// A `tracing` writer that keeps what was written, for asserting on logs.
+    #[derive(Clone, Default)]
+    struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for Captured {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A send that fails the way a relay chunk does on a dropped uplink:
+    /// the peer takes the connection and hangs up.
+    async fn failed_send(path: &str) -> reqwest::Error {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((socket, _)) = listener.accept().await {
+                drop(socket);
+            }
+        });
+        reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .unwrap()
+            .post(format!("http://{addr}{path}"))
+            .send()
+            .await
+            .expect_err("the peer hangs up, so the send must fail")
+    }
+
+    /// The line `sarca::errors` logs when a relay chunk runs out of retries
+    /// used to read `error sending request for url (https://api.telegram.org/
+    /// bot<token>/sendDocument)` — the whole bot, in `docker logs`.
+    #[tokio::test]
+    async fn a_failed_send_never_logs_the_bot_token() {
+        let e = failed_send("/bot123:ABC/sendDocument").await;
+        // The premise: unredacted, reqwest does print it.
+        assert!(e.to_string().contains("bot123:ABC"), "{e}");
+
+        let log = Captured::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer({
+                let log = log.clone();
+                move || log.clone()
+            })
+            .with_ansi(false)
+            .finish();
+        let converted = tracing::subscriber::with_default(subscriber, || SarcaError::from(e));
+        let log = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+
+        for text in [&log, &converted.to_string()] {
+            assert!(!text.contains("bot123") && !text.contains("ABC"), "{text}");
+        }
+        // Still says which call failed, and why.
+        assert!(log.contains("/bot***/sendDocument"), "{log}");
+        assert!(log.contains("error sending request") && log.contains("): "), "{log}");
+    }
+
+    #[tokio::test]
+    async fn redaction_takes_only_the_token_segment() {
+        let e = failed_send("/file/bot42:SECRET/documents/file_7.bin?x=1").await;
+        let text = redact_url(e).to_string();
+        assert!(!text.contains("SECRET") && !text.contains("42:"), "{text}");
+        assert!(text.contains("/file/bot***/documents/file_7.bin?x=1"), "{text}");
     }
 }
