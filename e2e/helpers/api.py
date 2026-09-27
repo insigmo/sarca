@@ -144,12 +144,14 @@ class SarcaClient:
         content_hash: str | None = None,
         mtime_ms: int | None = None,
         thumb: bytes | None = None,
+        on_conflict: str | None = None,
         timeout: float = 180.0,
     ) -> UploadResult:
         """Upload one file and drain the NDJSON progress stream.
 
         `thumb` mimics the web client, which builds the 128px grid tile itself
         and ships it alongside the original so the server never decodes it.
+        `on_conflict="replace"` is what the sync client sends.
         """
         files = {"file": (filename, data, content_type)}
         if thumb is not None:
@@ -159,6 +161,8 @@ class SarcaClient:
             form["content_hash"] = content_hash
         if mtime_ms is not None:
             form["mtime"] = str(mtime_ms)
+        if on_conflict is not None:
+            form["on_conflict"] = on_conflict
 
         events: list[dict[str, Any]] = []
         started = time.time()

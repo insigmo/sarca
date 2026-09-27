@@ -90,16 +90,16 @@ def test_new_photo_is_picked_up_by_the_next_pass(
     assert "IMG_0003.jpg" in names
 
 
-def test_edited_photo_is_re_uploaded_beside_the_original(
-    sarca: SarcaClient, storage: str, gallery, tmp_path
+def test_edited_photo_replaces_the_original(
+    sarca: SarcaClient, storage: str, gallery, tmp_path, mock
 ) -> None:
-    """Editing a synced photo sends it again.
+    """Editing a synced photo sends it again, and the path holds the new bytes.
 
-    The server never overwrites an existing path (`create_file_anyway` de-duplicates
-    like a browser download), so the new bytes land next to the old ones as
-    "IMG_0001 (1).jpg" and the first upload stays untouched.
+    It used to land beside the original as "IMG_0001 (1).jpg" while the path kept
+    the old bytes. A file whose upload the client only handed off then never
+    matched on the next pass and was sent again, forever, one "(N)" copy each
+    time. The previous version is not dropped: it waits in the trash.
     """
-    original = (gallery / "IMG_0001.jpg").read_bytes()
     sync(sarca, storage, tmp_path, gallery, remote_root="Camera")
     edited = media.big_photo(900, 700)
     (gallery / "IMG_0001.jpg").write_bytes(edited)
@@ -108,10 +108,23 @@ def test_edited_photo_is_re_uploaded_beside_the_original(
     assert not run.errors, run.errors
     assert run.pending == 1, run.status
 
+    sarca.wait_for_file(storage, "Camera/IMG_0001.jpg")
     names = {e["name"] for e in sarca.tree(storage, "Camera")}
-    assert {"IMG_0001.jpg", "IMG_0001 (1).jpg"} <= names, names
-    assert sha256(sarca.download_bytes(storage, "Camera/IMG_0001.jpg")) == sha256(original)
-    assert sha256(sarca.download_bytes(storage, "Camera/IMG_0001 (1).jpg")) == sha256(edited)
+    assert names == {"IMG_0001.jpg", "IMG_0002.png"}, names
+    assert sha256(sarca.download_bytes(storage, "Camera/IMG_0001.jpg")) == sha256(edited)
+
+    r = sarca.get(f"/api/storages/{storage}/trash", params={"path": "Camera"})
+    assert r.status_code == 200, r.text
+    trashed = [e["name"] for e in r.json()]
+    assert any(n.startswith("IMG_0001 (replaced ") and n.endswith(").jpg") for n in trashed), (
+        trashed
+    )
+
+    uploads = mock.calls("sendDocument")
+    again = sync(sarca, storage, tmp_path, gallery, remote_root="Camera")
+    assert not again.errors, again.errors
+    assert again.pending == 0, "the edit is stored; nothing is left to send"
+    assert mock.calls("sendDocument") == uploads
 
 
 def test_retried_upload_with_same_hash_is_not_duplicated(

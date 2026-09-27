@@ -11,6 +11,7 @@ Covers two guarantees that are easy to regress and painful for users:
 from __future__ import annotations
 
 import concurrent.futures
+import time
 import uuid
 
 import httpx
@@ -132,3 +133,52 @@ def test_sync_retry_after_failed_relay_keeps_original_name(
 
     names = sorted(e["name"] for e in sarca.tree(storage, "Camera"))
     assert names == ["IMG_0001.jpg", "IMG_0002.jpg"], f"retry renamed a file: {names}"
+
+
+def test_a_replacement_handed_off_mid_relay_is_recognised_at_its_path(
+    sarca: SarcaClient, storage: str, mock
+) -> None:
+    """A new version whose sender hangs up after `spooled` must still be the
+    version the path reports.
+
+    That report is all the sync client has to go on once it has handed a file
+    off: its next pass asks the path and sends the file again unless the answer
+    is "these bytes, being stored" or "these bytes, stored". When the new
+    version landed as "name (1).ext" instead, the path kept answering with the
+    old bytes, and a video recorded while it was being synced was sent 180
+    times over.
+    """
+    name = "recording.mp4"
+    old, new = b"first" * 1024, b"second" * 4096
+    assert sarca.upload(storage, name, old, content_hash=sha256(old)).ok
+
+    mock.set_latency(sendDocument=10.0)
+    try:
+        with pytest.raises(httpx.TimeoutException):
+            sarca.upload(
+                storage,
+                name,
+                new,
+                content_hash=sha256(new),
+                on_conflict="replace",
+                timeout=1.0,
+            )
+        info = sarca.info(storage, name)
+        assert (info["size"], info["is_uploaded"], info["is_relaying"]) == (
+            len(new),
+            False,
+            True,
+        ), info
+    finally:
+        mock.clear_latency()
+
+    deadline = time.time() + 60
+    while not (info := sarca.info(storage, name))["is_uploaded"]:
+        assert time.time() < deadline, f"the new version never finished: {info}"
+        time.sleep(0.2)
+    assert info["content_hash"] == sha256(new)
+
+    assert sorted(e["name"] for e in sarca.tree(storage)) == [name]
+    assert sarca.download_bytes(storage, name) == new
+    trashed = [e["name"] for e in sarca.get(f"/api/storages/{storage}/trash").json()]
+    assert any(n.startswith("recording (replaced ") for n in trashed), trashed
