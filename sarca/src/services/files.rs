@@ -186,6 +186,10 @@ impl<'d> FilesService<'d> {
 
     /// `client_thumb`: grid thumbnail already built by the uploading client.
     /// When present the server stores it as-is instead of decoding the original.
+    ///
+    /// `replace`: a file already at this path is an older version of this one,
+    /// and the upload takes its place rather than landing beside it as
+    /// "name (1).ext". The sync client asks for this; the web UI does not.
     pub async fn upload_anyway_from_path_with_progress(
         &self,
         in_file: InFile,
@@ -194,6 +198,7 @@ impl<'d> FilesService<'d> {
         user: &AuthUser,
         progress: Option<mpsc::Sender<UploadProgressEvent>>,
         client_thumb: Option<Vec<u8>>,
+        replace: bool,
     ) -> SarcaResult<()> {
         // 0. checking access
         check_access(&self.access_repo, user.id, in_file.storage_id, &AccessType::W).await?;
@@ -309,6 +314,51 @@ impl<'d> FilesService<'d> {
                         );
                     }
                 }
+            }
+        }
+
+        // A new version of a file the sync client already stored. Everything
+        // with the same hash was settled above, so a row still at this path
+        // holds other bytes.
+        //
+        // This used to fall through to `create_file_anyway` like any upload,
+        // which put the new version beside the old one as "name (1).ext" and
+        // left the path itself on the old bytes. A client that got `done` in
+        // time recorded the new hash and moved on, leaving a stray copy. One
+        // that handed off — every large file — checks the path on its next
+        // pass, finds the old bytes still there and sends the file again: a
+        // recording synced while it was still being written was sent 180
+        // times, each copy landing as the next "(N)".
+        if replace {
+            if let Ok(existing) =
+                self.repo.get_file_by_path(&in_file.path, in_file.storage_id).await
+            {
+                // Another version is mid-relay at this path. Its chunks are
+                // going into this row right now, so it cannot be retired under
+                // it; the client comes back once that relay is over.
+                if relay_in_flight(existing.id) {
+                    return Err(SarcaError::UploadAlreadyInProgress);
+                }
+
+                let retired = retired_version_path(&existing.path, chrono::Utc::now());
+                let file = self
+                    .repo
+                    .replace_content(
+                        existing.id,
+                        existing.content_hash.as_deref(),
+                        &retired,
+                        &in_file,
+                    )
+                    .await?;
+                self.invalidate_media_cache(file.storage_id, &file.path);
+                tracing::info!(
+                    "replacing {} with a new version; the previous one is in the trash as \
+                     {retired}",
+                    file.path
+                );
+                return self
+                    .upload_from_path(file, file_path, file_size, progress, client_thumb)
+                    .await;
             }
         }
 
@@ -853,6 +903,25 @@ fn resumable(existing: &File, incoming_size: i64) -> bool {
         && existing.chunk_size_bytes.is_some_and(|n| n > 0)
 }
 
+/// Where the version a replace upload displaces goes in the trash: the same
+/// folder, the name marked with when it was replaced.
+///
+/// Never the live path itself. Trash is emptied by hard delete, which the sync
+/// changelog reports as a `delete` of the row's path — under the live path
+/// that event would name the new version, and a two-way client would remove
+/// its own copy of it.
+fn retired_version_path(path: &str, at: chrono::DateTime<chrono::Utc>) -> String {
+    let (folder, name) = path.rsplit_once('/').map_or(("", path), |(f, n)| (f, n));
+    // A leading dot is part of the name (".env"), not a suffix.
+    let (stem, suffix) = name
+        .char_indices()
+        .skip(1)
+        .find(|&(_, c)| c == '.')
+        .map_or((name, ""), |(i, _)| name.split_at(i));
+    let marked = format!("{stem} (replaced {}){suffix}", at.format("%Y-%m-%d %H-%M-%S"));
+    if folder.is_empty() { marked } else { format!("{folder}/{marked}") }
+}
+
 #[cfg(test)]
 mod resume_eligibility_tests {
     use super::{File, resumable};
@@ -905,6 +974,55 @@ mod resume_eligibility_tests {
         let mut file = partial(1_000);
         file.deleted_at = Some(chrono::Utc::now());
         assert!(!resumable(&file, 1_000));
+    }
+}
+
+#[cfg(test)]
+mod retired_version_path_tests {
+    use chrono::TimeZone;
+
+    use super::retired_version_path;
+
+    fn at() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 9, 27, 10, 35, 7).unwrap()
+    }
+
+    #[test]
+    fn the_mark_goes_before_the_extension_in_the_same_folder() {
+        assert_eq!(
+            retired_version_path("Camera/PC/2026-09-21 13-00-54.mp4", at()),
+            "Camera/PC/2026-09-21 13-00-54 (replaced 2026-09-27 10-35-07).mp4"
+        );
+        assert_eq!(
+            retired_version_path("notes.txt", at()),
+            "notes (replaced 2026-09-27 10-35-07).txt"
+        );
+    }
+
+    /// Matches how "(1)" names split a name: at its first dot.
+    #[test]
+    fn a_double_extension_stays_whole() {
+        assert_eq!(
+            retired_version_path("backups/site.tar.gz", at()),
+            "backups/site (replaced 2026-09-27 10-35-07).tar.gz"
+        );
+    }
+
+    #[test]
+    fn dotfiles_and_extensionless_names_keep_their_name_first() {
+        assert_eq!(retired_version_path("a/.env", at()), "a/.env (replaced 2026-09-27 10-35-07)");
+        assert_eq!(
+            retired_version_path("Makefile", at()),
+            "Makefile (replaced 2026-09-27 10-35-07)"
+        );
+    }
+
+    /// Never the live path: purging the trash reports a `delete` of this name.
+    #[test]
+    fn the_retired_name_is_never_the_live_one() {
+        for path in ["a.mp4", "dir/a.mp4", ".env", "x"] {
+            assert_ne!(retired_version_path(path, at()), path);
+        }
     }
 }
 

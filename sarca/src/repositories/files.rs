@@ -778,6 +778,114 @@ impl<'d> FilesRepository<'d> {
             .map(|_| ())
     }
 
+    /// Point the live row `file_id` at a new version of its file, `incoming`,
+    /// without its path ever going empty.
+    ///
+    /// The row keeps its id and path, and comes back unuploaded with no chunks,
+    /// ready for a relay to fill. What it held before — chunks, thumbnail,
+    /// preview — moves to a new row in the trash at `retired_path`, where
+    /// the usual trash retention purges it; a partial with nothing stored is
+    /// simply dropped. Neither write reaches the sync changelog: its triggers
+    /// only report uploaded live rows and the trashing of live ones, so the only
+    /// event a replace produces is the `upsert` when the new relay finishes.
+    ///
+    /// `expected_hash` is the hash the caller saw on the row. If the row has
+    /// changed or gone since, nothing is written and the answer is
+    /// `UploadAlreadyInProgress`: another upload got to this path first.
+    pub async fn replace_content(
+        &self,
+        file_id: Uuid,
+        expected_hash: Option<&str>,
+        retired_path: &str,
+        incoming: &InFile,
+    ) -> SarcaResult<File> {
+        let db_error = |e: sqlx::Error| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        };
+        let mut transaction = self.db.begin().await.map_err(db_error)?;
+
+        let current: Option<(bool, bool)> = sqlx::query_as(&format!(
+            "
+            SELECT is_uploaded,
+                   EXISTS (SELECT 1 FROM {CHUNKS_TABLE} WHERE file_id = $1)
+            FROM {FILES_TABLE}
+            WHERE id = $1 AND deleted_at IS NULL AND content_hash IS $2
+            "
+        ))
+        .bind(file_id)
+        .bind(expected_hash)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(db_error)?;
+        let Some((is_uploaded, has_chunks)) = current else {
+            return Err(SarcaError::UploadAlreadyInProgress);
+        };
+
+        if is_uploaded || has_chunks {
+            let retired_id = Uuid::new_v4();
+            sqlx::query(&format!(
+                "
+                INSERT INTO {FILES_TABLE} (
+                    id, path, size, storage_id, is_uploaded, thumb_telegram_file_id,
+                    chunk_size_bytes, deleted_at, thumb_telegram_message_id, created_at,
+                    source_created_at, source_mtime, content_hash,
+                    preview_telegram_file_id, preview_telegram_message_id
+                )
+                SELECT $2, $3, size, storage_id, is_uploaded, thumb_telegram_file_id,
+                       chunk_size_bytes, datetime('now'), thumb_telegram_message_id,
+                       created_at, source_created_at, source_mtime, content_hash,
+                       preview_telegram_file_id, preview_telegram_message_id
+                FROM {FILES_TABLE}
+                WHERE id = $1
+                "
+            ))
+            .bind(file_id)
+            .bind(retired_id)
+            .bind(retired_path)
+            .execute(&mut *transaction)
+            .await
+            .map_err(db_error)?;
+
+            sqlx::query(&format!("UPDATE {CHUNKS_TABLE} SET file_id = $2 WHERE file_id = $1"))
+                .bind(file_id)
+                .bind(retired_id)
+                .execute(&mut *transaction)
+                .await
+                .map_err(db_error)?;
+        }
+
+        let file: File = sqlx::query_as(&format!(
+            "
+            UPDATE {FILES_TABLE}
+            SET size = $2,
+                is_uploaded = false,
+                chunk_size_bytes = $3,
+                source_created_at = $4,
+                source_mtime = $5,
+                content_hash = $6,
+                thumb_telegram_file_id = NULL,
+                thumb_telegram_message_id = NULL,
+                preview_telegram_file_id = NULL,
+                preview_telegram_message_id = NULL
+            WHERE id = $1
+            RETURNING *
+            "
+        ))
+        .bind(file_id)
+        .bind(incoming.size)
+        .bind(incoming.chunk_size_bytes)
+        .bind(incoming.source_created_at)
+        .bind(incoming.source_mtime)
+        .bind(&incoming.content_hash)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(db_error)?;
+
+        transaction.commit().await.map_err(db_error)?;
+        Ok(file)
+    }
+
     /// Soft-delete live file(s) under `path`. Returns the canonical deleted target
     /// (folders end with `/`) for callers that need to clean up path-keyed metadata.
     pub async fn delete(&self, path: &str, storage_id: Uuid) -> SarcaResult<String> {
@@ -1838,6 +1946,142 @@ mod resume_tests {
             !stale.contains(&partial.id),
             "a row with chunks in a channel must survive the restart that interrupted it"
         );
+    }
+
+    fn new_version(storage_id: Uuid, size: i64) -> InFile {
+        InFile::new("clip.mp4".to_owned(), size, storage_id)
+            .with_chunk_size(20)
+            .with_content_hash(Some("sha256:new".to_owned()))
+    }
+
+    /// The newest changelog id, which is also how far a client's cursor would
+    /// have read.
+    async fn latest_sync_event_id(db: &SqlitePool) -> i64 {
+        sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM file_sync_events")
+            .fetch_one(db)
+            .await
+            .unwrap()
+    }
+
+    /// A replace keeps the row — same id, same path — and turns it into the new
+    /// version, empty and waiting for its relay. The old bytes are not lost: they
+    /// sit in the trash under their own name, chunks and all.
+    #[tokio::test]
+    async fn replace_retires_the_old_version_to_the_trash() {
+        let db = test_pool().await;
+        let (storage_id, channel_id) = insert_storage_with_channel(&db).await;
+        let repo = FilesRepository::new(&db);
+        let old = unfinished_file(&db, storage_id, 40).await;
+        store_chunk(&db, old.id, channel_id, 0).await;
+        store_chunk(&db, old.id, channel_id, 1).await;
+        repo.set_as_uploaded(old.id).await.unwrap();
+
+        let replaced = repo
+            .replace_content(
+                old.id,
+                Some("sha256:abc"),
+                "clip (replaced).mp4",
+                &new_version(storage_id, 100),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!((replaced.id, replaced.path.as_str()), (old.id, "clip.mp4"));
+        assert_eq!(replaced.size, 100);
+        assert_eq!(replaced.content_hash.as_deref(), Some("sha256:new"));
+        assert!(!replaced.is_uploaded, "the new version is not stored until its relay says so");
+        assert!(repo.list_stored_chunk_positions(old.id).await.unwrap().is_empty());
+
+        let retired: File =
+            sqlx::query_as("SELECT * FROM files WHERE path = 'clip (replaced).mp4'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        assert!(retired.deleted_at.is_some(), "the old version belongs in the trash");
+        assert!(retired.is_uploaded);
+        assert_eq!(retired.size, 40);
+        assert_eq!(retired.content_hash.as_deref(), Some("sha256:abc"));
+        assert_eq!(repo.list_stored_chunk_positions(retired.id).await.unwrap().len(), 2);
+    }
+
+    /// The reason for replacing in place: the changelog a two-way client pulls
+    /// must never say the path was deleted, or that client removes its own copy
+    /// of the file it is uploading. The only event is the one the finished relay
+    /// produces.
+    #[tokio::test]
+    async fn replace_is_silent_until_the_new_version_is_stored() {
+        let db = test_pool().await;
+        let (storage_id, channel_id) = insert_storage_with_channel(&db).await;
+        let repo = FilesRepository::new(&db);
+        let old = unfinished_file(&db, storage_id, 40).await;
+        store_chunk(&db, old.id, channel_id, 0).await;
+        repo.set_as_uploaded(old.id).await.unwrap();
+        let before = latest_sync_event_id(&db).await;
+
+        repo.replace_content(old.id, Some("sha256:abc"), "old.mp4", &new_version(storage_id, 100))
+            .await
+            .unwrap();
+        assert_eq!(
+            latest_sync_event_id(&db).await,
+            before,
+            "replacing must not reach the changelog"
+        );
+
+        repo.set_as_uploaded(old.id).await.unwrap();
+        let events: Vec<(String, String, Option<String>)> = sqlx::query_as(
+            "SELECT op, path, content_hash FROM file_sync_events WHERE id > $1 ORDER BY id",
+        )
+        .bind(before)
+        .fetch_all(&db)
+        .await
+        .unwrap();
+        assert_eq!(
+            events,
+            vec![("upsert".to_owned(), "clip.mp4".to_owned(), Some("sha256:new".to_owned()))]
+        );
+    }
+
+    /// Two uploads of different versions racing for one path: the second sees a
+    /// row that no longer holds what it looked at, and must not retire the
+    /// first one's work.
+    #[tokio::test]
+    async fn replace_refuses_a_row_that_changed_since_it_was_read() {
+        let db = test_pool().await;
+        let (storage_id, _) = insert_storage_with_channel(&db).await;
+        let repo = FilesRepository::new(&db);
+        let old = unfinished_file(&db, storage_id, 40).await;
+        repo.set_as_uploaded(old.id).await.unwrap();
+
+        let result = repo
+            .replace_content(old.id, Some("sha256:stale"), "old.mp4", &new_version(storage_id, 100))
+            .await;
+
+        assert!(matches!(result, Err(SarcaError::UploadAlreadyInProgress)), "{result:?}");
+        let untouched = repo.get_by_id(old.id).await.unwrap();
+        assert!(untouched.is_uploaded);
+        assert_eq!(untouched.content_hash.as_deref(), Some("sha256:abc"));
+        let rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM files").fetch_one(&db).await.unwrap();
+        assert_eq!(rows, 1, "nothing may be retired on a refused replace");
+    }
+
+    /// A partial that never stored a chunk holds nothing worth a trash entry.
+    #[tokio::test]
+    async fn replacing_an_empty_partial_leaves_nothing_in_the_trash() {
+        let db = test_pool().await;
+        let (storage_id, _) = insert_storage_with_channel(&db).await;
+        let repo = FilesRepository::new(&db);
+        let old = unfinished_file(&db, storage_id, 40).await;
+
+        let replaced = repo
+            .replace_content(old.id, Some("sha256:abc"), "old.mp4", &new_version(storage_id, 100))
+            .await
+            .unwrap();
+
+        assert_eq!(replaced.id, old.id);
+        let rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM files").fetch_one(&db).await.unwrap();
+        assert_eq!(rows, 1);
     }
 }
 

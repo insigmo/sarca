@@ -650,6 +650,13 @@ impl SarcaApi {
             if let Some(hash) = params.content_hash {
                 form = form.text("content_hash", hash.to_owned());
             }
+            // The local file is the one this path should hold, so whatever the
+            // server has there is an older version of it. Left at the default,
+            // the server kept that older version at the path and stored this one
+            // beside it as "name (1).ext" — and the next pass's preflight,
+            // finding the old bytes still at the path, sent the file again.
+            // Servers that predate the field ignore it.
+            form = form.text("on_conflict", "replace");
             // Override the client-wide control-plane deadline: the server only
             // answers once the file is through Telegram, which is minutes, not
             // seconds. Without this the response body read died mid-stream with

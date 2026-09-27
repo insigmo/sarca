@@ -209,6 +209,7 @@ impl FilesRouter {
         let mut source_created_at = None::<chrono::DateTime<chrono::Utc>>;
         let mut content_hash = None::<String>;
         let mut client_thumb = None::<Vec<u8>>;
+        let mut replace = false;
 
         while let Some(mut field) = multipart.next_field().await.map_err(|_| {
             cleanup_tmp(&tmp_path);
@@ -320,6 +321,26 @@ impl FilesRouter {
                         content_hash = Some(trimmed);
                     }
                 },
+                // What to do with a file already at the path. "rename" (the
+                // default) keeps both, the upload landing as "name (1).ext";
+                // "replace" makes the upload the path's new version.
+                "on_conflict" => {
+                    let raw = field.text().await.map_err(|_| {
+                        cleanup_tmp(&tmp_path);
+                        (StatusCode::BAD_REQUEST, "Invalid on_conflict".to_owned())
+                    })?;
+                    replace = match raw.trim() {
+                        "replace" => true,
+                        "" | "rename" => false,
+                        _ => {
+                            cleanup_tmp(&tmp_path);
+                            return Err((
+                                StatusCode::BAD_REQUEST,
+                                "on_conflict must be \"replace\" or \"rename\"".to_owned(),
+                            ));
+                        },
+                    };
+                },
                 _ => (),
             }
         }
@@ -393,6 +414,7 @@ impl FilesRouter {
                     &user,
                     Some(progress_tx),
                     client_thumb,
+                    replace,
                 )
                 .await;
             if result.is_err() {
