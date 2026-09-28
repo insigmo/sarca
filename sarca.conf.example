@@ -38,6 +38,22 @@ TELEGRAM_CHUNK_SIZE_MB=20
 # Over budget, uploads are answered 503 ("try again shortly") until it drains.
 UPLOAD_SPOOL_BUDGET_MB=8192
 
+# How hard uploads to Telegram are pushed. "auto" (the default) decides from
+# where Sarca runs:
+#   constrained — the uplink is Wi-Fi, or this is a Raspberry Pi seen from
+#                 inside a container (its on-board Wi-Fi is an SDIO chip that
+#                 wedges or crashes under sustained full-rate transmit):
+#                 7 MiB/s, 2 uploads in flight at once
+#   standard    — anything else: no byte cap, 6 uploads in flight at once
+# Either way the body is sent at an even pace, and network errors halve the
+# rate and the number of uploads in flight until a run of clean sends brings
+# them back. The startup log says which profile was picked and why.
+# UPLINK_PROFILE=auto
+# MiB per second for all uploads together; 0 = no cap. Overrides the profile.
+# TELEGRAM_UPLOAD_RATE_MB=7
+# Upload requests in flight at once, server-wide. Overrides the profile.
+# TELEGRAM_UPLOAD_STREAMS=2
+
 # Route all Telegram Bot API traffic (uploads, downloads, setup calls) through
 # a proxy. Useful when api.telegram.org is blocked or slow to reach directly.
 # Accepted schemes: http://, https://, socks5://, socks5h://. Leave blank to

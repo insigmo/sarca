@@ -85,6 +85,9 @@ async fn main() {
     if config.debug_log {
         tracing::info!("DEBUG_LOG=1 — verbose request/action logging enabled");
     }
+    // Detect the uplink profile now, so the log says up front how hard uploads
+    // to Telegram will be pushed on this machine and why.
+    sarca::common::telegram_api::uplink::governor();
 
     // No TLS_HOSTNAME: fall back to the machine's public IP so the server still
     // comes up on HTTPS (TCP + HTTP/3) with an ACME-issuable identity.
