@@ -1028,7 +1028,10 @@ impl SyncEngine {
             // and a client that waits on it waits forever while the file sits
             // in neither place. Asking the server which of the two it is turns
             // an abandoned row back into an upload.
-            if remote.as_ref().is_some_and(|r| r.still_relaying() && r.size == size) {
+            if remote
+                .as_ref()
+                .is_some_and(|r| r.still_relaying() && r.size == size)
+            {
                 debug!(binding = %binding.id, path = %rel,
                     "already being stored by the server; leaving it to finish");
                 self.transfer_abandon(&tid).await;
@@ -1273,7 +1276,10 @@ impl SyncEngine {
 
     /// Drop every cached remote directory belonging to `binding_id`.
     async fn forget_remote_dirs(&self, binding_id: &str) {
-        self.known_remote_dirs.write().await.retain(|(id, _)| id != binding_id);
+        self.known_remote_dirs
+            .write()
+            .await
+            .retain(|(id, _)| id != binding_id);
     }
 
     async fn ensure_remote_parents(&self, binding: &Binding, parent: &str) -> Result<()> {
@@ -1681,11 +1687,8 @@ mod tests {
                     // defeat the point of choosing a status.
                     let mut buf = vec![0u8; 65536];
                     loop {
-                        match tokio::time::timeout(
-                            Duration::from_millis(100),
-                            sock.read(&mut buf),
-                        )
-                        .await
+                        match tokio::time::timeout(Duration::from_millis(100), sock.read(&mut buf))
+                            .await
                         {
                             Ok(Ok(0) | Err(_)) | Err(_) => break,
                             Ok(Ok(_)) => {}
@@ -1760,11 +1763,8 @@ mod tests {
                     let mut buf = vec![0u8; 65536];
                     let mut seen = Vec::new();
                     loop {
-                        match tokio::time::timeout(
-                            Duration::from_millis(100),
-                            sock.read(&mut buf),
-                        )
-                        .await
+                        match tokio::time::timeout(Duration::from_millis(100), sock.read(&mut buf))
+                            .await
                         {
                             Ok(Ok(0) | Err(_)) | Err(_) => break,
                             Ok(Ok(n)) => seen.extend_from_slice(&buf[..n]),
@@ -1804,10 +1804,8 @@ mod tests {
         std::fs::write(pics.join("clip.mp4"), b"video-bytes").unwrap();
 
         // Same size, relay unfinished.
-        let (base, uploads) = preflight_server(
-            r#"{"size":11,"is_uploaded":false,"content_hash":null}"#,
-        )
-        .await;
+        let (base, uploads) =
+            preflight_server(r#"{"size":11,"is_uploaded":false,"content_hash":null}"#).await;
         let engine = engine_facing(dir.path(), &base);
         let binding = cam_binding(&pics);
 
@@ -1836,11 +1834,12 @@ mod tests {
         let pics = dir.path().join("pics");
         std::fs::create_dir_all(&pics).unwrap();
         std::fs::write(pics.join("clip.mp4"), b"video-bytes").unwrap();
-        let hash = crate::hash::sha256_file(&pics.join("clip.mp4")).await.unwrap();
+        let hash = crate::hash::sha256_file(&pics.join("clip.mp4"))
+            .await
+            .unwrap();
 
         let body: &'static str = Box::leak(
-            format!(r#"{{"size":11,"is_uploaded":true,"content_hash":"{hash}"}}"#)
-                .into_boxed_str(),
+            format!(r#"{{"size":11,"is_uploaded":true,"content_hash":"{hash}"}}"#).into_boxed_str(),
         );
         let (base, uploads) = preflight_server(body).await;
         let engine = engine_facing(dir.path(), &base);
@@ -1960,7 +1959,10 @@ mod tests {
                 "{status_line}: one refusal from the gateway is enough — the rest of the \
                  backlog must not be thrown at a server that is not there; got {hits} requests"
             );
-            assert_eq!(result.failed, 0, "{status_line}: the link failed, not the files");
+            assert_eq!(
+                result.failed, 0,
+                "{status_line}: the link failed, not the files"
+            );
             // A busy skip raises no banner, so this also says the gateway was
             // not mistaken for a busy server.
             assert!(
@@ -2013,11 +2015,8 @@ mod tests {
                     let mut buf = vec![0u8; 65536];
                     let mut request = Vec::new();
                     loop {
-                        match tokio::time::timeout(
-                            Duration::from_millis(100),
-                            sock.read(&mut buf),
-                        )
-                        .await
+                        match tokio::time::timeout(Duration::from_millis(100), sock.read(&mut buf))
+                            .await
                         {
                             Ok(Ok(0) | Err(_)) | Err(_) => break,
                             Ok(Ok(n)) => request.extend_from_slice(&buf[..n]),
@@ -2118,8 +2117,16 @@ mod tests {
             0,
             "a busy server must put nothing on the retry ladder"
         );
-        assert!(engine.index.get_entry(&binding.id, "1.jpg").unwrap().is_some());
-        assert!(engine.index.get_entry(&binding.id, "3.jpg").unwrap().is_some());
+        assert!(engine
+            .index
+            .get_entry(&binding.id, "1.jpg")
+            .unwrap()
+            .is_some());
+        assert!(engine
+            .index
+            .get_entry(&binding.id, "3.jpg")
+            .unwrap()
+            .is_some());
         assert_eq!(
             engine.transfer_queue().await.uploading,
             0,

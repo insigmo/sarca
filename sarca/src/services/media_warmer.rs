@@ -210,19 +210,16 @@ async fn warm_storage(
         .map(|target| {
             let thumb_cache = thumb_cache.clone();
             let preview_cache = preview_cache.clone();
+
             async move { warm_one(state, storage_id, &target, &thumb_cache, &preview_cache).await }
         })
-        // Own concurrency cap, acquired ahead of the shared media/thumb
-        // semaphores that `thumb_for_path`/`preview_for_path` acquire inside
-        // `warm_one`: at most this many warmer requests ever reach those
-        // semaphores at once, so an interactive request queued behind them
-        // is never waiting on more than a handful of background jobs.
+        .buffer_unordered(settings.concurrency)
         .fold(WarmSummary::default(), |mut acc, item| {
             async move {
                 acc.merge(item);
                 acc
             }
-		})
+        })
         .await
 }
 

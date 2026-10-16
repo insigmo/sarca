@@ -179,21 +179,19 @@ async fn latest_release() -> Result<GithubRelease, String> {
 }
 
 pub async fn check(data_dir: &std::path::Path) -> Result<UpdateStatusDto, String> {
-    client_log::debug_line(data_dir, "update check: asking GitHub for the latest release");
+    client_log::debug_line(
+        data_dir,
+        "update check: asking GitHub for the latest release",
+    );
     let release = latest_release().await?;
     let latest = release.tag_name.trim().to_owned();
     let wanted = asset_name();
     let found = wanted.and_then(|name| release.assets.iter().find(|a| a.name == name));
     let blocker = install_blocker().or_else(|| {
-        found
-            .is_none()
-            .then(|| match wanted {
-                Some(name) => format!("this release does not include {name}"),
-                None => format!(
-                    "no client build is published for {}",
-                    std::env::consts::OS
-                ),
-            })
+        found.is_none().then(|| match wanted {
+            Some(name) => format!("this release does not include {name}"),
+            None => format!("no client build is published for {}", std::env::consts::OS),
+        })
     });
     let update_available = !latest.is_empty() && is_newer(&latest, CURRENT_VERSION);
     client_log::write_line(
@@ -207,7 +205,12 @@ pub async fn check(data_dir: &std::path::Path) -> Result<UpdateStatusDto, String
         current: CURRENT_VERSION.to_owned(),
         update_available,
         latest: (!latest.is_empty()).then_some(latest),
-        notes: release.body.unwrap_or_default().chars().take(4000).collect(),
+        notes: release
+            .body
+            .unwrap_or_default()
+            .chars()
+            .take(4000)
+            .collect(),
         asset: found.map(|a| a.name.clone()),
         download_url: found.map(|a| a.browser_download_url.clone()),
         can_install: blocker.is_none() && found.is_some(),
@@ -317,19 +320,19 @@ fn launch_installer(path: &std::path::Path) -> bool {
             let mut c = std::process::Command::new("open");
             c.arg(path);
             c
-        },
+        }
         _ => {
             let mut c = std::process::Command::new("xdg-open");
             c.arg(path);
             c
-        },
+        }
     };
     match command.spawn() {
         Ok(_) => true,
         Err(e) => {
             tracing::warn!(error = %e, path = %path.display(), "could not launch the installer");
             false
-        },
+        }
     }
 }
 

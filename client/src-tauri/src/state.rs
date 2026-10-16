@@ -1250,7 +1250,11 @@ impl AppSyncState {
                             &data_dir,
                             &format!(
                                 "tick ok ({})",
-                                if due_for_full_pass { "full pass" } else { "pull only" }
+                                if due_for_full_pass {
+                                    "full pass"
+                                } else {
+                                    "pull only"
+                                }
                             ),
                         ),
                         Err(e) => {
@@ -1259,7 +1263,7 @@ impl AppSyncState {
                                 &data_dir,
                                 &format!("sync tick error: {e}"),
                             );
-                        },
+                        }
                     }
                 } else {
                     crate::client_log::debug_line(

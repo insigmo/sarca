@@ -1142,7 +1142,10 @@ pub fn clear_logs(state: State<'_, AppSyncState>) -> Result<LogStatusDto, String
 /// WebView used to receive it from `get_client_prefs` and compare in JS, which
 /// meant reading the lock screen's own secret was enough to walk past it.
 #[tauri::command]
-pub async fn verify_app_lock_pin(state: State<'_, AppSyncState>, pin: String) -> Result<bool, String> {
+pub async fn verify_app_lock_pin(
+    state: State<'_, AppSyncState>,
+    pin: String,
+) -> Result<bool, String> {
     let prefs = load_prefs(&state);
     if !prefs.app_lock_enabled || !prefs.has_pin() {
         return Ok(true);

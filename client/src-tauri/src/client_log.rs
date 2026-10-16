@@ -169,7 +169,9 @@ pub fn clear(data_dir: &Path) -> Result<u64, String> {
 
 /// Size of the log file on disk, or 0 when there is none.
 pub fn size_bytes(data_dir: &Path) -> u64 {
-    fs::metadata(log_path(data_dir)).map(|m| m.len()).unwrap_or(0)
+    fs::metadata(log_path(data_dir))
+        .map(|m| m.len())
+        .unwrap_or(0)
 }
 
 //////////////////////////////////////
@@ -219,7 +221,9 @@ impl Write for ClientLogWriter {
 /// no-op rather than a panic, because the app's entry point runs twice on some
 /// mobile launch paths.
 pub fn install(data_dir: PathBuf) {
-    use tracing_subscriber::{fmt, layer::SubscriberExt as _, reload, util::SubscriberInitExt as _};
+    use tracing_subscriber::{
+        fmt, layer::SubscriberExt as _, reload, util::SubscriberInitExt as _,
+    };
 
     if RELOAD.get().is_some() {
         return;
@@ -303,7 +307,9 @@ mod tests {
 
         set_level(LogLevel::Debug, &dir);
         debug_line(&dir, "loud-detail");
-        assert!(read_export(&dir, 64 * 1024).unwrap().contains("loud-detail"));
+        assert!(read_export(&dir, 64 * 1024)
+            .unwrap()
+            .contains("loud-detail"));
 
         set_level(LogLevel::Info, &dir);
         set_enabled(false, &dir);

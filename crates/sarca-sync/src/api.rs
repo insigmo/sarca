@@ -440,7 +440,8 @@ impl SarcaApi {
     /// range, so distinct Range windows land on distinct chunks and are
     /// fetched from Telegram at the same time instead of one-ahead.
     async fn download_parallel(&self, url: &str, total_len: u64, dest: &Path) -> Result<()> {
-        let parts = PARALLEL_DOWNLOAD_PARTS.min(total_len.div_ceil(PARALLEL_DOWNLOAD_THRESHOLD_BYTES));
+        let parts =
+            PARALLEL_DOWNLOAD_PARTS.min(total_len.div_ceil(PARALLEL_DOWNLOAD_THRESHOLD_BYTES));
         let part_size = total_len.div_ceil(parts);
         let ranges: Vec<(u64, u64)> = (0..parts)
             .map(|i| {
@@ -452,16 +453,11 @@ impl SarcaApi {
             .collect();
 
         let part_paths: Vec<PathBuf> = (0..ranges.len())
-            .map(|idx| {
-                dest.with_extension(format!("sarca-part-{idx}-{}", Uuid::new_v4().simple()))
-            })
+            .map(|idx| dest.with_extension(format!("sarca-part-{idx}-{}", Uuid::new_v4().simple())))
             .collect();
 
-        let fetch_parts = ranges
-            .iter()
-            .copied()
-            .zip(part_paths.iter().cloned())
-            .map(|((start, end), part_path)| {
+        let fetch_parts = ranges.iter().copied().zip(part_paths.iter().cloned()).map(
+            |((start, end), part_path)| {
                 let url = url.to_owned();
                 async move {
                     let resp = self
@@ -476,7 +472,8 @@ impl SarcaApi {
                         .error_for_status()?;
                     self.write_response_body(resp, &part_path).await
                 }
-            });
+            },
+        );
 
         let fetched = futures::stream::iter(fetch_parts)
             .buffer_unordered(part_paths.len().max(1))
@@ -703,7 +700,9 @@ impl SarcaApi {
                 log::info!("HTTP/3 upload failed, falling back to TCP HTTPS url={url} error={err}");
                 let (req, progress) =
                     build_upload(self, &self.tcp_client, &url, Version::HTTP_11, &params).await?;
-                let resp = send_upload(req, progress).await.map_err(|e| e.into_report())?;
+                let resp = send_upload(req, progress)
+                    .await
+                    .map_err(|e| e.into_report())?;
                 log_response_protocol("POST", &url, resp.version());
                 resp
             }
@@ -962,11 +961,7 @@ fn ndjson_phase_is(line: &[u8], phase: &str) -> bool {
     std::str::from_utf8(line)
         .ok()
         .and_then(|l| serde_json::from_str::<serde_json::Value>(l.trim()).ok())
-        .and_then(|ev| {
-            ev.get("phase")
-                .and_then(|p| p.as_str())
-                .map(|p| p == phase)
-        })
+        .and_then(|ev| ev.get("phase").and_then(|p| p.as_str()).map(|p| p == phase))
         .unwrap_or(false)
 }
 
@@ -1013,7 +1008,7 @@ async fn drain_upload_progress(resp: Response, grace: Duration) -> Result<Upload
                     return Ok(UploadOutcome::HandedOff);
                 }
                 Some(left)
-            },
+            }
             None => None,
         };
         // Before `spooled` the only bound is the idle one; after it, whichever
@@ -1030,7 +1025,7 @@ async fn drain_upload_progress(resp: Response, grace: Duration) -> Result<Upload
                     return Ok(UploadOutcome::HandedOff);
                 }
                 return Err(anyhow::Error::new(TransferReadStalled(READ_IDLE_TIMEOUT)));
-            },
+            }
         };
 
         pending.extend_from_slice(&chunk);
@@ -1688,11 +1683,8 @@ mod tests {
                     // arrive in a couple of reads.
                     let mut buf = vec![0u8; 64 * 1024];
                     loop {
-                        match tokio::time::timeout(
-                            Duration::from_millis(150),
-                            sock.read(&mut buf),
-                        )
-                        .await
+                        match tokio::time::timeout(Duration::from_millis(150), sock.read(&mut buf))
+                            .await
                         {
                             Ok(Ok(0)) | Err(_) => break,
                             Ok(Ok(_)) => continue,
@@ -1877,7 +1869,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            drain_upload_progress(resp, RELAY_CONFIRM_GRACE).await.unwrap(),
+            drain_upload_progress(resp, RELAY_CONFIRM_GRACE)
+                .await
+                .unwrap(),
             UploadOutcome::Stored
         );
     }
@@ -1903,7 +1897,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            drain_upload_progress(resp, RELAY_CONFIRM_GRACE).await.unwrap(),
+            drain_upload_progress(resp, RELAY_CONFIRM_GRACE)
+                .await
+                .unwrap(),
             UploadOutcome::HandedOff
         );
     }
@@ -1970,7 +1966,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            drain_upload_progress(resp, RELAY_CONFIRM_GRACE).await.unwrap(),
+            drain_upload_progress(resp, RELAY_CONFIRM_GRACE)
+                .await
+                .unwrap(),
             UploadOutcome::HandedOff
         );
     }
@@ -2039,11 +2037,8 @@ mod tests {
                 tokio::spawn(async move {
                     let mut buf = vec![0u8; 64 * 1024];
                     loop {
-                        match tokio::time::timeout(
-                            Duration::from_millis(150),
-                            sock.read(&mut buf),
-                        )
-                        .await
+                        match tokio::time::timeout(Duration::from_millis(150), sock.read(&mut buf))
+                            .await
                         {
                             Ok(Ok(0)) | Err(_) => break,
                             Ok(Ok(_)) => continue,
@@ -2392,11 +2387,8 @@ mod tests {
                 tokio::spawn(async move {
                     let mut buf = vec![0u8; 64 * 1024];
                     loop {
-                        match tokio::time::timeout(
-                            Duration::from_millis(150),
-                            sock.read(&mut buf),
-                        )
-                        .await
+                        match tokio::time::timeout(Duration::from_millis(150), sock.read(&mut buf))
+                            .await
                         {
                             Ok(Ok(0) | Err(_)) | Err(_) => break,
                             Ok(Ok(_)) => continue,
@@ -2500,7 +2492,9 @@ mod tests {
         // a local read failure. Unknown has to mean "the file", so head-of-line
         // isolation still holds.
         assert_eq!(
-            failure_scope(&anyhow::anyhow!("upload failed: [Telegram API] file is too big")),
+            failure_scope(&anyhow::anyhow!(
+                "upload failed: [Telegram API] file is too big"
+            )),
             FailureScope::File
         );
     }

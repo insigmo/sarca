@@ -60,9 +60,12 @@ fn pilot_context(mut context: tauri::Context) -> tauri::Context {
         if let Ok(suffix) = std::env::var("SARCA_E2E_ID_SUFFIX") {
             let suffix = suffix.trim().to_owned();
             if !suffix.is_empty()
-                && suffix.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                && suffix
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-')
             {
-                context.config_mut().identifier = format!("{}.e2e-{suffix}", context.config().identifier);
+                context.config_mut().identifier =
+                    format!("{}.e2e-{suffix}", context.config().identifier);
             }
         }
     }
