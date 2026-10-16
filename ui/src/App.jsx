@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from '@solidjs/router'
+import { Route, Navigate } from '@solidjs/router'
 import { ThemeProvider, createTheme } from '@suid/material'
 import { Show, onMount } from 'solid-js'
 
@@ -174,7 +174,29 @@ function sharedComponents(mode) {
 	}
 }
 
-const App = () => {
+const StoragesRedirect = () => <Navigate href="/storages" />
+
+/** Route table; mounted by `<Router root={App}>` in index.jsx. */
+export const AppRoutes = () => (
+	<>
+		<Route path="/login" component={Login} />
+		<Route path="/s/:token" component={PublicShare} />
+
+		<Route path="/" component={BasicLayout}>
+			<Route path="/" component={StoragesRedirect} />
+			<Route path="/storages" component={Storages} />
+			<Route path="/storages/register" component={SetupWizard} />
+			<Route path="/setup" component={SetupWizard} />
+			<Route path="/storages/:id/files/*path" component={Files} />
+			<Route path="/storage_workers" component={WorkersRedirect} />
+			<Route path="/storage_workers/register" component={WorkersRedirect} />
+			<Route path="*404" component={NotFound} />
+		</Route>
+	</>
+)
+
+/** Router root: `props.children` is the matched route. */
+const App = (props) => {
 	const mode = useThemeMode()
 	onMount(() => {
 		initTheme()
@@ -190,21 +212,7 @@ const App = () => {
 			{(m) => (
 				<ThemeProvider theme={muiThemes[m] ?? lightTheme}>
 					<AppLockGate>
-						<Routes>
-							<Route path="/login" component={Login} />
-							<Route path="/s/:token" component={PublicShare} />
-
-							<Route path="/" component={BasicLayout}>
-								<Route path="/" element={<Navigate href="/storages" />} />
-								<Route path="/storages" component={Storages} />
-								<Route path="/storages/register" component={SetupWizard} />
-								<Route path="/setup" component={SetupWizard} />
-								<Route path="/storages/:id/files/*path" component={Files} />
-								<Route path="/storage_workers" component={WorkersRedirect} />
-								<Route path="/storage_workers/register" component={WorkersRedirect} />
-								<Route path="*404" component={NotFound} />
-							</Route>
-						</Routes>
+						{props.children}
 
 						<AlertStack />
 						<UploadManager />

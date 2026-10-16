@@ -1,5 +1,5 @@
 import { render, fireEvent, waitFor } from '@solidjs/testing-library'
-import { Router, Routes, Route, useLocation } from '@solidjs/router'
+import { Router, Route, useLocation } from '@solidjs/router'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const login = vi.fn()
@@ -34,11 +34,9 @@ const Home = () => {
 const renderApp = () =>
 	render(() => (
 		<Router>
-			<Routes>
-				<Route path="/login" component={Login} />
-				<Route path="/storages" component={Home} />
-				<Route path="/" component={Home} />
-			</Routes>
+			<Route path="/login" component={Login} />
+			<Route path="/storages" component={Home} />
+			<Route path="/" component={Home} />
 		</Router>
 	))
 

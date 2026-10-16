@@ -3,7 +3,7 @@ import { render } from 'solid-js/web'
 import { Router } from '@solidjs/router'
 
 import './index.css'
-import App from './App'
+import App, { AppRoutes } from './App'
 import { initTheme } from './common/theme'
 
 initTheme()
@@ -18,8 +18,8 @@ if (import.meta.env.DEV && !(root instanceof HTMLElement)) {
 
 render(
 	() => (
-		<Router>
-			<App />
+		<Router root={App}>
+			<AppRoutes />
 		</Router>
 	),
 	root

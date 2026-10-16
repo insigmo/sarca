@@ -1,5 +1,5 @@
 import { onCleanup, onMount } from 'solid-js'
-import { Outlet, useNavigate } from '@solidjs/router'
+import { useNavigate } from '@solidjs/router'
 import SettingsModal from '../components/SettingsModal'
 import StorageSettingsModal from '../components/StorageSettingsModal'
 import Box from '@suid/material/Box'
@@ -13,7 +13,7 @@ import { installTextSelectionGuard } from '../common/suppressTextSelection'
 import { installAndroidSafeAreaFallbacks } from '../common/androidSafeArea'
 import { installWheelScrollFix } from '../common/wheelScroll'
 
-const BasicLayout = () => {
+const BasicLayout = (props) => {
 	onMount(() => {
 		checkAuth()
 		installAndroidSafeAreaFallbacks()
@@ -41,7 +41,7 @@ const BasicLayout = () => {
 			<Box class="app-shell-root">
 				<Box class="app-shell-stage">
 					<div class="app-shell-outlet app-shell-main">
-						<Outlet />
+						{props.children}
 					</div>
 				</Box>
 			</Box>

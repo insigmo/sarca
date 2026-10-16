@@ -24,10 +24,11 @@ export default defineConfig(({ mode }) => ({
 		// Size is kept under the warning via slim icon maps + dynamic imports
 		// for marked/mammoth in FileViewer.
 		//
-		// What is left is the app plus @suid, split by Rollup into two ~500 kB
-		// chunks. Nothing more to shave without the circular-chunk breakage
-		// above, so raise the threshold instead of warning on every build.
-		chunkSizeWarningLimit: 600,
+		// What is left is the app plus @suid, which Vite 8's Rolldown splits into
+		// a ~650 kB and a ~300 kB chunk. Nothing more to shave without the
+		// circular-chunk breakage above, so raise the threshold instead of
+		// warning on every build.
+		chunkSizeWarningLimit: 700,
 	},
 	test: {
 		environment: 'jsdom',
