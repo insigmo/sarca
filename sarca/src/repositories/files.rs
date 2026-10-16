@@ -2014,7 +2014,10 @@ mod resume_tests {
         assert_eq!(replaced.size, 100);
         assert_eq!(replaced.content_hash.as_deref(), Some("sha256:new"));
         assert!(!replaced.is_uploaded, "the new version is not stored until its relay says so");
-        assert!(repo.list_stored_chunk_positions(old.id).await.unwrap().is_empty());
+        assert_eq!(
+            repo.list_stored_chunk_positions(old.id).await.unwrap(),
+            [] as [(i16, uuid::Uuid); 0]
+        );
 
         let retired: File =
             sqlx::query_as("SELECT * FROM files WHERE path = 'clip (replaced).mp4'")

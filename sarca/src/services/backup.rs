@@ -628,7 +628,7 @@ mod tests {
 
         let outcome = apply_snapshot(live_path.to_str().unwrap(), &snapshot_path).await.unwrap();
         assert_eq!(outcome.rows, 2);
-        assert!(outcome.skipped_tables.is_empty());
+        assert_eq!(outcome.skipped_tables, [] as [std::string::String; 0]);
 
         let rows: Vec<(i64, String, String)> =
             sqlx::query_as("SELECT id, v, added FROM t ORDER BY id")

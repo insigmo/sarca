@@ -270,7 +270,10 @@ mod tests {
           }]
         }"#;
         let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
-        assert!(chats_from_updates(&body).is_empty());
+        assert_eq!(
+            chats_from_updates(&body),
+            [] as [common::telegram_api::schemas::DetectedChat; 0]
+        );
     }
 
     #[test]
@@ -309,7 +312,10 @@ mod tests {
           }]
         }"#;
         let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
-        assert!(chats_from_updates(&body).is_empty());
+        assert_eq!(
+            chats_from_updates(&body),
+            [] as [common::telegram_api::schemas::DetectedChat; 0]
+        );
     }
 
     #[test]

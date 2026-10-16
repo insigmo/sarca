@@ -489,7 +489,7 @@ mod tests {
         let id = TlsIdentity::Dns("test.local".into());
         let (cert_pem, key_pem, _) = generate_self_signed_pem(&id).unwrap();
         let parsed = parse_pem_material(&cert_pem, &key_pem).unwrap();
-        assert!(!parsed.cert_chain.is_empty());
+        assert_ne!(parsed.cert_chain, [] as [rustls::pki_types::CertificateDer<'_>; 0]);
     }
 
     #[test]

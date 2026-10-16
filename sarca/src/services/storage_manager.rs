@@ -720,7 +720,7 @@ mod tests {
         let stored: HashSet<usize> = [0, 1, 2].into_iter().collect();
         let (plan, resumed) = remaining_chunk_plan(250, 100, &stored);
 
-        assert!(plan.is_empty());
+        assert_eq!(plan, [] as [(usize, u64, u64); 0]);
         assert_eq!(resumed, 250);
     }
 
@@ -731,7 +731,7 @@ mod tests {
     fn an_empty_file_plans_nothing() {
         let (plan, resumed) = remaining_chunk_plan(0, 100, &HashSet::new());
 
-        assert!(plan.is_empty());
+        assert_eq!(plan, [] as [(usize, u64, u64); 0]);
         assert_eq!(resumed, 0);
     }
 
