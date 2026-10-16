@@ -125,6 +125,12 @@ tar = "0.4"
 ring = "0.17"
 chrono = { version = "0.4.45", features = ["clock", "serde"] }
 
+# Free space under WORK_DIR before an upload is spooled (services::files::available_bytes).
+# `unsafe_code` is forbidden here, so statvfs goes through rustix's safe wrapper; it is
+# already in the Linux build via `tar` -> `xattr`.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
 [dev-dependencies]
 # `test-util` gives tests the paused clock used by the supervisor backoff test.
 tokio = { version = "1.33.0", features = ["full", "test-util"] }

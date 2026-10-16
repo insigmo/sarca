@@ -54,8 +54,8 @@ pub struct Config {
 
     /// Max size of a single Telegram document chunk (official Bot API ≤20 MB).
     pub telegram_chunk_size_mb: u32,
-    /// Ceiling on bytes spooled in `WORK_DIR` awaiting relay. See
-    /// `services::files::spool_backlog_bytes`.
+    /// Ceiling on spooled bytes not yet relayed to Telegram. See
+    /// `services::files::SpoolUsage::admit`.
     pub upload_spool_budget_mb: u32,
 
     /// Verbose (debug-level) tracing for requests and background jobs. `RUST_LOG` still wins.
@@ -138,10 +138,10 @@ impl Config {
             Self::get_env_var_with_default("TELEGRAM_CHUNK_SIZE_MB", 20u32)?;
         // Clients hand a file off as soon as it is spooled and move straight on
         // to the next one, so nothing on their side is paced by how fast this
-        // server drains its backlog. Every waiting file is a full copy in
-        // WORK_DIR; this is the ceiling on how much of that may pile up before
-        // uploads are told to come back later. 8 GiB leaves room for a couple of
-        // large videos in the queue without threatening a modest disk.
+        // server drains its backlog. This is the ceiling on how much may be
+        // waiting to relay before uploads are told to come back later. 8 GiB
+        // leaves room for a couple of large videos in the queue; the disk itself
+        // is guarded separately, by asking the filesystem (`SpoolUsage::admit`).
         let upload_spool_budget_mb =
             Self::get_env_var_with_default("UPLOAD_SPOOL_BUDGET_MB", 8192u32)?.max(1);
 

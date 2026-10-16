@@ -55,7 +55,7 @@ use crate::{
         UploadParams,
     },
     services::{
-        files::FilesService,
+        files::{FilesService, SpoolAdmission},
         storage_manager::StorageManagerService,
         storage_workers_scheduler::StorageWorkersScheduler,
         thumbnails,
@@ -157,29 +157,46 @@ impl FilesRouter {
         // are spooled — so nothing but this paces it against a server that
         // relays far slower than it receives. Every file waiting to relay is a
         // full copy in WORK_DIR, and without a ceiling a big enough backlog
-        // simply fills the disk.
+        // simply fills the disk. See `SpoolUsage::admit` for the two limits.
         //
-        // 503 on purpose: this is "come back later", about the server, not about
-        // the file. Clients classify it as a link condition and retry the whole
-        // batch on the next pass rather than blaming any one file for it.
+        // Decided before a byte of the body is read, so a refused client has
+        // sent almost nothing.
         let incoming = headers
             .get(header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
-        let backlog = crate::services::files::spool_backlog_bytes();
+        let usage = crate::services::files::spool_usage();
         let budget = state.config.upload_spool_budget_bytes();
-        if backlog > 0 && backlog.saturating_add(incoming) > budget {
-            tracing::info!(
-                backlog,
-                incoming,
-                budget,
-                "upload deferred: too much already waiting to be relayed"
-            );
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Still storing earlier uploads — try again shortly".to_owned(),
-            ));
+        let available = crate::services::files::available_bytes(Path::new(&state.config.work_dir));
+        match usage.admit(incoming, budget, available) {
+            SpoolAdmission::Admit => {},
+            SpoolAdmission::Busy => {
+                tracing::info!(
+                    unrelayed = usage.unrelayed,
+                    on_disk = usage.on_disk,
+                    available,
+                    incoming,
+                    budget,
+                    "upload deferred: still storing earlier uploads"
+                );
+                return Ok(upload_busy_response());
+            },
+            SpoolAdmission::NoRoom => {
+                tracing::warn!(
+                    on_disk = usage.on_disk,
+                    available,
+                    incoming,
+                    "upload refused: not enough free space under WORK_DIR even once the \
+                     running relays finish"
+                );
+                return Err((
+                    StatusCode::INSUFFICIENT_STORAGE,
+                    "Not enough free space under WORK_DIR for this upload — free some and try \
+                     again"
+                        .to_owned(),
+                ));
+            },
         }
 
         // stream multipart to disk
@@ -1715,6 +1732,30 @@ async fn cached_jpeg(cache: &MediaCache, key: &str) -> Option<Vec<u8>> {
 
 fn preview_jpeg_response(bytes: Vec<u8>) -> Response {
     inline_jpeg_response(bytes, "preview.jpg")
+}
+
+/// Marks the upload handler's own "still storing earlier uploads" 503.
+///
+/// A 503 alone cannot say who sent it: a gateway answers one for a Sarca that
+/// is not there, and the sync client must stop its batch for that. This one
+/// means the opposite — the server is up and only this file has to wait — so
+/// the client skips the file and carries on with the rest. It is a header, not
+/// the body, because over HTTP/3 the body of an answer sent before the request
+/// body was read does not reliably arrive: production clients logged this 503
+/// with an empty body. The sync client reads the same name
+/// (`crates/sarca-sync/src/api.rs`).
+pub const UPLOAD_BUSY_HEADER: &str = "x-sarca-busy";
+
+/// 503 with `Retry-After` and [`UPLOAD_BUSY_HEADER`]: come back later, about
+/// the server and not about the file.
+fn upload_busy_response() -> Response {
+    let mut response =
+        (StatusCode::SERVICE_UNAVAILABLE, "Still storing earlier uploads — try again shortly")
+            .into_response();
+    let headers = response.headers_mut();
+    headers.insert(header::RETRY_AFTER, header::HeaderValue::from_static("60"));
+    headers.insert(UPLOAD_BUSY_HEADER, header::HeaderValue::from_static("spool"));
+    response
 }
 
 /// 503 with `Retry-After` so `thumbQueue.js` backs off instead of hammering a

@@ -4513,6 +4513,7 @@ dependencies = [
  "rcgen 0.13.2",
  "reqwest 0.12.28",
  "ring",
+ "rustix",
  "rustls",
  "rustls-pemfile",
  "serde",

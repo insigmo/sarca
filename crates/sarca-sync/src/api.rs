@@ -711,6 +711,11 @@ impl SarcaApi {
         };
         if !resp.status().is_success() {
             let status = resp.status();
+            if status == StatusCode::SERVICE_UNAVAILABLE
+                && resp.headers().contains_key(UPLOAD_BUSY_HEADER)
+            {
+                return Err(anyhow::Error::new(ServerBusy).context("upload failed"));
+            }
             let body = resp.text().await.unwrap_or_default();
             return Err(
                 anyhow::Error::new(HttpStatusError { status, body }).context("upload failed")
@@ -1115,7 +1120,37 @@ pub enum FailureScope {
     /// gateway answered for a backend that is not there, or the session
     /// expired. Every other file is about to fail exactly the same way.
     Link,
+    /// Neither. The server is up and answered, but it is still storing
+    /// earlier uploads and has no room for this one yet. The next file may be
+    /// small enough to fit where this one did not, so the batch goes on
+    /// without it; and since nothing was learned about the file, nothing about
+    /// it goes on the retry ladder. It is simply offered again next pass.
+    Busy,
 }
+
+/// Header a Sarca server puts on its "still storing earlier uploads" 503. The
+/// status alone cannot tell that answer from a gateway's 503 for a server that
+/// is not there, and the body is no help: over HTTP/3 the body of an answer
+/// sent before the upload was read arrives empty. Mirrors
+/// `UPLOAD_BUSY_HEADER` in the server's `routers/files.rs`; a server that
+/// predates it sends a bare 503, which stays a [`FailureScope::Link`].
+const UPLOAD_BUSY_HEADER: &str = "x-sarca-busy";
+
+/// The server's "come back later" answer to an upload. Typed so
+/// [`failure_scope`] can tell it apart from every other 503.
+#[derive(Debug)]
+struct ServerBusy;
+
+impl std::fmt::Display for ServerBusy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "the server is still storing earlier uploads and has no room for this file yet. \
+             It will be offered again on the next pass.",
+        )
+    }
+}
+
+impl std::error::Error for ServerBusy {}
 
 /// A non-2xx answer, kept as a typed error so callers can classify by status
 /// instead of re-parsing the message they just formatted. `Display` is bare
@@ -1224,6 +1259,8 @@ fn scope_for_status(status: StatusCode) -> FailureScope {
         // a 5xx is the server or the gateway in front of it: overloaded,
         // restarting, or gone. Caddy's empty-bodied 502 for a backend that is
         // not listening is the shape this whole classification exists for.
+        // The server's own "busy" 503 never gets here: `upload_file` knows it
+        // by its header and raises `ServerBusy` instead.
         s if s >= 500 => FailureScope::Link,
         _ => FailureScope::File,
     }
@@ -1238,6 +1275,9 @@ fn scope_for_status(status: StatusCode) -> FailureScope {
 /// the property the retry ladder exists for.
 pub fn failure_scope(err: &anyhow::Error) -> FailureScope {
     for cause in err.chain() {
+        if cause.is::<ServerBusy>() {
+            return FailureScope::Busy;
+        }
         // A response that went quiet says nothing about the file that happened
         // to be in flight — the next one is about to meet the same silence.
         if cause.is::<TransferReadStalled>() || cause.is::<TransferTruncated>() {
@@ -2325,6 +2365,12 @@ mod tests {
         // The 502 storm: Caddy answering for a sarca that was restarting. The
         // file in flight had nothing to do with it, and 130 files behind it
         // even less.
+        //
+        // 503 stays in this list on purpose. An `HttpStatusError` is what a 503
+        // *without* the busy header becomes — a gateway's, or one from a server
+        // that predates the header — and that still has to stop the batch. The
+        // server's own busy answer is told apart by its header, before an
+        // `HttpStatusError` is ever built; see the tests below.
         for status in [502u16, 503, 504, 500, 507] {
             let err = anyhow::Error::new(HttpStatusError {
                 status: StatusCode::from_u16(status).unwrap(),
@@ -2333,6 +2379,96 @@ mod tests {
             .context("upload failed");
             assert_eq!(failure_scope(&err), FailureScope::Link, "status {status}");
         }
+    }
+
+    /// Answers every request with `response` (a raw HTTP/1.1 response), once
+    /// the client has stopped sending: replying mid-body fails the request as a
+    /// transport error, which would test the wrong thing.
+    async fn canned_response_endpoint(response: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 64 * 1024];
+                    loop {
+                        match tokio::time::timeout(
+                            Duration::from_millis(150),
+                            sock.read(&mut buf),
+                        )
+                        .await
+                        {
+                            Ok(Ok(0) | Err(_)) | Err(_) => break,
+                            Ok(Ok(_)) => continue,
+                        }
+                    }
+                    let _ = sock.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    async fn upload_against(response: &'static str) -> anyhow::Error {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("clip.mp4");
+        tokio::fs::write(&file_path, b"video-bytes").await.unwrap();
+        let base = canned_response_endpoint(response).await;
+        SarcaApi::new(&base, "t")
+            .upload_file(Uuid::nil(), "", "clip.mp4", &file_path, None, None)
+            .await
+            .expect_err("a 503 is not a stored file")
+    }
+
+    /// The server's "still storing earlier uploads" answer. It used to be
+    /// classified like any 503 — the link is down — and stopped the batch, so
+    /// a file that could not fit beside the running relays kept every file
+    /// behind it from being tried at all.
+    #[tokio::test]
+    async fn the_servers_busy_answer_is_neither_the_file_nor_the_link() {
+        // Empty body, as production clients received it over HTTP/3: the
+        // header has to carry the whole meaning.
+        let err = upload_against(
+            "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 60\r\nx-sarca-busy: spool\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert_eq!(failure_scope(&err), FailureScope::Busy);
+        assert!(
+            format!("{err:#}").contains("still storing earlier uploads"),
+            "the log line should say why the file was skipped: {err:#}"
+        );
+    }
+
+    /// The same status without the header is a gateway speaking for a server
+    /// that is not there, or a server too old to send the header. Old servers
+    /// keep working exactly as before: the batch stops.
+    #[tokio::test]
+    async fn a_503_without_the_busy_header_is_still_the_link() {
+        let err = upload_against(
+            "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 60\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert_eq!(failure_scope(&err), FailureScope::Link);
+    }
+
+    /// The header only means something on a 503. Anything else carrying it
+    /// is classified by its status, as it would be without it.
+    #[tokio::test]
+    async fn the_busy_header_on_another_status_changes_nothing() {
+        let err = upload_against(
+            "HTTP/1.1 502 Bad Gateway\r\nx-sarca-busy: spool\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert_eq!(failure_scope(&err), FailureScope::Link);
+        let err = upload_against(
+            "HTTP/1.1 400 Bad Request\r\nx-sarca-busy: spool\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n",
+        )
+        .await;
+        assert_eq!(failure_scope(&err), FailureScope::File);
     }
 
     #[test]

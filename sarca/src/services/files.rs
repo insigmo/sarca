@@ -41,8 +41,8 @@ use crate::{
     services::trash::purge_file_ids,
 };
 
-/// Files whose Telegram relay is running right now, by `files.id`, with the size of the
-/// spool each is still holding in `WORK_DIR`.
+/// Files whose Telegram relay is running right now, by `files.id`, with what each is
+/// holding in `WORK_DIR`.
 ///
 /// A relay outlives the request that started it (see `ndjson_upload_progress_response`:
 /// the abort guard is disarmed once the bytes are spooled), and on a slow uplink it can
@@ -54,15 +54,67 @@ use crate::{
 /// work would start over from chunk 0 — forever, for any file too large to finish inside
 /// one client deadline.
 ///
-/// The second is [`spool_backlog_bytes`]. Clients hand off and move on now, so nothing
-/// upstream is paced by how fast this server can drain its backlog — and every waiting
-/// file is a full copy on disk. Accepting them faster than they relay is how `WORK_DIR`
-/// fills up.
+/// The second is [`spool_usage`]. Clients hand off and move on now, so nothing upstream
+/// is paced by how fast this server can drain its backlog — and every waiting file is a
+/// full copy on disk. Accepting them faster than they relay is how `WORK_DIR` fills up.
 ///
 /// A plain in-memory map is enough: it only has to be right for the lifetime of the
 /// relays it tracks, and a restart ends those too.
-static RELAYS_IN_FLIGHT: LazyLock<Mutex<HashMap<Uuid, u64>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static RELAYS_IN_FLIGHT: LazyLock<Mutex<RelayLedger>> =
+    LazyLock::new(|| Mutex::new(RelayLedger::default()));
+
+/// What one running relay holds.
+#[derive(Debug, Clone, Copy)]
+struct SpoolEntry {
+    /// Size of the spool file. It stays whole on disk until the relay ends — the
+    /// thumbnail and preview are read from it after the last chunk — so this never
+    /// shrinks.
+    on_disk: u64,
+    /// Bytes not yet in a channel. Starts at the spool's size, loses whatever an
+    /// earlier attempt already stored once the relay has looked, and then each chunk
+    /// as Telegram accepts it.
+    unrelayed: u64,
+}
+
+/// Every relay running in this process. Separate from the static so the arithmetic can
+/// be tested on an instance no other test is writing to.
+#[derive(Debug, Default)]
+struct RelayLedger(HashMap<Uuid, SpoolEntry>);
+
+impl RelayLedger {
+    fn start(&mut self, file_id: Uuid, spooled_bytes: u64) {
+        self.0.insert(
+            file_id,
+            SpoolEntry {
+                on_disk: spooled_bytes,
+                unrelayed: spooled_bytes,
+            },
+        );
+    }
+
+    fn relayed(&mut self, file_id: Uuid, bytes: u64) {
+        if let Some(entry) = self.0.get_mut(&file_id) {
+            entry.unrelayed = entry.unrelayed.saturating_sub(bytes);
+        }
+    }
+
+    fn end(&mut self, file_id: Uuid) {
+        self.0.remove(&file_id);
+    }
+
+    fn contains(&self, file_id: Uuid) -> bool {
+        self.0.contains_key(&file_id)
+    }
+
+    fn usage(&self) -> SpoolUsage {
+        self.0.values().fold(SpoolUsage::default(), |acc, entry| {
+            SpoolUsage {
+                unrelayed: acc.unrelayed.saturating_add(entry.unrelayed),
+                on_disk: acc.on_disk.saturating_add(entry.on_disk),
+            }
+        })
+    }
+}
 
 /// Marks `file_id` as relaying for as long as it is alive. Removal on drop covers the
 /// panic and cancellation paths as well as the ordinary one.
@@ -71,7 +123,7 @@ struct RelayGuard(Uuid);
 impl RelayGuard {
     fn new(file_id: Uuid, spooled_bytes: u64) -> Self {
         if let Ok(mut guard) = RELAYS_IN_FLIGHT.lock() {
-            guard.insert(file_id, spooled_bytes);
+            guard.start(file_id, spooled_bytes);
         }
         Self(file_id)
     }
@@ -80,23 +132,107 @@ impl RelayGuard {
 impl Drop for RelayGuard {
     fn drop(&mut self) {
         if let Ok(mut guard) = RELAYS_IN_FLIGHT.lock() {
-            guard.remove(&self.0);
+            guard.end(self.0);
         }
     }
 }
 
 /// True while `file_id`'s Telegram relay is running in this process.
 fn relay_in_flight(file_id: Uuid) -> bool {
-    RELAYS_IN_FLIGHT.lock().is_ok_and(|g| g.contains_key(&file_id))
+    RELAYS_IN_FLIGHT.lock().is_ok_and(|g| g.contains(file_id))
 }
 
-/// Bytes currently spooled in `WORK_DIR` waiting to be relayed onward.
+/// Records that `bytes` of `file_id`'s spool are in a channel now.
 ///
-/// The upload handler refuses new work once this is over budget. That refusal is the only
-/// backpressure left in the system: a client used to be paced by holding its request open
-/// until the relay finished, and it deliberately no longer does.
-pub fn spool_backlog_bytes() -> u64 {
-    RELAYS_IN_FLIGHT.lock().map_or(0, |g| g.values().sum())
+/// They stop counting against the spool budget. The relay calls it once for what an
+/// earlier attempt already stored and then per chunk. A file with no relay running here
+/// is ignored.
+pub fn mark_relayed(file_id: Uuid, bytes: u64) {
+    if let Ok(mut guard) = RELAYS_IN_FLIGHT.lock() {
+        guard.relayed(file_id, bytes);
+    }
+}
+
+/// What every running relay holds right now.
+pub fn spool_usage() -> SpoolUsage {
+    RELAYS_IN_FLIGHT.lock().map_or_else(|_| SpoolUsage::default(), |g| g.usage())
+}
+
+/// Headroom kept free on the filesystem under `WORK_DIR`. The SQLite database and the
+/// media caches live there too, and a spool that takes the last byte breaks them.
+pub const SPOOL_FREE_SPACE_RESERVE: u64 = 1024 * 1024 * 1024;
+
+/// The spool's state as the upload handler weighs it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SpoolUsage {
+    /// Bytes still to go onward to Telegram. Shrinks chunk by chunk, so a large file's
+    /// relay makes room for the next upload as it goes rather than all at the end.
+    pub unrelayed: u64,
+    /// Bytes the spool files take on disk. Each is freed only when its relay ends.
+    pub on_disk: u64,
+}
+
+/// The upload handler's answer to an upload of a given size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpoolAdmission {
+    Admit,
+    /// Come back later: the server is still storing earlier uploads, and this one fits
+    /// once some of that is done.
+    Busy,
+    /// Waiting would not help: even with every running relay's spool gone, the
+    /// filesystem under `WORK_DIR` has no room for this upload.
+    NoRoom,
+}
+
+impl SpoolUsage {
+    /// Whether an upload of `incoming` bytes may be spooled now, given `budget` bytes of
+    /// relay backlog and `available` bytes free under `WORK_DIR` (`None` when the
+    /// filesystem cannot be asked).
+    ///
+    /// This is the only backpressure left in the system: a client used to be paced by
+    /// holding its request open until the relay finished, and it deliberately no longer
+    /// does. Two limits, because the backlog is no longer the disk:
+    ///
+    /// - The budget caps work not yet relayed. It used to count each spool at full size until its
+    ///   relay ended, so a file near or over the budget held every other upload off for its whole
+    ///   relay. A backlog of zero admits anything, as it always has — otherwise a file larger than
+    ///   the budget could never go.
+    /// - The disk check is what keeps `WORK_DIR` from filling now that the budget lets a finished
+    ///   chunk's bytes be counted as gone while they are still on disk. It asks the filesystem
+    ///   instead of trusting the arithmetic, so it also covers whatever else is using the disk.
+    pub fn admit(self, incoming: u64, budget: u64, available: Option<u64>) -> SpoolAdmission {
+        if let Some(available) = available {
+            let needed = incoming.saturating_add(SPOOL_FREE_SPACE_RESERVE);
+            if available < needed {
+                // Every running relay deletes its spool when it ends, so what they hold
+                // now is room this upload gets back by waiting.
+                return if available.saturating_add(self.on_disk) >= needed {
+                    SpoolAdmission::Busy
+                } else {
+                    SpoolAdmission::NoRoom
+                };
+            }
+        }
+        if self.unrelayed > 0 && self.unrelayed.saturating_add(incoming) > budget {
+            return SpoolAdmission::Busy;
+        }
+        SpoolAdmission::Admit
+    }
+}
+
+/// Bytes an unprivileged writer can still put on the filesystem holding `path`, or
+/// `None` when that cannot be asked — a non-Unix build, or a path that does not exist.
+pub fn available_bytes(path: &std::path::Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        let stat = rustix::fs::statvfs(path).ok()?;
+        Some(stat.f_bavail.saturating_mul(stat.f_frsize))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        None
+    }
 }
 
 pub struct FilesService<'d> {
@@ -1030,7 +1166,26 @@ mod retired_version_path_tests {
 mod relay_registry_tests {
     use uuid::Uuid;
 
-    use super::{RelayGuard, relay_in_flight, spool_backlog_bytes};
+    use super::{
+        RELAYS_IN_FLIGHT,
+        RelayGuard,
+        RelayLedger,
+        SPOOL_FREE_SPACE_RESERVE,
+        SpoolAdmission,
+        SpoolUsage,
+        mark_relayed,
+        relay_in_flight,
+    };
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const BUDGET: u64 = 8 * GIB;
+
+    fn usage(unrelayed: u64, on_disk: u64) -> SpoolUsage {
+        SpoolUsage {
+            unrelayed,
+            on_disk,
+        }
+    }
 
     #[test]
     fn a_relay_is_visible_while_it_runs_and_gone_afterwards() {
@@ -1061,17 +1216,158 @@ mod relay_registry_tests {
 
     /// The backlog is what the upload handler refuses on, so it has to count
     /// every waiting spool and let go of each one as its relay ends.
+    ///
+    /// Used to read the process-wide total, which every other test in this
+    /// module writes to at the same time; a ledger of its own cannot race.
     #[test]
     fn the_backlog_totals_what_is_still_waiting_to_relay() {
-        let before = spool_backlog_bytes();
-        let guard = RelayGuard::new(Uuid::new_v4(), 700);
-        {
-            let _second = RelayGuard::new(Uuid::new_v4(), 300);
-            assert_eq!(spool_backlog_bytes(), before + 1000);
-        }
-        assert_eq!(spool_backlog_bytes(), before + 700);
+        let mut ledger = RelayLedger::default();
+        let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
+        ledger.start(a, 700);
+        ledger.start(b, 300);
+        assert_eq!(ledger.usage(), usage(1000, 1000));
+        ledger.end(b);
+        assert_eq!(ledger.usage(), usage(700, 700));
+        ledger.end(a);
+        assert_eq!(ledger.usage(), SpoolUsage::default());
+    }
+
+    /// A chunk in a channel is no longer the budget's concern, but its bytes
+    /// stay on disk until the relay is over: the spool is read again for the
+    /// thumbnail after the last chunk. Counting them as freed on disk too is
+    /// how the budget stopped protecting `WORK_DIR`.
+    #[test]
+    fn a_relay_frees_budget_chunk_by_chunk_but_disk_only_when_it_ends() {
+        let mut ledger = RelayLedger::default();
+        let id = Uuid::new_v4();
+        ledger.start(id, 1000);
+        ledger.relayed(id, 300);
+        assert_eq!(ledger.usage(), usage(700, 1000));
+        ledger.relayed(id, 700);
+        assert_eq!(ledger.usage(), usage(0, 1000));
+        ledger.end(id);
+        assert_eq!(ledger.usage(), SpoolUsage::default());
+    }
+
+    /// A resumed upload spools the whole file again, but the positions an
+    /// earlier attempt stored are not going anywhere.
+    #[test]
+    fn positions_a_resumed_upload_already_has_do_not_count() {
+        let mut ledger = RelayLedger::default();
+        let id = Uuid::new_v4();
+        ledger.start(id, 1000);
+        ledger.relayed(id, 600);
+        assert_eq!(ledger.usage(), usage(400, 1000));
+    }
+
+    #[test]
+    fn relay_progress_never_underflows_or_invents_a_relay() {
+        let mut ledger = RelayLedger::default();
+        let id = Uuid::new_v4();
+        ledger.start(id, 100);
+        ledger.relayed(id, 500);
+        assert_eq!(ledger.usage(), usage(0, 100));
+        ledger.relayed(Uuid::new_v4(), 50);
+        assert_eq!(ledger.usage(), usage(0, 100), "no relay, nothing to record");
+    }
+
+    /// The storage manager reports through the process-wide registry, keyed by
+    /// the same id the upload's guard holds.
+    #[test]
+    fn relay_progress_reaches_the_running_relay() {
+        let entry = |id: Uuid| {
+            RELAYS_IN_FLIGHT.lock().unwrap().0.get(&id).map(|e| (e.unrelayed, e.on_disk))
+        };
+        let id = Uuid::new_v4();
+        let guard = RelayGuard::new(id, 1000);
+        mark_relayed(id, 400);
+        assert_eq!(entry(id), Some((600, 1000)));
         drop(guard);
-        assert_eq!(spool_backlog_bytes(), before);
+        assert_eq!(entry(id), None);
+    }
+
+    /// Nothing waiting admits anything, as before: otherwise a file larger than
+    /// the budget could never be stored at all.
+    #[test]
+    fn an_idle_spool_admits_a_file_larger_than_the_budget() {
+        assert_eq!(
+            SpoolUsage::default().admit(11 * GIB, BUDGET, Some(100 * GIB)),
+            SpoolAdmission::Admit
+        );
+    }
+
+    #[test]
+    fn a_backlog_that_would_go_over_budget_is_busy() {
+        assert_eq!(
+            usage(2 * GIB, 2 * GIB).admit(7 * GIB, BUDGET, Some(100 * GIB)),
+            SpoolAdmission::Busy
+        );
+        assert_eq!(
+            usage(2 * GIB, 2 * GIB).admit(6 * GIB, BUDGET, Some(100 * GIB)),
+            SpoolAdmission::Admit
+        );
+    }
+
+    /// The case that serialised every upload behind one large video: while a
+    /// 10.7 GB relay was running, its full size counted against the 8 GiB
+    /// budget until the last chunk, so nothing else got in. Counted by what is
+    /// left to relay, the next file gets in once the video is far enough along.
+    #[test]
+    fn a_large_relay_lets_the_next_upload_in_as_it_goes() {
+        let video = 10_738_631_814;
+        let next = 3 * GIB;
+        assert_eq!(
+            usage(video, video).admit(next, BUDGET, Some(100 * GIB)),
+            SpoolAdmission::Busy,
+            "at the start the video fills the budget"
+        );
+        assert_eq!(
+            usage(video - 8 * GIB, video).admit(next, BUDGET, Some(100 * GIB)),
+            SpoolAdmission::Admit,
+            "8 GiB into the relay, there is room"
+        );
+    }
+
+    /// With the budget counting relayed chunks as gone, the disk has to be
+    /// asked directly. Short of room, but with running relays whose spools will
+    /// be deleted: wait for them, even when the budget itself has room.
+    #[test]
+    fn a_disk_that_frees_up_once_relays_end_is_busy() {
+        let available = 2 * GIB;
+        assert_eq!(usage(0, 5 * GIB).admit(3 * GIB, BUDGET, Some(available)), SpoolAdmission::Busy);
+    }
+
+    /// Nothing to wait for: the upload does not fit even with every spool
+    /// gone. Refused up front instead of written until the disk is full.
+    #[test]
+    fn an_upload_the_disk_cannot_hold_is_refused_not_deferred() {
+        assert_eq!(usage(0, GIB).admit(3 * GIB, BUDGET, Some(GIB)), SpoolAdmission::NoRoom);
+        assert_eq!(
+            SpoolUsage::default().admit(3 * GIB, BUDGET, Some(2 * GIB)),
+            SpoolAdmission::NoRoom
+        );
+    }
+
+    #[test]
+    fn the_disk_check_keeps_a_reserve_free() {
+        let incoming = GIB;
+        let exactly = incoming + SPOOL_FREE_SPACE_RESERVE;
+        assert_eq!(
+            SpoolUsage::default().admit(incoming, BUDGET, Some(exactly)),
+            SpoolAdmission::Admit
+        );
+        assert_eq!(
+            SpoolUsage::default().admit(incoming, BUDGET, Some(exactly - 1)),
+            SpoolAdmission::NoRoom
+        );
+    }
+
+    /// No answer from the filesystem (not a Unix build) leaves the budget as
+    /// the only limit, as it was before the disk check existed.
+    #[test]
+    fn without_a_disk_reading_only_the_budget_applies() {
+        assert_eq!(SpoolUsage::default().admit(100 * GIB, BUDGET, None), SpoolAdmission::Admit);
+        assert_eq!(usage(GIB, GIB).admit(8 * GIB, BUDGET, None), SpoolAdmission::Busy);
     }
 }
 

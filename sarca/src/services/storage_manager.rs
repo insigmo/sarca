@@ -32,7 +32,7 @@ use crate::{
         storage_channels::StorageChannelsRepository,
         storages::StoragesRepository,
     },
-    services::{thumbnails, thumbnails::ThumbAndPreview},
+    services::{files, thumbnails, thumbnails::ThumbAndPreview},
 };
 
 pub struct StorageManagerService<'d> {
@@ -195,6 +195,8 @@ impl<'d> StorageManagerService<'d> {
 
         // Everything still to send, and the bytes the earlier attempt is worth.
         let (plan, resumed_bytes) = remaining_chunk_plan(total, chunk_size, &stored_positions);
+        // Already in a channel, so not the spool budget's concern any more.
+        files::mark_relayed(data.file_id, resumed_bytes);
         let resumed_chunks = u32::try_from(stored_positions.len()).unwrap_or(u32::MAX);
         if resumed_chunks > 0 {
             tracing::info!(
@@ -262,6 +264,9 @@ impl<'d> StorageManagerService<'d> {
                             Some(Arc::clone(&sent_total)),
                         )
                         .await?;
+                    // Frees budget as the relay goes, so a large file lets the
+                    // next upload in long before its last chunk.
+                    files::mark_relayed(data.file_id, len);
                     // Report chunks *finished*, not the position that happened
                     // to land last: out of order, the latter goes backwards.
                     let finished = done_chunks.fetch_add(1, Ordering::Relaxed) + 1;

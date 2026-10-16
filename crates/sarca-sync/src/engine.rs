@@ -749,6 +749,7 @@ impl SyncEngine {
         let mut uploaded = 0usize;
         let mut relaying = 0usize;
         let mut failed = 0usize;
+        let mut busy = 0usize;
         let mut first_error: Option<String> = None;
         let mut consecutive_failures = 0usize;
         let mut stop_batch = false;
@@ -762,7 +763,8 @@ impl SyncEngine {
         //
         // A file that failed because there was no server there to refuse it is
         // the opposite case, and gets the opposite treatment: see the
-        // `FailureScope::Link` arm below.
+        // `FailureScope::Link` arm below. A server that answered "not yet" is
+        // neither: see the `FailureScope::Busy` arm.
         loop {
             let wave: Vec<_> = pending_iter.by_ref().take(UPLOAD_PARALLELISM).collect();
             if wave.is_empty() {
@@ -795,6 +797,21 @@ impl SyncEngine {
                         }
                     }
                     Err(e) => {
+                        let scope = failure_scope(&e);
+                        if scope == FailureScope::Busy {
+                            // The server is up and said "not yet": it is still
+                            // storing earlier uploads. This used to read as a
+                            // dead link and stop the batch, so a file too big to
+                            // fit beside anything else kept every file behind it
+                            // waiting, pass after pass. The next file may well
+                            // fit, so go on to it. Nothing was learned about this
+                            // one, so it stays off the retry ladder and out of
+                            // the error banner; the next pass offers it again.
+                            busy += 1;
+                            info!(binding = %binding.id, path = %rel,
+                                "server still storing earlier uploads; file waits for next pass");
+                            continue;
+                        }
                         let msg = format!("{e:#}");
                         // The cached remote-folder set is an optimistic guess.
                         // If an upload fails, a folder we skipped re-creating
@@ -804,7 +821,7 @@ impl SyncEngine {
                         if first_error.is_none() {
                             first_error = Some(msg.clone());
                         }
-                        if matches!(failure_scope(&e), FailureScope::Link) {
+                        if scope == FailureScope::Link {
                             // Nothing reached the server, so nothing was learned
                             // about this file — and nothing will be learned about
                             // the next one either. Marching on would attempt the
@@ -893,6 +910,7 @@ impl SyncEngine {
             uploaded,
             relaying,
             failed,
+            busy,
             error = first_error.as_deref().unwrap_or(""),
             "push_local done"
         );
@@ -1914,53 +1932,208 @@ mod tests {
         // failed in milliseconds, and each was pushed a rung up the retry
         // ladder — so a minute of downtime showed up as "132 files failed to
         // upload" and locked a healthy backlog out for six hours.
+        //
+        // A bare 503 is here alongside the 502 on purpose. The server's own
+        // "busy" 503 carries a header and keeps the batch going (see
+        // `a_busy_server_skips_the_file_and_the_batch_goes_on`); without the
+        // header it is a gateway's, or an old server's, and must still stop it.
         const FILES: usize = 5;
+        for status_line in ["502 Bad Gateway", "503 Service Unavailable"] {
+            let dir = tempfile::tempdir().unwrap();
+            let pics = dir.path().join("pics");
+            std::fs::create_dir_all(&pics).unwrap();
+            for i in 0..FILES {
+                std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
+            }
+            let (base, hits) = canned_status_server(status_line).await;
+            let engine = engine_facing(dir.path(), &base);
+            let binding = cam_binding(&pics);
+
+            let result = engine.push_local(&binding).await.unwrap();
+
+            // One file's worth of requests: the preflight asks first, and the
+            // upload follows when it cannot answer. What must not happen is the
+            // *backlog* marching through — five files thrown at a dead gateway.
+            let hits = hits.load(std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                hits <= 2,
+                "{status_line}: one refusal from the gateway is enough — the rest of the \
+                 backlog must not be thrown at a server that is not there; got {hits} requests"
+            );
+            assert_eq!(result.failed, 0, "{status_line}: the link failed, not the files");
+            // A busy skip raises no banner, so this also says the gateway was
+            // not mistaken for a busy server.
+            assert!(
+                result.first_error.is_some(),
+                "{status_line}: the outage must still be reported, via the error banner"
+            );
+            assert_eq!(
+                engine.index.upload_failure_count(&binding.id).unwrap(),
+                0,
+                "{status_line}: an outage must leave no file deferred"
+            );
+
+            // And the whole backlog is still there for the next tick, undeferred.
+            assert_eq!(
+                filter_pending_candidates(
+                    &engine.index,
+                    &binding.id,
+                    &crate::media_source::FsMediaSource
+                        .list_candidates(&binding)
+                        .await
+                        .unwrap(),
+                )
+                .unwrap()
+                .len(),
+                FILES,
+                "{status_line}"
+            );
+        }
+    }
+
+    /// A server that answers the upload preflight "no such file" and each
+    /// upload according to what the file holds: `BUSY` in the bytes gets the
+    /// server's own busy 503 (empty body, as it arrives over HTTP/3), anything
+    /// else a clean `spooled` + `done`. Returns the base URL and the file
+    /// contents of every upload it saw, in the order they arrived.
+    async fn busy_for_one_file_server() -> (String, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_for_task = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                let seen = seen_for_task.clone();
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 65536];
+                    let mut request = Vec::new();
+                    loop {
+                        match tokio::time::timeout(
+                            Duration::from_millis(100),
+                            sock.read(&mut buf),
+                        )
+                        .await
+                        {
+                            Ok(Ok(0) | Err(_)) | Err(_) => break,
+                            Ok(Ok(n)) => request.extend_from_slice(&buf[..n]),
+                        }
+                    }
+                    let request = String::from_utf8_lossy(&request).to_string();
+                    let resp = if request.contains("/files/info/") {
+                        "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            .to_owned()
+                    } else if request.contains("/files/upload") {
+                        let file = ["file-1", "BUSY file-2", "file-3"]
+                            .into_iter()
+                            .find(|content| request.contains(content))
+                            .unwrap_or("?");
+                        seen.lock().unwrap().push(file.to_owned());
+                        if file.starts_with("BUSY") {
+                            "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 60\r\n\
+                             x-sarca-busy: spool\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                .to_owned()
+                        } else {
+                            let body = "{\"phase\":\"spooled\"}\n{\"phase\":\"done\"}\n";
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\
+                                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                body.len()
+                            )
+                        }
+                    } else {
+                        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\
+                         Connection: close\r\n\r\n"
+                            .to_owned()
+                    };
+                    let _ = sock.write_all(resp.as_bytes()).await;
+                });
+            }
+        });
+        (format!("http://{addr}"), seen)
+    }
+
+    /// The bug this test exists for: a 10.7 GB video too big to fit beside
+    /// anything else the server was still storing got the server's "busy" 503
+    /// on every pass. That read as a dead link and stopped the batch, and the
+    /// 30 files behind it in scan order were never attempted at all.
+    #[tokio::test]
+    async fn a_busy_server_skips_the_file_and_the_batch_goes_on() {
         let dir = tempfile::tempdir().unwrap();
         let pics = dir.path().join("pics");
         std::fs::create_dir_all(&pics).unwrap();
-        for i in 0..FILES {
-            std::fs::write(pics.join(format!("{i}.jpg")), b"x").unwrap();
-        }
-        let (base, hits) = canned_status_server("502 Bad Gateway").await;
-        let engine = engine_facing(dir.path(), &base);
+        // A fixed order, so "file 3 comes after the busy one" is a fact of the
+        // test and not of how the filesystem happens to list a directory.
+        let candidates: Vec<LocalCandidate> = [
+            ("1.jpg", "file-1"),
+            ("2.jpg", "BUSY file-2"),
+            ("3.jpg", "file-3"),
+        ]
+        .into_iter()
+        .map(|(name, content)| {
+            let path = pics.join(name);
+            std::fs::write(&path, content).unwrap();
+            LocalCandidate {
+                relative_path: name.into(),
+                absolute_path: path,
+                size: content.len() as i64,
+                mtime_ms: 5,
+                ephemeral: false,
+            }
+        })
+        .collect();
+        let (base, seen) = busy_for_one_file_server().await;
+        let engine = SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(&base, "t"))),
+                data_dir: dir.path().to_path_buf(),
+                media_source: Arc::new(FixedMediaSource(candidates.clone())),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap();
         let binding = cam_binding(&pics);
 
         let result = engine.push_local(&binding).await.unwrap();
 
-        // One file's worth of requests: the preflight asks first, and the upload
-        // follows when it cannot answer. What must not happen is the *backlog*
-        // marching through — five files thrown at a dead gateway.
-        let hits = hits.load(std::sync::atomic::Ordering::SeqCst);
-        assert!(
-            hits <= 2,
-            "one refusal from the gateway is enough — the rest of the backlog \
-             must not be thrown at a server that is not there; got {hits} requests"
+        assert_eq!(
+            *seen.lock().unwrap(),
+            ["file-1", "BUSY file-2", "file-3"],
+            "file 3 must still be offered after the server said it was busy for file 2"
         );
-        assert_eq!(result.failed, 0, "the link failed, not the files");
+        assert_eq!(result.uploaded, 2);
+        assert_eq!(result.failed, 0, "busy is not a verdict on the file");
         assert!(
-            result.first_error.is_some(),
-            "the outage must still be reported, via the error banner"
+            result.first_error.is_none(),
+            "busy is not an error either, so it must not raise the error banner: {:?}",
+            result.first_error
         );
         assert_eq!(
             engine.index.upload_failure_count(&binding.id).unwrap(),
             0,
-            "an outage must leave no file deferred"
+            "a busy server must put nothing on the retry ladder"
+        );
+        assert!(engine.index.get_entry(&binding.id, "1.jpg").unwrap().is_some());
+        assert!(engine.index.get_entry(&binding.id, "3.jpg").unwrap().is_some());
+        assert_eq!(
+            engine.transfer_queue().await.uploading,
+            0,
+            "the skipped file must not be left showing as queued"
         );
 
-        // And the whole backlog is still there for the next tick, undeferred.
-        assert_eq!(
-            filter_pending_candidates(
-                &engine.index,
-                &binding.id,
-                &crate::media_source::FsMediaSource
-                    .list_candidates(&binding)
-                    .await
-                    .unwrap(),
-            )
-            .unwrap()
-            .len(),
-            FILES,
-        );
+        // And the next pass offers it again, with no deadline to wait out.
+        let pending: Vec<String> =
+            filter_pending_candidates(&engine.index, &binding.id, &candidates)
+                .unwrap()
+                .into_iter()
+                .map(|c| c.relative_path)
+                .collect();
+        assert_eq!(pending, ["2.jpg"]);
     }
 
     #[tokio::test]
