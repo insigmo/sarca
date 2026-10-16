@@ -8,3 +8,13 @@ allowBuilds:
 # requires Node >=22, and postcss loads it as CommonJS.
 overrides:
   nanoid@<3.3.17: '^3.3.17'
+
+# GHSA-hp3w-g68c-fv3c (sprintf-js, DoS via unbounded precision specifiers) has
+# no patched release: the advisory covers every published version up to 1.1.3.
+# It reaches us only as mammoth > argparse > sprintf-js, and argparse is
+# required solely by mammoth's command-line wrapper (`bin/mammoth`), never by
+# `lib/`, so it is not in the UI bundle. Drop this entry once sprintf-js ships
+# a fix or mammoth stops depending on argparse 1.x.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-hp3w-g68c-fv3c
