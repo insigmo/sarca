@@ -470,6 +470,8 @@ pub async fn save_issued(store: &CertStore, issued: &IssuedCertificate) -> Resul
 mod tests {
     use std::net::{IpAddr, Ipv4Addr};
 
+    use rcgen::PublicKeyData;
+
     use super::*;
 
     fn test_config() -> AcmeConfig {
@@ -512,7 +514,7 @@ mod tests {
 
         // The public key is what clients pin, so it is what must survive a
         // renewal, not just the file.
-        assert_eq!(first.public_key_der(), second.public_key_der());
+        assert_eq!(first.subject_public_key_info(), second.subject_public_key_info());
     }
 
     #[tokio::test]
@@ -523,7 +525,7 @@ mod tests {
 
         let key = load_or_create_key(&path).await.unwrap();
         let reloaded = load_or_create_key(&path).await.unwrap();
-        assert_eq!(key.public_key_der(), reloaded.public_key_der());
+        assert_eq!(key.subject_public_key_info(), reloaded.subject_public_key_info());
     }
 
     #[test]

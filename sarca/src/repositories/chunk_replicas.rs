@@ -83,9 +83,8 @@ impl<'d> ChunkReplicasRepository<'d> {
 
     /// Pending or failed replicas whose target channel is still active.
     pub async fn list_pending(&self, limit: i64) -> SarcaResult<Vec<PendingReplicaJob>> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT cr.id, cr.chunk_id, cr.channel_id, sc.chat_id AS target_chat_id
                 FROM {TABLE} cr
                 JOIN storage_channels sc ON sc.id = cr.channel_id
@@ -94,9 +93,7 @@ impl<'d> ChunkReplicasRepository<'d> {
                 ORDER BY cr.id
                 LIMIT $1
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(limit)
         .fetch_all(self.db)
         .await
@@ -113,9 +110,8 @@ impl<'d> ChunkReplicasRepository<'d> {
         chunk_id: Uuid,
         exclude_channel_id: Uuid,
     ) -> SarcaResult<Option<SourceReplica>> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT cr.telegram_file_id, cr.telegram_message_id, sc.chat_id, sc.storage_id
                 FROM {TABLE} cr
                 JOIN storage_channels sc ON sc.id = cr.channel_id
@@ -126,9 +122,7 @@ impl<'d> ChunkReplicasRepository<'d> {
                 ORDER BY (cr.telegram_message_id IS NOT NULL) DESC
                 LIMIT 1
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(chunk_id)
         .bind(exclude_channel_id)
         .fetch_optional(self.db)
@@ -145,13 +139,10 @@ impl<'d> ChunkReplicasRepository<'d> {
         telegram_file_id: &str,
         telegram_message_id: Option<i64>,
     ) -> SarcaResult<()> {
-        sqlx::query(
-            format!(
-                "UPDATE {TABLE} SET telegram_file_id = $2, telegram_message_id = $3, status = \
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE {TABLE} SET telegram_file_id = $2, telegram_message_id = $3, status = \
                  '{REPLICA_STATUS_UPLOADED}' WHERE id = $1"
-            )
-            .as_str(),
-        )
+        )))
         .bind(id)
         .bind(telegram_file_id)
         .bind(telegram_message_id)
@@ -162,9 +153,9 @@ impl<'d> ChunkReplicasRepository<'d> {
     }
 
     pub async fn mark_failed(&self, id: Uuid) -> SarcaResult<()> {
-        sqlx::query(
-            format!("UPDATE {TABLE} SET status = '{REPLICA_STATUS_FAILED}' WHERE id = $1").as_str(),
-        )
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE {TABLE} SET status = '{REPLICA_STATUS_FAILED}' WHERE id = $1"
+        )))
         .bind(id)
         .execute(self.db)
         .await
@@ -226,16 +217,13 @@ impl<'d> ChunkReplicasRepository<'d> {
     }
 
     pub async fn retry_failed(&self, storage_id: Uuid) -> SarcaResult<()> {
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 UPDATE {TABLE} SET status = '{REPLICA_STATUS_PENDING}'
                 WHERE status = '{REPLICA_STATUS_FAILED}'
                   AND channel_id IN (SELECT id FROM storage_channels WHERE storage_id = $1)
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(storage_id)
         .execute(self.db)
         .await
@@ -245,7 +233,7 @@ impl<'d> ChunkReplicasRepository<'d> {
 
     pub async fn replication_stats(&self, storage_id: Uuid) -> SarcaResult<ReplicationStats> {
         sqlx::query_as(
-            format!(
+            sqlx::AssertSqlSafe(format!(
                 "
                 SELECT
                     SUM(CASE WHEN cr.status = '{REPLICA_STATUS_PENDING}' THEN 1 ELSE 0 END) AS pending,
@@ -255,8 +243,7 @@ impl<'d> ChunkReplicasRepository<'d> {
                 JOIN storage_channels sc ON sc.id = cr.channel_id
                 WHERE sc.storage_id = $1
                 "
-            )
-            .as_str(),
+            )),
         )
         .bind(storage_id)
         .fetch_one(self.db)
@@ -309,9 +296,8 @@ impl<'d> ChunkReplicasRepository<'d> {
         &self,
         storage_id: Uuid,
     ) -> SarcaResult<Vec<(i64, i64)>> {
-        let rows: Vec<(i64, Option<i64>)> = sqlx::query_as(
-            format!(
-                "
+        let rows: Vec<(i64, Option<i64>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT DISTINCT sc.chat_id, cr.telegram_message_id
                 FROM {TABLE} cr
                 JOIN file_chunks fc ON fc.id = cr.chunk_id
@@ -319,9 +305,7 @@ impl<'d> ChunkReplicasRepository<'d> {
                 WHERE sc.storage_id = $1
                   AND cr.telegram_message_id IS NOT NULL
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(storage_id)
         .fetch_all(self.db)
         .await
@@ -338,9 +322,8 @@ impl<'d> ChunkReplicasRepository<'d> {
 
     /// All replicas for chunks of `file_id` (any status), for metadata clone.
     pub async fn list_for_file(&self, file_id: Uuid) -> SarcaResult<Vec<ChunkReplica>> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT cr.id, cr.chunk_id, cr.channel_id,
                        cr.telegram_file_id, cr.telegram_message_id, cr.status
                 FROM {TABLE} cr
@@ -348,9 +331,7 @@ impl<'d> ChunkReplicasRepository<'d> {
                 WHERE fc.file_id = $1
                 ORDER BY fc.position, cr.channel_id
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(file_id)
         .fetch_all(self.db)
         .await
@@ -367,9 +348,8 @@ impl<'d> ChunkReplicasRepository<'d> {
         chat_id: ChatId,
         message_id: i64,
     ) -> SarcaResult<bool> {
-        let row: (bool,) = sqlx::query_as(
-            format!(
-                "
+        let row: (bool,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT EXISTS(
                     SELECT 1
                     FROM {TABLE} cr
@@ -378,9 +358,7 @@ impl<'d> ChunkReplicasRepository<'d> {
                       AND cr.telegram_message_id = $2
                 )
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(chat_id)
         .bind(message_id)
         .fetch_one(self.db)

@@ -45,17 +45,14 @@ impl<'d> AccessRepository<'d> {
     ) -> SarcaResult<()> {
         let id = Uuid::new_v4();
 
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 INSERT INTO {TABLE} (id, user_id, storage_id, access_type)
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT (user_id, storage_id) DO UPDATE
                     SET access_type = excluded.access_type;
             "
-            )
-            .as_str(),
-        )
+        )))
         .bind(id)
         .bind(user_id)
         .bind(storage_id)
@@ -95,9 +92,8 @@ impl<'d> AccessRepository<'d> {
             grant_access.access_type
         );
 
-        let result = sqlx::query(
-            format!(
-                "
+        let result = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 INSERT INTO {TABLE} (id, user_id, storage_id, access_type)
                 SELECT $1, u.id, $3, $4
                 FROM users u
@@ -105,9 +101,7 @@ impl<'d> AccessRepository<'d> {
                 ON CONFLICT (user_id, storage_id) DO UPDATE
                     SET access_type = excluded.access_type;
             "
-            )
-            .as_str(),
-        )
+        )))
         .bind(id)
         .bind(grant_access.user_email.clone())
         .bind(storage_id)
@@ -152,17 +146,14 @@ impl<'d> AccessRepository<'d> {
         &self,
         storage_id: Uuid,
     ) -> SarcaResult<Vec<UserWithAccess>> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
             SELECT u.id AS id, u.email AS email, a.access_type AS access_type
             FROM {TABLE} a
             JOIN users u ON a.user_id = u.id
             WHERE a.storage_id = $1
         "
-            )
-            .as_str(),
-        )
+        )))
         .bind(storage_id)
         .fetch_all(self.db)
         .await
@@ -182,16 +173,13 @@ impl<'d> AccessRepository<'d> {
             AccessType::A => "AND access_type = 'a'",
         };
 
-        let has_access: (_,) = sqlx::query_as(
-            format!(
-                "
+        let has_access: (_,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
             SELECT COUNT(*) > 0
             FROM {TABLE}
             WHERE user_id = $1 AND storage_id = $2 {access_type_filter};
         "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .bind(storage_id)
         .fetch_one(self.db)
@@ -207,12 +195,9 @@ impl<'d> AccessRepository<'d> {
     /// everyone.
     #[inline]
     pub async fn has_any_admin_access(&self, user_id: Uuid) -> SarcaResult<bool> {
-        let has_access: (bool,) = sqlx::query_as(
-            format!(
-                "SELECT EXISTS(SELECT 1 FROM {TABLE} WHERE user_id = $1 AND access_type = 'a')"
-            )
-            .as_str(),
-        )
+        let has_access: (bool,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT EXISTS(SELECT 1 FROM {TABLE} WHERE user_id = $1 AND access_type = 'a')"
+        )))
         .bind(user_id)
         .fetch_one(self.db)
         .await
@@ -225,15 +210,12 @@ impl<'d> AccessRepository<'d> {
     }
 
     pub async fn delete_access(&self, user_id: Uuid, storage_id: Uuid) -> SarcaResult<()> {
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
             DELETE FROM {TABLE}
             WHERE user_id = $1 AND storage_id = $2
         "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .bind(storage_id)
         .execute(self.db)

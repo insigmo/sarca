@@ -23,9 +23,8 @@ impl<'d> RecentFilesRepository<'d> {
 
     /// Up to 20 live uploaded files, most recently viewed first.
     pub async fn list(&self, user_id: Uuid, storage_id: Uuid) -> SarcaResult<Vec<FSElement>> {
-        let rows: Vec<(String, i64, bool)> = sqlx::query_as(
-            format!(
-                "
+        let rows: Vec<(String, i64, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT
                     f.path,
                     f.size,
@@ -40,9 +39,7 @@ impl<'d> RecentFilesRepository<'d> {
                 ORDER BY rf.viewed_at DESC
                 LIMIT {RECENT_LIMIT}
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .bind(storage_id)
         .fetch_all(self.db)
@@ -79,18 +76,15 @@ impl<'d> RecentFilesRepository<'d> {
             SarcaError::Unknown
         })?;
 
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 INSERT INTO {TABLE} (user_id, storage_id, file_id, viewed_at)
                 VALUES ($1, $2, $3, datetime('now'))
                 ON CONFLICT (user_id, file_id) DO UPDATE
                   SET viewed_at = datetime('now'),
                       storage_id = EXCLUDED.storage_id
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .bind(storage_id)
         .bind(file_id)
@@ -101,9 +95,8 @@ impl<'d> RecentFilesRepository<'d> {
             SarcaError::Unknown
         })?;
 
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 DELETE FROM {TABLE}
                 WHERE user_id = $1
                   AND storage_id = $2
@@ -117,9 +110,7 @@ impl<'d> RecentFilesRepository<'d> {
                       ) keep
                   )
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .bind(storage_id)
         .execute(&mut *tx)

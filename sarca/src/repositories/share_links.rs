@@ -31,17 +31,14 @@ impl<'d> ShareLinksRepository<'d> {
         expires_at: Option<DateTime<Utc>>,
         password_hash: Option<&str>,
     ) -> SarcaResult<ShareLink> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 INSERT INTO {TABLE}
                     (id, token, storage_id, path, created_by, expires_at, password_hash)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
                 RETURNING *
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(id)
         .bind(token)
         .bind(storage_id)
@@ -58,17 +55,14 @@ impl<'d> ShareLinksRepository<'d> {
     }
 
     pub async fn list_for_storage(&self, storage_id: Uuid) -> SarcaResult<Vec<ShareLink>> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT * FROM {TABLE}
                 WHERE storage_id = $1
                   AND revoked_at IS NULL
                 ORDER BY created_at DESC
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(storage_id)
         .fetch_all(self.db)
         .await
@@ -79,15 +73,12 @@ impl<'d> ShareLinksRepository<'d> {
     }
 
     pub async fn get_by_token(&self, token: &str) -> SarcaResult<ShareLink> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT * FROM {TABLE}
                 WHERE token = $1
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(token)
         .fetch_optional(self.db)
         .await
@@ -100,16 +91,13 @@ impl<'d> ShareLinksRepository<'d> {
 
     /// Soft-revoke. Idempotent if already revoked.
     pub async fn revoke(&self, id: Uuid, storage_id: Uuid) -> SarcaResult<()> {
-        let res = sqlx::query(
-            format!(
-                "
+        let res = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 UPDATE {TABLE}
                 SET revoked_at = COALESCE(revoked_at, datetime('now'))
                 WHERE id = $1 AND storage_id = $2
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(id)
         .bind(storage_id)
         .execute(self.db)
@@ -134,30 +122,24 @@ impl<'d> ShareLinksRepository<'d> {
         }
 
         let res = if path.ends_with('/') {
-            sqlx::query(
-                format!(
-                    "
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "
                     DELETE FROM {TABLE}
                     WHERE storage_id = $1
                       AND (path = $2 OR path LIKE $2 || '%')
                     "
-                )
-                .as_str(),
-            )
+            )))
             .bind(storage_id)
             .bind(path)
             .execute(self.db)
             .await
         } else {
-            sqlx::query(
-                format!(
-                    "
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "
                     DELETE FROM {TABLE}
                     WHERE storage_id = $1 AND path = $2
                     "
-                )
-                .as_str(),
-            )
+            )))
             .bind(storage_id)
             .bind(path)
             .execute(self.db)
@@ -228,17 +210,14 @@ impl<'d> ShareLinksRepository<'d> {
             let new_prefix =
                 if new_path.ends_with('/') { new_path.to_string() } else { format!("{new_path}/") };
             let skip = old_path.len();
-            sqlx::query(
-                format!(
-                    "
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "
                     UPDATE {TABLE}
                     SET path = $1 || substr(path, {skip} + 1)
                     WHERE storage_id = $2
                       AND (path = $3 OR path LIKE $3 || '%')
                     "
-                )
-                .as_str(),
-            )
+            )))
             .bind(&new_prefix)
             .bind(storage_id)
             .bind(old_path)
@@ -255,16 +234,13 @@ impl<'d> ShareLinksRepository<'d> {
                 if new_path.ends_with('/') { new_path.to_string() } else { format!("{new_path}/") };
             let skip = old_folder.len();
 
-            sqlx::query(
-                format!(
-                    "
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "
                     UPDATE {TABLE}
                     SET path = $1
                     WHERE storage_id = $2 AND path = $3
                     "
-                )
-                .as_str(),
-            )
+            )))
             .bind(new_path)
             .bind(storage_id)
             .bind(old_path)
@@ -275,17 +251,14 @@ impl<'d> ShareLinksRepository<'d> {
                 SarcaError::Unknown
             })?;
 
-            sqlx::query(
-                format!(
-                    "
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "
                     UPDATE {TABLE}
                     SET path = $1 || substr(path, {skip} + 1)
                     WHERE storage_id = $2
                       AND (path = $3 OR path LIKE $3 || '%')
                     "
-                )
-                .as_str(),
-            )
+            )))
             .bind(&new_folder)
             .bind(storage_id)
             .bind(&old_folder)

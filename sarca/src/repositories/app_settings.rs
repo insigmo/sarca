@@ -20,28 +20,26 @@ impl<'d> AppSettingsRepository<'d> {
     }
 
     pub async fn get_value(&self, key: &str) -> SarcaResult<Option<String>> {
-        let row: Option<(String,)> =
-            sqlx::query_as(format!("SELECT value FROM {TABLE} WHERE key = $1").as_str())
-                .bind(key)
-                .fetch_optional(self.db)
-                .await
-                .map_err(|e| {
-                    tracing::error!("{e}");
-                    SarcaError::Unknown
-                })?;
+        let row: Option<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT value FROM {TABLE} WHERE key = $1"
+        )))
+        .bind(key)
+        .fetch_optional(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })?;
         Ok(row.map(|(v,)| v))
     }
 
     pub async fn set_value(&self, key: &str, value: &str) -> SarcaResult<()> {
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 INSERT INTO {TABLE} (key, value) VALUES ($1, $2)
                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(key)
         .bind(value)
         .execute(self.db)

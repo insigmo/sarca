@@ -22,9 +22,8 @@ impl<'d> FavoritesRepository<'d> {
 
     /// Live uploaded files starred by the user in this storage, newest star first.
     pub async fn list(&self, user_id: Uuid, storage_id: Uuid) -> SarcaResult<Vec<FSElement>> {
-        let rows: Vec<(String, i64, bool)> = sqlx::query_as(
-            format!(
-                "
+        let rows: Vec<(String, i64, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT
                     f.path,
                     f.size,
@@ -38,9 +37,7 @@ impl<'d> FavoritesRepository<'d> {
                   AND f.path NOT LIKE '%/'
                 ORDER BY fav.created_at DESC
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .bind(storage_id)
         .fetch_all(self.db)
@@ -67,16 +64,13 @@ impl<'d> FavoritesRepository<'d> {
 
     /// Idempotent star. Returns Ok even if already starred.
     pub async fn add(&self, user_id: Uuid, storage_id: Uuid, file_id: Uuid) -> SarcaResult<()> {
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 INSERT INTO {TABLE} (user_id, storage_id, file_id)
                 VALUES ($1, $2, $3)
                 ON CONFLICT (user_id, file_id) DO NOTHING
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .bind(storage_id)
         .bind(file_id)
@@ -96,9 +90,8 @@ impl<'d> FavoritesRepository<'d> {
         storage_id: Uuid,
         path: &str,
     ) -> SarcaResult<()> {
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 DELETE FROM {TABLE}
                 WHERE user_id = $1
                   AND storage_id = $2
@@ -109,9 +102,7 @@ impl<'d> FavoritesRepository<'d> {
                         AND f.storage_id = $2
                   )
 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .bind(storage_id)
         .bind(path)

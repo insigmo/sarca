@@ -467,9 +467,11 @@ async fn create_query_indexes(db: &SqlitePool) {
         }
 
         tracing::info!("building index {name}");
-        if let Err(e) = sqlx::query(&format!("CREATE INDEX IF NOT EXISTS {name} {definition}"))
-            .execute(db)
-            .await
+        if let Err(e) = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE INDEX IF NOT EXISTS {name} {definition}"
+        )))
+        .execute(db)
+        .await
         {
             tracing::error!("failed to create index {name}: {e}");
         }
@@ -527,9 +529,9 @@ async fn enforce_one_row_per_chunk_position(db: &SqlitePool) {
         },
     }
 
-    match sqlx::query(&format!(
+    match sqlx::query(sqlx::AssertSqlSafe(format!(
         "CREATE UNIQUE INDEX IF NOT EXISTS {INDEX} ON file_chunks (file_id, position)"
-    ))
+    )))
     .execute(db)
     .await
     {
@@ -563,9 +565,11 @@ async fn add_missing_columns(db: &SqlitePool) {
             continue;
         }
 
-        match sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"))
-            .execute(db)
-            .await
+        match sqlx::query(sqlx::AssertSqlSafe(format!(
+            "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+        )))
+        .execute(db)
+        .await
         {
             Ok(_) => tracing::info!("migrated: added {table}.{column}"),
             Err(e) => tracing::error!("failed to add {table}.{column}: {e}"),
@@ -883,7 +887,8 @@ mod tests {
     /// is bound to NULL: plans are made at prepare time, before any value is seen.
     async fn plan(pool: &SqlitePool, sql: &str, params: usize) -> String {
         let explain = format!("EXPLAIN QUERY PLAN {sql}");
-        let mut query = sqlx::query_as::<_, (i64, i64, i64, String)>(&explain);
+        let mut query =
+            sqlx::query_as::<_, (i64, i64, i64, String)>(sqlx::AssertSqlSafe(explain.as_str()));
         for _ in 0..params {
             query = query.bind(None::<i64>);
         }

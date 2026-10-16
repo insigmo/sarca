@@ -232,7 +232,7 @@ async fn snapshot_into(db: &SqlitePool, target: &Path) -> SarcaResult<()> {
     // ship against. The path is ours (a UUID under WORK_DIR), and the quote
     // doubling keeps it a literal even so.
     let literal = target.to_string_lossy().replace('\'', "''");
-    sqlx::query(&format!("VACUUM INTO '{literal}'"))
+    sqlx::query(sqlx::AssertSqlSafe(format!("VACUUM INTO '{literal}'")))
         .execute(db)
         .await
         .map_err(|e| internal("VACUUM INTO", &e))?;
@@ -437,7 +437,7 @@ async fn copy_tables_in_transaction(
     // Every live table is emptied, including ones the archive predates: leaving
     // today's rows behind would mix two instances into one database.
     for table in live {
-        sqlx::query(&format!("DELETE FROM main.{}", quote_ident(table)))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM main.{}", quote_ident(table))))
             .execute(&mut *conn)
             .await
             .map_err(|e| internal(&format!("clearing {table}"), &e))?;
@@ -460,9 +460,9 @@ async fn copy_tables_in_transaction(
 
         let columns = shared.iter().map(|c| quote_ident(c)).collect::<Vec<_>>().join(", ");
         let quoted = quote_ident(table);
-        let affected = sqlx::query(&format!(
+        let affected = sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO main.{quoted} ({columns}) SELECT {columns} FROM restore_src.{quoted}"
-        ))
+        )))
         .execute(&mut *conn)
         .await
         .map_err(|e| internal(&format!("restoring {table}"), &e))?
@@ -502,7 +502,7 @@ async fn take_triggers(conn: &mut SqliteConnection) -> SarcaResult<Vec<String>> 
     .map_err(|e| internal("reading triggers", &e))?;
 
     for (name, _) in &triggers {
-        sqlx::query(&format!("DROP TRIGGER main.{}", quote_ident(name)))
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP TRIGGER main.{}", quote_ident(name))))
             .execute(&mut *conn)
             .await
             .map_err(|e| internal(&format!("dropping trigger {name}"), &e))?;
@@ -513,7 +513,7 @@ async fn take_triggers(conn: &mut SqliteConnection) -> SarcaResult<Vec<String>> 
 
 async fn restore_triggers(conn: &mut SqliteConnection, triggers: &[String]) -> SarcaResult<()> {
     for sql in triggers {
-        sqlx::query(sql)
+        sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
             .execute(&mut *conn)
             .await
             .map_err(|e| internal("recreating a trigger", &e))?;
@@ -530,9 +530,10 @@ where
         "SELECT name FROM {}.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
         quote_ident(schema)
     );
-    let names: Vec<String> = sqlx::query_scalar(&sql).fetch_all(executor).await.map_err(|e| {
-        SarcaError::InvalidBackupFile(format!("could not read the table list ({e})"))
-    })?;
+    let names: Vec<String> =
+        sqlx::query_scalar(sqlx::AssertSqlSafe(sql.as_str())).fetch_all(executor).await.map_err(
+            |e| SarcaError::InvalidBackupFile(format!("could not read the table list ({e})")),
+        )?;
     Ok(names.into_iter().collect())
 }
 

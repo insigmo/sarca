@@ -24,12 +24,12 @@ impl<'d> StorageWorkersRepository<'d> {
     pub async fn create(&self, in_obj: InStorageWorker) -> SarcaResult<StorageWorker> {
         let id = Uuid::new_v4();
 
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "
             INSERT INTO {STORAGE_WORKERS_TABLE} (id, name, token, user_id, storage_id)
             VALUES ($1, $2, $3, $4, $5);
         "
-        ))
+        )))
         .bind(id)
         .bind(in_obj.name.clone())
         .bind(in_obj.token.clone())
@@ -58,9 +58,9 @@ impl<'d> StorageWorkersRepository<'d> {
     }
 
     pub async fn storage_has_any(&self, storage_id: Uuid) -> SarcaResult<bool> {
-        let has_sws: (_,) = sqlx::query_as(&format!(
+        let has_sws: (_,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT COUNT(*) > 0 FROM {STORAGE_WORKERS_TABLE} WHERE storage_id = $1"
-        ))
+        )))
         .bind(storage_id)
         .fetch_one(self.db)
         .await
@@ -70,11 +70,13 @@ impl<'d> StorageWorkersRepository<'d> {
     }
 
     pub async fn list_by_user_id(&self, user_id: Uuid) -> SarcaResult<Vec<StorageWorker>> {
-        sqlx::query_as(&format!("SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE user_id = $1"))
-            .bind(user_id)
-            .fetch_all(self.db)
-            .await
-            .map_err(|_| SarcaError::Unknown)
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE user_id = $1"
+        )))
+        .bind(user_id)
+        .fetch_all(self.db)
+        .await
+        .map_err(|_| SarcaError::Unknown)
     }
 
     pub async fn get_by_name_and_user_id(
@@ -82,9 +84,9 @@ impl<'d> StorageWorkersRepository<'d> {
         name: &str,
         user_id: Uuid,
     ) -> SarcaResult<StorageWorker> {
-        sqlx::query_as(&format!(
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE name = $1 AND user_id = $2"
-        ))
+        )))
         .bind(name)
         .bind(user_id)
         .fetch_one(self.db)
@@ -97,9 +99,9 @@ impl<'d> StorageWorkersRepository<'d> {
         id: Uuid,
         user_id: Uuid,
     ) -> SarcaResult<StorageWorker> {
-        sqlx::query_as(&format!(
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE id = $1 AND user_id = $2"
-        ))
+        )))
         .bind(id)
         .bind(user_id)
         .fetch_one(self.db)
@@ -108,9 +110,9 @@ impl<'d> StorageWorkersRepository<'d> {
     }
 
     pub async fn delete(&self, id: Uuid, user_id: Uuid) -> SarcaResult<()> {
-        let result = sqlx::query(&format!(
+        let result = sqlx::query(sqlx::AssertSqlSafe(format!(
             "DELETE FROM {STORAGE_WORKERS_TABLE} WHERE id = $1 AND user_id = $2"
-        ))
+        )))
         .bind(id)
         .bind(user_id)
         .execute(self.db)
@@ -124,9 +126,9 @@ impl<'d> StorageWorkersRepository<'d> {
     }
 
     pub async fn get_by_storage_id(&self, storage_id: Uuid) -> SarcaResult<Option<StorageWorker>> {
-        sqlx::query_as(&format!(
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE storage_id = $1 ORDER BY name LIMIT 1"
-        ))
+        )))
         .bind(storage_id)
         .fetch_optional(self.db)
         .await
@@ -137,14 +139,16 @@ impl<'d> StorageWorkersRepository<'d> {
     }
 
     pub async fn get_by_token(&self, token: &str) -> SarcaResult<Option<StorageWorker>> {
-        sqlx::query_as(&format!("SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE token = $1"))
-            .bind(token)
-            .fetch_optional(self.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
-            })
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT * FROM {STORAGE_WORKERS_TABLE} WHERE token = $1"
+        )))
+        .bind(token)
+        .fetch_optional(self.db)
+        .await
+        .map_err(|e| {
+            tracing::error!("{e}");
+            SarcaError::Unknown
+        })
     }
 
     /// Move an existing worker (same bot token) onto another storage.
@@ -154,10 +158,10 @@ impl<'d> StorageWorkersRepository<'d> {
         storage_id: Uuid,
         name: &str,
     ) -> SarcaResult<StorageWorker> {
-        sqlx::query_as(&format!(
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "UPDATE {STORAGE_WORKERS_TABLE} SET storage_id = $2, name = $3 WHERE id = $1 \
              RETURNING *"
-        ))
+        )))
         .bind(id)
         .bind(storage_id)
         .bind(name)
@@ -186,10 +190,10 @@ impl<'d> StorageWorkersRepository<'d> {
         name: &str,
         token: &str,
     ) -> SarcaResult<StorageWorker> {
-        let result = sqlx::query_as(&format!(
+        let result = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "UPDATE {STORAGE_WORKERS_TABLE} SET name = $2, token = $3 WHERE id = $1 \
              RETURNING *"
-        ))
+        )))
         .bind(id)
         .bind(name)
         .bind(token)
@@ -211,7 +215,7 @@ impl<'d> StorageWorkersRepository<'d> {
     }
 
     pub async fn delete_orphans(&self) -> SarcaResult<u64> {
-        let result = sqlx::query(&format!(
+        let result = sqlx::query(sqlx::AssertSqlSafe(format!(
             "
             DELETE FROM {STORAGE_WORKERS_TABLE}
             WHERE storage_id IS NULL
@@ -222,7 +226,7 @@ impl<'d> StorageWorkersRepository<'d> {
                   AND spj.bot_token = {STORAGE_WORKERS_TABLE}.token
               )
             "
-        ))
+        )))
         .execute(self.db)
         .await
         .map_err(|e| {
@@ -241,19 +245,19 @@ impl<'d> StorageWorkersRepository<'d> {
         let mut transaction = self.db.begin().await.map_err(|e| map_not_found(&e, ""))?;
 
         // deleting old rows
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "
             DELETE FROM {STORAGE_WORKERS_USAGES_TABLE}
             WHERE dt < datetime('now', '-1 minute');
             "
-        ))
+        )))
         .execute(&mut *transaction)
         .await
         .map_err(|e| map_not_found(&e, "some entity"))?;
 
         let new_id = Uuid::new_v4();
 
-        let candidate: Option<(Uuid,)> = sqlx::query_as(&format!(
+        let candidate: Option<(Uuid,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "
             SELECT sw.id AS storage_worker_id
             FROM {STORAGE_WORKERS_TABLE} sw
@@ -264,7 +268,7 @@ impl<'d> StorageWorkersRepository<'d> {
             ORDER BY COUNT(swu.id)
             LIMIT 1
             "
-        ))
+        )))
         .bind(storage_id)
         .bind(i32::from(limit))
         .fetch_optional(&mut *transaction)
@@ -276,21 +280,22 @@ impl<'d> StorageWorkersRepository<'d> {
             return Ok(None);
         };
 
-        sqlx::query(&format!(
+        sqlx::query(sqlx::AssertSqlSafe(format!(
             "INSERT INTO {STORAGE_WORKERS_USAGES_TABLE} (id, storage_worker_id) VALUES ($1, $2)"
-        ))
+        )))
         .bind(new_id)
         .bind(storage_worker_id)
         .execute(&mut *transaction)
         .await
         .map_err(|e| map_not_found(&e, "some entity"))?;
 
-        let token: StorageWorkerTokenOnly =
-            sqlx::query_as(&format!("SELECT token FROM {STORAGE_WORKERS_TABLE} WHERE id = $1"))
-                .bind(storage_worker_id)
-                .fetch_one(&mut *transaction)
-                .await
-                .map_err(|e| map_not_found(&e, "some entity"))?;
+        let token: StorageWorkerTokenOnly = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT token FROM {STORAGE_WORKERS_TABLE} WHERE id = $1"
+        )))
+        .bind(storage_worker_id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|e| map_not_found(&e, "some entity"))?;
 
         transaction.commit().await.map_err(|e| map_not_found(&e, ""))?;
 

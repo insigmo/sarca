@@ -31,7 +31,7 @@ fn test_material() -> TlsMaterial {
     let cert = generate_simple_self_signed(vec!["localhost".into()]).unwrap();
     TlsMaterial {
         cert_chain: vec![CertificateDer::from(cert.cert)],
-        key: PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into()),
+        key: PrivateKeyDer::Pkcs8(cert.signing_key.serialize_der().into()),
     }
 }
 

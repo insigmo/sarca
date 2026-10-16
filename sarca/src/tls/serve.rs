@@ -147,8 +147,8 @@ fn generate_self_signed_pem(
     let cert =
         rcgen::generate_simple_self_signed(subject_alt_names).map_err(|_| TlsError::CertGen)?;
     let cert_pem = cert.cert.pem();
-    let key_pem = cert.key_pair.serialize_pem();
-    let key = PrivateKeyDer::Pkcs8(cert.key_pair.serialize_der().into());
+    let key_pem = cert.signing_key.serialize_pem();
+    let key = PrivateKeyDer::Pkcs8(cert.signing_key.serialize_der().into());
     let cert_chain = vec![CertificateDer::from(cert.cert)];
     Ok((
         cert_pem,

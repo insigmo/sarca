@@ -24,10 +24,9 @@ impl<'d> StoragesRepository<'d> {
     pub async fn create(&self, in_obj: InStorage) -> SarcaResult<Storage> {
         let id = Uuid::new_v4();
 
-        sqlx::query(
-            format!("INSERT INTO {TABLE} (id, name, primary_position) VALUES ($1, $2, $3) ")
-                .as_str(),
-        )
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO {TABLE} (id, name, primary_position) VALUES ($1, $2, $3) "
+        )))
         .bind(id)
         .bind(in_obj.name.clone())
         .bind(in_obj.primary_position)
@@ -52,9 +51,8 @@ impl<'d> StoragesRepository<'d> {
     pub async fn list_by_user_id(&self, user_id: Uuid) -> SarcaResult<Vec<StorageWithInfo>> {
         tracing::debug!("[STORAGES REPO] Fetching storages for user_id={}", user_id);
 
-        let result = sqlx::query_as(
-            format!(
-                "
+        let result = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT
                     s.*,
                     COALESCE(t.files_amount, 0) AS files_amount,
@@ -79,9 +77,7 @@ impl<'d> StoragesRepository<'d> {
                 WHERE a.user_id = $1
                 ORDER BY s.id
             "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .fetch_all(self.db)
         .await
@@ -95,18 +91,19 @@ impl<'d> StoragesRepository<'d> {
     /// Every storage id, for background jobs that walk all of them (the
     /// startup media warmer) rather than a single user's list.
     pub async fn list_all_ids(&self) -> SarcaResult<Vec<Uuid>> {
-        let rows: Vec<(Uuid,)> = sqlx::query_as(format!("SELECT id FROM {TABLE}").as_str())
-            .fetch_all(self.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
-            })?;
+        let rows: Vec<(Uuid,)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT id FROM {TABLE}")))
+                .fetch_all(self.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                })?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
     pub async fn get_by_id(&self, id: Uuid) -> SarcaResult<Storage> {
-        sqlx::query_as(format!("SELECT * FROM {TABLE} WHERE id = $1").as_str())
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT * FROM {TABLE} WHERE id = $1")))
             .bind(id)
             .fetch_one(self.db)
             .await
@@ -114,17 +111,14 @@ impl<'d> StoragesRepository<'d> {
     }
 
     pub async fn get_by_name_and_user_id(&self, name: &str, user_id: Uuid) -> SarcaResult<Storage> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT s.* 
                 FROM {TABLE} s
                 JOIN {ACCESS_TABLE} a ON s.id = a.storage_id
                 WHERE a.user_id = $1 AND s.name = $2
             "
-            )
-            .as_str(),
-        )
+        )))
         .bind(user_id)
         .bind(name)
         .fetch_one(self.db)
@@ -133,13 +127,10 @@ impl<'d> StoragesRepository<'d> {
     }
 
     pub async fn get_by_file_id(&self, file_id: Uuid) -> SarcaResult<Storage> {
-        sqlx::query_as(
-            format!(
-                "SELECT s.* FROM {TABLE} s JOIN {FILES_TABLE} AS f ON f.storage_id = s.id WHERE \
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT s.* FROM {TABLE} s JOIN {FILES_TABLE} AS f ON f.storage_id = s.id WHERE \
                  f.id = $1"
-            )
-            .as_str(),
-        )
+        )))
         .bind(file_id)
         .fetch_one(self.db)
         .await
@@ -147,21 +138,25 @@ impl<'d> StoragesRepository<'d> {
     }
 
     pub async fn update_name(&self, storage_id: Uuid, name: &str) -> SarcaResult<Storage> {
-        sqlx::query_as(format!("UPDATE {TABLE} SET name = $2 WHERE id = $1 RETURNING *").as_str())
-            .bind(storage_id)
-            .bind(name)
-            .fetch_one(self.db)
-            .await
-            .map_err(|e| map_not_found(&e, "storage"))
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "UPDATE {TABLE} SET name = $2 WHERE id = $1 RETURNING *"
+        )))
+        .bind(storage_id)
+        .bind(name)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| map_not_found(&e, "storage"))
     }
 
     pub async fn set_primary_position(&self, storage_id: Uuid, position: i16) -> SarcaResult<()> {
-        sqlx::query(format!("UPDATE {TABLE} SET primary_position = $2 WHERE id = $1").as_str())
-            .bind(storage_id)
-            .bind(position)
-            .execute(self.db)
-            .await
-            .map_err(|e| map_not_found(&e, "storage"))?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE {TABLE} SET primary_position = $2 WHERE id = $1"
+        )))
+        .bind(storage_id)
+        .bind(position)
+        .execute(self.db)
+        .await
+        .map_err(|e| map_not_found(&e, "storage"))?;
         Ok(())
     }
 
@@ -208,7 +203,7 @@ impl<'d> StoragesRepository<'d> {
                 SarcaError::Unknown
             })?;
 
-        sqlx::query(format!("DELETE FROM {TABLE} WHERE id = $1").as_str())
+        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {TABLE} WHERE id = $1")))
             .bind(storage_id)
             .execute(&mut **tx)
             .await

@@ -21,9 +21,9 @@ impl<'d> StorageChannelsRepository<'d> {
     }
 
     pub async fn list_by_storage(&self, storage_id: Uuid) -> SarcaResult<Vec<StorageChannel>> {
-        sqlx::query_as(
-            format!("SELECT * FROM {TABLE} WHERE storage_id = $1 ORDER BY position").as_str(),
-        )
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT * FROM {TABLE} WHERE storage_id = $1 ORDER BY position"
+        )))
         .bind(storage_id)
         .fetch_all(self.db)
         .await
@@ -31,7 +31,7 @@ impl<'d> StorageChannelsRepository<'d> {
     }
 
     pub async fn get_by_id(&self, id: Uuid) -> SarcaResult<StorageChannel> {
-        sqlx::query_as(format!("SELECT * FROM {TABLE} WHERE id = $1").as_str())
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT * FROM {TABLE} WHERE id = $1")))
             .bind(id)
             .fetch_one(self.db)
             .await
@@ -39,7 +39,7 @@ impl<'d> StorageChannelsRepository<'d> {
     }
 
     pub async fn get_by_chat_id(&self, chat_id: ChatId) -> SarcaResult<StorageChannel> {
-        sqlx::query_as(format!("SELECT * FROM {TABLE} WHERE chat_id = $1").as_str())
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT * FROM {TABLE} WHERE chat_id = $1")))
             .bind(chat_id)
             .fetch_one(self.db)
             .await
@@ -48,13 +48,14 @@ impl<'d> StorageChannelsRepository<'d> {
 
     /// All chat ids already bound to any storage (globally unique).
     pub async fn list_all_chat_ids(&self) -> SarcaResult<Vec<ChatId>> {
-        let rows: Vec<(ChatId,)> = sqlx::query_as(format!("SELECT chat_id FROM {TABLE}").as_str())
-            .fetch_all(self.db)
-            .await
-            .map_err(|e| {
-                tracing::error!("{e}");
-                SarcaError::Unknown
-            })?;
+        let rows: Vec<(ChatId,)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT chat_id FROM {TABLE}")))
+                .fetch_all(self.db)
+                .await
+                .map_err(|e| {
+                    tracing::error!("{e}");
+                    SarcaError::Unknown
+                })?;
         Ok(rows.into_iter().map(|(id,)| id).collect())
     }
 
@@ -67,13 +68,10 @@ impl<'d> StorageChannelsRepository<'d> {
     pub async fn insert(&self, in_obj: InStorageChannel) -> SarcaResult<StorageChannel> {
         let id = Uuid::new_v4();
 
-        sqlx::query(
-            format!(
-                "INSERT INTO {TABLE} (id, storage_id, position, chat_id, name, status)
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO {TABLE} (id, storage_id, position, chat_id, name, status)
                  VALUES ($1, $2, $3, $4, $5, $6) "
-            )
-            .as_str(),
-        )
+        )))
         .bind(id)
         .bind(in_obj.storage_id)
         .bind(in_obj.position)
@@ -113,13 +111,10 @@ impl<'d> StorageChannelsRepository<'d> {
         chat_id: ChatId,
         name: &str,
     ) -> SarcaResult<StorageChannel> {
-        sqlx::query_as(
-            format!(
-                "UPDATE {TABLE} SET chat_id = $2, name = $3, status = 'active' WHERE id = $1 \
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "UPDATE {TABLE} SET chat_id = $2, name = $3, status = 'active' WHERE id = $1 \
                  RETURNING *"
-            )
-            .as_str(),
-        )
+        )))
         .bind(id)
         .bind(chat_id)
         .bind(name)
@@ -136,16 +131,18 @@ impl<'d> StorageChannelsRepository<'d> {
     }
 
     pub async fn update_name(&self, id: Uuid, name: &str) -> SarcaResult<StorageChannel> {
-        sqlx::query_as(format!("UPDATE {TABLE} SET name = $2 WHERE id = $1 RETURNING *").as_str())
-            .bind(id)
-            .bind(name)
-            .fetch_one(self.db)
-            .await
-            .map_err(|e| map_not_found(&e, "storage channel"))
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "UPDATE {TABLE} SET name = $2 WHERE id = $1 RETURNING *"
+        )))
+        .bind(id)
+        .bind(name)
+        .fetch_one(self.db)
+        .await
+        .map_err(|e| map_not_found(&e, "storage channel"))
     }
 
     pub async fn mark_dead(&self, id: Uuid) -> SarcaResult<()> {
-        sqlx::query(format!("UPDATE {TABLE} SET status = $2 WHERE id = $1").as_str())
+        sqlx::query(sqlx::AssertSqlSafe(format!("UPDATE {TABLE} SET status = $2 WHERE id = $1")))
             .bind(id)
             .bind(CHANNEL_STATUS_DEAD)
             .execute(self.db)
@@ -155,10 +152,9 @@ impl<'d> StorageChannelsRepository<'d> {
     }
 
     pub async fn count_active(&self, storage_id: Uuid) -> SarcaResult<i64> {
-        let row: (i64,) = sqlx::query_as(
-            format!("SELECT COUNT(*) FROM {TABLE} WHERE storage_id = $1 AND status = 'active'")
-                .as_str(),
-        )
+        let row: (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT COUNT(*) FROM {TABLE} WHERE storage_id = $1 AND status = 'active'"
+        )))
         .bind(storage_id)
         .fetch_one(self.db)
         .await
@@ -167,7 +163,7 @@ impl<'d> StorageChannelsRepository<'d> {
     }
 
     pub async fn delete(&self, id: Uuid) -> SarcaResult<()> {
-        sqlx::query(format!("DELETE FROM {TABLE} WHERE id = $1").as_str())
+        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {TABLE} WHERE id = $1")))
             .bind(id)
             .execute(self.db)
             .await
@@ -176,7 +172,7 @@ impl<'d> StorageChannelsRepository<'d> {
     }
 
     pub async fn list_all(&self) -> SarcaResult<Vec<StorageChannel>> {
-        sqlx::query_as(format!("SELECT * FROM {TABLE}").as_str())
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT * FROM {TABLE}")))
             .fetch_all(self.db)
             .await
             .map_err(|_| SarcaError::Unknown)

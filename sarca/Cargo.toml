@@ -61,21 +61,21 @@ struct_field_names = "allow"
 axum = { version = "0.8", features = ["macros", "multipart"] }
 mime_guess = "2.0.4"
 tower = { version = "0.5", features = ["limit", "util"], default-features = false }
-tower-http = { version = "0.6", features = ["fs", "trace", "cors", "set-header"], default-features = false }
+tower-http = { version = "0.7", features = ["fs", "trace", "cors", "set-header"], default-features = false }
 
 # TLS / HTTP/3
 quinn = "0.11"
 h3 = "0.0.8"
 h3-quinn = "0.0.10"
-h3-axum = "0.2"
+h3-axum = "0.3"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"
 tokio-rustls = "0.26"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "service"] }
-rcgen = "0.13"
+rcgen = "0.14"
 instant-acme = { version = "0.8", default-features = false, features = ["hyper-rustls", "ring"] }
-x509-parser = "0.17"
+x509-parser = "0.18"
 
 # serialization/deserialization
 serde = { version = "1.0.189", features = ["derive"] }
@@ -87,8 +87,8 @@ pwhash = "1.0.0"
 # Exactly one crypto provider may be on, or every sign/verify panics; aws_lc_rs
 # is already in the tree via rustls, and picking it keeps the `rsa` crate
 # (RUSTSEC-2023-0071, Marvin) out of the build entirely. Only HS256 is used.
-jsonwebtoken = { version = "10", default-features = false, features = ["aws_lc_rs"] }
-sha2 = "0.10"
+jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs"] }
+sha2 = "0.11"
 
 # async
 tokio = { version = "1.33.0", features = ["full"] }
@@ -101,8 +101,8 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.17", features = ["env-filter"] }
 
 # others
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "tls-rustls", "sqlite", "uuid", "chrono"] }
-thiserror = "1.0.50"
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "sqlite", "uuid", "chrono"] }
+thiserror = "2.0.21"
 uuid = { version = "1.5.0", features = ["serde", "v4"] }
 
 # HTTP client (без native-tls — ок для musl)
@@ -139,7 +139,7 @@ http = "1"
 http-body-util = "0.1"
 bytes = "1"
 tower = { version = "0.5", features = ["util"] }
-rcgen = "0.13"
+rcgen = "0.14"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 h3 = "0.0.8"
 h3-quinn = "0.0.10"

@@ -142,16 +142,13 @@ impl<'d> FilesRepository<'d> {
     async fn create_file_row(&self, in_obj: InFile, is_uploaded: bool) -> SarcaResult<File> {
         let id = Uuid::new_v4();
 
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded, \
                  chunk_size_bytes, source_created_at, source_mtime, content_hash)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
             "
-            )
-            .as_str(),
-        )
+        )))
         .bind(id)
         .bind(&in_obj.path)
         .bind(in_obj.size)
@@ -222,9 +219,8 @@ impl<'d> FilesRepository<'d> {
         let under_stem = starts_with("path", "$2");
 
         for attempt in 0..MAX_ATTEMPTS {
-            let candidates: Vec<(String,)> = sqlx::query_as(
-                format!(
-                    r#"
+            let candidates: Vec<(String,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                r#"
                     SELECT path
                     FROM {FILES_TABLE}
                     WHERE storage_id = $1
@@ -232,9 +228,7 @@ impl<'d> FilesRepository<'d> {
                       AND {under_stem}
                       AND (path = $2 || $3 OR path LIKE $2 || ' (%)' || $3)
                     "#
-                )
-                .as_str(),
-            )
+            )))
             .bind(in_obj.storage_id)
             .bind(&path_with_stem)
             .bind(&suffix)
@@ -267,9 +261,8 @@ impl<'d> FilesRepository<'d> {
             let final_path = pick_duplicate_path(&path_with_stem, &suffix, &matching);
             let id = Uuid::new_v4();
 
-            let result: Result<File, sqlx::Error> = sqlx::query_as(
-                format!(
-                    r#"
+            let result: Result<File, sqlx::Error> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                r#"
                     INSERT INTO {FILES_TABLE} (
                         path, storage_id, id, size, is_uploaded, chunk_size_bytes,
                         source_created_at, source_mtime, content_hash
@@ -277,9 +270,7 @@ impl<'d> FilesRepository<'d> {
                     VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8)
                     RETURNING *
                     "#
-                )
-                .as_str(),
-            )
+            )))
             .bind(&final_path)
             .bind(in_obj.storage_id)
             .bind(id)
@@ -355,10 +346,9 @@ impl<'d> FilesRepository<'d> {
             SarcaError::Unknown
         })?;
 
-        sqlx::query(
-            format!("INSERT INTO {CHUNKS_TABLE} (id, file_id, position) VALUES ($1, $2, $3)")
-                .as_str(),
-        )
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "INSERT INTO {CHUNKS_TABLE} (id, file_id, position) VALUES ($1, $2, $3)"
+        )))
         .bind(chunk.id)
         .bind(chunk.file_id)
         .bind(chunk.position)
@@ -403,9 +393,8 @@ impl<'d> FilesRepository<'d> {
         &self,
         file_id: Uuid,
     ) -> SarcaResult<Vec<(Position, Uuid)>> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT fc.position, fc.id
                 FROM {CHUNKS_TABLE} fc
                 WHERE fc.file_id = $1
@@ -417,9 +406,7 @@ impl<'d> FilesRepository<'d> {
                   )
                 ORDER BY fc.position
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(file_id)
         .fetch_all(self.db)
         .await
@@ -437,9 +424,8 @@ impl<'d> FilesRepository<'d> {
         file_id: Uuid,
         channel_id: Uuid,
     ) -> SarcaResult<Vec<FileChunkWithReplica>> {
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT fc.position, cr.telegram_file_id
                 FROM {CHUNKS_TABLE} fc
                 JOIN chunk_replicas cr ON cr.chunk_id = fc.id
@@ -449,9 +435,7 @@ impl<'d> FilesRepository<'d> {
                 WHERE fc.file_id = $1
                 ORDER BY fc.position
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(file_id)
         .bind(channel_id)
         .fetch_all(self.db)
@@ -473,21 +457,22 @@ impl<'d> FilesRepository<'d> {
             format!("AND {}", starts_with("path", "$1"))
         };
 
-        let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(&format!(
-            "
+        let rows: Vec<(String, i64, Option<String>)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "
             SELECT path, size, thumb_telegram_file_id
             FROM {FILES_TABLE}
             WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NULL
             "
-        ))
-        .bind(&prefix)
-        .bind(storage_id)
-        .fetch_all(self.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("{e}");
-            SarcaError::Unknown
-        })?;
+            )))
+            .bind(&prefix)
+            .bind(storage_id)
+            .fetch_all(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
 
         Ok(aggregate_dir_listing(rows, &prefix))
     }
@@ -499,15 +484,14 @@ impl<'d> FilesRepository<'d> {
         storage_id: Uuid,
     ) -> SarcaResult<Vec<SearchFSElement>> {
         sqlx::query_as(
-            format!(
+            sqlx::AssertSqlSafe(format!(
                 "SELECT
                     path,
                     path NOT LIKE '%/' AS is_file
                 FROM {FILES_TABLE}
                 WHERE storage_id = $1 AND deleted_at IS NULL AND lower(path) LIKE lower($2) || '%' || lower($3) || '%'
             "
-            )
-            .as_str(),
+            )),
         )
         .bind(storage_id)
         .bind(path)
@@ -521,13 +505,10 @@ impl<'d> FilesRepository<'d> {
     }
 
     pub async fn get_file_by_path(&self, path: &str, storage_id: Uuid) -> SarcaResult<File> {
-        sqlx::query_as(
-            format!(
-                "SELECT * FROM {FILES_TABLE} WHERE storage_id = $1 AND path = $2 AND deleted_at \
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT * FROM {FILES_TABLE} WHERE storage_id = $1 AND path = $2 AND deleted_at \
                  IS NULL"
-            )
-            .as_str(),
-        )
+        )))
         .bind(storage_id)
         .bind(path)
         .fetch_one(self.db)
@@ -542,9 +523,8 @@ impl<'d> FilesRepository<'d> {
         folder_prefix: &str,
     ) -> SarcaResult<i64> {
         let under = starts_with("path", "$2");
-        let row: (i64,) = sqlx::query_as(
-            format!(
-                "
+        let row: (i64,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT COALESCE(SUM(size), 0)
                 FROM {FILES_TABLE}
                 WHERE storage_id = $1
@@ -553,9 +533,7 @@ impl<'d> FilesRepository<'d> {
                   AND {under}
                   AND path NOT LIKE '%/';
             "
-            )
-            .as_str(),
-        )
+        )))
         .bind(storage_id)
         .bind(folder_prefix)
         .fetch_one(self.db)
@@ -574,9 +552,8 @@ impl<'d> FilesRepository<'d> {
         folder_prefix: &str,
     ) -> SarcaResult<Vec<File>> {
         let under = starts_with("path", "$2");
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT *
                 FROM {FILES_TABLE}
                 WHERE storage_id = $1
@@ -586,9 +563,7 @@ impl<'d> FilesRepository<'d> {
                   AND path NOT LIKE '%/'
                 ORDER BY path
             "
-            )
-            .as_str(),
-        )
+        )))
         .bind(storage_id)
         .bind(folder_prefix)
         .fetch_all(self.db)
@@ -600,7 +575,7 @@ impl<'d> FilesRepository<'d> {
     }
 
     pub async fn get_by_id(&self, id: Uuid) -> SarcaResult<File> {
-        sqlx::query_as(format!("SELECT * FROM {FILES_TABLE} WHERE id = $1").as_str())
+        sqlx::query_as(sqlx::AssertSqlSafe(format!("SELECT * FROM {FILES_TABLE} WHERE id = $1")))
             .bind(id)
             .fetch_one(self.db)
             .await
@@ -613,17 +588,14 @@ impl<'d> FilesRepository<'d> {
         thumb_telegram_file_id: &str,
         thumb_telegram_message_id: i64,
     ) -> SarcaResult<()> {
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 UPDATE {FILES_TABLE}
                 SET thumb_telegram_file_id = $2,
                     thumb_telegram_message_id = $3
                 WHERE id = $1
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(file_id)
         .bind(thumb_telegram_file_id)
         .bind(thumb_telegram_message_id)
@@ -639,17 +611,14 @@ impl<'d> FilesRepository<'d> {
         preview_telegram_file_id: &str,
         preview_telegram_message_id: i64,
     ) -> SarcaResult<()> {
-        sqlx::query(
-            format!(
-                "
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "
                 UPDATE {FILES_TABLE}
                 SET preview_telegram_file_id = $2,
                     preview_telegram_message_id = $3
                 WHERE id = $1
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(file_id)
         .bind(preview_telegram_file_id)
         .bind(preview_telegram_message_id)
@@ -709,8 +678,8 @@ impl<'d> FilesRepository<'d> {
         &self,
         storage_id: Uuid,
     ) -> SarcaResult<Vec<(i64, i64)>> {
-        let rows: Vec<(i64, Option<i64>, Option<i64>)> = sqlx::query_as(
-            format!(
+        let rows: Vec<(i64, Option<i64>, Option<i64>)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT DISTINCT sc.chat_id, f.thumb_telegram_message_id,
                        f.preview_telegram_message_id
@@ -720,16 +689,14 @@ impl<'d> FilesRepository<'d> {
                   AND (f.thumb_telegram_message_id IS NOT NULL
                        OR f.preview_telegram_message_id IS NOT NULL)
                 "
-            )
-            .as_str(),
-        )
-        .bind(storage_id)
-        .fetch_all(self.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("{e}");
-            SarcaError::Unknown
-        })?;
+            )))
+            .bind(storage_id)
+            .fetch_all(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
 
         Ok(rows
             .into_iter()
@@ -749,9 +716,8 @@ impl<'d> FilesRepository<'d> {
         chat_id: i64,
         message_id: i64,
     ) -> SarcaResult<bool> {
-        let row: (bool,) = sqlx::query_as(
-            format!(
-                "
+        let row: (bool,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT EXISTS(
                     SELECT 1
                     FROM {FILES_TABLE} f
@@ -761,9 +727,7 @@ impl<'d> FilesRepository<'d> {
                            OR f.preview_telegram_message_id = $2)
                 )
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(chat_id)
         .bind(message_id)
         .fetch_one(self.db)
@@ -776,20 +740,24 @@ impl<'d> FilesRepository<'d> {
     }
 
     pub async fn list_chunks_of_file(&self, file_id: Uuid) -> SarcaResult<Vec<FileChunk>> {
-        sqlx::query_as(format!("SELECT * FROM {CHUNKS_TABLE} WHERE file_id = $1").as_str())
-            .bind(file_id)
-            .fetch_all(self.db)
-            .await
-            .map_err(|e| map_not_found(&e, "file chunks"))
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "SELECT * FROM {CHUNKS_TABLE} WHERE file_id = $1"
+        )))
+        .bind(file_id)
+        .fetch_all(self.db)
+        .await
+        .map_err(|e| map_not_found(&e, "file chunks"))
     }
 
     pub async fn set_as_uploaded(&self, file_id: Uuid) -> SarcaResult<()> {
-        sqlx::query(format!("UPDATE {FILES_TABLE} SET is_uploaded = true WHERE id = $1").as_str())
-            .bind(file_id)
-            .execute(self.db)
-            .await
-            .map_err(|_| SarcaError::Unknown)
-            .map(|_| ())
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE {FILES_TABLE} SET is_uploaded = true WHERE id = $1"
+        )))
+        .bind(file_id)
+        .execute(self.db)
+        .await
+        .map_err(|_| SarcaError::Unknown)
+        .map(|_| ())
     }
 
     /// Point the live row `file_id` at a new version of its file, `incoming`,
@@ -819,14 +787,14 @@ impl<'d> FilesRepository<'d> {
         };
         let mut transaction = self.db.begin().await.map_err(db_error)?;
 
-        let current: Option<(bool, bool)> = sqlx::query_as(&format!(
+        let current: Option<(bool, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "
             SELECT is_uploaded,
                    EXISTS (SELECT 1 FROM {CHUNKS_TABLE} WHERE file_id = $1)
             FROM {FILES_TABLE}
             WHERE id = $1 AND deleted_at IS NULL AND content_hash IS $2
             "
-        ))
+        )))
         .bind(file_id)
         .bind(expected_hash)
         .fetch_optional(&mut *transaction)
@@ -838,7 +806,7 @@ impl<'d> FilesRepository<'d> {
 
         if is_uploaded || has_chunks {
             let retired_id = Uuid::new_v4();
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 INSERT INTO {FILES_TABLE} (
                     id, path, size, storage_id, is_uploaded, thumb_telegram_file_id,
@@ -853,7 +821,7 @@ impl<'d> FilesRepository<'d> {
                 FROM {FILES_TABLE}
                 WHERE id = $1
                 "
-            ))
+            )))
             .bind(file_id)
             .bind(retired_id)
             .bind(retired_path)
@@ -861,15 +829,17 @@ impl<'d> FilesRepository<'d> {
             .await
             .map_err(db_error)?;
 
-            sqlx::query(&format!("UPDATE {CHUNKS_TABLE} SET file_id = $2 WHERE file_id = $1"))
-                .bind(file_id)
-                .bind(retired_id)
-                .execute(&mut *transaction)
-                .await
-                .map_err(db_error)?;
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "UPDATE {CHUNKS_TABLE} SET file_id = $2 WHERE file_id = $1"
+            )))
+            .bind(file_id)
+            .bind(retired_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(db_error)?;
         }
 
-        let file: File = sqlx::query_as(&format!(
+        let file: File = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "
             UPDATE {FILES_TABLE}
             SET size = $2,
@@ -885,7 +855,7 @@ impl<'d> FilesRepository<'d> {
             WHERE id = $1
             RETURNING *
             "
-        ))
+        )))
         .bind(file_id)
         .bind(incoming.size)
         .bind(incoming.chunk_size_bytes)
@@ -913,7 +883,7 @@ impl<'d> FilesRepository<'d> {
         } else {
             // Treat as folder when a live folder marker or children exist under path/
             let probe = format!("{path}/");
-            let has_folder: (bool,) = sqlx::query_as(&format!(
+            let has_folder: (bool,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT EXISTS(
                     SELECT 1 FROM {FILES_TABLE}
@@ -922,7 +892,7 @@ impl<'d> FilesRepository<'d> {
                       AND {under}
                 )
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&probe)
             .fetch_one(&mut *transaction)
@@ -933,13 +903,13 @@ impl<'d> FilesRepository<'d> {
         };
 
         let affected = if folder_prefix.is_empty() {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 UPDATE {FILES_TABLE}
                 SET deleted_at = datetime('now')
                 WHERE storage_id = $1 AND deleted_at IS NULL AND path = $2;
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(path)
             .execute(&mut *transaction)
@@ -947,7 +917,7 @@ impl<'d> FilesRepository<'d> {
             .map_err(|e| map_not_found(&e, "file"))?
             .rows_affected()
         } else {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 UPDATE {FILES_TABLE}
                 SET deleted_at = datetime('now')
@@ -955,7 +925,7 @@ impl<'d> FilesRepository<'d> {
                   AND deleted_at IS NULL
                   AND {under};
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&folder_prefix)
             .execute(&mut *transaction)
@@ -983,7 +953,7 @@ impl<'d> FilesRepository<'d> {
             let new_id = Uuid::new_v4();
             let parent = format!("{parent}/");
 
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded)
                 SELECT $1, $2, 0, $3, true
@@ -996,7 +966,7 @@ impl<'d> FilesRepository<'d> {
                           AND {under}
                     );
             "
-            ))
+            )))
             .bind(new_id)
             .bind(parent)
             .bind(storage_id)
@@ -1045,7 +1015,7 @@ impl<'d> FilesRepository<'d> {
                 if new_path.ends_with('/') { new_path.to_string() } else { format!("{new_path}/") };
             let skip = old_prefix.len();
             let under = starts_with("path", "$3");
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 UPDATE {FILES_TABLE}
                 SET path = $1 || substr(path, {skip} + 1)
@@ -1053,7 +1023,7 @@ impl<'d> FilesRepository<'d> {
                   {deleted_filter}
                   AND {under}
                 "
-            ))
+            )))
             .bind(&new_prefix)
             .bind(storage_id)
             .bind(old_prefix)
@@ -1061,13 +1031,13 @@ impl<'d> FilesRepository<'d> {
             .await
             .map_err(map_rewrite_path_error)?;
         } else {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 UPDATE {FILES_TABLE}
                 SET path = $1
                 WHERE storage_id = $2 {deleted_filter} AND path = $3
                 "
-            ))
+            )))
             .bind(new_path)
             .bind(storage_id)
             .bind(old_path)
@@ -1087,21 +1057,22 @@ impl<'d> FilesRepository<'d> {
             format!("AND {}", starts_with("path", "$1"))
         };
 
-        let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(&format!(
-            "
+        let rows: Vec<(String, i64, Option<String>)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "
             SELECT path, size, thumb_telegram_file_id
             FROM {FILES_TABLE}
             WHERE storage_id = $2 {path_filter} AND is_uploaded AND deleted_at IS NOT NULL
             "
-        ))
-        .bind(&prefix)
-        .bind(storage_id)
-        .fetch_all(self.db)
-        .await
-        .map_err(|e| {
-            tracing::error!("{e}");
-            SarcaError::Unknown
-        })?;
+            )))
+            .bind(&prefix)
+            .bind(storage_id)
+            .fetch_all(self.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("{e}");
+                SarcaError::Unknown
+            })?;
 
         Ok(aggregate_dir_listing(rows, &prefix))
     }
@@ -1114,7 +1085,7 @@ impl<'d> FilesRepository<'d> {
             path.to_string()
         } else {
             let probe = format!("{path}/");
-            let has_folder: (bool,) = sqlx::query_as(&format!(
+            let has_folder: (bool,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT EXISTS(
                     SELECT 1 FROM {FILES_TABLE}
@@ -1123,7 +1094,7 @@ impl<'d> FilesRepository<'d> {
                       AND {under}
                 )
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&probe)
             .fetch_one(self.db)
@@ -1134,25 +1105,25 @@ impl<'d> FilesRepository<'d> {
         };
 
         let rows: Vec<(Uuid,)> = if folder_prefix.is_empty() {
-            sqlx::query_as(&format!(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT id FROM {FILES_TABLE}
                 WHERE storage_id = $1 AND deleted_at IS NOT NULL AND path = $2
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(path)
             .fetch_all(self.db)
             .await
         } else {
-            sqlx::query_as(&format!(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT id FROM {FILES_TABLE}
                 WHERE storage_id = $1
                   AND deleted_at IS NOT NULL
                   AND {under}
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&folder_prefix)
             .fetch_all(self.db)
@@ -1167,9 +1138,9 @@ impl<'d> FilesRepository<'d> {
     }
 
     pub async fn list_all_trashed_ids(&self, storage_id: Uuid) -> SarcaResult<Vec<Uuid>> {
-        let rows: Vec<(Uuid,)> = sqlx::query_as(&format!(
+        let rows: Vec<(Uuid,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "SELECT id FROM {FILES_TABLE} WHERE storage_id = $1 AND deleted_at IS NOT NULL"
-        ))
+        )))
         .bind(storage_id)
         .fetch_all(self.db)
         .await
@@ -1185,13 +1156,13 @@ impl<'d> FilesRepository<'d> {
         older_than_days: i32,
     ) -> SarcaResult<Vec<(Uuid, Uuid)>> {
         let cutoff = Utc::now() - ChronoDuration::days(i64::from(older_than_days));
-        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(&format!(
+        let rows: Vec<(Uuid, Uuid)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "
             SELECT id, storage_id FROM {FILES_TABLE}
             WHERE deleted_at IS NOT NULL
               AND deleted_at < $1
             "
-        ))
+        )))
         .bind(cutoff)
         .fetch_all(self.db)
         .await
@@ -1229,7 +1200,7 @@ impl<'d> FilesRepository<'d> {
             path.to_string()
         } else {
             let probe = format!("{path}/");
-            let has_folder: (bool,) = sqlx::query_as(&format!(
+            let has_folder: (bool,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT EXISTS(
                     SELECT 1 FROM {FILES_TABLE}
@@ -1238,7 +1209,7 @@ impl<'d> FilesRepository<'d> {
                       AND {under}
                 )
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&probe)
             .fetch_one(self.db)
@@ -1249,7 +1220,7 @@ impl<'d> FilesRepository<'d> {
         };
 
         let affected = if folder_prefix.is_empty() {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 UPDATE {FILES_TABLE} AS t
                 SET deleted_at = NULL
@@ -1263,7 +1234,7 @@ impl<'d> FilesRepository<'d> {
                         AND live.deleted_at IS NULL
                   )
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(path)
             .execute(self.db)
@@ -1281,7 +1252,7 @@ impl<'d> FilesRepository<'d> {
             })?
             .rows_affected()
         } else {
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 UPDATE {FILES_TABLE} AS t
                 SET deleted_at = NULL
@@ -1295,7 +1266,7 @@ impl<'d> FilesRepository<'d> {
                         AND live.deleted_at IS NULL
                   )
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&folder_prefix)
             .execute(self.db)
@@ -1358,14 +1329,14 @@ impl<'d> FilesRepository<'d> {
             }
             acc.push_str(part);
             let folder_path = format!("{acc}/");
-            let live_exists: (bool,) = sqlx::query_as(&format!(
+            let live_exists: (bool,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT EXISTS(
                     SELECT 1 FROM {FILES_TABLE}
                     WHERE storage_id = $1 AND deleted_at IS NULL AND path = $2
                 )
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&folder_path)
             .fetch_one(self.db)
@@ -1381,7 +1352,7 @@ impl<'d> FilesRepository<'d> {
 
             // Prefer restoring a trashed folder marker (exact path only — do not
             // pull nested trash contents back with the parent).
-            let restored = sqlx::query(&format!(
+            let restored = sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 UPDATE {FILES_TABLE}
                 SET deleted_at = NULL
@@ -1394,7 +1365,7 @@ impl<'d> FilesRepository<'d> {
                     LIMIT 1
                 )
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&folder_path)
             .execute(self.db)
@@ -1417,13 +1388,13 @@ impl<'d> FilesRepository<'d> {
             }
 
             let id = Uuid::new_v4();
-            sqlx::query(&format!(
+            sqlx::query(sqlx::AssertSqlSafe(format!(
                 "
                 INSERT INTO {FILES_TABLE} (id, path, size, storage_id, is_uploaded)
                 VALUES ($1, $2, 0, $3, true)
                 ON CONFLICT (path, storage_id) WHERE deleted_at IS NULL DO NOTHING
                 "
-            ))
+            )))
             .bind(id)
             .bind(&folder_path)
             .bind(storage_id)
@@ -1438,14 +1409,14 @@ impl<'d> FilesRepository<'d> {
     }
 
     pub async fn live_path_exists(&self, path: &str, storage_id: Uuid) -> SarcaResult<bool> {
-        let row: (bool,) = sqlx::query_as(&format!(
+        let row: (bool,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "
             SELECT EXISTS(
                 SELECT 1 FROM {FILES_TABLE}
                 WHERE storage_id = $1 AND deleted_at IS NULL AND path = $2
             )
             "
-        ))
+        )))
         .bind(storage_id)
         .bind(path)
         .fetch_one(self.db)
@@ -1538,7 +1509,7 @@ impl<'d> FilesRepository<'d> {
             path.to_string()
         } else {
             let probe = format!("{path}/");
-            let has_folder: (bool,) = sqlx::query_as(&format!(
+            let has_folder: (bool,) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT EXISTS(
                     SELECT 1 FROM {FILES_TABLE}
@@ -1547,7 +1518,7 @@ impl<'d> FilesRepository<'d> {
                       AND {under}
                 )
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&probe)
             .fetch_one(self.db)
@@ -1558,25 +1529,25 @@ impl<'d> FilesRepository<'d> {
         };
 
         let rows: Vec<(Uuid,)> = if folder_prefix.is_empty() {
-            sqlx::query_as(&format!(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT id FROM {FILES_TABLE}
                 WHERE storage_id = $1 AND deleted_at IS NULL AND path = $2
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(path)
             .fetch_all(self.db)
             .await
         } else {
-            sqlx::query_as(&format!(
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
                 "
                 SELECT id FROM {FILES_TABLE}
                 WHERE storage_id = $1
                   AND deleted_at IS NULL
                   AND {under}
                 "
-            ))
+            )))
             .bind(storage_id)
             .bind(&folder_prefix)
             .fetch_all(self.db)
@@ -1624,9 +1595,8 @@ impl<'d> FilesRepository<'d> {
         folder_prefix: &str,
     ) -> SarcaResult<Vec<File>> {
         let under = starts_with("path", "$2");
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 SELECT *
                 FROM {FILES_TABLE}
                 WHERE storage_id = $1
@@ -1634,9 +1604,7 @@ impl<'d> FilesRepository<'d> {
                   AND {under}
                 ORDER BY path
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(storage_id)
         .bind(folder_prefix)
         .fetch_all(self.db)
@@ -1650,9 +1618,8 @@ impl<'d> FilesRepository<'d> {
     /// Insert a live file row copying size/flags/thumb/preview/chunk size from `source`.
     pub async fn insert_cloned_file(&self, source: &File, dest_path: &str) -> SarcaResult<File> {
         let id = Uuid::new_v4();
-        sqlx::query_as(
-            format!(
-                "
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "
                 INSERT INTO {FILES_TABLE} (
                     id, path, size, storage_id, is_uploaded,
                     thumb_telegram_file_id, thumb_telegram_message_id, chunk_size_bytes,
@@ -1662,9 +1629,7 @@ impl<'d> FilesRepository<'d> {
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 RETURNING *
                 "
-            )
-            .as_str(),
-        )
+        )))
         .bind(id)
         .bind(dest_path)
         .bind(source.size)
@@ -1699,7 +1664,7 @@ impl<'d> FilesRepository<'d> {
     /// channel, and the next attempt at the same file resumes into them instead
     /// of relaying it from position 0. See `purge_interrupted_uploads`.
     pub async fn list_stale_upload_ids(&self) -> SarcaResult<Vec<Uuid>> {
-        let rows: Vec<(Uuid,)> = sqlx::query_as(&format!(
+        let rows: Vec<(Uuid,)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "
             SELECT id FROM {FILES_TABLE} f
             WHERE is_uploaded = false
@@ -1707,7 +1672,7 @@ impl<'d> FilesRepository<'d> {
               AND path NOT LIKE '%/'
               AND NOT EXISTS (SELECT 1 FROM {CHUNKS_TABLE} WHERE {CHUNKS_TABLE}.file_id = f.id)
             "
-        ))
+        )))
         .fetch_all(self.db)
         .await
         .map_err(|e| {

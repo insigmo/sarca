@@ -21,7 +21,7 @@ pub fn starts_with(column: &str, param: &str) -> String {
 ///
 /// `SQLite` cannot bind an array to a single placeholder the way `Postgres` does
 /// with `= ANY($1)`, so each id needs its own bind.
-pub fn push_uuid_list(builder: &mut QueryBuilder<'_, Sqlite>, ids: &[Uuid]) {
+pub fn push_uuid_list(builder: &mut QueryBuilder<Sqlite>, ids: &[Uuid]) {
     let mut separated = builder.separated(", ");
     for id in ids {
         separated.push_bind(*id);
