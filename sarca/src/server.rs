@@ -89,16 +89,10 @@ impl Server {
             .nest("/users", UsersRouter::get_router(app_state.clone()))
             .nest("/auth", AuthRouter::get_router(app_state.clone()))
             .nest("/storages", StoragesRouter::get_router(app_state.clone()))
-            .nest(
-                "/storage_workers",
-                StorageWorkersRouter::get_router(app_state.clone()),
-            )
+            .nest("/storage_workers", StorageWorkersRouter::get_router(app_state.clone()))
             .nest("/settings", SettingsRouter::get_router(app_state.clone()))
             .nest("/setup", SetupRouter::get_router(app_state.clone()))
-            .nest(
-                "/public/shares",
-                PublicSharesRouter::get_router(app_state),
-            )
+            .nest("/public/shares", PublicSharesRouter::get_router(app_state))
             // Keep unknown /api/* from falling through to the SPA HTML fallback.
             .fallback(|| async { (StatusCode::NOT_FOUND, "Not Found") })
             .layer(app_cors)

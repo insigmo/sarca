@@ -217,11 +217,12 @@ async fn warm_storage(
         // `warm_one`: at most this many warmer requests ever reach those
         // semaphores at once, so an interactive request queued behind them
         // is never waiting on more than a handful of background jobs.
-        .buffer_unordered(settings.concurrency)
-        .fold(WarmSummary::default(), |mut acc, item| async move {
-            acc.merge(item);
-            acc
-        })
+        .fold(WarmSummary::default(), |mut acc, item| {
+            async move {
+                acc.merge(item);
+                acc
+            }
+		})
         .await
 }
 
