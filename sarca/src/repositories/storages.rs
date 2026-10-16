@@ -57,20 +57,27 @@ impl<'d> StoragesRepository<'d> {
                 "
                 SELECT
                     s.*,
-                    COUNT(f.id) AS files_amount,
-                    COALESCE(SUM(f.size), 0) as size,
+                    COALESCE(t.files_amount, 0) AS files_amount,
+                    COALESCE(t.size, 0) AS size,
                     EXISTS(
                         SELECT 1 FROM storage_channels sc
                         WHERE sc.storage_id = s.id AND sc.status = 'dead'
                     ) AS has_dead_channel
                 FROM {TABLE} s
                 JOIN {ACCESS_TABLE} a ON s.id = a.storage_id
-                LEFT JOIN {FILES_TABLE} f ON s.id = f.storage_id
-                    AND f.path NOT LIKE '%/'
-                    AND f.is_uploaded = true
-                    AND f.deleted_at IS NULL
+                -- Totals first, then the join. Grouping the joined rows sorted
+                -- every file through a temp b-tree on each storage list, and the
+                -- covering files_totals_idx answers this without the table.
+                LEFT JOIN (
+                    SELECT storage_id, COUNT(*) AS files_amount, SUM(size) AS size
+                    FROM {FILES_TABLE}
+                    WHERE path NOT LIKE '%/'
+                      AND is_uploaded = true
+                      AND deleted_at IS NULL
+                    GROUP BY storage_id
+                ) t ON t.storage_id = s.id
                 WHERE a.user_id = $1
-                GROUP by s.id
+                ORDER BY s.id
             "
             )
             .as_str(),
@@ -207,5 +214,60 @@ impl<'d> StoragesRepository<'d> {
             .await
             .map_err(|e| map_not_found(&e, "storage"))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::{
+        common::db::pool::get_pool,
+        models::{access::AccessType, files::InFile, users::InDBUser},
+        repositories::{access::AccessRepository, files::FilesRepository, users::UsersRepository},
+    };
+
+    /// Totals count uploaded files only — not folder markers, not the trash, not
+    /// unfinished uploads — and a storage with nothing in it still lists, at zero.
+    #[tokio::test]
+    async fn storage_list_totals_count_uploaded_files_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 4, Duration::from_secs(5)).await.unwrap();
+        crate::startup::init_db(&pool).await;
+
+        let user = UsersRepository::new(&pool)
+            .create(InDBUser::new_password("u@sarca.test".into(), "x".into()))
+            .await
+            .unwrap();
+        let (full, empty) = (Uuid::new_v4(), Uuid::new_v4());
+        for (id, name) in [(full, "Full"), (empty, "Empty")] {
+            sqlx::query("INSERT INTO storages (id, name, primary_position) VALUES ($1, $2, 1)")
+                .bind(id)
+                .bind(name)
+                .execute(&pool)
+                .await
+                .unwrap();
+            AccessRepository::new(&pool)
+                .grant_for_user_id(id, user.id, AccessType::A)
+                .await
+                .unwrap();
+        }
+
+        let files = FilesRepository::new(&pool);
+        for (path, size) in [("a.jpg", 10), ("dir/b.jpg", 20), ("dir/", 0), ("gone.jpg", 40)] {
+            files.create_folder(InFile::new(path.into(), size, full)).await.unwrap();
+        }
+        files.delete("gone.jpg", full).await.unwrap();
+        files.create_file_anyway(InFile::new("partial.mp4".into(), 80, full)).await.unwrap();
+
+        let listed = StoragesRepository::new(&pool).list_by_user_id(user.id).await.unwrap();
+        let totals = |id: Uuid| {
+            listed.iter().find(|s| s.id == id).map(|s| (s.files_amount, s.size)).unwrap()
+        };
+        assert_eq!(listed.len(), 2);
+        assert_eq!(totals(full), (2, 30));
+        assert_eq!(totals(empty), (0, 0));
     }
 }

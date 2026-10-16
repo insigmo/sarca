@@ -47,6 +47,17 @@ impl LocalIndex {
         }
         let conn =
             Connection::open(path).with_context(|| format!("open index {}", path.display()))?;
+        // Every index write is its own transaction, and a scan writes one per
+        // file. In the default rollback-journal mode with `synchronous=FULL`
+        // each of those is several fsyncs — slow on a phone's flash once a camera
+        // roll holds tens of thousands of entries. WAL with `NORMAL` makes a
+        // commit an append and fsyncs at checkpoints; a power cut can lose the
+        // last few entries but never corrupts the index, and a lost entry only
+        // means the next scan hashes that file again.
+        conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0))
+            .context("enable WAL on the sync index")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         let idx = Self {
             conn: Mutex::new(conn),
         };
@@ -475,6 +486,26 @@ pub fn utc_from_mtime_ms(ms: i64) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A commit per entry is only cheap in WAL mode with `synchronous=NORMAL`;
+    /// both are per-connection or per-file settings that a reopen must keep.
+    #[test]
+    fn index_runs_in_wal_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sync-index.sqlite");
+        drop(LocalIndex::open(&path).unwrap());
+
+        let idx = LocalIndex::open(&path).unwrap();
+        let conn = idx.lock().unwrap();
+        let mode: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let synchronous: i64 = conn
+            .query_row("PRAGMA synchronous", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(synchronous, 1, "synchronous should be NORMAL");
+    }
 
     #[test]
     fn set_binding_enabled_preserves_entries() {

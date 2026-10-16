@@ -7,7 +7,11 @@ use crate::{
     common::password_manager::PasswordManager,
     config::Config,
     errors::SarcaError,
-    models::{access::AccessType, users::InDBUser},
+    models::{
+        access::AccessType,
+        chunk_replicas::{REPLICA_STATUS_FAILED, REPLICA_STATUS_PENDING},
+        users::InDBUser,
+    },
     repositories::{
         access::AccessRepository,
         storage_workers::StorageWorkersRepository,
@@ -391,6 +395,85 @@ pub async fn init_db(db: &SqlitePool) {
 
     add_missing_columns(db).await;
     enforce_one_row_per_chunk_position(db).await;
+    create_query_indexes(db).await;
+}
+
+/// Secondary indexes behind the queries that scanned whole tables once a
+/// storage held tens of thousands of files.
+///
+/// Created after `add_missing_columns`, because some cover columns an older
+/// database only gains there, and outside `init_db`'s `unwrap()`ed list, so a
+/// failure leaves a slower server rather than one that will not boot. The first
+/// boot on a large database builds them once; that is what the log line is for.
+#[inline]
+async fn create_query_indexes(db: &SqlitePool) {
+    let replica_queue =
+        format!("status IN ('{REPLICA_STATUS_PENDING}', '{REPLICA_STATUS_FAILED}')");
+
+    for (name, definition) in [
+        // Trash listing, restore and per-path purge read trashed rows by folder;
+        // `files_path_storage_id_alive_uidx` only holds live ones.
+        (
+            "files_trash_storage_path_idx",
+            "ON files (storage_id, path) WHERE deleted_at IS NOT NULL".to_owned(),
+        ),
+        // The trash retention sweep.
+        (
+            "files_trash_deleted_at_idx",
+            "ON files (deleted_at) WHERE deleted_at IS NOT NULL".to_owned(),
+        ),
+        // Per-storage file count and size, read from the index alone: the storage
+        // list used to visit every row in path order. `is_uploaded` leads so the
+        // folder queries, which filter on `storage_id` and a path range, keep
+        // choosing the path index. Also finds unfinished uploads at startup.
+        (
+            "files_totals_idx",
+            "ON files (is_uploaded, storage_id, deleted_at, size, path) WHERE deleted_at IS NULL"
+                .to_owned(),
+        ),
+        // Trash GC asks, once per Telegram message, whether anything still uses it.
+        (
+            "files_thumb_message_idx",
+            "ON files (thumb_telegram_message_id) WHERE thumb_telegram_message_id IS NOT NULL"
+                .to_owned(),
+        ),
+        (
+            "files_preview_message_idx",
+            "ON files (preview_telegram_message_id) \
+             WHERE preview_telegram_message_id IS NOT NULL"
+                .to_owned(),
+        ),
+        (
+            "chunk_replicas_message_idx",
+            "ON chunk_replicas (telegram_message_id) WHERE telegram_message_id IS NOT NULL"
+                .to_owned(),
+        ),
+        // The replication loop's queue. It must say `status IN (…)` exactly as
+        // `list_pending` does, or SQLite will not match the partial index.
+        ("chunk_replicas_queue_idx", format!("ON chunk_replicas (id) WHERE {replica_queue}")),
+        // Replication stats, retrying a storage's failures, and the cascade when a
+        // channel is removed.
+        ("chunk_replicas_channel_status_idx", "ON chunk_replicas (channel_id, status)".to_owned()),
+    ] {
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = $1",
+        )
+        .bind(name)
+        .fetch_one(db)
+        .await
+        .unwrap_or(0);
+        if exists > 0 {
+            continue;
+        }
+
+        tracing::info!("building index {name}");
+        if let Err(e) = sqlx::query(&format!("CREATE INDEX IF NOT EXISTS {name} {definition}"))
+            .execute(db)
+            .await
+        {
+            tracing::error!("failed to create index {name}: {e}");
+        }
+    }
 }
 
 /// Give `file_chunks` its `(file_id, position)` unique index, deduplicating first.
@@ -796,6 +879,167 @@ mod tests {
         assert_eq!(tables, 4);
     }
 
+    /// `EXPLAIN QUERY PLAN` for `sql`, one detail per step, `|`-joined. Each `$n`
+    /// is bound to NULL: plans are made at prepare time, before any value is seen.
+    async fn plan(pool: &SqlitePool, sql: &str, params: usize) -> String {
+        let explain = format!("EXPLAIN QUERY PLAN {sql}");
+        let mut query = sqlx::query_as::<_, (i64, i64, i64, String)>(&explain);
+        for _ in 0..params {
+            query = query.bind(None::<i64>);
+        }
+        let steps = query.fetch_all(pool).await.unwrap();
+        steps.into_iter().map(|(_, _, _, detail)| detail).collect::<Vec<_>>().join(" | ")
+    }
+
+    /// The queries that scanned whole tables once storages held tens of thousands
+    /// of files must stay on their indexes. Another index can quietly win the
+    /// planner over — one led by `storage_id` sent folder listings straight back
+    /// to scanning the storage — so the plans are pinned here. The SQL mirrors
+    /// the repositories'; keep the two in step.
+    #[tokio::test]
+    async fn hot_queries_stay_on_their_indexes() {
+        use crate::common::db::sql::starts_with;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("plans.sqlite");
+        let pool = get_pool(path.to_str().unwrap(), 1, Duration::from_secs(5)).await.unwrap();
+        init_db(&pool).await;
+
+        let under = starts_with("path", "$2");
+        let under_t = starts_with("t.path", "$2");
+        let cases = [
+            (
+                "folder listing",
+                format!(
+                    "SELECT path, size, thumb_telegram_file_id FROM files
+                      WHERE storage_id = $1 AND {under} AND is_uploaded AND deleted_at IS NULL"
+                ),
+                2,
+                "SEARCH files USING INDEX files_path_storage_id_alive_uidx (path>? AND path<?)",
+            ),
+            (
+                "folder delete",
+                format!(
+                    "UPDATE files SET deleted_at = datetime('now')
+                      WHERE storage_id = $1 AND deleted_at IS NULL AND {under}"
+                ),
+                2,
+                "SEARCH files USING INDEX files_path_storage_id_alive_uidx (path>? AND path<?)",
+            ),
+            (
+                "duplicate-name lookup",
+                format!(
+                    "SELECT path FROM files
+                      WHERE storage_id = $1 AND deleted_at IS NULL AND {under}
+                        AND (path = $2 || $3 OR path LIKE $2 || ' (%)' || $3)"
+                ),
+                3,
+                "SEARCH files USING INDEX files_path_storage_id_alive_uidx (path>? AND path<?)",
+            ),
+            (
+                "trash listing",
+                format!(
+                    "SELECT path, size, thumb_telegram_file_id FROM files
+                      WHERE storage_id = $1 AND {under} AND is_uploaded
+                        AND deleted_at IS NOT NULL"
+                ),
+                2,
+                "SEARCH files USING INDEX files_trash_storage_path_idx (storage_id=? AND path>? AND path<?)",
+            ),
+            (
+                "folder restore",
+                format!(
+                    "UPDATE files AS t SET deleted_at = NULL
+                      WHERE t.storage_id = $1 AND t.deleted_at IS NOT NULL AND {under_t}
+                        AND NOT EXISTS (
+                            SELECT 1 FROM files AS live
+                             WHERE live.storage_id = t.storage_id
+                               AND live.path = t.path
+                               AND live.deleted_at IS NULL)"
+                ),
+                2,
+                "SEARCH t USING INDEX files_trash_storage_path_idx (storage_id=? AND path>? AND path<?)",
+            ),
+            (
+                "trash retention sweep",
+                "SELECT id, storage_id FROM files WHERE deleted_at IS NOT NULL AND deleted_at < $1"
+                    .to_owned(),
+                1,
+                "SEARCH files USING INDEX files_trash_deleted_at_idx",
+            ),
+            (
+                "storage totals",
+                "SELECT storage_id, COUNT(*), SUM(size) FROM files
+                  WHERE path NOT LIKE '%/' AND is_uploaded = true AND deleted_at IS NULL
+                  GROUP BY storage_id"
+                    .to_owned(),
+                0,
+                "SEARCH files USING COVERING INDEX files_totals_idx (is_uploaded=?)",
+            ),
+            (
+                "unfinished uploads",
+                "SELECT id FROM files f
+                  WHERE is_uploaded = false AND deleted_at IS NULL AND path NOT LIKE '%/'
+                    AND NOT EXISTS (SELECT 1 FROM file_chunks WHERE file_chunks.file_id = f.id)"
+                    .to_owned(),
+                0,
+                "SEARCH f USING INDEX files_totals_idx (is_uploaded=?)",
+            ),
+            (
+                "thumbnail/preview still referenced",
+                "SELECT EXISTS(
+                    SELECT 1 FROM files f
+                    JOIN storage_channels sc ON sc.storage_id = f.storage_id
+                    WHERE sc.chat_id = $1
+                      AND (f.thumb_telegram_message_id = $2
+                           OR f.preview_telegram_message_id = $2))"
+                    .to_owned(),
+                2,
+                "SEARCH f USING INDEX files_thumb_message_idx (thumb_telegram_message_id=?) \
+                 | INDEX 2 | SEARCH f USING INDEX files_preview_message_idx",
+            ),
+            (
+                "chunk message still referenced",
+                "SELECT EXISTS(
+                    SELECT 1 FROM chunk_replicas cr
+                    JOIN storage_channels sc ON sc.id = cr.channel_id
+                    WHERE sc.chat_id = $1 AND cr.telegram_message_id = $2)"
+                    .to_owned(),
+                2,
+                "SEARCH cr USING INDEX chunk_replicas_message_idx (telegram_message_id=?)",
+            ),
+            (
+                "replication queue",
+                format!(
+                    "SELECT cr.id, cr.chunk_id, cr.channel_id, sc.chat_id AS target_chat_id
+                       FROM chunk_replicas cr
+                       JOIN storage_channels sc ON sc.id = cr.channel_id
+                      WHERE cr.status IN ('{REPLICA_STATUS_PENDING}', '{REPLICA_STATUS_FAILED}')
+                        AND sc.status = 'active'
+                      ORDER BY cr.id
+                      LIMIT $1"
+                ),
+                1,
+                "SCAN cr USING INDEX chunk_replicas_queue_idx",
+            ),
+            (
+                "replication stats",
+                "SELECT SUM(CASE WHEN cr.status = 'pending' THEN 1 ELSE 0 END)
+                   FROM chunk_replicas cr
+                   JOIN storage_channels sc ON sc.id = cr.channel_id
+                  WHERE sc.storage_id = $1"
+                    .to_owned(),
+                1,
+                "SEARCH cr USING COVERING INDEX chunk_replicas_channel_status_idx (channel_id=?)",
+            ),
+        ];
+
+        for (name, sql, params, expected) in cases {
+            let plan = plan(&pool, &sql, params).await;
+            assert!(plan.contains(expected), "{name}: expected `{expected}` in plan\n{plan}");
+        }
+    }
+
     /// A database created before previews existed keeps its `files` table, so the
     /// new columns can only arrive through `add_missing_columns`.
     #[tokio::test]
@@ -838,6 +1082,16 @@ mod tests {
             .unwrap();
             assert_eq!(present, 1, "{column} missing after migration");
         }
+
+        // An index over an added column can only be built once the column is there.
+        let indexed: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM sqlite_master
+              WHERE type = 'index' AND name = 'files_preview_message_idx'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(indexed, 1, "preview index missing on a migrated database");
 
         init_db(&pool).await; // idempotent: no duplicate-column error
     }

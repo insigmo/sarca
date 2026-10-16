@@ -6,7 +6,10 @@ use uuid::Uuid;
 
 use crate::{
     common::{
-        db::{errors::map_not_found, sql::push_uuid_list},
+        db::{
+            errors::map_not_found,
+            sql::{push_uuid_list, starts_with},
+        },
         types::Position,
     },
     errors::{SarcaError, SarcaResult},
@@ -215,6 +218,8 @@ impl<'d> FilesRepository<'d> {
         // exact same path, each retry narrowing the race window further.
         const MAX_ATTEMPTS: u32 = 20;
         let mut last_conflict_path = in_obj.path.clone();
+        // Both shapes begin with the stem; the range is what makes this indexed.
+        let under_stem = starts_with("path", "$2");
 
         for attempt in 0..MAX_ATTEMPTS {
             let candidates: Vec<(String,)> = sqlx::query_as(
@@ -224,6 +229,7 @@ impl<'d> FilesRepository<'d> {
                     FROM {FILES_TABLE}
                     WHERE storage_id = $1
                       AND deleted_at IS NULL
+                      AND {under_stem}
                       AND (path = $2 || $3 OR path LIKE $2 || ' (%)' || $3)
                     "#
                 )
@@ -461,8 +467,11 @@ impl<'d> FilesRepository<'d> {
     /// `prefix` must be without leading and trailing slashes
     pub async fn list_dir(&self, storage_id: Uuid, prefix: &str) -> SarcaResult<Vec<FSElement>> {
         let prefix = if prefix.is_empty() { prefix.to_string() } else { format!("{prefix}/") };
-        let path_filter =
-            if prefix.is_empty() { String::new() } else { "AND path LIKE $1 || '%'".to_string() };
+        let path_filter = if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("AND {}", starts_with("path", "$1"))
+        };
 
         let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(&format!(
             "
@@ -532,6 +541,7 @@ impl<'d> FilesRepository<'d> {
         storage_id: Uuid,
         folder_prefix: &str,
     ) -> SarcaResult<i64> {
+        let under = starts_with("path", "$2");
         let row: (i64,) = sqlx::query_as(
             format!(
                 "
@@ -540,7 +550,7 @@ impl<'d> FilesRepository<'d> {
                 WHERE storage_id = $1
                   AND is_uploaded
                   AND deleted_at IS NULL
-                  AND path LIKE $2 || '%'
+                  AND {under}
                   AND path NOT LIKE '%/';
             "
             )
@@ -563,6 +573,7 @@ impl<'d> FilesRepository<'d> {
         storage_id: Uuid,
         folder_prefix: &str,
     ) -> SarcaResult<Vec<File>> {
+        let under = starts_with("path", "$2");
         sqlx::query_as(
             format!(
                 "
@@ -571,7 +582,7 @@ impl<'d> FilesRepository<'d> {
                 WHERE storage_id = $1
                   AND is_uploaded
                   AND deleted_at IS NULL
-                  AND path LIKE $2 || '%'
+                  AND {under}
                   AND path NOT LIKE '%/'
                 ORDER BY path
             "
@@ -649,7 +660,8 @@ impl<'d> FilesRepository<'d> {
     }
 
     /// `(chat_id, message_id, storage_id)` for derived (thumbnail + preview) Telegram
-    /// messages of the given files.
+    /// messages of the given files. May repeat a message shared by two files (a
+    /// copy keeps the original's thumbnail); callers deduplicate.
     pub async fn list_derived_messages_for_files(
         &self,
         file_ids: &[Uuid],
@@ -659,26 +671,25 @@ impl<'d> FilesRepository<'d> {
         }
         // Derived documents go to the primary channel at upload time; try all storage
         // channels so purge still works if primary later rotated.
+        //
+        // Both message columns come back in one row and are split below. Joining
+        // `files` to a UNION of itself built that union over the whole table on
+        // every call, however few ids were asked for.
         let mut builder = QueryBuilder::new(
             format!(
                 "
-                SELECT DISTINCT sc.chat_id, m.message_id, f.storage_id
+                SELECT DISTINCT sc.chat_id, f.thumb_telegram_message_id,
+                       f.preview_telegram_message_id, f.storage_id
                 FROM {FILES_TABLE} f
                 JOIN storage_channels sc ON sc.storage_id = f.storage_id
-                JOIN (
-                    SELECT id, thumb_telegram_message_id AS message_id FROM {FILES_TABLE}
-                    UNION ALL
-                    SELECT id, preview_telegram_message_id AS message_id FROM {FILES_TABLE}
-                ) m ON m.id = f.id
-                WHERE m.message_id IS NOT NULL
-                  AND f.id IN ("
+                WHERE f.id IN ("
             )
             .as_str(),
         );
         push_uuid_list(&mut builder, file_ids);
         builder.push(")");
 
-        let rows: Vec<(i64, Option<i64>, Uuid)> =
+        let rows: Vec<(i64, Option<i64>, Option<i64>, Uuid)> =
             builder.build_query_as().fetch_all(self.db).await.map_err(|e| {
                 tracing::error!("{e}");
                 SarcaError::Unknown
@@ -686,31 +697,28 @@ impl<'d> FilesRepository<'d> {
 
         Ok(rows
             .into_iter()
-            .filter_map(|(chat_id, message_id, storage_id)| {
-                message_id.map(|mid| (chat_id, mid, storage_id))
+            .flat_map(|(chat_id, thumb, preview, storage_id)| {
+                [thumb, preview].into_iter().flatten().map(move |mid| (chat_id, mid, storage_id))
             })
             .collect())
     }
 
     /// `(chat_id, message_id)` for derived (thumbnail + preview) Telegram messages of all
-    /// files in a storage.
+    /// files in a storage. May repeat a message; callers deduplicate.
     pub async fn list_derived_messages_for_storage(
         &self,
         storage_id: Uuid,
     ) -> SarcaResult<Vec<(i64, i64)>> {
-        let rows: Vec<(i64, Option<i64>)> = sqlx::query_as(
+        let rows: Vec<(i64, Option<i64>, Option<i64>)> = sqlx::query_as(
             format!(
                 "
-                SELECT DISTINCT sc.chat_id, m.message_id
+                SELECT DISTINCT sc.chat_id, f.thumb_telegram_message_id,
+                       f.preview_telegram_message_id
                 FROM {FILES_TABLE} f
                 JOIN storage_channels sc ON sc.storage_id = f.storage_id
-                JOIN (
-                    SELECT id, thumb_telegram_message_id AS message_id FROM {FILES_TABLE}
-                    UNION ALL
-                    SELECT id, preview_telegram_message_id AS message_id FROM {FILES_TABLE}
-                ) m ON m.id = f.id
                 WHERE f.storage_id = $1
-                  AND m.message_id IS NOT NULL
+                  AND (f.thumb_telegram_message_id IS NOT NULL
+                       OR f.preview_telegram_message_id IS NOT NULL)
                 "
             )
             .as_str(),
@@ -725,12 +733,17 @@ impl<'d> FilesRepository<'d> {
 
         Ok(rows
             .into_iter()
-            .filter_map(|(chat_id, message_id)| message_id.map(|mid| (chat_id, mid)))
+            .flat_map(|(chat_id, thumb, preview)| {
+                [thumb, preview].into_iter().flatten().map(move |mid| (chat_id, mid))
+            })
             .collect())
     }
 
     /// True if any remaining file (live or trashed) still uses this message as its
     /// thumbnail or preview on a channel with `chat_id`.
+    ///
+    /// Runs once per message during trash GC, so it must not scan `files`: the two
+    /// equalities (not `$2 IN (…)`) let each be answered from its own index.
     pub async fn derived_message_still_referenced(
         &self,
         chat_id: i64,
@@ -744,7 +757,8 @@ impl<'d> FilesRepository<'d> {
                     FROM {FILES_TABLE} f
                     JOIN storage_channels sc ON sc.storage_id = f.storage_id
                     WHERE sc.chat_id = $1
-                      AND $2 IN (f.thumb_telegram_message_id, f.preview_telegram_message_id)
+                      AND (f.thumb_telegram_message_id = $2
+                           OR f.preview_telegram_message_id = $2)
                 )
                 "
             )
@@ -889,6 +903,7 @@ impl<'d> FilesRepository<'d> {
     /// Soft-delete live file(s) under `path`. Returns the canonical deleted target
     /// (folders end with `/`) for callers that need to clean up path-keyed metadata.
     pub async fn delete(&self, path: &str, storage_id: Uuid) -> SarcaResult<String> {
+        let under = starts_with("path", "$2");
         let mut transaction = self.db.begin().await.map_err(|e| map_not_found(&e, ""))?;
 
         // Folders may arrive without a trailing slash from the UI.
@@ -904,7 +919,7 @@ impl<'d> FilesRepository<'d> {
                     SELECT 1 FROM {FILES_TABLE}
                     WHERE storage_id = $1
                       AND deleted_at IS NULL
-                      AND (path = $2 OR path LIKE $2 || '%')
+                      AND {under}
                 )
                 "
             ))
@@ -938,7 +953,7 @@ impl<'d> FilesRepository<'d> {
                 SET deleted_at = datetime('now')
                 WHERE storage_id = $1
                   AND deleted_at IS NULL
-                  AND (path = $2 OR path LIKE $2 || '%');
+                  AND {under};
                 "
             ))
             .bind(storage_id)
@@ -978,7 +993,7 @@ impl<'d> FilesRepository<'d> {
                         FROM {FILES_TABLE}
                         WHERE storage_id = $3
                           AND deleted_at IS NULL
-                          AND path LIKE $2 || '%'
+                          AND {under}
                     );
             "
             ))
@@ -1029,13 +1044,14 @@ impl<'d> FilesRepository<'d> {
             let new_prefix =
                 if new_path.ends_with('/') { new_path.to_string() } else { format!("{new_path}/") };
             let skip = old_prefix.len();
+            let under = starts_with("path", "$3");
             sqlx::query(&format!(
                 "
                 UPDATE {FILES_TABLE}
                 SET path = $1 || substr(path, {skip} + 1)
                 WHERE storage_id = $2
                   {deleted_filter}
-                  AND (path = $3 OR path LIKE $3 || '%')
+                  AND {under}
                 "
             ))
             .bind(&new_prefix)
@@ -1065,8 +1081,11 @@ impl<'d> FilesRepository<'d> {
     /// Directory listing for trashed items under `prefix` (without leading/trailing slashes).
     pub async fn list_trash(&self, storage_id: Uuid, prefix: &str) -> SarcaResult<Vec<FSElement>> {
         let prefix = if prefix.is_empty() { prefix.to_string() } else { format!("{prefix}/") };
-        let path_filter =
-            if prefix.is_empty() { String::new() } else { "AND path LIKE $1 || '%'".to_string() };
+        let path_filter = if prefix.is_empty() {
+            String::new()
+        } else {
+            format!("AND {}", starts_with("path", "$1"))
+        };
 
         let rows: Vec<(String, i64, Option<String>)> = sqlx::query_as(&format!(
             "
@@ -1089,6 +1108,7 @@ impl<'d> FilesRepository<'d> {
 
     /// Resolve trashed file ids matching a path or folder prefix.
     pub async fn list_trashed_ids(&self, storage_id: Uuid, path: &str) -> SarcaResult<Vec<Uuid>> {
+        let under = starts_with("path", "$2");
         let is_folder = path.ends_with('/');
         let folder_prefix = if is_folder {
             path.to_string()
@@ -1100,7 +1120,7 @@ impl<'d> FilesRepository<'d> {
                     SELECT 1 FROM {FILES_TABLE}
                     WHERE storage_id = $1
                       AND deleted_at IS NOT NULL
-                      AND (path = $2 OR path LIKE $2 || '%')
+                      AND {under}
                 )
                 "
             ))
@@ -1130,7 +1150,7 @@ impl<'d> FilesRepository<'d> {
                 SELECT id FROM {FILES_TABLE}
                 WHERE storage_id = $1
                   AND deleted_at IS NOT NULL
-                  AND (path = $2 OR path LIKE $2 || '%')
+                  AND {under}
                 "
             ))
             .bind(storage_id)
@@ -1202,6 +1222,8 @@ impl<'d> FilesRepository<'d> {
     /// parent folder marker recreated earlier) so restore cannot hit the alive
     /// unique index.
     pub async fn restore(&self, path: &str, storage_id: Uuid) -> SarcaResult<()> {
+        let under = starts_with("path", "$2");
+        let under_t = starts_with("t.path", "$2");
         let is_folder = path.ends_with('/');
         let folder_prefix = if is_folder {
             path.to_string()
@@ -1213,7 +1235,7 @@ impl<'d> FilesRepository<'d> {
                     SELECT 1 FROM {FILES_TABLE}
                     WHERE storage_id = $1
                       AND deleted_at IS NOT NULL
-                      AND (path = $2 OR path LIKE $2 || '%')
+                      AND {under}
                 )
                 "
             ))
@@ -1265,7 +1287,7 @@ impl<'d> FilesRepository<'d> {
                 SET deleted_at = NULL
                 WHERE t.storage_id = $1
                   AND t.deleted_at IS NOT NULL
-                  AND (t.path = $2 OR t.path LIKE $2 || '%')
+                  AND {under_t}
                   AND NOT EXISTS (
                       SELECT 1 FROM {FILES_TABLE} AS live
                       WHERE live.storage_id = t.storage_id
@@ -1510,6 +1532,7 @@ impl<'d> FilesRepository<'d> {
         storage_id: Uuid,
         path: &str,
     ) -> SarcaResult<Vec<Uuid>> {
+        let under = starts_with("path", "$2");
         let is_folder = path.ends_with('/');
         let folder_prefix = if is_folder {
             path.to_string()
@@ -1521,7 +1544,7 @@ impl<'d> FilesRepository<'d> {
                     SELECT 1 FROM {FILES_TABLE}
                     WHERE storage_id = $1
                       AND deleted_at IS NULL
-                      AND (path = $2 OR path LIKE $2 || '%')
+                      AND {under}
                 )
                 "
             ))
@@ -1551,7 +1574,7 @@ impl<'d> FilesRepository<'d> {
                 SELECT id FROM {FILES_TABLE}
                 WHERE storage_id = $1
                   AND deleted_at IS NULL
-                  AND (path = $2 OR path LIKE $2 || '%')
+                  AND {under}
                 "
             ))
             .bind(storage_id)
@@ -1600,6 +1623,7 @@ impl<'d> FilesRepository<'d> {
         storage_id: Uuid,
         folder_prefix: &str,
     ) -> SarcaResult<Vec<File>> {
+        let under = starts_with("path", "$2");
         sqlx::query_as(
             format!(
                 "
@@ -1607,7 +1631,7 @@ impl<'d> FilesRepository<'d> {
                 FROM {FILES_TABLE}
                 WHERE storage_id = $1
                   AND deleted_at IS NULL
-                  AND (path = $2 OR path LIKE $2 || '%')
+                  AND {under}
                 ORDER BY path
                 "
             )
@@ -2139,5 +2163,114 @@ mod rename_conflict_tests {
             matches!(err, SarcaError::AlreadyExists(_) | SarcaError::TrashPathConflict),
             "expected a conflict error, got {err:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::*;
+
+    async fn test_pool() -> SqlitePool {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sarca.sqlite");
+        let pool = crate::common::db::pool::get_pool(
+            path.to_str().unwrap(),
+            8,
+            std::time::Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        crate::startup::init_db(&pool).await;
+        // Keep the tempdir (and its backing file) alive for the pool's lifetime.
+        std::mem::forget(dir);
+        pool
+    }
+
+    async fn insert_storage_with_channel(db: &SqlitePool, chat_id: i64) -> Uuid {
+        let storage_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO storages (id, name, primary_position) VALUES ($1, $2, 1)")
+            .bind(storage_id)
+            .bind("test storage")
+            .execute(db)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO storage_channels (id, storage_id, position, chat_id, name)
+             VALUES ($1, $2, 1, $3, 'test channel')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(storage_id)
+        .bind(chat_id)
+        .execute(db)
+        .await
+        .unwrap();
+        storage_id
+    }
+
+    fn names(listing: SarcaResult<Vec<FSElement>>) -> Vec<String> {
+        let mut names: Vec<String> = listing.unwrap().into_iter().map(|e| e.name).collect();
+        names.sort();
+        names
+    }
+
+    /// `LIKE` read `_` as a wildcard and ignored case, so the folder `a_b/` also
+    /// matched `axb/` and `A_B/`: listing it mixed their files in, and deleting
+    /// it trashed them too. Every folder operation must stay inside the folder.
+    #[tokio::test]
+    async fn folder_operations_match_their_prefix_exactly() {
+        let db = test_pool().await;
+        let storage_id = insert_storage_with_channel(&db, 1).await;
+        let repo = FilesRepository::new(&db);
+        for path in ["a_b/one.txt", "a_b/sub/two.txt", "axb/three.txt", "A_B/four.txt"] {
+            repo.create_folder(InFile::new(path.to_owned(), 1, storage_id)).await.unwrap();
+        }
+
+        assert_eq!(names(repo.list_dir(storage_id, "a_b").await), ["one.txt", "sub"]);
+        assert_eq!(repo.list_live_under(storage_id, "a_b/").await.unwrap().len(), 2);
+        assert_eq!(repo.sum_uploaded_size_under(storage_id, "a_b/").await.unwrap(), 2);
+
+        repo.delete("a_b", storage_id).await.unwrap();
+        assert!(!repo.live_path_exists("a_b/sub/two.txt", storage_id).await.unwrap());
+        assert!(repo.live_path_exists("axb/three.txt", storage_id).await.unwrap());
+        assert!(repo.live_path_exists("A_B/four.txt", storage_id).await.unwrap());
+        assert_eq!(names(repo.list_trash(storage_id, "a_b").await), ["one.txt", "sub"]);
+
+        repo.restore("a_b/", storage_id).await.unwrap();
+        repo.update_path("a_b/", "moved/", storage_id).await.unwrap();
+        assert!(repo.live_path_exists("moved/sub/two.txt", storage_id).await.unwrap());
+        assert!(repo.live_path_exists("axb/three.txt", storage_id).await.unwrap());
+        assert!(repo.live_path_exists("A_B/four.txt", storage_id).await.unwrap());
+    }
+
+    /// Trash GC asks, per message, whether a file still uses it as a thumbnail or
+    /// a preview. Each column now has its own index; both must still answer.
+    #[tokio::test]
+    async fn derived_messages_are_found_through_either_column() {
+        let db = test_pool().await;
+        let chat_id = 4242;
+        let storage_id = insert_storage_with_channel(&db, chat_id).await;
+        let repo = FilesRepository::new(&db);
+        let file =
+            repo.create_folder(InFile::new("p.jpg".to_owned(), 1, storage_id)).await.unwrap();
+        sqlx::query(
+            "UPDATE files SET thumb_telegram_message_id = 7, preview_telegram_message_id = 8
+              WHERE id = $1",
+        )
+        .bind(file.id)
+        .execute(&db)
+        .await
+        .unwrap();
+
+        let mut for_files = repo.list_derived_messages_for_files(&[file.id]).await.unwrap();
+        for_files.sort_unstable();
+        assert_eq!(for_files, [(chat_id, 7, storage_id), (chat_id, 8, storage_id)]);
+        let mut for_storage = repo.list_derived_messages_for_storage(storage_id).await.unwrap();
+        for_storage.sort_unstable();
+        assert_eq!(for_storage, [(chat_id, 7), (chat_id, 8)]);
+
+        assert!(repo.derived_message_still_referenced(chat_id, 7).await.unwrap());
+        assert!(repo.derived_message_still_referenced(chat_id, 8).await.unwrap());
+        assert!(!repo.derived_message_still_referenced(chat_id, 9).await.unwrap());
+        assert!(!repo.derived_message_still_referenced(chat_id + 1, 7).await.unwrap());
     }
 }
