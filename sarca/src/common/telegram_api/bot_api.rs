@@ -26,14 +26,13 @@ use super::{
         UploadBodySchema,
         UploadOutcome,
     },
-    uplink::{self, Uplink},
 };
 use crate::{
     common::{
         channels::{UploadProgressEvent, emit_upload_progress},
         types::ChatId,
     },
-    errors::{SarcaError, SarcaResult},
+    errors::{SarcaError, SarcaResult, error_chain, redact_url},
     services::storage_workers_scheduler::StorageWorkersScheduler,
 };
 
@@ -277,34 +276,6 @@ impl<'t> TelegramBotApi<'t> {
         url.to_string()
     }
 
-    /// Mask every bot token in arbitrary text, for logging a transport error.
-    ///
-    /// `reqwest::Error`'s `Display` embeds the URL it was given, so a plain
-    /// `{e}` in a retry warning prints the bot token in full — and on a host
-    /// with a flaky resolver these fire often enough to be the bulk of a day's
-    /// warnings, in exactly the log someone pastes into an issue. Same rule as
-    /// [`Self::mask_url`], applied wherever a token appears rather than only at
-    /// the start.
-    fn mask_secrets(text: &str) -> String {
-        let mut out = String::with_capacity(text.len());
-        let mut rest = text;
-        while let Some(bot_idx) = rest.find("/bot") {
-            out.push_str(&rest[..bot_idx + 4]);
-            let after = &rest[bot_idx + 4..];
-            // A token runs to the next path separator and always contains a
-            // colon; `/botanical/...` and a trailing `/bot` are not tokens.
-            match after.find('/') {
-                Some(end) if after[..end].contains(':') => {
-                    out.push_str("***");
-                    rest = &after[end..];
-                },
-                _ => rest = after,
-            }
-        }
-        out.push_str(rest);
-        out
-    }
-
     /// Seconds to wait for a Telegram flood-control response, if any.
     ///
     /// Official API uses HTTP 429; some responses use HTTP 400 with
@@ -474,13 +445,14 @@ impl<'t> TelegramBotApi<'t> {
                     return Err(SarcaError::TelegramAPIError(format!("{status}: {body}")));
                 },
                 Err(e) => {
+                    let e = redact_url(e);
                     other_tries += 1;
                     if other_tries < MAX_ATTEMPTS {
                         let backoff = Self::server_backoff_ms(other_tries.saturating_sub(1));
                         tracing::warn!(
                             "[TELEGRAM API] {op} network error, retrying in {backoff}ms (attempt \
                              {other_tries}/{MAX_ATTEMPTS}): {}",
-                            Self::mask_secrets(&e.to_string())
+                            error_chain(&e)
                         );
                         tokio::time::sleep(Duration::from_millis(backoff)).await;
                         continue;
@@ -512,9 +484,6 @@ impl<'t> TelegramBotApi<'t> {
 
         let start = Instant::now();
         let permit = SendPermit::acquire(&token, chat_id).await;
-        // Thumbnails and previews are small, but they leave by the same radio as
-        // the chunks, so they are counted against the same byte budget.
-        uplink::governor().pace(file_len).await;
         let response = Self::send_with_retries("upload", Some(&permit), || {
             let file_part = multipart::Part::bytes(file.to_vec()).file_name("sarca_chunk.bin");
             let form = multipart::Form::new()
@@ -582,34 +551,18 @@ impl<'t> TelegramBotApi<'t> {
     /// Build the streaming multipart form for one upload attempt of `upload_file_part`.
     ///
     /// Rebuilt per attempt because the underlying file stream can't be replayed.
-    ///
-    /// The body is metered through `uplink` as the HTTP client pulls it, so the
-    /// bytes leave at the governed rate rather than as fast as the socket takes
-    /// them.
     async fn build_upload_part_form(
         file_path: &Path,
         req: &UploadFilePartRequest,
-        uplink: &'static Uplink,
     ) -> SarcaResult<multipart::Form> {
         use std::sync::atomic::{AtomicU64, Ordering};
 
         use futures::StreamExt;
 
-        /// Read and pacing granularity: large enough that metering costs
-        /// nothing, small enough to keep the pace smooth.
-        const PACE_BLOCK: usize = 64 * 1024;
-
         let mut file = tokio::fs::File::open(file_path).await.map_err(|_| SarcaError::Unknown)?;
         file.seek(SeekFrom::Start(req.offset)).await.map_err(|_| SarcaError::Unknown)?;
         let reader = file.take(req.len);
-        let base_stream = ReaderStream::with_capacity(reader, PACE_BLOCK).then(move |item| {
-            async move {
-                if let Ok(bytes) = &item {
-                    uplink.pace(bytes.len()).await;
-                }
-                item
-            }
-        });
+        let base_stream = ReaderStream::new(reader);
 
         let sent = AtomicU64::new(0);
         let last_emit = AtomicU64::new(0);
@@ -652,17 +605,11 @@ impl<'t> TelegramBotApi<'t> {
     /// rebuilt each attempt (unlike `send_with_retries`, which reuses a closure).
     ///
     /// Flood waits retry indefinitely per chunk (no attempt / total-time budget).
-    ///
-    /// Each attempt holds one of `uplink`'s streams only while its body is on
-    /// the wire — never across a backoff or a flood wait — and reports how it
-    /// went, which is what lets the governor back off a failing link and step
-    /// up again on a healthy one.
     async fn send_upload_part_with_retries(
         url: &str,
         file_path: &Path,
         req: &UploadFilePartRequest,
         permit: &SendPermit,
-        uplink: &'static Uplink,
     ) -> SarcaResult<reqwest::Response> {
         let mut flood_tries: u32 = 0;
         let mut flood_waited_secs: u64 = 0;
@@ -685,16 +632,13 @@ impl<'t> TelegramBotApi<'t> {
             // anyone is still listening — the same rule `emit_upload_progress`
             // states. A disconnect *before* `spooled` is still handled, by the
             // router aborting this task outright (`AbortOnDrop`).
-            let form = Self::build_upload_part_form(file_path, req, uplink).await?;
-            let result = {
-                let _stream = uplink.stream().await;
-                http_client::client().post(url).multipart(form).send().await
-            };
+            let form = Self::build_upload_part_form(file_path, req).await?;
+            let send_fut = http_client::client().post(url).multipart(form).send();
+            let result = send_fut.await;
             match result {
                 Ok(response) => {
                     let status = response.status();
                     if status.is_success() {
-                        uplink.note_ok();
                         return Ok(response);
                     }
 
@@ -754,15 +698,14 @@ impl<'t> TelegramBotApi<'t> {
                     return Err(SarcaError::TelegramAPIError(format!("{status}: {body}")));
                 },
                 Err(e) => {
-                    // Below HTTP: the link itself, not Telegram, is in trouble.
-                    uplink.note_transport_error();
+                    let e = redact_url(e);
                     other_tries += 1;
                     if other_tries < MAX_ATTEMPTS {
                         let backoff = Self::server_backoff_ms(other_tries.saturating_sub(1));
                         tracing::warn!(
                             "[TELEGRAM API] upload_file_part network error, retrying in \
                              {backoff}ms (attempt {other_tries}/{MAX_ATTEMPTS}): {}",
-                            Self::mask_secrets(&e.to_string())
+                            error_chain(&e)
                         );
                         tokio::time::sleep(Duration::from_millis(backoff)).await;
                         continue;
@@ -788,9 +731,7 @@ impl<'t> TelegramBotApi<'t> {
 
         let start = Instant::now();
         let permit = SendPermit::acquire(&token, req.chat_id).await;
-        let response =
-            Self::send_upload_part_with_retries(&url, file_path, &req, &permit, uplink::governor())
-                .await?;
+        let response = Self::send_upload_part_with_retries(&url, file_path, &req, &permit).await?;
         permit.mark_ok().await;
         drop(permit);
         let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -1274,22 +1215,7 @@ mod relay_outlives_client_tests {
     use tokio::sync::mpsc;
 
     use super::{SendPermit, TelegramBotApi, UploadFilePartRequest};
-    use crate::common::{
-        telegram_api::uplink::{Limits, Profile, Uplink},
-        types::ChatId,
-    };
-
-    /// A governor of the tests' own: the process-wide one is shared by every
-    /// test in the binary, and these must neither slow each other down nor
-    /// depend on the machine they run on.
-    fn uncapped_uplink() -> &'static Uplink {
-        Box::leak(Box::new(Uplink::new(Limits {
-            profile: Profile::Standard,
-            rate: None,
-            streams: 4,
-            reason: "test".to_owned(),
-        })))
-    }
+    use crate::common::types::ChatId;
 
     /// A Bot API stand-in that accepts any `sendDocument` and reports success.
     async fn fake_bot_api() -> String {
@@ -1346,16 +1272,10 @@ mod relay_outlives_client_tests {
         let req = part_request(Some(tx), 4096);
         let status = {
             let permit = SendPermit::acquire("relay-outlives-client", req.chat_id).await;
-            TelegramBotApi::send_upload_part_with_retries(
-                &url,
-                spool.path(),
-                &req,
-                &permit,
-                uncapped_uplink(),
-            )
-            .await
-            .expect("a hung-up client must not cancel a committed relay")
-            .status()
+            TelegramBotApi::send_upload_part_with_retries(&url, spool.path(), &req, &permit)
+                .await
+                .expect("a hung-up client must not cancel a committed relay")
+                .status()
         };
 
         assert!(status.is_success());
@@ -1375,184 +1295,12 @@ mod relay_outlives_client_tests {
         let req = part_request(None, 1024);
         let status = {
             let permit = SendPermit::acquire("relay-no-listener", req.chat_id).await;
-            TelegramBotApi::send_upload_part_with_retries(
-                &url,
-                spool.path(),
-                &req,
-                &permit,
-                uncapped_uplink(),
-            )
-            .await
-            .unwrap()
-            .status()
+            TelegramBotApi::send_upload_part_with_retries(&url, spool.path(), &req, &permit)
+                .await
+                .unwrap()
+                .status()
         };
 
         assert!(status.is_success());
-    }
-}
-
-/// The chunk body really leaves at the governed rate, all of it arrives, and a
-/// link that fails below HTTP shrinks the budget.
-#[cfg(test)]
-mod relay_pacing_tests {
-    use std::{
-        io::Write,
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::{Duration, Instant},
-    };
-
-    use axum::{Router, body::Bytes, routing::post};
-
-    use super::{SendPermit, TelegramBotApi, UploadFilePartRequest};
-    use crate::common::{
-        telegram_api::uplink::{Limits, Profile, Uplink},
-        types::ChatId,
-    };
-
-    const MIB: usize = 1024 * 1024;
-
-    fn uplink(rate_mib: Option<f64>) -> &'static Uplink {
-        Box::leak(Box::new(Uplink::new(Limits {
-            profile: Profile::Constrained,
-            rate: rate_mib.map(|r| r * 1024.0 * 1024.0),
-            streams: 2,
-            reason: "test".to_owned(),
-        })))
-    }
-
-    fn request(len: u64) -> UploadFilePartRequest {
-        UploadFilePartRequest {
-            offset: 0,
-            len,
-            chat_id: ChatId::from(-1_001_234_567_891_i64),
-            storage_id: uuid::Uuid::new_v4(),
-            file_total: len,
-            chunk_no: 1,
-            total_chunks: 1,
-            progress: None,
-            sent_total: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn a_chunk_body_is_sent_at_the_governed_rate() {
-        let received = Arc::new(AtomicUsize::new(0));
-        let counter = Arc::clone(&received);
-        let app = Router::new().route(
-            "/botTEST/sendDocument",
-            post(move |body: Bytes| {
-                let counter = Arc::clone(&counter);
-                async move {
-                    counter.store(body.len(), Ordering::SeqCst);
-                    axum::Json(serde_json::json!({
-                        "ok": true,
-                        "result": {"message_id": 1, "document": {"file_id": "PACED"}}
-                    }))
-                }
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.ok();
-        });
-
-        // Under axum's default 2 MB body limit, framing included.
-        let payload = MIB;
-        let mut spool = tempfile::NamedTempFile::new().unwrap();
-        spool.write_all(&vec![5u8; payload]).unwrap();
-        spool.flush().unwrap();
-
-        // 1 MiB at 2 MiB/s is half a second, less the burst allowance.
-        let governed = uplink(Some(2.0));
-        let req = request(payload as u64);
-        let started = Instant::now();
-        let permit = SendPermit::acquire("relay-paced", req.chat_id).await;
-        let response = TelegramBotApi::send_upload_part_with_retries(
-            &format!("http://{addr}/botTEST/sendDocument"),
-            spool.path(),
-            &req,
-            &permit,
-            governed,
-        )
-        .await
-        .unwrap();
-        let elapsed = started.elapsed();
-
-        assert!(response.status().is_success());
-        assert!(elapsed >= Duration::from_millis(250), "sent too fast: {elapsed:?}");
-        assert!(
-            received.load(Ordering::SeqCst) > payload,
-            "the whole chunk, plus multipart framing, must arrive"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_link_failure_backs_the_governor_off() {
-        // Bind and drop: nothing listens there any more, so every attempt is
-        // refused below HTTP.
-        let addr = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap()
-        };
-        let mut spool = tempfile::NamedTempFile::new().unwrap();
-        spool.write_all(&[1u8; 1024]).unwrap();
-        spool.flush().unwrap();
-
-        let governed = uplink(Some(64.0));
-        let req = request(1024);
-        let permit = SendPermit::acquire("relay-refused", req.chat_id).await;
-        let result = TelegramBotApi::send_upload_part_with_retries(
-            &format!("http://{addr}/botTEST/sendDocument"),
-            spool.path(),
-            &req,
-            &permit,
-            governed,
-        )
-        .await;
-
-        assert!(result.is_err());
-        let budget = governed.current();
-        let mib_per_sec = budget.rate.expect("a failing link gets a cap") / (1024.0 * 1024.0);
-        // Five refused attempts. Halving on each would leave 2 MiB/s; the
-        // debounce makes them one event — two where refusals are slow enough
-        // (Windows takes ~2s per refused localhost connect) to straddle it.
-        assert!(mib_per_sec <= 32.0, "backed off: {mib_per_sec} MiB/s");
-        assert!(mib_per_sec >= 16.0, "not once per retry: {mib_per_sec} MiB/s");
-        assert_eq!(budget.streams, 1);
-    }
-}
-
-#[cfg(test)]
-mod mask_secrets_tests {
-    use super::TelegramBotApi;
-
-    #[test]
-    fn masks_the_token_in_a_reqwest_style_error() {
-        let text = "error sending request for url (https://api.telegram.org/bot8876571618:AAE9qfZ\
-                    qfa5VDmuvr817rqMCu3RbqVBMLbk/getChat?chat_id=-1004417157762)";
-        let masked = TelegramBotApi::mask_secrets(text);
-        assert!(!masked.contains("AAE9qfZqfa5VDmuvr817rqMCu3RbqVBMLbk"), "{masked}");
-        assert!(!masked.contains("8876571618"), "{masked}");
-        assert!(masked.contains("/bot***/getChat?chat_id=-1004417157762"), "{masked}");
-    }
-
-    #[test]
-    fn masks_every_token_when_a_message_carries_more_than_one() {
-        let text = "a https://api.telegram.org/bot111:AAA/getChat then \
-                    https://api.telegram.org/bot222:BBB/sendDocument";
-        let masked = TelegramBotApi::mask_secrets(text);
-        assert!(!masked.contains("AAA") && !masked.contains("BBB"), "{masked}");
-        assert_eq!(masked.matches("/bot***").count(), 2, "{masked}");
-    }
-
-    #[test]
-    fn leaves_text_without_a_token_alone() {
-        for text in ["operation timed out", "connect error to /botanical/garden", "trailing /bot"] {
-            assert_eq!(TelegramBotApi::mask_secrets(text), text);
-        }
     }
 }
