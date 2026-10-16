@@ -258,6 +258,7 @@ mod tests {
 
     #[test]
     fn chats_from_updates_skips_private_messages() {
+        use crate::common::telegram_api::schemas;
         let json = r#"{
           "result": [{
             "update_id": 2,
@@ -270,10 +271,7 @@ mod tests {
           }]
         }"#;
         let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            chats_from_updates(&body),
-            [] as [common::telegram_api::schemas::DetectedChat; 0]
-        );
+        assert_eq!(chats_from_updates(&body), [] as [schemas::DetectedChat; 0]);
     }
 
     #[test]
@@ -299,6 +297,7 @@ mod tests {
 
     #[test]
     fn chats_from_updates_skips_my_chat_member_kick() {
+        use crate::common::telegram_api::schemas;
         let json = r#"{
           "result": [{
             "update_id": 3,
@@ -312,10 +311,7 @@ mod tests {
           }]
         }"#;
         let body: GetUpdatesBodySchema = serde_json::from_str(json).unwrap();
-        assert_eq!(
-            chats_from_updates(&body),
-            [] as [common::telegram_api::schemas::DetectedChat; 0]
-        );
+        assert_eq!(chats_from_updates(&body), [] as [schemas::DetectedChat; 0]);
     }
 
     #[test]
