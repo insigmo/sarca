@@ -4488,7 +4488,7 @@ dependencies = [
 
 [[package]]
 name = "sarca"
-version = "0.0.178"
+version = "0.0.179"
 dependencies = [
  "async-stream",
  "axum",
@@ -4513,6 +4513,7 @@ dependencies = [
  "rcgen 0.13.2",
  "reqwest 0.12.28",
  "ring",
+ "rustix",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -4536,7 +4537,7 @@ dependencies = [
 
 [[package]]
 name = "sarca-client"
-version = "0.0.178"
+version = "0.0.179"
 dependencies = [
  "android_logger",
  "anyhow",
