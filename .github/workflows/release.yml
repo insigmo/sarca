@@ -121,9 +121,14 @@ jobs:
           git config user.name "Beta"
           git config user.email "qwantone@gmail.com"
           git add sarca/Cargo.toml ui/package.json client/package.json client/src-tauri/Cargo.toml client/src-tauri/tauri.conf.json
-          git commit -m "chore: release ${TAG}"
+          # Manifests may already be at ${VERSION} (bumped by hand); then tag HEAD as-is.
+          if git diff --cached --quiet; then
+            echo "Manifests already at ${VERSION}; tagging HEAD without a bump commit"
+          else
+            git commit -m "chore: release ${TAG}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
           git tag "${TAG}"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
           git push origin "${TAG}"
 
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
