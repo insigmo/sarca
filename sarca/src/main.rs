@@ -11,6 +11,7 @@ use sarca::{
     server::Server,
     services::{
         channel_health::ChannelHealthService,
+        import::ImportRunner,
         media_warmer,
         replication::ReplicationService,
         storage_purge::StoragePurgeService,
@@ -209,6 +210,9 @@ async fn main() {
     // storage tree never delays serving; never fails startup either — every
     // error inside is logged and swallowed by the daemon itself.
     media_warmer::spawn(app_state.clone());
+
+    // Needs the upload channel, so it starts once `AppState` exists.
+    ImportRunner::spawn(app_state.clone());
 
     let server = Server::build_server(app_state);
 

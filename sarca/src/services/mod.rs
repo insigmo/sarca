@@ -3,6 +3,7 @@ pub mod backup;
 pub mod channel_health;
 pub mod favorites;
 pub mod files;
+pub mod import;
 pub mod media_warmer;
 pub mod recent;
 pub mod replication;

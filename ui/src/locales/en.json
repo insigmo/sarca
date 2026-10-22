@@ -163,6 +163,8 @@
 		"accessTabDesc": "Who can open",
 		"backupTab": "Backup",
 		"backupTabDesc": "Download & restore",
+		"importTab": "Import",
+		"importTabDesc": "From another cloud",
 		"botHintPrefix": "Telegram bot and channels are in",
 		"storageSettingsLabel": "Storage settings",
 		"botHintSuffix": "— use the gear on a storage card, or (on desktop) the tune icon in the header while browsing files.",
@@ -659,5 +661,39 @@
 		"storageReady": "Storage “{{name}}” ready",
 		"loadStatusFailed": "Failed to load setup status",
 		"channelDetectFailed": "Channel detect failed"
+	},
+	"imports": {
+		"title": "Import from another cloud",
+		"hint": "Copy a folder from Nextcloud, ownCloud or Seafile into a storage. The copy runs on this server, so you can close this window or the app — it carries on and resumes after a restart.",
+		"urlLabel": "WebDAV folder address",
+		"urlHint": "Nextcloud / ownCloud: https://your-cloud/remote.php/dav/files/USERNAME/Folder/ · Seafile: https://your-seafile/seafdav/Library/",
+		"usernameLabel": "Username",
+		"passwordLabel": "Password",
+		"passwordHint": "With two-factor sign-in, create an app password in the cloud's security settings. It stays on this server, is never shown again and is not included in backups.",
+		"storageLabel": "Into storage",
+		"targetLabel": "Folder in the storage",
+		"targetHint": "Leave empty to copy into the storage root.",
+		"start": "Check and start",
+		"starting": "Checking the source…",
+		"started": "Import started",
+		"empty": "No imports yet.",
+		"jobsTitle": "Imports",
+		"progress": "{{done}} of {{total}} files · {{bytes}}",
+		"skipped": "{{count}} already there",
+		"failedCount": "{{count}} failed",
+		"pause": "Pause",
+		"resume": "Resume",
+		"retry": "Retry failed",
+		"cancel": "Cancel",
+		"remove": "Remove",
+		"newPasswordLabel": "Password for this source",
+		"status": {
+			"scanning": "Listing files…",
+			"running": "Copying",
+			"paused": "Paused",
+			"done": "Finished",
+			"failed": "Stopped",
+			"cancelled": "Cancelled"
+		}
 	}
 }

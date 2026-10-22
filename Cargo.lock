@@ -4539,6 +4539,7 @@ dependencies = [
  "mime_guess",
  "percent-encoding",
  "pwhash",
+ "quick-xml 0.42.0",
  "quinn",
  "rcgen",
  "reqwest 0.12.28",

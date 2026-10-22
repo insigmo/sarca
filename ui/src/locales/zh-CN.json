@@ -163,6 +163,8 @@
 		"accessTabDesc": "谁可以打开",
 		"backupTab": "备份",
 		"backupTabDesc": "下载与恢复",
+		"importTab": "导入",
+		"importTabDesc": "从其他云盘",
 		"botHintPrefix": "Telegram 机器人和频道位于",
 		"storageSettingsLabel": "存储设置",
 		"botHintSuffix": "— 点击存储卡片上的齿轮图标，或在桌面端浏览文件时点击顶部的调节图标。",
@@ -659,5 +661,39 @@
 		"storageReady": "存储“{{name}}”已就绪",
 		"loadStatusFailed": "加载设置状态失败",
 		"channelDetectFailed": "频道检测失败"
+	},
+	"imports": {
+		"title": "从其他云盘导入",
+		"hint": "将 Nextcloud、ownCloud 或 Seafile 中的文件夹复制到存储。复制在此服务器上进行，可以关闭此窗口或应用——它会继续运行，重启后也会自动恢复。",
+		"urlLabel": "WebDAV 文件夹地址",
+		"urlHint": "Nextcloud / ownCloud：https://your-cloud/remote.php/dav/files/用户名/文件夹/ · Seafile：https://your-seafile/seafdav/资料库/",
+		"usernameLabel": "用户名",
+		"passwordLabel": "密码",
+		"passwordHint": "如果启用了两步验证，请在云盘的安全设置中创建应用密码。密码只保存在此服务器上，不会再次显示，也不会包含在备份中。",
+		"storageLabel": "导入到存储",
+		"targetLabel": "存储中的文件夹",
+		"targetHint": "留空则复制到存储根目录。",
+		"start": "检查并开始",
+		"starting": "正在检查来源…",
+		"started": "导入已开始",
+		"empty": "还没有导入任务。",
+		"jobsTitle": "导入任务",
+		"progress": "{{done}} / {{total}} 个文件 · {{bytes}}",
+		"skipped": "{{count}} 个已存在",
+		"failedCount": "{{count}} 个失败",
+		"pause": "暂停",
+		"resume": "继续",
+		"retry": "重试失败项",
+		"cancel": "取消",
+		"remove": "移除",
+		"newPasswordLabel": "此来源的密码",
+		"status": {
+			"scanning": "正在列出文件…",
+			"running": "正在复制",
+			"paused": "已暂停",
+			"done": "已完成",
+			"failed": "已停止",
+			"cancelled": "已取消"
+		}
 	}
 }

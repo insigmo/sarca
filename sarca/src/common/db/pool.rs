@@ -13,12 +13,12 @@ use sqlx::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Connections reserved for the background loops (storage manager, replication,
-/// channel health, trash purge, storage purge) on top of the HTTP workers.
+/// channel health, trash purge, storage purge, import) on top of the HTTP workers.
 ///
 /// Without this headroom `max_connections == WORKERS`, and the loops starved the
 /// request handlers until they failed with `pool timed out while waiting for an
 /// open connection`.
-pub const BACKGROUND_CONNECTIONS: u32 = 6;
+pub const BACKGROUND_CONNECTIONS: u32 = 7;
 
 /// Total `SQLite` page-cache budget (KiB) shared across the whole pool.
 ///

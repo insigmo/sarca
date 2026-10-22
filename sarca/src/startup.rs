@@ -269,6 +269,51 @@ pub async fn init_db(db: &SqlitePool) {
           ON storage_purge_messages (updated_at)
           WHERE status = 'in_progress';
         ",
+        // Server-side imports from another cloud (`services::import`). `secret`
+        // is the source password; a backup snapshot blanks it, so a restored
+        // job asks for it again instead of carrying it in the archive.
+        "
+        CREATE TABLE IF NOT EXISTS import_jobs (
+            id           BLOB PRIMARY KEY NOT NULL,
+            user_id      BLOB NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            storage_id   BLOB NOT NULL REFERENCES storages(id) ON DELETE CASCADE,
+            source_kind  TEXT NOT NULL CHECK (source_kind IN ('webdav')),
+            source_url   TEXT NOT NULL,
+            username     TEXT NOT NULL,
+            secret       TEXT,
+            target_path  TEXT NOT NULL DEFAULT '',
+            -- Set once the source listing finished; a job resumed before that
+            -- lists again (items are unique per path, so nothing doubles).
+            scanned      INTEGER NOT NULL DEFAULT 0,
+            status       TEXT NOT NULL DEFAULT 'scanning'
+                         CHECK (status IN ('scanning', 'running', 'paused', 'done', 'failed',
+                                           'cancelled')),
+            last_error   TEXT,
+            created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            completed_at TEXT
+        );
+        ",
+        "
+        CREATE TABLE IF NOT EXISTS import_items (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id       BLOB NOT NULL REFERENCES import_jobs(id) ON DELETE CASCADE,
+            rel_path     TEXT NOT NULL,
+            size         INTEGER NOT NULL,
+            source_mtime TEXT,
+            status       TEXT NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending', 'in_progress', 'done', 'skipped',
+                                           'failed')),
+            attempts     INTEGER NOT NULL DEFAULT 0,
+            last_error   TEXT,
+            updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (job_id, rel_path)
+        );
+        ",
+        "
+        CREATE INDEX IF NOT EXISTS import_items_job_status_idx
+          ON import_items (job_id, status, attempts, id);
+        ",
         // updated_at touch
         "DROP TRIGGER IF EXISTS files_touch_updated_at;",
         r#"

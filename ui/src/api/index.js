@@ -1762,6 +1762,84 @@ const getSyncSnapshot = async (storage_id) => {
 	)
 }
 
+/**
+ * A server-side import job. The source password never comes back;
+ * `has_password` says whether the server still holds one.
+ * @typedef {Object} ImportJob
+ * @property {string} id
+ * @property {string} storage_id
+ * @property {string} source_kind
+ * @property {string} source_url
+ * @property {string} username
+ * @property {boolean} has_password
+ * @property {string} target_path
+ * @property {'scanning' | 'running' | 'paused' | 'done' | 'failed' | 'cancelled'} status
+ * @property {string | null} last_error
+ * @property {string} created_at
+ * @property {number} total_files
+ * @property {number} total_bytes
+ * @property {number} done_files
+ * @property {number} done_bytes
+ * @property {number} skipped_files
+ * @property {number} failed_files
+ */
+
+/** @returns {Promise<{ imports: ImportJob[] }>} */
+const listImports = async () => {
+	return await apiRequest('/imports', 'get', getAuthToken(), undefined, false, false, true)
+}
+
+/**
+ * @param {string} id
+ * @returns {Promise<ImportJob & { failed_items: Array<{ path: string, size: number, attempts: number, error: string | null }> }>}
+ */
+const getImport = async (id) => {
+	return await apiRequest(`/imports/${id}`, 'get', getAuthToken())
+}
+
+/**
+ * Check the source and queue an import. Superuser only. The server lists the
+ * source folder before answering, so a bad address or password fails here.
+ * @param {{ storage_id: string, url: string, username: string, password: string, target_path: string }} body
+ * @returns {Promise<ImportJob>}
+ */
+const createImport = async (body) => {
+	return await apiRequest('/imports', 'post', getAuthToken(), body)
+}
+
+/** @param {string} id */
+const pauseImport = async (id) => {
+	return await apiRequest(`/imports/${id}/pause`, 'post', getAuthToken())
+}
+
+/**
+ * @param {string} id
+ * @param {string} [password] replaces the stored source password
+ */
+const resumeImport = async (id, password) => {
+	return await apiRequest(
+		`/imports/${id}/resume`,
+		'post',
+		getAuthToken(),
+		password ? { password } : {},
+	)
+}
+
+/** @param {string} id */
+const retryImport = async (id) => {
+	return await apiRequest(`/imports/${id}/retry`, 'post', getAuthToken())
+}
+
+/** @param {string} id */
+const cancelImport = async (id) => {
+	return await apiRequest(`/imports/${id}/cancel`, 'post', getAuthToken())
+}
+
+/** @param {string} id */
+const deleteImport = async (id) => {
+	await apiRequest(`/imports/${id}`, 'delete', getAuthToken())
+}
+
 /////////////////////////////////////////////////////////////
 ////  API
 /////////////////////////////////////////////////////////////
@@ -1861,6 +1939,16 @@ const API = {
 		applyServerUpdate,
 		createBackup,
 		restoreBackup,
+	},
+	imports: {
+		listImports,
+		getImport,
+		createImport,
+		pauseImport,
+		resumeImport,
+		retryImport,
+		cancelImport,
+		deleteImport,
 	},
 	setup: {
 		getSetupStatus,

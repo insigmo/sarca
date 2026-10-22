@@ -163,6 +163,8 @@
 		"accessTabDesc": "من يمكنه الفتح",
 		"backupTab": "النسخ الاحتياطي",
 		"backupTabDesc": "التنزيل والاستعادة",
+		"importTab": "استيراد",
+		"importTabDesc": "من سحابة أخرى",
 		"botHintPrefix": "يوجد بوت وقنوات تيليجرام ضمن",
 		"storageSettingsLabel": "إعدادات التخزين",
 		"botHintSuffix": "— استخدم أيقونة الترس على بطاقة التخزين، أو (على سطح المكتب) أيقونة الضبط في الأعلى أثناء تصفح الملفات.",
@@ -659,5 +661,39 @@
 		"storageReady": "التخزين «{{name}}» جاهز",
 		"loadStatusFailed": "فشل تحميل حالة الإعداد",
 		"channelDetectFailed": "فشل رصد القناة"
+	},
+	"imports": {
+		"title": "استيراد من سحابة أخرى",
+		"hint": "انسخ مجلدًا من Nextcloud أو ownCloud أو Seafile إلى مساحة تخزين. يجري النسخ على هذا الخادم، لذا يمكنك إغلاق هذه النافذة أو التطبيق — يستمر ويُستأنف بعد إعادة التشغيل.",
+		"urlLabel": "عنوان مجلد WebDAV",
+		"urlHint": "Nextcloud / ownCloud: https://your-cloud/remote.php/dav/files/USERNAME/Folder/ · Seafile: https://your-seafile/seafdav/Library/",
+		"usernameLabel": "اسم المستخدم",
+		"passwordLabel": "كلمة المرور",
+		"passwordHint": "مع تسجيل الدخول بخطوتين، أنشئ كلمة مرور للتطبيق في إعدادات أمان السحابة. تبقى على هذا الخادم فقط ولا تُعرض مجددًا ولا تُضمَّن في النسخ الاحتياطية.",
+		"storageLabel": "إلى مساحة التخزين",
+		"targetLabel": "المجلد في مساحة التخزين",
+		"targetHint": "اتركه فارغًا للنسخ إلى جذر مساحة التخزين.",
+		"start": "تحقق وابدأ",
+		"starting": "جارٍ التحقق من المصدر…",
+		"started": "بدأ الاستيراد",
+		"empty": "لا توجد عمليات استيراد بعد.",
+		"jobsTitle": "عمليات الاستيراد",
+		"progress": "{{done}} من {{total}} ملف · {{bytes}}",
+		"skipped": "{{count}} موجود مسبقًا",
+		"failedCount": "{{count}} فشل",
+		"pause": "إيقاف مؤقت",
+		"resume": "استئناف",
+		"retry": "إعادة محاولة الفاشلة",
+		"cancel": "إلغاء",
+		"remove": "إزالة",
+		"newPasswordLabel": "كلمة مرور هذا المصدر",
+		"status": {
+			"scanning": "جارٍ سرد الملفات…",
+			"running": "جارٍ النسخ",
+			"paused": "متوقف مؤقتًا",
+			"done": "اكتمل",
+			"failed": "توقف",
+			"cancelled": "أُلغي"
+		}
 	}
 }

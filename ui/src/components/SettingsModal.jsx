@@ -25,6 +25,7 @@ import Access from './Access'
 import ActionConfirmDialog from './ActionConfirmDialog'
 import FluentIcon from './FluentIcon'
 import GrantAccess from './GrantAccess'
+import SettingsImportPanel from './SettingsImportPanel'
 import SettingsSyncPanel from './SettingsSyncPanel'
 import SettingsSwitch from './SettingsSwitch'
 import AppLockToggle from './AppLockToggle'
@@ -128,6 +129,7 @@ const SettingsModal = () => {
 		{ id: 'sync', icon: 'cloud', visible: showSyncTab },
 		{ id: 'access', icon: 'lockClosed', visible: () => true },
 		{ id: 'backup', icon: 'history', visible: isSuperuser },
+		{ id: 'import', icon: 'arrowImport', visible: isSuperuser },
 		{ id: 'logs', icon: 'documentBulletList', visible: isNative },
 		{ id: 'about', icon: 'info', visible: () => true },
 	]
@@ -418,11 +420,11 @@ const SettingsModal = () => {
 		if (!isNative() && tab() === 'logs') setTab('general')
 	})
 
-	// The backup tab is superuser-only. The check is async, so bounce only
-	// once the answer is in — not while `isSuperuser()` is still its
-	// pessimistic initial value, which would kill a deep link to the tab.
+	// The backup and import tabs are superuser-only. The check is async, so
+	// bounce only once the answer is in — not while `isSuperuser()` is still
+	// its pessimistic initial value, which would kill a deep link to the tab.
 	createEffect(() => {
-		if (!isOpen() || tab() !== 'backup') return
+		if (!isOpen() || (tab() !== 'backup' && tab() !== 'import')) return
 		refreshSuperuser().then((su) => {
 			if (!su) setTab('general')
 		})
@@ -1804,6 +1806,13 @@ const SettingsModal = () => {
 											</div>
 										</div>
 									</div>
+								</Show>
+
+								<Show when={tab() === 'import' && isSuperuser()}>
+									<SettingsImportPanel
+										storages={storages()}
+										defaultStorageId={chrome.storageId()}
+									/>
 								</Show>
 
 								<Show when={tab() === 'sync' && showSyncTab()}>

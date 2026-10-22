@@ -87,6 +87,12 @@ pub enum SarcaError {
     UpdateNotSupported(String),
     #[error("the update failed: {0}")]
     UpdateFailed(String),
+    /// The import source refused, or could not be read. Worded for the user,
+    /// and never carries the source password.
+    #[error("{0}")]
+    ImportSource(String),
+    #[error("{0}")]
+    ImportState(String),
 }
 
 impl From<SarcaError> for (StatusCode, String) {
@@ -103,6 +109,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::BotReplacementRequiresChannelConfirmation
             | SarcaError::CannotManageAccessOfYourself
             | SarcaError::TrashPathConflict
+            | SarcaError::ImportState(_)
             | SarcaError::UploadAlreadyInProgress => (StatusCode::CONFLICT, e.to_string()),
             SarcaError::NotAuthenticated => (StatusCode::UNAUTHORIZED, e.to_string()),
             SarcaError::TooManyAttempts => (StatusCode::TOO_MANY_REQUESTS, e.to_string()),
@@ -141,6 +148,7 @@ impl From<SarcaError> for (StatusCode, String) {
             | SarcaError::InvalidBackupFile(_)
             | SarcaError::InvalidShareExpiry
             | SarcaError::BotTokenUnchanged
+            | SarcaError::ImportSource(_)
             | SarcaError::TelegramAPIError(_) => (StatusCode::BAD_REQUEST, e.to_string()),
             _ => {
                 tracing::error!("{e}");

@@ -11,3 +11,6 @@ vec-box-size-threshold = 8
 large-error-threshold = 128
 future-size-threshold = 2048
 stack-size-threshold = 524288
+
+# Product names that read as identifiers to `doc_markdown`. ".." keeps the defaults.
+doc-valid-idents = ["WebDAV", "SeafDAV", ".."]

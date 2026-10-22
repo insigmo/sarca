@@ -163,6 +163,8 @@
 		"accessTabDesc": "Quién puede abrir",
 		"backupTab": "Copia de seguridad",
 		"backupTabDesc": "Descargar y restaurar",
+		"importTab": "Importar",
+		"importTabDesc": "Desde otra nube",
 		"botHintPrefix": "El bot y los canales de Telegram están en",
 		"storageSettingsLabel": "Ajustes de almacenamiento",
 		"botHintSuffix": "— usa el engranaje en la tarjeta de un almacenamiento, o (en escritorio) el icono de ajustes en la cabecera mientras navegas archivos.",
@@ -659,5 +661,39 @@
 		"storageReady": "Almacenamiento “{{name}}” listo",
 		"loadStatusFailed": "No se pudo cargar el estado de configuración",
 		"channelDetectFailed": "Error al detectar el canal"
+	},
+	"imports": {
+		"title": "Importar desde otra nube",
+		"hint": "Copia una carpeta de Nextcloud, ownCloud o Seafile a un almacenamiento. La copia se hace en este servidor: puedes cerrar esta ventana o la app y seguirá, y se reanuda tras un reinicio.",
+		"urlLabel": "Dirección WebDAV de la carpeta",
+		"urlHint": "Nextcloud / ownCloud: https://tu-nube/remote.php/dav/files/USUARIO/Carpeta/ · Seafile: https://tu-seafile/seafdav/Biblioteca/",
+		"usernameLabel": "Usuario",
+		"passwordLabel": "Contraseña",
+		"passwordHint": "Con verificación en dos pasos, crea una contraseña de aplicación en los ajustes de seguridad de la nube. Se guarda solo en este servidor, no se vuelve a mostrar y no entra en las copias de seguridad.",
+		"storageLabel": "Al almacenamiento",
+		"targetLabel": "Carpeta en el almacenamiento",
+		"targetHint": "Déjalo vacío para copiar en la raíz del almacenamiento.",
+		"start": "Comprobar e iniciar",
+		"starting": "Comprobando el origen…",
+		"started": "Importación iniciada",
+		"empty": "Aún no hay importaciones.",
+		"jobsTitle": "Importaciones",
+		"progress": "{{done}} de {{total}} archivos · {{bytes}}",
+		"skipped": "{{count}} ya estaban",
+		"failedCount": "{{count}} con error",
+		"pause": "Pausar",
+		"resume": "Reanudar",
+		"retry": "Reintentar fallidos",
+		"cancel": "Cancelar",
+		"remove": "Quitar",
+		"newPasswordLabel": "Contraseña de este origen",
+		"status": {
+			"scanning": "Listando archivos…",
+			"running": "Copiando",
+			"paused": "En pausa",
+			"done": "Terminada",
+			"failed": "Detenida",
+			"cancelled": "Cancelada"
+		}
 	}
 }

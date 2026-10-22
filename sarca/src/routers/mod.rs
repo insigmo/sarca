@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod favorites;
 pub mod files;
+pub mod imports;
 pub mod public_shares;
 pub mod recent;
 pub mod settings;

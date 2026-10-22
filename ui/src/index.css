@@ -2284,6 +2284,110 @@ body.sarca-no-select :is(input, textarea, select, [contenteditable='true'], .all
 	background: color-mix(in srgb, var(--sarca-ink) 10%, transparent);
 }
 
+.settings-import__form {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+	padding: 16px;
+	border: 1px solid var(--sarca-border);
+	border-radius: 16px;
+	background: color-mix(in srgb, var(--sarca-ink) 3%, transparent);
+}
+
+.settings-import__form .settings-account__hint {
+	margin-top: -6px;
+	overflow-wrap: anywhere;
+}
+
+.settings-import__jobs-title {
+	margin-top: 24px;
+}
+
+.settings-import__jobs {
+	list-style: none;
+	margin: 8px 0 0;
+	padding: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.settings-import__job {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	padding: 12px 14px;
+	border: 1px solid var(--sarca-border);
+	border-radius: 14px;
+}
+
+.settings-import__job-head {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+	min-width: 0;
+}
+
+.settings-import__job-source {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-weight: 600;
+	font-size: 0.88rem;
+	color: var(--sarca-ink);
+}
+
+.settings-import__job-status {
+	flex-shrink: 0;
+	font-size: 0.8rem;
+	font-weight: 600;
+	color: var(--sarca-ink-soft);
+}
+
+.settings-import__job[data-status='running'] .settings-import__job-status,
+.settings-import__job[data-status='scanning'] .settings-import__job-status {
+	color: var(--sarca-teal);
+}
+
+.settings-import__job[data-status='failed'] .settings-import__job-status {
+	color: #c4314b;
+}
+
+.settings-import__job-target {
+	font-size: 0.82rem;
+	color: var(--sarca-ink-soft);
+	overflow-wrap: anywhere;
+}
+
+.settings-import__bar {
+	height: 6px;
+	border-radius: 999px;
+	overflow: hidden;
+	background: color-mix(in srgb, var(--sarca-ink) 8%, transparent);
+}
+
+.settings-import__bar > div {
+	height: 100%;
+	border-radius: inherit;
+	background: var(--sarca-teal);
+	transition: width 0.4s ease;
+}
+
+.settings-import__error {
+	margin: 0;
+	font-size: 0.82rem;
+	color: #c4314b;
+	overflow-wrap: anywhere;
+}
+
+.settings-import__actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+}
+
 .settings-account__hint {
 	margin: 4px 0 0;
 	font-size: 0.82rem;

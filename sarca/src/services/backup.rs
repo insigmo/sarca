@@ -116,6 +116,7 @@ impl BackupService {
         let dir = scratch_dir(work_dir).await?;
         let snapshot = ScratchFile::new(dir.join(format!("snapshot-{}.sqlite", Uuid::new_v4())));
         snapshot_into(db, snapshot.path()).await?;
+        scrub_secrets(snapshot.path()).await?;
 
         let archive =
             ScratchFile::new(dir.join(format!("archive-{}.{BACKUP_EXTENSION}", Uuid::new_v4())));
@@ -237,6 +238,29 @@ async fn snapshot_into(db: &SqlitePool, target: &Path) -> SarcaResult<()> {
         .await
         .map_err(|e| internal("VACUUM INTO", &e))?;
     Ok(())
+}
+
+/// Blank the import source passwords in a snapshot before it is archived.
+///
+/// They are another service's credentials, and a backup is a file that gets
+/// copied around; a restored job asks for its password again instead
+/// (`services::import`). `secure_delete` overwrites the freed bytes, or the old
+/// values would stay readable in the file's free pages.
+async fn scrub_secrets(snapshot: &Path) -> SarcaResult<()> {
+    let mut conn = SqliteConnectOptions::new()
+        .filename(snapshot)
+        .connect()
+        .await
+        .map_err(|e| internal("opening snapshot", &e))?;
+    sqlx::query("PRAGMA secure_delete = ON")
+        .execute(&mut conn)
+        .await
+        .map_err(|e| internal("snapshot secure_delete", &e))?;
+    sqlx::query("UPDATE import_jobs SET secret = NULL WHERE secret IS NOT NULL")
+        .execute(&mut conn)
+        .await
+        .map_err(|e| internal("scrubbing import passwords", &e))?;
+    conn.close().await.map_err(|e| internal("closing snapshot", &e))
 }
 
 async fn decode_archive(archive: &Path, target: &Path, password: Option<&str>) -> SarcaResult<()> {
@@ -750,6 +774,62 @@ mod tests {
             .unwrap();
         assert_eq!(name, "Rocks");
         target.close().await;
+    }
+
+    // An import job's source password belongs to another service; the archive
+    // keeps the job but not the password, not even in the file's free pages.
+    #[tokio::test]
+    async fn a_backup_leaves_import_passwords_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let work_dir = dir.path().join("work");
+        tokio::fs::create_dir_all(&work_dir).await.unwrap();
+
+        let source = pool(&dir.path().join("source.sqlite")).await;
+        crate::startup::init_db(&source).await;
+        let (user_id, storage_id) = (Uuid::new_v4(), Uuid::new_v4());
+        sqlx::query("INSERT INTO users (id, email) VALUES (?, 'a@example.com')")
+            .bind(user_id)
+            .execute(&source)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO storages (id, name, primary_position) VALUES (?, 'Rocks', 1)")
+            .bind(storage_id)
+            .execute(&source)
+            .await
+            .unwrap();
+        crate::repositories::imports::ImportsRepository::new(&source)
+            .create_job(crate::repositories::imports::NewImportJob {
+                user_id,
+                storage_id,
+                source_kind: "webdav",
+                source_url: "https://cloud.example.com/dav/",
+                username: "alice",
+                secret: "nextcloud-app-password-1234",
+                target_path: "",
+            })
+            .await
+            .unwrap();
+
+        let artifact =
+            BackupService::create(&source, work_dir.to_str().unwrap(), None).await.unwrap();
+        source.close().await;
+
+        let staged = dir.path().join("staged.sqlite");
+        decode_archive(artifact.file.path(), &staged, None).await.unwrap();
+        let raw = tokio::fs::read(&staged).await.unwrap();
+        assert!(
+            !raw.windows(27).any(|w| w == b"nextcloud-app-password-1234"),
+            "the password survived somewhere in the snapshot file"
+        );
+        let snapshot = pool(&staged).await;
+        let (username, secret): (String, Option<String>) =
+            sqlx::query_as("SELECT username, secret FROM import_jobs")
+                .fetch_one(&snapshot)
+                .await
+                .unwrap();
+        assert_eq!(username, "alice");
+        assert_eq!(secret, None);
+        snapshot.close().await;
     }
 
     #[tokio::test]

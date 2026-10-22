@@ -31,6 +31,7 @@ use crate::{
     common::routing::app_state::AppState,
     routers::{
         auth::AuthRouter,
+        imports::ImportsRouter,
         public_shares::PublicSharesRouter,
         settings::SettingsRouter,
         setup::SetupRouter,
@@ -91,6 +92,7 @@ impl Server {
             .nest("/storages", StoragesRouter::get_router(app_state.clone()))
             .nest("/storage_workers", StorageWorkersRouter::get_router(app_state.clone()))
             .nest("/settings", SettingsRouter::get_router(app_state.clone()))
+            .nest("/imports", ImportsRouter::get_router(app_state.clone()))
             .nest("/setup", SetupRouter::get_router(app_state.clone()))
             .nest("/public/shares", PublicSharesRouter::get_router(app_state))
             // Keep unknown /api/* from falling through to the SPA HTML fallback.

@@ -3,6 +3,7 @@ pub mod app_settings;
 pub mod chunk_replicas;
 pub mod favorites;
 pub mod files;
+pub mod imports;
 pub mod recent_files;
 pub mod share_links;
 pub mod storage_channels;

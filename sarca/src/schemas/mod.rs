@@ -2,6 +2,7 @@ pub mod access;
 pub mod auth;
 pub mod favorites;
 pub mod files;
+pub mod imports;
 pub mod recent;
 pub mod settings;
 pub mod setup;
