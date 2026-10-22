@@ -1,4 +1,4 @@
-//! Android startup helpers: runtime permissions, device model, share text.
+//! Android startup helpers: runtime permissions, device model, saving a text file.
 //! Also owns the on-disk device-label cache used by Sync Camera roots.
 
 use std::{
@@ -86,32 +86,43 @@ pub fn device_model_label<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<Strin
     }
 }
 
-/// Share plain text via Android ACTION_SEND chooser.
+/// Let the user pick where to save `text` (Android's "Save as" screen) and
+/// write it there. `Ok(Some(name))` is the saved file's display name,
+/// `Ok(None)` means the user backed out.
 #[cfg(target_os = "android")]
-pub async fn share_text<R: Runtime>(
+pub async fn save_text_file<R: Runtime>(
     app: &tauri::AppHandle<R>,
     text: &str,
-    subject: &str,
-) -> Result<(), String> {
+    file_name: &str,
+) -> Result<Option<String>, String> {
+    use serde::Deserialize;
     use serde_json::json;
     use tauri::Manager;
     use tokio::sync::oneshot;
+
+    #[derive(Deserialize)]
+    struct Saved {
+        saved: bool,
+        name: Option<String>,
+    }
 
     let state = app
         .try_state::<AndroidStartup<R>>()
         .ok_or_else(|| "Android startup plugin not registered".to_string())?;
     let handle = state.handle.clone();
-    let payload = json!({ "text": text, "subject": subject });
+    let payload = json!({ "text": text, "fileName": file_name });
     let (tx, rx) = oneshot::channel();
     std::thread::spawn(move || {
-        let result = handle.run_mobile_plugin::<serde_json::Value>("shareText", payload);
+        let result = handle.run_mobile_plugin::<Saved>("saveTextFile", payload);
         let _ = tx.send(result);
     });
-    match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
-        Ok(Ok(Ok(_))) => Ok(()),
+    // The user is browsing folders on the save screen; give them time.
+    match tokio::time::timeout(std::time::Duration::from_secs(15 * 60), rx).await {
+        Ok(Ok(Ok(r))) if r.saved => Ok(Some(r.name.unwrap_or_default())),
+        Ok(Ok(Ok(_))) => Ok(None),
         Ok(Ok(Err(e))) => Err(e.to_string()),
         Ok(Err(e)) => Err(e.to_string()),
-        Err(_) => Err("shareText timed out".into()),
+        Err(_) => Err("saving the log timed out".into()),
     }
 }
 

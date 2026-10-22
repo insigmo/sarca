@@ -1,6 +1,10 @@
 //! In-memory transfer queue for Sync Settings UI (active + recent done).
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc,
+};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -52,6 +56,28 @@ pub struct TransferQueueSnapshot {
     pub items: Vec<TransferItem>,
 }
 
+/// Upload totals for a progress display (the Android notification).
+///
+/// `completed*` count every upload this process has finished, so a display
+/// that wants "this run" subtracts the values it saw when the run began.
+/// `remaining*` cover what is still active or waiting, sent bytes included.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct UploadProgressSnapshot {
+    pub completed: u64,
+    pub completed_bytes: u64,
+    pub remaining: usize,
+    pub remaining_bytes: u64,
+    /// Active uploads whose bytes are on the way, oldest first.
+    pub current: Vec<UploadInFlight>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UploadInFlight {
+    pub name: String,
+    pub sent: u64,
+    pub size: u64,
+}
+
 /// Identifies a waiting slot regardless of its transfer id: same file, same
 /// direction, same binding. Used to detect "this path is already queued" and
 /// to replace that entry in place instead of scanning `waiting` for it.
@@ -68,6 +94,10 @@ pub struct TransferQueue {
     waiting_pos_by_id: HashMap<String, usize>,
     waiting_pos_by_key: HashMap<WaitingKey, usize>,
     done: VecDeque<TransferItem>,
+    /// Bytes sent so far, per active upload that has started sending.
+    meters: HashMap<String, Arc<AtomicU64>>,
+    uploads_completed: u64,
+    upload_bytes_completed: u64,
 }
 
 fn now_ms() -> i64 {
@@ -203,7 +233,12 @@ impl TransferQueue {
     }
 
     pub fn complete(&mut self, id: &str) {
+        self.meters.remove(id);
         if let Some(mut item) = self.take_active_or_waiting(id) {
+            if item.direction == TransferDirection::Upload {
+                self.uploads_completed += 1;
+                self.upload_bytes_completed += item.size.unwrap_or(0).max(0) as u64;
+            }
             item.status = TransferStatus::Done;
             item.updated_at_ms = now_ms();
             self.push_done(item);
@@ -211,6 +246,7 @@ impl TransferQueue {
     }
 
     pub fn abandon(&mut self, id: &str) {
+        self.meters.remove(id);
         self.active.retain(|i| i.id != id);
         self.waiting_remove_by_id(id);
     }
@@ -221,6 +257,9 @@ impl TransferQueue {
     pub fn clear_binding(&mut self, binding_id: &str) {
         self.active.retain(|i| i.binding_id != binding_id);
         self.waiting.retain(|i| i.binding_id != binding_id);
+        let active = &self.active;
+        self.meters
+            .retain(|id, _| active.iter().any(|i| &i.id == id));
         self.waiting_pos_by_id.clear();
         self.waiting_pos_by_key.clear();
         for (pos, item) in self.waiting.iter().enumerate() {
@@ -261,6 +300,41 @@ impl TransferQueue {
             uploading,
             downloading,
             items,
+        }
+    }
+
+    /// The byte counter for active transfer `id`, created on first use. The
+    /// uploader adds to it as the body goes out.
+    pub fn meter(&mut self, id: &str) -> Arc<AtomicU64> {
+        self.meters.entry(id.to_owned()).or_default().clone()
+    }
+
+    pub fn upload_progress(&self) -> UploadProgressSnapshot {
+        let uploads = || {
+            self.active
+                .iter()
+                .chain(self.waiting.iter())
+                .filter(|i| i.direction == TransferDirection::Upload)
+        };
+        let current = self
+            .active
+            .iter()
+            .filter(|i| i.direction == TransferDirection::Upload)
+            .filter_map(|i| {
+                let sent = self.meters.get(&i.id)?.load(Ordering::Relaxed);
+                Some(UploadInFlight {
+                    name: i.name.clone(),
+                    sent,
+                    size: i.size.unwrap_or(0).max(0) as u64,
+                })
+            })
+            .collect();
+        UploadProgressSnapshot {
+            completed: self.uploads_completed,
+            completed_bytes: self.upload_bytes_completed,
+            remaining: uploads().count(),
+            remaining_bytes: uploads().map(|i| i.size.unwrap_or(0).max(0) as u64).sum(),
+            current,
         }
     }
 
@@ -322,6 +396,36 @@ mod tests {
         q.complete(&id);
         assert_eq!(q.snapshot().uploading, 0);
         assert_eq!(q.snapshot().items[0].status, TransferStatus::Done);
+    }
+
+    #[test]
+    fn upload_progress_counts_finished_queued_and_sent_bytes() {
+        let mut q = TransferQueue::default();
+        let a = q.enqueue_waiting("b", TransferDirection::Upload, "Camera/a.jpg", Some(100));
+        q.enqueue_waiting("b", TransferDirection::Upload, "Camera/b.jpg", Some(50));
+        q.begin("b", TransferDirection::Download, "x.bin", Some(7));
+        let p = q.upload_progress();
+        assert_eq!((p.remaining, p.remaining_bytes), (2, 150));
+        assert!(p.current.is_empty(), "nothing is sending yet");
+
+        assert!(q.promote(&a));
+        q.meter(&a).fetch_add(40, Ordering::Relaxed);
+        let p = q.upload_progress();
+        assert_eq!(
+            p.current,
+            vec![UploadInFlight {
+                name: "a.jpg".into(),
+                sent: 40,
+                size: 100
+            }]
+        );
+
+        q.complete(&a);
+        let p = q.upload_progress();
+        assert_eq!((p.completed, p.completed_bytes), (1, 100));
+        assert_eq!((p.remaining, p.remaining_bytes), (1, 50));
+        assert!(p.current.is_empty());
+        assert!(q.meters.is_empty(), "a finished upload drops its meter");
     }
 
     #[test]

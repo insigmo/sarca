@@ -663,8 +663,16 @@ const SettingsModal = () => {
 		setLogsBusy(true)
 		try {
 			const result = await nativeInvoke('export_logs')
-			if (result?.shared) {
-				addAlert(i18n.t('settings.shareSheetOpened'), 'success')
+			// Android wrote the file itself (or the user backed out of "Save as").
+			if (result?.saved || result?.cancelled) {
+				if (result.saved) {
+					addAlert(
+						i18n.t('settings.logsSaved', { name: String(result?.path || '') }),
+						'success',
+					)
+				}
+				setLogsEnabled(true)
+				refreshLogStatus()
 				return
 			}
 			const content = String(result?.content || '')

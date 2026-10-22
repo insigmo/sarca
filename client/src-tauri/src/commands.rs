@@ -1169,12 +1169,17 @@ pub async fn verify_app_lock_pin(
 #[derive(Serialize)]
 pub struct ExportLogsDto {
     pub path: String,
-    pub shared: bool,
-    /// Log text for desktop download / clipboard when share sheet is unavailable.
+    /// Android: the log was written where the user chose; `path` is its name.
+    pub saved: bool,
+    /// Android: the user backed out of the save screen.
+    pub cancelled: bool,
+    /// Log text for the desktop download. Empty on Android, where the file is
+    /// already written.
     pub content: String,
 }
 
-/// Export client logs: Android opens a share sheet; desktop returns path + content.
+/// Export client logs: Android asks where to save the file and writes it there;
+/// desktop returns path + content for the webview's download.
 #[tauri::command]
 pub async fn export_logs(
     app: AppHandle,
@@ -1195,12 +1200,12 @@ pub async fn export_logs(
     let text = client_log::read_export(&data_dir, 512 * 1024)?;
     #[cfg(target_os = "android")]
     {
-        let path = client_log::log_path(&data_dir);
-        crate::startup::share_text(&app, &text, "Sarca client logs").await?;
+        let name = crate::startup::save_text_file(&app, &text, "sarca-client.log").await?;
         return Ok(ExportLogsDto {
-            path: path.display().to_string(),
-            shared: true,
-            content: text,
+            cancelled: name.is_none(),
+            saved: name.is_some(),
+            path: name.unwrap_or_default(),
+            content: String::new(),
         });
     }
     #[cfg(not(target_os = "android"))]
@@ -1210,7 +1215,8 @@ pub async fn export_logs(
         fs::write(&export, &text).map_err(|e| e.to_string())?;
         Ok(ExportLogsDto {
             path: export.display().to_string(),
-            shared: false,
+            saved: false,
+            cancelled: false,
             content: text,
         })
     }

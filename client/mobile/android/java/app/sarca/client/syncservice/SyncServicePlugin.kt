@@ -8,8 +8,9 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
 /**
- * Starts/stops [SyncForegroundService] and tells it when a sync pass is moving
- * files (see client/src-tauri/src/bg_service.rs).
+ * Starts/stops [SyncForegroundService], tells it when a sync pass is moving
+ * files and how far it has got, and parks the loop's wake-up call in it
+ * (see client/src-tauri/src/bg_service.rs).
  * Installed into the generated Android project by scripts/patch-android-http.sh.
  */
 @TauriPlugin
@@ -37,5 +38,28 @@ class SyncServicePlugin(private val activity: Activity) : Plugin(activity) {
   fun setBusy(invoke: Invoke) {
     SyncForegroundService.setBusy(invoke.getArgs().optBoolean("busy", false))
     invoke.resolve(JSObject())
+  }
+
+  @Command
+  fun setProgress(invoke: Invoke) {
+    val args = invoke.getArgs()
+    SyncForegroundService.setProgress(
+      SyncForegroundService.Progress(
+        done = args.optInt("done", 0),
+        remaining = args.optInt("remaining", 0),
+        total = args.optInt("total", 0),
+        percent = args.optInt("percent", 0).coerceIn(0, 100),
+        // optString turns a JSON null into the text "null".
+        file = if (args.isNull("file")) null else args.optString("file"),
+        filePercent = args.optInt("filePercent", 0).coerceIn(0, 100),
+      ),
+    )
+    invoke.resolve(JSObject())
+  }
+
+  /** Resolves when the service's alarm fires or the gallery changes. */
+  @Command
+  fun awaitWake(invoke: Invoke) {
+    SyncForegroundService.awaitWake(invoke)
   }
 }

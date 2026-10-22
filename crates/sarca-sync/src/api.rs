@@ -610,6 +610,32 @@ impl SarcaApi {
         mtime_ms: Option<i64>,
         content_hash: Option<&str>,
     ) -> Result<UploadOutcome> {
+        self.upload_file_metered(
+            storage_id,
+            parent_path,
+            filename,
+            local_path,
+            mtime_ms,
+            content_hash,
+            Arc::new(AtomicU64::new(0)),
+        )
+        .await
+    }
+
+    /// [`upload_file`](Self::upload_file) that also counts the bytes handed to
+    /// the connection into `sent`, for a progress display. A fallback attempt
+    /// starts the count again from zero, since it sends the file again.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upload_file_metered(
+        &self,
+        storage_id: Uuid,
+        parent_path: &str,
+        filename: &str,
+        local_path: &Path,
+        mtime_ms: Option<i64>,
+        content_hash: Option<&str>,
+        sent: Arc<AtomicU64>,
+    ) -> Result<UploadOutcome> {
         self.require_access_token()?;
         let url = format!("{}/api/storages/{storage_id}/files/upload", self.base_url);
         let h3_version = preferred_request_version(&url);
@@ -620,6 +646,7 @@ impl SarcaApi {
             local_path: &'a Path,
             mtime_ms: Option<i64>,
             content_hash: Option<&'a str>,
+            sent: Arc<AtomicU64>,
         }
 
         async fn build_upload(
@@ -632,7 +659,14 @@ impl SarcaApi {
             let file = File::open(params.local_path).await?;
             let meta = file.metadata().await?;
             let progress = Arc::new(UploadProgress::new());
-            let stream = instrumented_upload_body(ReaderStream::new(file), progress.clone());
+            params.sent.store(0, Ordering::Relaxed);
+            let meter = params.sent.clone();
+            let stream = instrumented_upload_body(ReaderStream::new(file), progress.clone())
+                .inspect(move |chunk| {
+                    if let Ok(chunk) = chunk {
+                        meter.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+                    }
+                });
             let body = reqwest::Body::wrap_stream(stream);
             let part = Part::stream_with_length(body, meta.len())
                 .file_name(params.filename.to_owned())
@@ -676,6 +710,7 @@ impl SarcaApi {
             local_path,
             mtime_ms,
             content_hash,
+            sent,
         };
         let (req, progress) = build_upload(self, h3_client, &url, h3_version, &params).await?;
         let resp = match send_upload(req, progress.clone()).await {

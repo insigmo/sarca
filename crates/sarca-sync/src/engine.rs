@@ -17,7 +17,7 @@ use crate::{
     index::{mtime_ms_from_system, now_ms, IndexEntry, LocalIndex, UploadFailure},
     media_source::LocalMediaSource,
     scheduler::BindingScheduler,
-    transfer::{TransferDirection, TransferQueue, TransferQueueSnapshot},
+    transfer::{TransferDirection, TransferQueue, TransferQueueSnapshot, UploadProgressSnapshot},
     types::{Binding, BindingMode, SyncStatus},
 };
 
@@ -293,6 +293,10 @@ impl SyncEngine {
 
     pub async fn transfer_queue(&self) -> TransferQueueSnapshot {
         self.transfers.read().await.snapshot()
+    }
+
+    pub async fn upload_progress(&self) -> UploadProgressSnapshot {
+        self.transfers.read().await.upload_progress()
     }
 
     async fn transfer_begin(
@@ -1115,16 +1119,18 @@ impl SyncEngine {
                 }
                 return Err(e);
             }
+            let sent = self.transfers.write().await.meter(&tid);
             let upload_result = self
                 .api()
                 .await
-                .upload_file(
+                .upload_file_metered(
                     binding.storage_id,
                     &remote_parent,
                     &filename,
                     &path,
                     Some(mtime),
                     Some(&hash),
+                    sent,
                 )
                 .await;
             let outcome = match upload_result {

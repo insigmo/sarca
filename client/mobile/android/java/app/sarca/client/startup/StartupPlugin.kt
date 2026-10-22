@@ -7,8 +7,11 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.provider.OpenableColumns
 import android.provider.Settings
+import androidx.activity.result.ActivityResult
 import androidx.core.content.ContextCompat
+import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
 import app.tauri.annotation.PermissionCallback
 import app.tauri.annotation.TauriPlugin
@@ -17,7 +20,7 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
 /**
- * Runtime media + battery-opt prompts, device model, and log share helpers.
+ * Runtime media + battery-opt prompts, device model, and the log export.
  * Installed into the generated Android project by scripts/patch-android-http.sh.
  */
 @TauriPlugin
@@ -87,25 +90,59 @@ class StartupPlugin(private val activity: Activity) : Plugin(activity) {
     invoke.resolve(ret)
   }
 
+  /**
+   * Asks the user where to save `text` (the system "Save as" screen, which
+   * also offers Downloads, Drive and other document providers) and writes it
+   * there. Resolves `{ saved: false }` when the user backs out.
+   */
   @Command
-  fun shareText(invoke: Invoke) {
+  fun saveTextFile(invoke: Invoke) {
     try {
       // Invoke has getArgs()/parseArgs — not getString (that lives on JSObject).
-      val args = invoke.getArgs()
-      val text = args.getString("text", "") ?: ""
-      val subject = args.getString("subject", "Sarca client logs") ?: "Sarca client logs"
-      val send =
-        Intent(Intent.ACTION_SEND).apply {
+      val name = invoke.getArgs().getString("fileName", "sarca-client.log") ?: "sarca-client.log"
+      val intent =
+        Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+          addCategory(Intent.CATEGORY_OPENABLE)
           type = "text/plain"
-          putExtra(Intent.EXTRA_TEXT, text)
-          putExtra(Intent.EXTRA_SUBJECT, subject)
+          putExtra(Intent.EXTRA_TITLE, name)
         }
-      activity.startActivity(Intent.createChooser(send, "Share Sarca logs"))
-      invoke.resolve(JSObject())
+      startActivityForResult(invoke, intent, "saveTextFileResult")
     } catch (ex: Exception) {
-      invoke.reject(ex.message ?: "share failed")
+      invoke.reject(ex.message ?: "could not open the save screen")
     }
   }
+
+  @ActivityCallback
+  fun saveTextFileResult(invoke: Invoke, result: ActivityResult) {
+    val ret = JSObject()
+    try {
+      val uri = result.data?.data
+      if (result.resultCode != Activity.RESULT_OK || uri == null) {
+        ret.put("saved", false)
+        invoke.resolve(ret)
+        return
+      }
+      val text = invoke.getArgs().getString("text", "") ?: ""
+      val out =
+        activity.contentResolver.openOutputStream(uri, "wt")
+          ?: throw IllegalStateException("cannot write to the chosen file")
+      out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+      ret.put("saved", true)
+      ret.put("name", displayName(uri) ?: uri.lastPathSegment ?: "")
+      invoke.resolve(ret)
+    } catch (ex: Exception) {
+      invoke.reject(ex.message ?: "saving the log failed")
+    }
+  }
+
+  private fun displayName(uri: Uri): String? =
+    try {
+      activity.contentResolver
+        .query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { if (it.moveToFirst()) it.getString(0) else null }
+    } catch (_: Exception) {
+      null
+    }
 
   private fun mediaPermissions(): Array<String> {
     return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

@@ -7,6 +7,16 @@
 //! is `specialUse`, not `dataSync`: Android 15 caps `dataSync` at six hours a
 //! day, and the APK is sideloaded, so Play's review of the type does not apply.
 //!
+//! The service also wakes the loop. Between passes nothing holds the CPU up,
+//! and `tokio::time::sleep` runs on a clock that stops while the device is
+//! suspended, so a 15-minute wait could stretch to hours and auto-upload looked
+//! like it had stopped. The service sets an alarm that fires through Doze and a
+//! watcher on the gallery, and either one reaches the loop through
+//! [`BgService::attach`].
+//!
+//! While a pass runs, the service's notification shows how many files are done
+//! and left, and a second one shows the file on the wire.
+//!
 //! Known limit: the service is started from Rust, and Rust only runs once the
 //! app has been opened, so after a reboot or a process kill auto-upload resumes
 //! when the user next opens Sarca.
@@ -18,6 +28,8 @@ use std::sync::{
     Arc,
 };
 
+use sarca_sync::{engine::SyncEngine, UploadProgressSnapshot};
+use serde::Serialize;
 use tauri::{
     plugin::{Builder as PluginBuilder, TauriPlugin},
     AppHandle, Runtime,
@@ -101,6 +113,84 @@ impl BgService {
         }
     }
 
+    /// Feeds the notification with upload progress and turns the service's
+    /// alarm and gallery signals into loop wake-ups (a bump of `wake_tx`).
+    /// Called once per process, by `start_background_loop`.
+    pub fn attach(&self, engine: Arc<SyncEngine>, wake_tx: tokio::sync::watch::Sender<u64>) {
+        #[cfg(target_os = "android")]
+        {
+            use tauri::Manager;
+            let Some(state) = self
+                .app
+                .as_ref()
+                .and_then(|app| app.try_state::<AndroidSyncService<tauri::Wry>>())
+            else {
+                return;
+            };
+            let handle = state.handle.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    // Parked in the service until its alarm fires or the gallery
+                    // changes. The async variant keeps no thread blocked on it.
+                    match handle
+                        .run_mobile_plugin_async::<serde_json::Value>(
+                            "awaitWake",
+                            serde_json::json!({}),
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            let next = wake_tx.borrow().wrapping_add(1);
+                            let _ = wake_tx.send(next);
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "sync service wake wait failed");
+                            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                        }
+                    }
+                }
+            });
+            let bg = self.clone();
+            tauri::async_runtime::spawn(async move { bg.feed_progress(engine).await });
+        }
+        #[cfg(not(target_os = "android"))]
+        let _ = (engine, wake_tx);
+    }
+
+    /// Sends the notification what [`progress_note`] makes of the queue, once
+    /// a second while a pass runs and only when it changed.
+    #[cfg(target_os = "android")]
+    async fn feed_progress(&self, engine: Arc<SyncEngine>) {
+        let mut base = engine.upload_progress().await;
+        let mut last: Option<ProgressNote> = None;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if self.busy.load(Ordering::SeqCst) == 0 {
+                if last.take().is_some() {
+                    // The pass is over; `setBusy(false)` has already reset the
+                    // notification. A drained queue starts the count afresh.
+                    let now = engine.upload_progress().await;
+                    if now.remaining == 0 {
+                        base = now;
+                    }
+                }
+                continue;
+            }
+            let now = engine.upload_progress().await;
+            if now.remaining == 0 && now.current.is_empty() {
+                base = now.clone();
+            }
+            let note = progress_note(&base, &now);
+            if last.as_ref() != Some(&note) {
+                self.call(
+                    "setProgress",
+                    serde_json::to_value(&note).unwrap_or_default(),
+                );
+                last = Some(note);
+            }
+        }
+    }
+
     /// Marks a pass as running until the returned guard drops.
     pub fn busy(&self) -> BusyGuard {
         if self.busy.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -146,6 +236,46 @@ impl BgService {
     }
 }
 
+/// What the notifications show: the run's file counts and byte percentage,
+/// and the file on the wire, if any.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgressNote {
+    pub done: u64,
+    pub remaining: usize,
+    pub total: u64,
+    pub percent: u8,
+    pub file: Option<String>,
+    pub file_percent: u8,
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn percent_of(part: u64, whole: u64) -> u8 {
+    if whole == 0 {
+        return 0;
+    }
+    (part.min(whole) as u128 * 100 / whole as u128) as u8
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+/// Counts since `base`, the queue as it was when this run began. The
+/// percentage is by bytes, so one large video weighs what it costs to send.
+pub fn progress_note(base: &UploadProgressSnapshot, now: &UploadProgressSnapshot) -> ProgressNote {
+    let done = now.completed.saturating_sub(base.completed);
+    let done_bytes = now.completed_bytes.saturating_sub(base.completed_bytes);
+    let sent: u64 = now.current.iter().map(|f| f.sent.min(f.size)).sum();
+    let file = now.current.first();
+    ProgressNote {
+        done,
+        remaining: now.remaining,
+        total: done + now.remaining as u64,
+        percent: percent_of(done_bytes + sent, done_bytes + now.remaining_bytes),
+        file: file.map(|f| f.name.clone()),
+        file_percent: file.map(|f| percent_of(f.sent, f.size)).unwrap_or(0),
+    }
+}
+
 pub struct BusyGuard(BgService);
 
 impl Drop for BusyGuard {
@@ -153,5 +283,50 @@ impl Drop for BusyGuard {
         if self.0.busy.fetch_sub(1, Ordering::SeqCst) == 1 {
             self.0.call("setBusy", serde_json::json!({ "busy": false }));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sarca_sync::UploadInFlight;
+
+    fn snap(
+        completed: u64,
+        completed_bytes: u64,
+        remaining: usize,
+        remaining_bytes: u64,
+    ) -> UploadProgressSnapshot {
+        UploadProgressSnapshot {
+            completed,
+            completed_bytes,
+            remaining,
+            remaining_bytes,
+            current: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn note_counts_from_the_start_of_the_run_and_weighs_by_bytes() {
+        let base = snap(5, 500, 4, 1000);
+        let mut now = snap(7, 800, 2, 700);
+        now.current.push(UploadInFlight {
+            name: "VID_1.mp4".into(),
+            sent: 150,
+            size: 600,
+        });
+        let note = progress_note(&base, &now);
+        assert_eq!((note.done, note.remaining, note.total), (2, 2, 4));
+        // 300 finished + 150 on the wire, of 300 + 700.
+        assert_eq!(note.percent, 45);
+        assert_eq!(note.file.as_deref(), Some("VID_1.mp4"));
+        assert_eq!(note.file_percent, 25);
+    }
+
+    #[test]
+    fn empty_run_is_zero_not_a_division_by_zero() {
+        let note = progress_note(&snap(0, 0, 0, 0), &snap(0, 0, 0, 0));
+        assert_eq!((note.total, note.percent, note.file_percent), (0, 0, 0));
+        assert_eq!(note.file, None);
     }
 }

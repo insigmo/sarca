@@ -28,7 +28,10 @@ pub use media_source::{FsMediaSource, LocalMediaSource};
 pub use pinning::{set_pin_store, PinStore};
 pub use proxy::LocalProxy;
 pub use scheduler::BindingScheduler;
-pub use transfer::{TransferDirection, TransferItem, TransferQueueSnapshot, TransferStatus};
+pub use transfer::{
+    TransferDirection, TransferItem, TransferQueueSnapshot, TransferStatus, UploadInFlight,
+    UploadProgressSnapshot,
+};
 pub use types::{
     scan_counters, Binding, BindingMode, ChangelogEvent, ChangelogResponse, SnapshotEntry,
     SnapshotResponse, SyncStatus,

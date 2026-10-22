@@ -406,13 +406,13 @@ pub const OPEN_SYNC_JS: &str = r#"
     }
     return tryAt(0);
   }
-  // Commands that wait on a person: an OS folder dialog, a share sheet. Every
-  // other command is machine-speed, so making them all wait out the long
-  // timeout meant one dead bridge froze a Settings switch for a minute and a
-  // half with no error.
+  // Commands that wait on a person: an OS folder dialog, a "save as" screen.
+  // Someone browsing folders there can take minutes. Every other command is
+  // machine-speed, so making them all wait out the long timeout meant one dead
+  // bridge froze a Settings switch with no error.
   var __SARCA_INTERACTIVE_CMDS = ['pick_local_folder', 'export_logs', 'connect'];
   function __sarcaNavTimeoutMs(cmd){
-    return __SARCA_INTERACTIVE_CMDS.indexOf(cmd) >= 0 ? 90000 : 12000;
+    return __SARCA_INTERACTIVE_CMDS.indexOf(cmd) >= 0 ? 600000 : 12000;
   }
   function __sarcaNavInvoke(cmd, args){
     return new Promise(function(resolve, reject){
@@ -1161,10 +1161,11 @@ impl AppSyncState {
     ///   (`bg_service`) keeps the process from being frozen or reclaimed,
     ///   but after a reboot or a force-stop nothing runs until the app is
     ///   opened again.
-    /// - **Doze is not exempt.** While the device is dozing,
-    ///   `tokio::time::sleep` is not guaranteed to fire on schedule, so
-    ///   `BACKGROUND_POLL` is a floor on the gap between ticks, not a promise
-    ///   of one every 15 minutes.
+    /// - **Doze.** `tokio::time::sleep` runs on a clock that stops while the
+    ///   device is suspended, so on its own `BACKGROUND_POLL` could stretch to
+    ///   hours. On Android the foreground service's alarm and gallery watcher
+    ///   bump `wake_tx` instead (`BgService::attach`); elsewhere
+    ///   `BACKGROUND_POLL` is a floor on the gap between ticks.
     pub fn start_background_loop(&self) {
         if BACKGROUND_LOOP_STARTED.swap(true, Ordering::SeqCst) {
             tracing::info!("background sync loop already running; not starting another");
@@ -1172,6 +1173,7 @@ impl AppSyncState {
         }
         let bg = self.bg.clone();
         let engine = self.engine.clone();
+        bg.attach(engine.clone(), self.wake_tx.clone());
         let data_dir = self.data_dir.clone();
         let server_cfg = self.server.clone();
         let proxy = self.proxy.clone();
