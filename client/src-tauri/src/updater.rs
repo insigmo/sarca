@@ -59,6 +59,9 @@ pub struct InstallStartedDto {
     /// True when the app handed the file to the platform installer. False means
     /// the download is all that happened and the path is the deliverable.
     pub launched: bool,
+    /// True when the system was given the asset's URL to download and install
+    /// itself (Android); `path` is then that URL.
+    pub handed_off: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,16 +145,40 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 
 /// Whether this build can start its own update.
 ///
-/// Android is the interesting one: installing an APK needs
-/// `REQUEST_INSTALL_PACKAGES` and a `FileProvider` grant, neither of which this
-/// app declares, so the honest answer is "download it and let the system's own
-/// download/install flow take over".
+/// Android counts as yes, by a different route: installing an APK from inside
+/// the app needs `REQUEST_INSTALL_PACKAGES` and a `FileProvider` grant, neither
+/// of which this app declares, so the update is handed to the system as a URL
+/// (see [`hands_off_to_system`]) and its own download/install flow takes over.
 fn install_blocker() -> Option<String> {
     match std::env::consts::OS {
-        "windows" | "macos" | "linux" => None,
-        "android" => Some("install the downloaded APK from your notifications".to_owned()),
+        "windows" | "macos" | "linux" | "android" => None,
         other => Some(format!("automatic updates are not available on {other}")),
     }
+}
+
+/// True where "install" means opening the release asset's URL in the system
+/// (browser or download manager) instead of downloading it in-process.
+pub fn hands_off_to_system() -> bool {
+    std::env::consts::OS == "android"
+}
+
+/// The newest release's version and this platform's asset URL, or why there is
+/// nothing to install.
+pub async fn latest_download(data_dir: &std::path::Path) -> Result<(String, String), String> {
+    let status = check(data_dir).await?;
+    if !status.update_available {
+        return Err("this client is already on the newest release".to_owned());
+    }
+    let Some(url) = status.download_url else {
+        return Err(status
+            .reason
+            .unwrap_or_else(|| "there is nothing to install for this platform".to_owned()));
+    };
+    if !url.starts_with("https://") {
+        return Err("the release asset is not served over https".to_owned());
+    }
+    let version = status.latest.unwrap_or_else(|| CURRENT_VERSION.to_owned());
+    Ok((version, url))
 }
 
 fn client(timeout: Duration) -> Result<reqwest::Client, String> {
@@ -267,6 +294,7 @@ pub async fn install(data_dir: &std::path::Path) -> Result<InstallStartedDto, St
         version,
         path: dest.display().to_string(),
         launched,
+        handed_off: false,
     })
 }
 

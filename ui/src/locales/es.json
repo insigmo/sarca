@@ -262,6 +262,7 @@
 		"serverRestarting": "Servidor actualizado a {{version}}: se está reiniciando y la página volverá a conectarse sola.",
 		"clientUpdateStarted": "Instalador descargado: sigue sus pasos para terminar.",
 		"clientUpdateDownloaded": "Descargado en {{path}}",
+		"clientUpdateHandedOff": "Descarga iniciada: abre el APK cuando termine para instalar la actualización.",
 		"updateSuperuserOnly": "Solo el superusuario puede actualizar este servidor.",
 		"updateNativeOnly": "Abre el cliente de escritorio o móvil de Sarca para actualizarlo.",
 		"unknownVersion": "desconocida",

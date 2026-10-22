@@ -262,6 +262,7 @@
 		"serverRestarting": "تم تحديث الخادم إلى {{version}} — تجري إعادة التشغيل وستعيد الصفحة الاتصال تلقائيًا.",
 		"clientUpdateStarted": "تم تنزيل المثبّت — أكمل الخطوات فيه.",
 		"clientUpdateDownloaded": "تم التنزيل إلى {{path}}",
+		"clientUpdateHandedOff": "بدأ التنزيل — افتح ملف APK عند اكتماله لتثبيت التحديث.",
 		"updateSuperuserOnly": "يستطيع المستخدم الأعلى وحده تحديث هذا الخادم.",
 		"updateNativeOnly": "افتح تطبيق Sarca لسطح المكتب أو الهاتف لتحديثه.",
 		"unknownVersion": "غير معروف",

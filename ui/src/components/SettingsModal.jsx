@@ -11,6 +11,7 @@ import { clearSession } from '../common/auth'
 import { settingsStore } from '../common/settings'
 import { filesChromeStore } from '../common/filesChrome'
 import { formatBytes, nativeInvoke } from '../common/nativeBridge'
+import { sanitizeHtml } from '../common/sanitizeHtml'
 import {
 	THEMES,
 	setThemeMode,
@@ -522,12 +523,13 @@ const SettingsModal = () => {
 			const started = await nativeInvoke('install_client_update')
 			// The platform installer owns it from here, so the message says what
 			// the user has to do rather than claiming the update is finished.
-			setClientUpdateMsg(
-				started?.launched
+			const msg = started?.handed_off
+				? i18n.t('settings.clientUpdateHandedOff')
+				: started?.launched
 					? i18n.t('settings.clientUpdateStarted')
-					: i18n.t('settings.clientUpdateDownloaded', { path: started?.path || '' }),
-			)
-			addAlert(i18n.t('settings.clientUpdateStarted'), 'success')
+					: i18n.t('settings.clientUpdateDownloaded', { path: started?.path || '' })
+			setClientUpdateMsg(msg)
+			addAlert(started?.handed_off ? msg : i18n.t('settings.clientUpdateStarted'), 'success')
 		} catch (e) {
 			setClientUpdateMsg(String(e))
 		} finally {
@@ -574,6 +576,46 @@ const SettingsModal = () => {
 			(u) => u?.update_available && u?.notes,
 		)
 		return found?.notes || ''
+	}
+
+	// GitHub release bodies are markdown; render them the way the file viewer
+	// renders a .md file — parsed, then sanitized, since the body is remote text.
+	const [releaseNotesHtml, setReleaseNotesHtml] = createSignal('')
+	createEffect(() => {
+		const raw = releaseNotes()
+		if (!raw) {
+			setReleaseNotesHtml('')
+			return
+		}
+		let cancelled = false
+		onCleanup(() => {
+			cancelled = true
+		})
+		;(async () => {
+			try {
+				const { marked } = await import('marked')
+				const html = await sanitizeHtml(await marked.parse(raw, { gfm: true, breaks: true }))
+				if (!cancelled) setReleaseNotesHtml(html)
+			} catch {
+				if (!cancelled) setReleaseNotesHtml('')
+			}
+		})()
+	})
+
+	/**
+	 * A link in the notes must not navigate the app's own webview away. In a
+	 * browser it opens a new tab; in the native shell the Update button is the
+	 * way to get the release, so the click is just swallowed.
+	 * @param {MouseEvent} e
+	 */
+	const onReleaseNotesClick = (e) => {
+		const a = e.target?.closest?.('a[href]')
+		if (!a) return
+		e.preventDefault()
+		const href = a.getAttribute('href') || ''
+		if (!isNative() && /^https?:\/\//i.test(href)) {
+			window.open(href, '_blank', 'noopener,noreferrer')
+		}
 	}
 
 	/**
@@ -1647,9 +1689,21 @@ const SettingsModal = () => {
 												<p class="settings-account__label">
 													{i18n.t('settings.releaseNotes')}
 												</p>
-												<p class="settings-account__hint settings-release-notes">
-													{releaseNotes()}
-												</p>
+												<Show
+													when={releaseNotesHtml()}
+													fallback={
+														<p class="settings-account__hint settings-release-notes">
+															{releaseNotes()}
+														</p>
+													}
+												>
+													{/* Sanitized by sanitizeHtml above. */}
+													<div
+														class="settings-account__hint settings-release-notes settings-release-notes--md"
+														onClick={onReleaseNotesClick}
+														innerHTML={releaseNotesHtml()}
+													/>
+												</Show>
 											</div>
 										</Show>
 									</div>

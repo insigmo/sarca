@@ -237,21 +237,22 @@ describe('SettingsModal about tab', () => {
 		)
 	})
 
-	// A platform that cannot start its own installer (Android, iOS) must not
-	// show a button that would do nothing.
+	// A platform that cannot start its own installer (iOS) must not show a
+	// button that would do nothing. Android can: it hands the APK URL to the
+	// system, so its check reports can_install true.
 	it('hides the update button when this platform cannot install it', async () => {
 		nativeInvoke.mockImplementation(async (cmd) => {
-			if (cmd === 'get_about') return { version: '0.0.170', platform: 'Android' }
+			if (cmd === 'get_about') return { version: '0.0.170', platform: 'iOS' }
 			if (cmd === 'check_client_update') {
 				return {
 					current: '0.0.170',
 					latest: 'v0.0.171',
 					update_available: true,
 					notes: '',
-					asset: 'sarca_client_android_arm64.apk',
-					download_url: 'https://example.invalid/app.apk',
+					asset: null,
+					download_url: null,
 					can_install: false,
-					reason: 'install the downloaded APK from your notifications',
+					reason: 'automatic updates are not available on ios',
 				}
 			}
 			return prefs()
@@ -267,5 +268,48 @@ describe('SettingsModal about tab', () => {
 			expect(container.textContent).toContain('v0.0.171 is available'),
 		)
 		expect(buttonByText(container, 'Update')).toBeFalsy()
+	})
+
+	// GitHub release bodies are markdown; the tab renders them rather than
+	// showing the raw `###` and `| --- |` text.
+	it('renders release notes as markdown', async () => {
+		nativeInvoke.mockImplementation(async (cmd) => {
+			if (cmd === 'check_client_update') {
+				return {
+					current: '0.0.170',
+					latest: 'v0.0.171',
+					update_available: true,
+					notes: [
+						'### Downloads',
+						'',
+						'| File | Description |',
+						'| --- | --- |',
+						'| [app.apk](https://example.invalid/app.apk) | Android |',
+						'',
+						'<script>window.pwned = 1</script>',
+					].join('\n'),
+					asset: 'sarca_client_android_arm64.apk',
+					download_url: 'https://example.invalid/app.apk',
+					can_install: true,
+					reason: null,
+				}
+			}
+			if (cmd === 'get_about') return { version: '0.0.170', platform: 'Android' }
+			return prefs()
+		})
+		const { container } = render(() => <SettingsModal />)
+		await waitFor(() =>
+			expect(buttonByText(container, 'Check for updates')).toBeTruthy(),
+		)
+		fireEvent.click(buttonByText(container, 'Check for updates'))
+
+		await waitFor(() =>
+			expect(container.querySelector('.settings-release-notes--md h3')).toBeTruthy(),
+		)
+		const notes = container.querySelector('.settings-release-notes--md')
+		expect(notes.querySelector('table td a')?.textContent).toBe('app.apk')
+		expect(notes.textContent).not.toContain('###')
+		expect(notes.querySelector('script')).toBeNull()
+		expect(buttonByText(container, 'Update')).toBeTruthy()
 	})
 })

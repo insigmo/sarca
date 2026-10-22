@@ -262,6 +262,7 @@
 		"serverRestarting": "服务器已更新到 {{version}}，正在重启，页面会自动重新连接。",
 		"clientUpdateStarted": "安装程序已下载，请按照提示完成安装。",
 		"clientUpdateDownloaded": "已下载到 {{path}}",
+		"clientUpdateHandedOff": "已开始下载，完成后打开 APK 即可安装更新。",
 		"updateSuperuserOnly": "只有超级用户可以更新此服务器。",
 		"updateNativeOnly": "请打开 Sarca 桌面端或移动端客户端进行更新。",
 		"unknownVersion": "未知",

@@ -1237,9 +1237,24 @@ pub async fn check_client_update(
 /// elevation prompt and the restart.
 #[tauri::command]
 pub async fn install_client_update(
+    app: AppHandle,
     state: State<'_, AppSyncState>,
 ) -> Result<crate::updater::InstallStartedDto, String> {
     let data_dir = state.data_dir().clone();
+    if crate::updater::hands_off_to_system() {
+        let (version, url) = crate::updater::latest_download(&data_dir).await?;
+        crate::client_log::write_line(&data_dir, &format!("update: opening {url}"));
+        #[allow(deprecated)]
+        tauri_plugin_shell::ShellExt::shell(&app)
+            .open(url.clone(), None)
+            .map_err(|e| format!("could not open the download: {e}"))?;
+        return Ok(crate::updater::InstallStartedDto {
+            version,
+            path: url,
+            launched: true,
+            handed_off: true,
+        });
+    }
     crate::updater::install(&data_dir).await
 }
 

@@ -293,7 +293,7 @@ pub async fn dispatch(app: AppHandle, cmd: &str, args: Value) -> Result<Value, S
             serde_json::to_value(dto).map_err(|e| e.to_string())
         }
         "install_client_update" => {
-            let dto = commands::install_client_update(state.clone()).await?;
+            let dto = commands::install_client_update(app.clone(), state.clone()).await?;
             serde_json::to_value(dto).map_err(|e| e.to_string())
         }
         "get_log_status" => {
