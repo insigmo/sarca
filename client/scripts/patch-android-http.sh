@@ -2,6 +2,7 @@
 # Post-init patches for the generated Tauri Android project:
 # - Allow http:// (cleartext) for self-hosted Sarca on LAN (https:// still works)
 # - Install SAF folder-picker + startup permission plugins
+# - Install the auto-upload foreground service and declare it in the manifest
 # - Replace Tauri default launcher icons with Sarca icons from src-tauri/icons/android
 set -euo pipefail
 
@@ -19,6 +20,8 @@ STARTUP_SRC="$ROOT/mobile/android/java/app/sarca/client/startup/StartupPlugin.kt
 STARTUP_DST="$APP_SRC/java/app/sarca/client/startup/StartupPlugin.kt"
 MEDIASTORE_SRC="$ROOT/mobile/android/java/app/sarca/client/mediastore/MediaStorePlugin.kt"
 MEDIASTORE_DST="$APP_SRC/java/app/sarca/client/mediastore/MediaStorePlugin.kt"
+SYNCSERVICE_SRC_DIR="$ROOT/mobile/android/java/app/sarca/client/syncservice"
+SYNCSERVICE_DST_DIR="$APP_SRC/java/app/sarca/client/syncservice"
 
 if [[ ! -f "$MANIFEST" ]]; then
   echo "AndroidManifest not found at $MANIFEST (run tauri android init first)" >&2
@@ -64,6 +67,12 @@ if [[ -f "$MEDIASTORE_SRC" ]]; then
   echo "Installed MediaStorePlugin.kt → $MEDIASTORE_DST"
 fi
 
+if [[ -d "$SYNCSERVICE_SRC_DIR" ]]; then
+  mkdir -p "$SYNCSERVICE_DST_DIR"
+  cp -a "$SYNCSERVICE_SRC_DIR"/. "$SYNCSERVICE_DST_DIR"/
+  echo "Installed sync foreground service → $SYNCSERVICE_DST_DIR"
+fi
+
 python3 - "$MANIFEST" <<'PY'
 import re
 import sys
@@ -87,6 +96,13 @@ for perm in (
     "android.permission.READ_MEDIA_VIDEO",
     "android.permission.READ_EXTERNAL_STORAGE",
     "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+    # Auto-upload foreground service (SyncForegroundService.kt): the service
+    # itself, its specialUse type, the wake/Wi-Fi locks it holds while
+    # uploading, and its notification on Android 13+.
+    "android.permission.FOREGROUND_SERVICE",
+    "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+    "android.permission.WAKE_LOCK",
+    "android.permission.POST_NOTIFICATIONS",
 ):
     if perm not in text:
         text = re.sub(
@@ -115,6 +131,22 @@ app = match.group(0)
 app = ensure_attr(app, "android:usesCleartextTraffic", "true")
 app = ensure_attr(app, "android:networkSecurityConfig", "@xml/network_security_config")
 text = text[: match.start()] + app + text[match.end() :]
+
+SERVICE = "app.sarca.client.syncservice.SyncForegroundService"
+if SERVICE not in text:
+    service = f'''
+        <service
+            android:name="{SERVICE}"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Uploads the user's photos and videos to their own Sarca server in the background" />
+        </service>
+'''
+    text, n = re.subn(r"(\s*</application>)", lambda m: service.rstrip() + m.group(1), text, count=1)
+    if n != 1:
+        raise SystemExit("no </application> tag in AndroidManifest.xml")
 path.write_text(text)
-print(f"Patched cleartext HTTP + media/battery permissions into {path}")
+print(f"Patched cleartext HTTP, media/battery permissions and sync service into {path}")
 PY

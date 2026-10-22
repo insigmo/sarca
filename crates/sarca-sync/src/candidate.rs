@@ -13,6 +13,14 @@ pub struct LocalCandidate {
     pub size: i64,
     pub mtime_ms: i64,
     pub ephemeral: bool,
+    /// Set when the bytes are not on disk yet: the source has an opaque handle
+    /// (an Android MediaStore `content://` URI) and `absolute_path` is not
+    /// readable until [`LocalMediaSource::materialize`] has produced a copy.
+    /// Materializing is deferred to the moment the file is actually uploaded,
+    /// so a pass over a library that is mostly already uploaded copies nothing.
+    ///
+    /// [`LocalMediaSource::materialize`]: crate::LocalMediaSource::materialize
+    pub source_uri: Option<String>,
 }
 
 pub fn strip_dcim_prefix(relative_path: &str) -> String {
@@ -148,6 +156,7 @@ pub fn collect_fs_candidates(root: &Path, media_only: bool) -> Result<Vec<LocalC
             size: meta.len() as i64,
             mtime_ms: mtime,
             ephemeral: false,
+            source_uri: None,
         });
     }
     if out.is_empty() && walk_errors > 0 {

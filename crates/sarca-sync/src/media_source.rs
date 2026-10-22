@@ -5,7 +5,7 @@
 //! DCIM via MediaStore (see the `sarca-client` crate) so it can see files
 //! that a raw filesystem walk cannot (e.g. `content://` scoped storage).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -16,6 +16,14 @@ use crate::types::{Binding, BindingMode};
 #[async_trait]
 pub trait LocalMediaSource: Send + Sync {
     async fn list_candidates(&self, binding: &Binding) -> Result<Vec<LocalCandidate>>;
+
+    /// Produces a readable file for a candidate the engine is about to upload,
+    /// returning its path and whether it is a temporary copy the engine must
+    /// delete afterwards. Only candidates with `source_uri` set need work; the
+    /// default hands back what the listing already found on disk.
+    async fn materialize(&self, candidate: &LocalCandidate) -> Result<(PathBuf, bool)> {
+        Ok((candidate.absolute_path.clone(), candidate.ephemeral))
+    }
 }
 
 /// Default source: walks `binding.local_path` on the filesystem.

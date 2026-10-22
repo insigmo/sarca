@@ -30,8 +30,16 @@ class StartupPlugin(private val activity: Activity) : Plugin(activity) {
     // until the user has actually answered the media permission prompt.
     requestIgnoreBatteryOptimizations()
 
+    // Notifications ride along: without them Android 13+ hides the
+    // auto-upload service's notification, and the user cannot see it running.
+    val wanted =
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        mediaPermissions() + Manifest.permission.POST_NOTIFICATIONS
+      } else {
+        mediaPermissions()
+      }
     val missing =
-      mediaPermissions().filter {
+      wanted.filter {
         ContextCompat.checkSelfPermission(activity, it) != PackageManager.PERMISSION_GRANTED
       }
     if (missing.isEmpty()) {

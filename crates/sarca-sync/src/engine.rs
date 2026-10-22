@@ -963,12 +963,14 @@ impl SyncEngine {
         waiting_id: String,
     ) -> Result<PushOutcome> {
         {
+            let source = candidate.clone();
             let LocalCandidate {
                 relative_path: rel,
                 absolute_path: path,
                 size,
                 mtime_ms: mtime,
                 ephemeral,
+                source_uri,
             } = candidate;
             let existing = self.index.get_entry(&binding.id, &rel)?;
 
@@ -1040,6 +1042,21 @@ impl SyncEngine {
                 }
                 return Ok(PushOutcome::Relaying);
             }
+
+            // Only now, with the file known to be needed, pull a URI-only
+            // candidate's bytes onto disk. Copying at listing time cost a full
+            // copy of every such file on every pass, uploaded or not.
+            let (path, ephemeral) = if source_uri.is_some() {
+                match self.config.media_source.materialize(&source).await {
+                    Ok(found) => found,
+                    Err(e) => {
+                        self.transfer_abandon(&tid).await;
+                        return Err(e).with_context(|| format!("read {rel} from the gallery"));
+                    }
+                }
+            } else {
+                (path, ephemeral)
+            };
 
             let hash = match sha256_file(&path).await {
                 Ok(h) => h,
@@ -2082,6 +2099,7 @@ mod tests {
                 size: content.len() as i64,
                 mtime_ms: 5,
                 ephemeral: false,
+                source_uri: None,
             }
         })
         .collect();
@@ -2357,6 +2375,93 @@ mod tests {
         }
     }
 
+    /// Lists URI-only candidates and records which ones it was asked to copy.
+    struct UriMediaSource {
+        candidates: Vec<LocalCandidate>,
+        materialized: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl LocalMediaSource for UriMediaSource {
+        async fn list_candidates(&self, _binding: &Binding) -> Result<Vec<LocalCandidate>> {
+            Ok(self.candidates.clone())
+        }
+
+        async fn materialize(&self, candidate: &LocalCandidate) -> Result<(PathBuf, bool)> {
+            self.materialized
+                .lock()
+                .unwrap()
+                .push(candidate.relative_path.clone());
+            anyhow::bail!("item vanished from the gallery")
+        }
+    }
+
+    #[tokio::test]
+    async fn push_local_materializes_only_files_it_uploads() {
+        // Copying every URI-only gallery item while listing made each pass
+        // cost a full copy of the library. Only the file that is actually
+        // pending may be materialized; the already-indexed one must not be.
+        let dir = tempfile::tempdir().unwrap();
+        let uri_candidate = |name: &str| LocalCandidate {
+            relative_path: name.into(),
+            absolute_path: dir.path().join("not-copied-yet").join(name),
+            size: 1,
+            mtime_ms: 5,
+            ephemeral: false,
+            source_uri: Some(format!("content://media/{name}")),
+        };
+        let source = Arc::new(UriMediaSource {
+            candidates: vec![uri_candidate("done.jpg"), uri_candidate("new.jpg")],
+            materialized: std::sync::Mutex::new(Vec::new()),
+        });
+        let engine = SyncEngine::open(
+            SyncEngineConfig {
+                poll_interval: Duration::from_secs(30),
+                api: Arc::new(tokio::sync::RwLock::new(SarcaApi::new(
+                    "http://127.0.0.1:9",
+                    "",
+                ))),
+                data_dir: dir.path().to_path_buf(),
+                media_source: source.clone(),
+            },
+            Arc::new(KeepBothPrompt),
+        )
+        .unwrap();
+        let binding = Binding {
+            id: "cam".into(),
+            storage_id: uuid::Uuid::new_v4(),
+            remote_root: "Camera".into(),
+            local_path: "/storage/emulated/0/DCIM".into(),
+            mode: BindingMode::AutoUpload,
+            enabled: true,
+        };
+        engine
+            .index
+            .upsert_entry(
+                &binding.id,
+                &IndexEntry {
+                    relative_path: "done.jpg".into(),
+                    size: 1,
+                    mtime_ms: 5,
+                    content_hash: Some("whatever".into()),
+                    remote_file_id: None,
+                    last_cursor: 0,
+                },
+            )
+            .unwrap();
+
+        let result = engine.push_local(&binding).await.unwrap();
+        assert_eq!(result.pending, 1);
+        assert_eq!(
+            result.failed, 1,
+            "a file that cannot be read is that file's failure"
+        );
+        assert_eq!(
+            *source.materialized.lock().unwrap(),
+            vec!["new.jpg".to_string()]
+        );
+    }
+
     #[tokio::test]
     async fn push_local_deletes_ephemeral_files_not_selected_for_upload() {
         // Regression test for lazy-materialize cleanup: a candidate whose
@@ -2383,6 +2488,7 @@ mod tests {
                     size: 1,
                     mtime_ms: 5,
                     ephemeral: true,
+                    source_uri: None,
                 }])),
             },
             Arc::new(KeepBothPrompt),
@@ -2505,6 +2611,7 @@ mod tests {
             size: 3,
             mtime_ms: 1,
             ephemeral: false,
+            source_uri: None,
         };
         let mut q = TransferQueue::default();
         let pending = select_pending_uploads(&idx, id, &[c], &mut q).unwrap();
@@ -2546,6 +2653,7 @@ mod tests {
             size: 3,
             mtime_ms: 1,
             ephemeral: false,
+            source_uri: None,
         };
         let mut q = TransferQueue::default();
         let pending = select_pending_uploads(&idx, id, &[c], &mut q).unwrap();

@@ -2,6 +2,7 @@
 
 #[cfg(test)]
 mod acl_check;
+mod bg_service;
 mod client_log;
 mod commands;
 mod folder_picker;
@@ -110,6 +111,7 @@ pub fn run() {
         .plugin(folder_picker::init())
         .plugin(startup::init())
         .plugin(mediastore::init())
+        .plugin(bg_service::init())
         .plugin(
             PluginBuilder::<tauri::Wry, ()>::new("sarca-nav")
                 // Mark every navigation as native *before* page scripts when the

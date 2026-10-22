@@ -978,7 +978,14 @@ pub struct AppSyncState {
     /// was killed or navigated away without ever sending the final `false` —
     /// without this, `foreground` would be stuck `true` forever.
     last_foreground_ping: Arc<StdMutex<Instant>>,
+    /// Android foreground service keeping the loop alive while auto-upload is on.
+    pub bg: crate::bg_service::BgService,
 }
+
+/// Set by the first `start_background_loop`. On Android the activity can be
+/// destroyed and re-created while the process lives on, and a second loop
+/// would double every tick, scan and upload.
+static BACKGROUND_LOOP_STARTED: AtomicBool = AtomicBool::new(false);
 
 impl AppSyncState {
     pub fn new(app: &AppHandle) -> Result<Self> {
@@ -1020,6 +1027,7 @@ impl AppSyncState {
             wake_tx,
             foreground: Arc::new(AtomicBool::new(true)),
             last_foreground_ping: Arc::new(StdMutex::new(Instant::now())),
+            bg: crate::bg_service::BgService::new(app),
         })
     }
 
@@ -1145,17 +1153,24 @@ impl AppSyncState {
 
     /// Drives sync forever, adapting cadence to `is_foreground()`.
     ///
-    /// Two known gaps, deliberately not addressed here:
+    /// Starts at most once per process; later calls are ignored.
+    ///
+    /// Two known gaps:
     /// - **The process has to be alive.** On Android this tokio task dies
-    ///   with the process, so background polling only happens while nothing
-    ///   has swiped the app away or killed it for memory. Surviving that
-    ///   needs a WorkManager job or a foreground service; this change does
-    ///   not add one.
+    ///   with the process. While auto-upload is on, the foreground service
+    ///   (`bg_service`) keeps the process from being frozen or reclaimed,
+    ///   but after a reboot or a force-stop nothing runs until the app is
+    ///   opened again.
     /// - **Doze is not exempt.** While the device is dozing,
     ///   `tokio::time::sleep` is not guaranteed to fire on schedule, so
     ///   `BACKGROUND_POLL` is a floor on the gap between ticks, not a promise
     ///   of one every 15 minutes.
     pub fn start_background_loop(&self) {
+        if BACKGROUND_LOOP_STARTED.swap(true, Ordering::SeqCst) {
+            tracing::info!("background sync loop already running; not starting another");
+            return;
+        }
+        let bg = self.bg.clone();
         let engine = self.engine.clone();
         let data_dir = self.data_dir.clone();
         let server_cfg = self.server.clone();
@@ -1203,6 +1218,7 @@ impl AppSyncState {
                     .and_then(|s| serde_json::from_str::<ClientPrefs>(&s).ok())
                     .unwrap_or_default();
                 let fg = is_foreground_signal(&foreground, &last_foreground_ping);
+                bg.set_running(connected && has_enabled_upload_binding(&engine).await);
 
                 // Never run discovery/upload while disconnected — MediaStore
                 // listing still blocks the UI thread via the plugin bridge and
@@ -1230,6 +1246,7 @@ impl AppSyncState {
                         !fg || last_local_scan.elapsed() >= FOREGROUND_LOCAL_SCAN_INTERVAL || woken;
                     let result = if due_for_full_pass {
                         last_local_scan = Instant::now();
+                        let _busy = bg.busy();
                         engine
                             .tick_filtered(|b| {
                                 if b.mode.is_upload_only() && !allow_auto {
@@ -1423,6 +1440,21 @@ impl AppSyncState {
 }
 
 /// The guts of [`AppSyncState::save_server`], pulled out to a free function so
+/// Whether any enabled binding uploads (Camera auto-upload or folder upload),
+/// i.e. whether there is background work worth keeping the process alive for.
+pub(crate) async fn has_enabled_upload_binding(engine: &Arc<SyncEngine>) -> bool {
+    let engine = engine.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.list_bindings())
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .is_some_and(|bindings| {
+            bindings
+                .iter()
+                .any(|b| b.enabled && b.mode.is_upload_only())
+        })
+}
+
 /// `start_background_loop`'s spawned task — which holds clones of individual
 /// `Arc`s rather than `&AppSyncState`, see [`is_foreground_signal`] — can
 /// persist a refreshed session the same way every other caller does.
@@ -1884,6 +1916,7 @@ mod tests {
             wake_tx,
             foreground: Arc::new(AtomicBool::new(true)),
             last_foreground_ping: Arc::new(StdMutex::new(Instant::now())),
+            bg: crate::bg_service::BgService::inert(),
         }
     }
 

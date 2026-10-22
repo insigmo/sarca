@@ -1010,12 +1010,6 @@ pub async fn sync_now(
             is_wifi_connected()
         ),
     );
-    let allow = |b: &Binding| {
-        if b.mode.is_upload_only() && !allow_auto {
-            return false;
-        }
-        true
-    };
     // This is the user asking, explicitly, right now — so drop the retry
     // backoff first. A file deferred for hours because it kept failing is
     // exactly what someone pressing "Upload now" wants reconsidered, and they
@@ -1035,18 +1029,34 @@ pub async fn sync_now(
         ),
         Err(e) => tracing::warn!(error = %e, "clearing upload backoff before sync_now failed"),
     }
-    match binding_id {
-        Some(id) => state
-            .engine
-            .tick_binding(&id, allow)
-            .await
-            .map_err(|e| e.to_string()),
-        None => state
-            .engine
-            .tick_filtered(allow)
-            .await
-            .map_err(|e| e.to_string()),
-    }
+    // Started from here too, not only by the loop: the app is in front right
+    // now, which is when Android lets a foreground service start.
+    let connected = state.server.lock().await.is_connected();
+    state
+        .bg
+        .set_running(connected && crate::state::has_enabled_upload_binding(&state.engine).await);
+
+    // Run the pass without awaiting it. A camera backlog takes minutes to hours;
+    // awaiting it held the UI's call open the whole time, and when anything on
+    // the way timed out the user got an error alert for an upload that was in
+    // fact still going. Progress and per-binding errors reach the UI through
+    // `sync_statuses` / `sync_transfer_queue`, which it polls anyway.
+    let engine = state.engine.clone();
+    let busy = state.bg.busy();
+    let data_dir = state.data_dir().clone();
+    tauri::async_runtime::spawn(async move {
+        let _busy = busy;
+        let allow = |b: &Binding| !(b.mode.is_upload_only() && !allow_auto);
+        let result = match binding_id {
+            Some(id) => engine.tick_binding(&id, allow).await,
+            None => engine.tick_filtered(allow).await,
+        };
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "sync_now pass failed");
+            client_log::write_line(&data_dir, &format!("sync_now pass failed: {e}"));
+        }
+    });
+    Ok(())
 }
 
 #[tauri::command]

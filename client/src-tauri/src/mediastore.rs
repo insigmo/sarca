@@ -98,6 +98,7 @@ pub async fn list_dcim_media<R: Runtime>(
 pub async fn materialize_for_upload<R: Runtime>(
     app: &AppHandle<R>,
     uri: &str,
+    timeout: std::time::Duration,
 ) -> Result<(std::path::PathBuf, bool), String> {
     use tauri::Manager;
     use tokio::sync::oneshot;
@@ -121,7 +122,7 @@ pub async fn materialize_for_upload<R: Runtime>(
         );
         let _ = tx.send(result);
     });
-    match tokio::time::timeout(std::time::Duration::from_secs(60), rx).await {
+    match tokio::time::timeout(timeout, rx).await {
         Ok(Ok(Ok(resp))) => Ok((std::path::PathBuf::from(resp.path), resp.ephemeral)),
         Ok(Ok(Err(e))) => Err(e.to_string()),
         Ok(Err(e)) => Err(e.to_string()),
@@ -159,61 +160,54 @@ impl<R: Runtime> AndroidDcimMediaSource<R> {
         Self { app }
     }
 
-    /// Lists DCIM candidates without materializing every item up front: when
-    /// MediaStore reports a directly-readable `DATA` path, that path is used
-    /// as-is (`ephemeral: false`, no cache copy). `materializeForUpload` is
-    /// only invoked for items where Kotlin could not confirm a readable path
-    /// (e.g. scoped-storage `content://`-only entries on newer Android).
-    ///
-    /// Individual materialize failures are logged and skipped — one corrupt
-    /// or since-deleted item should not abort the whole listing. Only errors
-    /// out if the MediaStore query itself failed, or if every item in a
-    /// non-empty list failed to produce a usable candidate.
+    /// Lists DCIM candidates without copying anything: an item MediaStore
+    /// reports a directly-readable `DATA` path for is used in place, and every
+    /// other item is listed by its `content://` URI (`source_uri`) and only
+    /// copied by [`LocalMediaSource::materialize`] once the engine has decided
+    /// to upload it. Copying at listing time used to cost a copy of every
+    /// URI-only item on every pass, with a 60 s cap each, before a single byte
+    /// went out — long enough on a big library to look like a hung sync.
     #[cfg(target_os = "android")]
     async fn list_dcim_via_mediastore(&self) -> anyhow::Result<Vec<LocalCandidate>> {
-        use anyhow::anyhow;
-
-        let items = list_dcim_media(&self.app).await.map_err(|e| anyhow!(e))?;
-        if items.is_empty() {
-            return Ok(Vec::new());
-        }
-        let total = items.len();
-        let mut out = Vec::with_capacity(total);
-        for item in items {
-            let relative_path = media_item_relative_path(&item.relative_path, &item.display_name);
-            let usable_path = item.path.as_deref().filter(|p| !p.trim().is_empty());
-            let candidate = if let Some(path) = usable_path {
-                Some(LocalCandidate {
-                    relative_path,
-                    absolute_path: std::path::PathBuf::from(path),
-                    size: item.size,
-                    mtime_ms: item.date_modified_ms,
-                    ephemeral: false,
-                })
-            } else {
-                match materialize_for_upload(&self.app, &item.uri).await {
-                    Ok((absolute_path, ephemeral)) => Some(LocalCandidate {
-                        relative_path,
-                        absolute_path,
-                        size: item.size,
-                        mtime_ms: item.date_modified_ms,
-                        ephemeral,
-                    }),
-                    Err(e) => {
-                        tracing::warn!(uri = %item.uri, error = %e, "materialize failed, skipping item");
-                        None
-                    }
-                }
-            };
-            if let Some(c) = candidate {
-                out.push(c);
-            }
-        }
-        if out.is_empty() {
-            anyhow::bail!("failed to materialize any of {total} MediaStore item(s)");
-        }
-        Ok(out)
+        let items = list_dcim_media(&self.app)
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+        Ok(items.into_iter().map(candidate_from_item).collect())
     }
+}
+
+/// One MediaStore item as an upload candidate; see `list_dcim_via_mediastore`.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn candidate_from_item(item: MediaStoreItem) -> LocalCandidate {
+    let relative_path = media_item_relative_path(&item.relative_path, &item.display_name);
+    match item.path.filter(|p| !p.trim().is_empty()) {
+        Some(path) => LocalCandidate {
+            relative_path,
+            absolute_path: std::path::PathBuf::from(path),
+            size: item.size,
+            mtime_ms: item.date_modified_ms,
+            ephemeral: false,
+            source_uri: None,
+        },
+        None => LocalCandidate {
+            // Not readable until materialized; the name only shows up in logs.
+            absolute_path: std::path::PathBuf::from(&item.display_name),
+            relative_path,
+            size: item.size,
+            mtime_ms: item.date_modified_ms,
+            ephemeral: false,
+            source_uri: Some(item.uri),
+        },
+    }
+}
+
+/// How long copying one item out of MediaStore may take. A flat 60 s failed
+/// multi-gigabyte videos on slow flash; this allows 60 s plus 1 s per 8 MiB,
+/// a rate even a slow phone sustains.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn materialize_timeout(size: i64) -> std::time::Duration {
+    const BYTES_PER_SEC: u64 = 8 * 1024 * 1024;
+    std::time::Duration::from_secs(60 + size.max(0) as u64 / BYTES_PER_SEC)
 }
 
 /// True when `local_path` is DCIM itself or lives under a DCIM subfolder
@@ -278,6 +272,19 @@ impl<R: Runtime> LocalMediaSource for AndroidDcimMediaSource<R> {
         // by `state.rs`): plain filesystem walk.
         collect_fs_candidates(Path::new(&binding.local_path), media_only)
     }
+
+    async fn materialize(
+        &self,
+        candidate: &LocalCandidate,
+    ) -> anyhow::Result<(std::path::PathBuf, bool)> {
+        #[cfg(target_os = "android")]
+        if let Some(uri) = &candidate.source_uri {
+            return materialize_for_upload(&self.app, uri, materialize_timeout(candidate.size))
+                .await
+                .map_err(|e| anyhow::anyhow!(e));
+        }
+        Ok((candidate.absolute_path.clone(), candidate.ephemeral))
+    }
 }
 
 #[cfg(test)]
@@ -291,6 +298,46 @@ mod tests {
             "Camera/IMG_1.jpg"
         );
         assert_eq!(media_item_relative_path("DCIM/", "x.mp4"), "x.mp4");
+    }
+
+    fn item(path: Option<&str>) -> MediaStoreItem {
+        MediaStoreItem {
+            uri: "content://media/external/images/media/7".into(),
+            display_name: "IMG_7.jpg".into(),
+            relative_path: "DCIM/Camera/".into(),
+            size: 10,
+            date_modified_ms: 1_000,
+            path: path.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn readable_item_is_used_in_place() {
+        let c = candidate_from_item(item(Some("/storage/emulated/0/DCIM/Camera/IMG_7.jpg")));
+        assert_eq!(c.relative_path, "Camera/IMG_7.jpg");
+        assert_eq!(c.source_uri, None);
+        assert!(!c.ephemeral);
+    }
+
+    #[test]
+    fn uri_only_item_is_listed_without_copying() {
+        for path in [None, Some("  ")] {
+            let c = candidate_from_item(item(path));
+            assert_eq!(c.relative_path, "Camera/IMG_7.jpg");
+            assert_eq!(
+                c.source_uri.as_deref(),
+                Some("content://media/external/images/media/7")
+            );
+        }
+    }
+
+    #[test]
+    fn materialize_timeout_grows_with_size() {
+        assert_eq!(materialize_timeout(0).as_secs(), 60);
+        assert_eq!(
+            materialize_timeout(4 * 1024 * 1024 * 1024).as_secs(),
+            60 + 512
+        );
     }
 
     #[test]
@@ -337,6 +384,7 @@ mod tests {
             size: 1,
             mtime_ms: 0,
             ephemeral: false,
+            source_uri: None,
         }
     }
 

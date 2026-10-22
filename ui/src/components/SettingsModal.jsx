@@ -119,6 +119,18 @@ const SettingsModal = () => {
 
 	const showSyncTab = () => isNative() && Boolean(chrome.storageId())
 
+	// Sidebar order lives here and only here. Each entry's id doubles as the
+	// i18n key stem (settings.<id>Tab / <id>TabDesc); icon is the outline
+	// name, the active tab shows its "Filled" variant.
+	const navTabs = [
+		{ id: 'general', icon: 'person', visible: () => true },
+		{ id: 'sync', icon: 'cloud', visible: showSyncTab },
+		{ id: 'access', icon: 'lockClosed', visible: () => true },
+		{ id: 'backup', icon: 'history', visible: isSuperuser },
+		{ id: 'logs', icon: 'documentBulletList', visible: isNative },
+		{ id: 'about', icon: 'info', visible: () => true },
+	]
+
 	const logout = () => {
 		// Revoke server-side first; the local clear must not wait on the network.
 		API.auth.logout()
@@ -821,122 +833,29 @@ const SettingsModal = () => {
 						<div class="settings-modal__layout">
 							<nav class="settings-nav" aria-label={i18n.t('settings.sectionsAriaLabel')}>
 								<p class="settings-nav__label">{i18n.t('settings.menu')}</p>
-								<button
-									type="button"
-									class="settings-nav__item"
-									classList={{ 'settings-nav__item--active': tab() === 'general' }}
-									onClick={() => setTab('general')}
-								>
-									<span class="settings-nav__icon" aria-hidden="true">
-										<FluentIcon
-											name={tab() === 'general' ? 'personFilled' : 'person'}
-											size={20}
-										/>
-									</span>
-									<span class="settings-nav__text">
-										<span class="settings-nav__title">{i18n.t('settings.generalTab')}</span>
-										<span class="settings-nav__desc">{i18n.t('settings.generalTabDesc')}</span>
-									</span>
-								</button>
-								<Show when={showSyncTab()}>
-									<button
-										type="button"
-										class="settings-nav__item"
-										classList={{ 'settings-nav__item--active': tab() === 'sync' }}
-										onClick={() => setTab('sync')}
-									>
-										<span class="settings-nav__icon" aria-hidden="true">
-											<FluentIcon
-												name={tab() === 'sync' ? 'cloudFilled' : 'cloud'}
-												size={20}
-											/>
-										</span>
-										<span class="settings-nav__text">
-											<span class="settings-nav__title">{i18n.t('settings.syncTab')}</span>
-											<span class="settings-nav__desc">
-												{i18n.t('settings.syncTabDesc')}
+								<For each={navTabs.filter((t) => t.visible())}>
+									{(t) => (
+										<button
+											type="button"
+											class="settings-nav__item"
+											classList={{ 'settings-nav__item--active': tab() === t.id }}
+											onClick={() => setTab(t.id)}
+										>
+											<span class="settings-nav__icon" aria-hidden="true">
+												<FluentIcon
+													name={tab() === t.id ? `${t.icon}Filled` : t.icon}
+													size={20}
+												/>
 											</span>
-										</span>
-									</button>
-								</Show>
-								<Show when={isNative()}>
-									<button
-										type="button"
-										class="settings-nav__item"
-										classList={{ 'settings-nav__item--active': tab() === 'logs' }}
-										onClick={() => setTab('logs')}
-									>
-										<span class="settings-nav__icon" aria-hidden="true">
-											<FluentIcon
-												name={
-													tab() === 'logs'
-														? 'documentBulletListFilled'
-														: 'documentBulletList'
-												}
-												size={20}
-											/>
-										</span>
-										<span class="settings-nav__text">
-											<span class="settings-nav__title">{i18n.t('settings.logsTab')}</span>
-											<span class="settings-nav__desc">{i18n.t('settings.logsTabDesc')}</span>
-										</span>
-									</button>
-								</Show>
-								<button
-									type="button"
-									class="settings-nav__item"
-									classList={{ 'settings-nav__item--active': tab() === 'about' }}
-									onClick={() => setTab('about')}
-								>
-									<span class="settings-nav__icon" aria-hidden="true">
-										<FluentIcon
-											name={tab() === 'about' ? 'infoFilled' : 'info'}
-											size={20}
-										/>
-									</span>
-									<span class="settings-nav__text">
-										<span class="settings-nav__title">{i18n.t('settings.aboutTab')}</span>
-										<span class="settings-nav__desc">{i18n.t('settings.aboutTabDesc')}</span>
-									</span>
-								</button>
-								<button
-									type="button"
-									class="settings-nav__item"
-									classList={{ 'settings-nav__item--active': tab() === 'access' }}
-									onClick={() => setTab('access')}
-								>
-									<span class="settings-nav__icon" aria-hidden="true">
-										<FluentIcon
-											name={
-												tab() === 'access' ? 'lockClosedFilled' : 'lockClosed'
-											}
-											size={20}
-										/>
-									</span>
-									<span class="settings-nav__text">
-										<span class="settings-nav__title">{i18n.t('settings.accessTab')}</span>
-										<span class="settings-nav__desc">{i18n.t('settings.accessTabDesc')}</span>
-									</span>
-								</button>
-								<Show when={isSuperuser()}>
-									<button
-										type="button"
-										class="settings-nav__item"
-										classList={{ 'settings-nav__item--active': tab() === 'backup' }}
-										onClick={() => setTab('backup')}
-									>
-										<span class="settings-nav__icon" aria-hidden="true">
-											<FluentIcon
-												name={tab() === 'backup' ? 'historyFilled' : 'history'}
-												size={20}
-											/>
-										</span>
-										<span class="settings-nav__text">
-											<span class="settings-nav__title">{i18n.t('settings.backupTab')}</span>
-											<span class="settings-nav__desc">{i18n.t('settings.backupTabDesc')}</span>
-										</span>
-									</button>
-								</Show>
+											<span class="settings-nav__text">
+												<span class="settings-nav__title">{i18n.t(`settings.${t.id}Tab`)}</span>
+												<span class="settings-nav__desc">
+													{i18n.t(`settings.${t.id}TabDesc`)}
+												</span>
+											</span>
+										</button>
+									)}
+								</For>
 							</nav>
 
 							<div class="settings-modal__body">

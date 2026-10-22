@@ -19,7 +19,7 @@ Self-hosted servers often use `http://` on LAN. After `tauri android init`, run:
 ```
 
 CI runs this automatically before building the APK. It enables cleartext traffic so both
-`http://` and `https://` work in the WebView, installs mobile plugins, and replaces
+`http://` and `https://` work in the WebView, installs mobile plugins and the auto-upload foreground service, and replaces
 Tauri’s default launcher icons with Sarca icons from `src-tauri/icons/android/`.
 
 ## Android sideload signing
@@ -71,5 +71,15 @@ exemption so background auto-upload is less likely to be killed.
 
 ## Background
 
-- **Android:** consider WorkManager via a small plugin after MVP.
+- **Android:** while auto-upload (Camera or folder upload) is on and the client is signed in,
+  `SyncForegroundService.kt` runs as a `specialUse` foreground service with an ongoing
+  "Auto-upload is on" notification, so Android does not freeze the process mid-upload. While a
+  pass is moving files it holds a partial wake lock and a Wi-Fi lock. `specialUse` rather than
+  `dataSync`, because Android 15 caps `dataSync` at six hours a day. The service is started from
+  Rust (`bg_service.rs`), so after a reboot or force-stop auto-upload resumes only once the app is
+  opened again.
+- "Sync now" returns at once; the pass runs in the background and reports through the sync
+  status the UI already polls.
+- Gallery items MediaStore only exposes as `content://` URIs are copied to the cache when they
+  are about to be uploaded, not while the gallery is listed.
 - **iOS:** background URLSession / BGProcessingTask — constrained; do not promise desktop parity.
