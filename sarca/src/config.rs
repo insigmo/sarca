@@ -282,8 +282,8 @@ mod tests {
         env::set_var("CHANNEL_CAPACITY", "8");
         env::set_var("SUPERUSER_EMAIL", "a@b.c");
         env::set_var("SUPERUSER_PASS", "pass");
-        env::set_var("ACCESS_TOKEN_EXPIRE_IN_SECS", "1800");
-        env::set_var("REFRESH_TOKEN_EXPIRE_IN_DAYS", "14");
+        env::set_var("ACCESS_TOKEN_EXPIRE_IN_SECS", "2592000");
+        env::set_var("REFRESH_TOKEN_EXPIRE_IN_DAYS", "30");
         env::set_var("SECRET_KEY", "secret");
     }
 

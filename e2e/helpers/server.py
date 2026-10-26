@@ -131,8 +131,8 @@ class SarcaServer:
                 "CHANNEL_CAPACITY": "32",
                 "SUPERUSER_EMAIL": self.email,
                 "SUPERUSER_PASS": self.password,
-                "ACCESS_TOKEN_EXPIRE_IN_SECS": "1800",
-                "REFRESH_TOKEN_EXPIRE_IN_DAYS": "14",
+                "ACCESS_TOKEN_EXPIRE_IN_SECS": "2592000",
+                "REFRESH_TOKEN_EXPIRE_IN_DAYS": "30",
                 "SECRET_KEY": "e2e" * 40,
                 "TELEGRAM_API_BASE_URL": self.telegram_base_url,
                 # requests/min/bot, u16 — the fake Bot API has no flood control

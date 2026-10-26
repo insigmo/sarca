@@ -205,8 +205,8 @@ function Write-OrMergeEnv {
         PREFETCH_MAX_ITEMS = "2000"
         SUPERUSER_EMAIL = "admin@example.com"
         SUPERUSER_PASS = "change-me"
-        ACCESS_TOKEN_EXPIRE_IN_SECS = "1800"
-        REFRESH_TOKEN_EXPIRE_IN_DAYS = "14"
+        ACCESS_TOKEN_EXPIRE_IN_SECS = "2592000"
+        REFRESH_TOKEN_EXPIRE_IN_DAYS = "30"
         SECRET_KEY = $secret
         TELEGRAM_API_BASE_URL = "https://api.telegram.org"
         TELEGRAM_RATE_LIMIT = "60"
@@ -230,6 +230,11 @@ function Write-OrMergeEnv {
     }
 
     Write-Host "Updating $envFile (keeping existing values)…"
+    # 14 days was the old default: a device that stayed offline longer lost its
+    # session and auto-upload stopped. Only the untouched default is raised.
+    if ((Get-Content -Path $envFile) -match '^\s*REFRESH_TOKEN_EXPIRE_IN_DAYS=14\s*$') {
+        Set-EnvKey -Path $envFile -Key "REFRESH_TOKEN_EXPIRE_IN_DAYS" -Value "30"
+    }
     Merge-EnvDefaults -EnvFile $envFile -Defaults $defaultsOrdered
 }
 

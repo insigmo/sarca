@@ -440,8 +440,8 @@ write_or_merge_conf() {
     "CHANNEL_CAPACITY=32" \
     "SUPERUSER_EMAIL=admin@example.com" \
     "SUPERUSER_PASS=change-me" \
-    "ACCESS_TOKEN_EXPIRE_IN_SECS=1800" \
-    "REFRESH_TOKEN_EXPIRE_IN_DAYS=14" \
+    "ACCESS_TOKEN_EXPIRE_IN_SECS=2592000" \
+    "REFRESH_TOKEN_EXPIRE_IN_DAYS=30" \
     "SECRET_KEY=${secret}" \
     "TELEGRAM_API_BASE_URL=https://api.telegram.org" \
     "TELEGRAM_RATE_LIMIT=60" \
@@ -464,6 +464,11 @@ write_or_merge_conf() {
   fi
 
   echo "Updating ${env_file} (keeping existing values)…"
+  # 14 days was the old default: a device that stayed offline longer lost its
+  # session and auto-upload stopped. Only the untouched default is raised.
+  if [ "$(env_get_value "${env_file}" REFRESH_TOKEN_EXPIRE_IN_DAYS)" = "14" ]; then
+    env_set_key "${env_file}" REFRESH_TOKEN_EXPIRE_IN_DAYS 30
+  fi
   merge_env_defaults "${env_file}" "$@"
 }
 
