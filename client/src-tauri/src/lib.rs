@@ -321,6 +321,9 @@ pub fn run() {
             state.start_background_loop();
 
             #[cfg(target_os = "android")]
+            startup::log_last_exit(app.handle(), state.data_dir().clone());
+
+            #[cfg(target_os = "android")]
             {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {

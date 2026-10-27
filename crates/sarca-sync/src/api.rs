@@ -1281,7 +1281,7 @@ impl std::error::Error for TransferTimedOut {}
 fn scope_for_status(status: StatusCode) -> FailureScope {
     match status.as_u16() {
         // The session, not the file. Self-heals: the client refreshes the
-        // access token before every tick.
+        // access token before every tick, and every minute while one runs.
         401 | 403 => FailureScope::Link,
         // Congestion and throttling — "come back later", for any file.
         408 | 425 | 429 => FailureScope::Link,

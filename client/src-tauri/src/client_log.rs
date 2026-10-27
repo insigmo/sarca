@@ -230,6 +230,7 @@ pub fn install(data_dir: PathBuf) {
     }
     let (filter, handle) = reload::Layer::new(level_filter(level()));
     let dir = data_dir;
+    install_panic_hook(dir.clone());
     let layer = fmt::layer()
         .with_ansi(false)
         .with_target(true)
@@ -244,6 +245,29 @@ pub fn install(data_dir: PathBuf) {
     {
         let _ = RELOAD.set(handle);
     }
+}
+
+/// Writes every panic into the log file as well, then runs the hook that was
+/// there before.
+///
+/// A panic on a runtime worker ends only its task, so the sync loop can stop
+/// while the app looks alive — and on Android the default hook prints to
+/// stderr, which nothing reads, so the log the user exports showed nothing.
+fn install_panic_hook(data_dir: PathBuf) {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        append(
+            &data_dir,
+            "ERROR",
+            &format!(
+                "panic in thread {}: {}",
+                thread.name().unwrap_or("<unnamed>"),
+                info.to_string().replace('\n', " ")
+            ),
+        );
+        previous(info);
+    }));
 }
 
 fn level_filter(level: LogLevel) -> tracing_subscriber::filter::LevelFilter {

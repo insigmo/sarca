@@ -71,6 +71,10 @@ class SyncForegroundService : Service() {
     private var pendingWake: Invoke? = null
     private var wakeQueued = false
 
+    /** Running for a Rust loop in this process; `MainActivity` keeps the process alive then. */
+    val isRunning: Boolean
+      get() = driven && instance != null
+
     fun start(context: Context) {
       driven = true
       ContextCompat.startForegroundService(

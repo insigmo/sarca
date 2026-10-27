@@ -1,4 +1,5 @@
-//! Android startup helpers: runtime permissions, device model, saving a text file.
+//! Android startup helpers: runtime permissions, device model, the previous
+//! process's exit reason, saving a text file.
 //! Also owns the on-disk device-label cache used by Sync Camera roots.
 
 use std::{
@@ -83,6 +84,97 @@ pub fn device_model_label<R: Runtime>(app: &tauri::AppHandle<R>) -> Option<Strin
         None
     } else {
         Some(cleaned)
+    }
+}
+
+/// Writes how the previous process ended into the client log, once per start.
+///
+/// The process can end with nothing in the log: a crash, the system reclaiming
+/// memory, or the app calling `exit(0)` itself — which is what Tauri does when
+/// its last activity is destroyed, and what stopped auto-upload every time the
+/// app was swiped out of Recents (see `MainActivity.kt`). Telling those apart
+/// took a phone on a cable (`dumpsys activity exit-info`); this puts the same
+/// record into the log the user exports.
+#[cfg(target_os = "android")]
+pub fn log_last_exit<R: Runtime>(app: &tauri::AppHandle<R>, data_dir: PathBuf) {
+    use tauri::Manager;
+
+    let Some(state) = app.try_state::<AndroidStartup<R>>() else {
+        return;
+    };
+    let handle = state.handle.clone();
+    // `run_mobile_plugin` waits on the main looper; keep it off the caller.
+    std::thread::spawn(move || {
+        if let Ok(exit) = handle.run_mobile_plugin::<LastExit>("lastExit", ()) {
+            if let Some(line) = exit.summary() {
+                crate::client_log::write_line(&data_dir, &line);
+            }
+        }
+    });
+}
+
+/// `StartupPlugin.lastExit`'s answer: Android's `ApplicationExitInfo` for the
+/// previous process of this app. Every field is absent when there is no record.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LastExit {
+    reason: Option<i32>,
+    status: Option<i32>,
+    importance: Option<i32>,
+    timestamp_ms: Option<i64>,
+    rss_kb: Option<i64>,
+    description: Option<String>,
+}
+
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+impl LastExit {
+    /// One log line, or `None` when Android had nothing on record.
+    pub fn summary(&self) -> Option<String> {
+        let reason = self.reason?;
+        let mut line = format!(
+            "previous process exit: reason={} ({reason}) status={}",
+            exit_reason_name(reason),
+            self.status.unwrap_or(0)
+        );
+        if let Some(importance) = self.importance {
+            // 100 = foreground, 125 = foreground service, 400+ = cached.
+            line.push_str(&format!(" importance={importance}"));
+        }
+        if let Some(kb) = self.rss_kb {
+            line.push_str(&format!(" rss={}MB", kb / 1024));
+        }
+        if let Some(ms) = self.timestamp_ms {
+            line.push_str(&format!(" at_unix={}", ms / 1000));
+        }
+        if let Some(d) = self.description.as_deref().filter(|d| !d.is_empty()) {
+            line.push_str(&format!(" description={d:?}"));
+        }
+        Some(line)
+    }
+}
+
+/// `ApplicationExitInfo.REASON_*` by value.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn exit_reason_name(reason: i32) -> &'static str {
+    match reason {
+        1 => "EXIT_SELF",
+        2 => "SIGNALED",
+        3 => "LOW_MEMORY",
+        4 => "CRASH",
+        5 => "CRASH_NATIVE",
+        6 => "ANR",
+        7 => "INITIALIZATION_FAILURE",
+        8 => "PERMISSION_CHANGE",
+        9 => "EXCESSIVE_RESOURCE_USAGE",
+        10 => "USER_REQUESTED",
+        11 => "USER_STOPPED",
+        12 => "DEPENDENCY_DIED",
+        13 => "OTHER",
+        14 => "FREEZER",
+        15 => "PACKAGE_STATE_CHANGE",
+        16 => "PACKAGE_UPDATED",
+        _ => "UNKNOWN",
     }
 }
 
@@ -183,6 +275,27 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn last_exit_summary_names_the_reason() {
+        let exit: LastExit = serde_json::from_str(
+            r#"{"reason":1,"status":0,"importance":125,"timestampMs":1793111685302,"rssKb":1153433,"description":""}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            exit.summary().as_deref(),
+            Some(
+                "previous process exit: reason=EXIT_SELF (1) status=0 importance=125 \
+                 rss=1126MB at_unix=1793111685"
+            )
+        );
+    }
+
+    #[test]
+    fn last_exit_summary_is_none_without_a_record() {
+        let exit: LastExit = serde_json::from_str("{}").unwrap();
+        assert_eq!(exit.summary(), None);
+    }
 
     #[test]
     fn rejects_localhost_hostnames() {

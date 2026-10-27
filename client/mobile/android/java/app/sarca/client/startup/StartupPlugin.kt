@@ -2,6 +2,7 @@ package app.sarca.client.startup
 
 import android.Manifest
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -20,7 +21,8 @@ import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
 /**
- * Runtime media + battery-opt prompts, device model, and the log export.
+ * Runtime media + battery-opt prompts, device model, the previous exit reason,
+ * and the log export.
  * Installed into the generated Android project by scripts/patch-android-http.sh.
  */
 @TauriPlugin
@@ -87,6 +89,38 @@ class StartupPlugin(private val activity: Activity) : Plugin(activity) {
         else -> "$manufacturer $model"
       }
     ret.put("label", label.trim())
+    invoke.resolve(ret)
+  }
+
+  /**
+   * How the previous process of this app ended, as Android recorded it
+   * (API 30+; empty before that or when there is no record). The Rust side
+   * logs it at startup, so an exported log tells a crash, the system
+   * reclaiming memory and the app ending itself apart.
+   */
+  @Command
+  fun lastExit(invoke: Invoke) {
+    val ret = JSObject()
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      try {
+        val info =
+          activity
+            .getSystemService(ActivityManager::class.java)
+            ?.getHistoricalProcessExitReasons(activity.packageName, 0, 0)
+            // The WebView's sandboxed renderers are listed under this package too.
+            ?.firstOrNull { it.processName == activity.packageName }
+        if (info != null) {
+          ret.put("reason", info.reason)
+          ret.put("status", info.status)
+          ret.put("importance", info.importance)
+          ret.put("timestampMs", info.timestamp)
+          ret.put("rssKb", info.rss)
+          ret.put("description", info.description ?: "")
+        }
+      } catch (_: Exception) {
+        // Diagnostics only; an empty answer is fine.
+      }
+    }
     invoke.resolve(ret)
   }
 

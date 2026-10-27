@@ -3,6 +3,7 @@
 # - Allow http:// (cleartext) for self-hosted Sarca on LAN (https:// still works)
 # - Install SAF folder-picker + startup permission plugins
 # - Install the auto-upload foreground service and declare it in the manifest
+# - Replace the generated MainActivity so swiping the app away keeps auto-upload running
 # - Replace Tauri default launcher icons with Sarca icons from src-tauri/icons/android
 set -euo pipefail
 
@@ -22,6 +23,8 @@ MEDIASTORE_SRC="$ROOT/mobile/android/java/app/sarca/client/mediastore/MediaStore
 MEDIASTORE_DST="$APP_SRC/java/app/sarca/client/mediastore/MediaStorePlugin.kt"
 SYNCSERVICE_SRC_DIR="$ROOT/mobile/android/java/app/sarca/client/syncservice"
 SYNCSERVICE_DST_DIR="$APP_SRC/java/app/sarca/client/syncservice"
+MAIN_ACTIVITY_SRC="$ROOT/mobile/android/java/app/sarca/client/MainActivity.kt"
+MAIN_ACTIVITY_DST="$APP_SRC/java/app/sarca/client/MainActivity.kt"
 
 if [[ ! -f "$MANIFEST" ]]; then
   echo "AndroidManifest not found at $MANIFEST (run tauri android init first)" >&2
@@ -72,6 +75,16 @@ if [[ -d "$SYNCSERVICE_SRC_DIR" ]]; then
   cp -a "$SYNCSERVICE_SRC_DIR"/. "$SYNCSERVICE_DST_DIR"/
   echo "Installed sync foreground service → $SYNCSERVICE_DST_DIR"
 fi
+
+# Replaces the generated MainActivity (it keeps the process alive when the app is
+# swiped away during auto-upload). Overwrite, never add: a second copy elsewhere
+# would not compile, and a missing target means the template moved.
+if [[ ! -f "$MAIN_ACTIVITY_DST" ]]; then
+  echo "Generated MainActivity not found at $MAIN_ACTIVITY_DST" >&2
+  exit 1
+fi
+cp -a "$MAIN_ACTIVITY_SRC" "$MAIN_ACTIVITY_DST"
+echo "Installed MainActivity.kt → $MAIN_ACTIVITY_DST"
 
 python3 - "$MANIFEST" <<'PY'
 import re

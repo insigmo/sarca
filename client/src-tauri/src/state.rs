@@ -162,6 +162,17 @@ pub fn merge_session_tokens(
 /// technically-not-yet-expired token to 401 mid-request.
 const ACCESS_TOKEN_REFRESH_SKEW_SECS: u64 = 120;
 
+/// How often `start_background_loop`'s session keeper re-checks the access
+/// token. The loop itself refreshes only at the top of a tick, and one pass can
+/// outlast the token: a camera backlog uploads for hours, the token lives
+/// `ACCESS_TOKEN_EXPIRE_IN_SECS` (30 minutes by default), and the webview that
+/// would otherwise refresh it is frozen in the background. Every file after the
+/// expiry then got a 401, which stopped the batch as "link down" and put
+/// "401 Unauthorized" in the error banner every half hour (client log
+/// 2026-10-26/27). Shorter than `ACCESS_TOKEN_REFRESH_SKEW_SECS`, so the token
+/// is replaced before it lapses rather than after.
+const SESSION_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(60);
+
 /// Decode the `exp` (Unix seconds) claim out of a JWT's payload segment
 /// without checking its signature. Safe only because this is always our own
 /// stored access token, never one from an untrusted source: a forged `exp`
@@ -1182,6 +1193,40 @@ impl AppSyncState {
         let mut wake_rx = self.wake_tx.subscribe();
         let foreground = self.foreground.clone();
         let last_foreground_ping = self.last_foreground_ping.clone();
+
+        // A task of its own, not a step of the loop below: the loop refreshes
+        // only between passes, and a pass — the loop's own, or one `sync_now`
+        // spawns — can outlast the token. Refresh tokens are not single-use,
+        // so racing the loop's refresh (or the webview's) costs one request.
+        {
+            let data_dir = data_dir.clone();
+            let server_cfg = server_cfg.clone();
+            let proxy = proxy.clone();
+            let trusted_origin = trusted_origin.clone();
+            let engine = engine.clone();
+            let mut rx = self.shutdown_tx.subscribe();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(SESSION_KEEPALIVE_INTERVAL) => {},
+                        _ = rx.changed() => {
+                            if *rx.borrow() {
+                                break;
+                            }
+                        }
+                    }
+                    ensure_fresh_session_with(
+                        &data_dir,
+                        &server_cfg,
+                        &proxy,
+                        &trusted_origin,
+                        &engine,
+                    )
+                    .await;
+                }
+            });
+        }
+
         tauri::async_runtime::spawn(async move {
             // Let the Android activity / WebView paint before the first heavy
             // MediaStore scan; otherwise startup looks like a black screen ANR.
